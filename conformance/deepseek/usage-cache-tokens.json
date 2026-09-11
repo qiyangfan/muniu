@@ -1,0 +1,41 @@
+{
+  "provider": "deepseek",
+  "scenario": "usage-cache-tokens",
+  "source_url": "https://api-docs.deepseek.com/api/create-chat-completion",
+  "inbound": {
+    "model": "deepseek-chat",
+    "messages": [{ "role": "user", "content": "重复这段前缀以命中缓存" }]
+  },
+  "upstream_raw": {
+    "status": 200,
+    "body": {
+      "id": "ds-cache1",
+      "object": "chat.completion",
+      "created": 1788900100,
+      "model": "deepseek-chat",
+      "choices": [
+        {
+          "index": 0,
+          "message": { "role": "assistant", "content": "已收到" },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 100,
+        "completion_tokens": 50,
+        "total_tokens": 150,
+        "prompt_cache_hit_tokens": 64,
+        "prompt_cache_miss_tokens": 36,
+        "completion_tokens_details": { "reasoning_tokens": 20 }
+      }
+    }
+  },
+  "expect": {
+    "usage": {
+      "prompt_tokens": 100,
+      "completion_tokens": 50,
+      "reasoning_tokens": 20,
+      "cached_tokens": 64
+    }
+  }
+}

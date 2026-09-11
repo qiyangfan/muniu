@@ -1,0 +1,134 @@
+# muniu API 契约单源(手写维护,T4.2):Go 侧路由必须与此处路径集合一致
+# (漂移门禁:cmd/muniu/routes_test.go)。web/ 的 API 类型经 openapi-typescript 生成,禁止手写。
+openapi: 3.0.3
+info:
+  title: muniu gateway API
+  version: 0.3.0
+components:
+  schemas:
+    Tenant:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [active, disabled] }
+        daily_quota_micro: { type: integer, format: int64 }
+        tpm_limit: { type: integer, format: int64 }
+        semantic_cache_enabled: { type: boolean }
+        created_at: { type: string }
+    KeyRecord:
+      type: object
+      properties:
+        id: { type: string }
+        tenant_id: { type: string }
+        name: { type: string }
+        prefix: { type: string }
+        rpm_limit: { type: integer, format: int64 }
+    UsagePoint:
+      type: object
+      properties:
+        dim: { type: string }
+        requests: { type: integer, format: int64 }
+        prompt_tokens: { type: integer, format: int64 }
+        completion_tokens: { type: integer, format: int64 }
+        cache_hits: { type: integer, format: int64 }
+        cost_micro: { type: integer, format: int64 }
+    ProviderInfo:
+      type: object
+      properties:
+        name: { type: string }
+        adapter: { type: string }
+        base_url: { type: string }
+        weight: { type: integer }
+        priority: { type: integer }
+        keys:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              weight: { type: integer }
+              state: { type: string, enum: [healthy, cooldown, disabled, unknown] }
+    CacheStats:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        entries: { type: integer }
+        hits: { type: integer }
+        capacity: { type: integer }
+        threshold: { type: number }
+        embedding_model: { type: string }
+paths:
+  /healthz:
+    get:
+      summary: 存活探针
+      responses:
+        "200": { description: 服务健康 }
+  /v1/chat/completions:
+    post:
+      summary: OpenAI 兼容对话补全(支持 SSE 流式)
+      parameters:
+        - { name: Authorization, in: header, required: true, schema: { type: string } }
+      responses:
+        "200": { description: 补全结果(非流式 JSON / 流式 SSE) }
+        "4XX": { description: 归一化错误信封 }
+  /v1/embeddings:
+    post:
+      summary: OpenAI 兼容 embeddings 透传
+      parameters:
+        - { name: Authorization, in: header, required: true, schema: { type: string } }
+      responses:
+        "200": { description: 嵌入向量 }
+  /admin/v1/tenants:
+    get:
+      summary: 租户列表
+      responses:
+        "200": { description: 租户数组 }
+    post:
+      summary: 创建租户
+      responses:
+        "200": { description: 租户 id }
+  /admin/v1/tenants/{id}:
+    patch:
+      summary: 更新租户(状态/配额/缓存开关)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: 已更新 }
+  /admin/v1/keys:
+    get:
+      summary: key 列表
+      responses:
+        "200": { description: key 数组(无明文) }
+    post:
+      summary: 签发 key(明文仅此一次返回)
+      responses:
+        "200": { description: 明文 key 与回执 }
+  /admin/v1/keys/{prefix}:
+    delete:
+      summary: 吊销 key
+      parameters:
+        - { name: prefix, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: 已吊销 }
+  /admin/v1/usage:
+    get:
+      summary: usage 聚合(按日/按 key/按模型/按 provider)
+      parameters:
+        - { name: group_by, in: query, required: true, schema: { type: string, enum: [day, key, model, provider] } }
+        - { name: from, in: query, schema: { type: string } }
+        - { name: to, in: query, schema: { type: string } }
+        - { name: tenant_id, in: query, schema: { type: string } }
+        - { name: key_id, in: query, schema: { type: string } }
+      responses:
+        "200": { description: 聚合点数组 }
+  /admin/v1/providers:
+    get:
+      summary: 供应商拓扑与 key 池实时状态(只读)
+      responses:
+        "200": { description: 供应商数组 }
+  /admin/v1/cache/stats:
+    get:
+      summary: 语义缓存统计
+      responses:
+        "200": { description: 命中率/条数/开关状态 }

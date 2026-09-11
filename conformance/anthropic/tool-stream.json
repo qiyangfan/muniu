@@ -1,0 +1,74 @@
+{
+  "provider": "anthropic",
+  "scenario": "tool-stream",
+  "source_url": "https://platform.claude.com/docs/en/docs/build-with-claude/tool-use",
+  "inbound": {
+    "model": "claude-sonnet-4-5",
+    "stream": true,
+    "max_tokens": 1024,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_weather",
+          "description": "查天气",
+          "parameters": {
+            "type": "object"
+          }
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "北京天气?"
+      }
+    ]
+  },
+  "upstream_raw": {
+    "stream": [
+      "{\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":40,\"output_tokens\":0}}}",
+      "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"get_weather\",\"input\":{}}}",
+      "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"北京\\\"}\"}}",
+      "{\"type\":\"content_block_stop\",\"index\":0}",
+      "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":12}}",
+      "{\"type\":\"message_stop\"}"
+    ]
+  },
+  "expect": {
+    "passthrough_lossless": false,
+    "usage": {
+      "prompt_tokens": 40,
+      "completion_tokens": 12,
+      "reasoning_tokens": 0,
+      "cached_tokens": 0
+    },
+    "events": [
+      {
+        "has_content": false,
+        "is_usage": true,
+        "is_done": false
+      },
+      {
+        "has_content": true,
+        "is_usage": false,
+        "is_done": false
+      },
+      {
+        "has_content": true,
+        "is_usage": false,
+        "is_done": false
+      },
+      {
+        "has_content": false,
+        "is_usage": true,
+        "is_done": false
+      },
+      {
+        "has_content": false,
+        "is_usage": false,
+        "is_done": true
+      }
+    ]
+  }
+}

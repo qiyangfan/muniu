@@ -1,0 +1,27 @@
+{
+  "provider": "doubao",
+  "scenario": "stream-basic",
+  "source_url": "https://www.volcengine.com/docs/82379/1330626",
+  "inbound": {
+    "model": "doubao-seed-1-6",
+    "stream": true,
+    "messages": [{ "role": "user", "content": "你好" }]
+  },
+  "upstream_raw": {
+    "stream": [
+      "{\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}",
+      "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"你好!\"},\"finish_reason\":null}]}",
+      "{\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":4,\"total_tokens\":12}}",
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "usage": { "prompt_tokens": 8, "completion_tokens": 4, "reasoning_tokens": 0, "cached_tokens": 0 },
+    "events": [
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": true, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": true }
+    ]
+  }
+}

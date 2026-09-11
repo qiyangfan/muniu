@@ -1,0 +1,33 @@
+{
+  "provider": "anthropic",
+  "scenario": "text-stream",
+  "source_url": "https://platform.claude.com/docs/en/api/messages-streaming",
+  "inbound": {
+    "model": "claude-sonnet-4-5",
+    "stream": true,
+    "max_tokens": 1024,
+    "messages": [{ "role": "user", "content": "你好" }]
+  },
+  "upstream_raw": {
+    "stream": [
+      "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":21,\"output_tokens\":0}}}",
+      "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+      "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}",
+      "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"!\"}}",
+      "{\"type\":\"content_block_stop\",\"index\":0}",
+      "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":9}}",
+      "{\"type\":\"message_stop\"}"
+    ]
+  },
+  "expect": {
+    "passthrough_lossless": false,
+    "usage": { "prompt_tokens": 21, "completion_tokens": 9, "reasoning_tokens": 0, "cached_tokens": 0 },
+    "events": [
+      { "has_content": false, "is_usage": true, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": true, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": true }
+    ]
+  }
+}

@@ -1,0 +1,168 @@
+// Package protocol 是入站/出站共享 DTO 单源:Chat 请求/响应、SSE chunk、usage、错误信封。
+// 铁则(architecture「包结构」):本包不 import 任何内部包,仅标准库。
+// 解析策略:只解析网关行为所需的字段,其余字段一律经 json.RawMessage 原样持有——
+// 网关的价值在透明,适配层改写永远基于完整原始字节,杜绝字段丢失。
+package protocol
+
+import (
+	"encoding/json"
+	"errors"
+)
+
+// ChatRequest 入站 OpenAI Chat Completions 请求。
+// 只解析网关需要的字段(路由/流式判定/校验/缓存准入);Raw 保留完整原始字节,
+// 生命周期第 7 步契约:解析后立即持有完整字节,适配器转换基于 Raw(request body 不可重读问题在此消灭)。
+type ChatRequest struct {
+	Model       string          `json:"model"`
+	Stream      bool            `json:"stream"`
+	Messages    []Message       `json:"messages"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	MaxTokens   *int64          `json:"max_tokens,omitempty"`
+	Tools       json.RawMessage `json:"tools,omitempty"` // 仅准入判定消费(语义缓存排除带工具请求);出站仍走 Raw
+	Raw         json.RawMessage `json:"-"`
+}
+
+// Message 消息条目。Content 可能是字符串或多模态数组,网关不做深解析,原样透传。
+type Message struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content,omitempty"`
+}
+
+// ChatResponse 非流式响应(统一 OpenAI 形态);Usage 保留原始字节——
+// 归一化必须经适配器 quirk(各家缓存/reasoning 字段位置不同),禁止在此直接结构化。
+type ChatResponse struct {
+	ID      string          `json:"id,omitempty"`
+	Model   string          `json:"model,omitempty"`
+	Choices []Choice        `json:"choices,omitempty"`
+	Usage   json.RawMessage `json:"usage,omitempty"`
+	Raw     json.RawMessage `json:"-"`
+}
+
+// Choice 非流式候选项。
+type Choice struct {
+	Index        int             `json:"index,omitempty"`
+	Message      ResponseMessage `json:"message,omitempty"`
+	FinishReason string          `json:"finish_reason,omitempty"`
+}
+
+// ResponseMessage 助手回复消息(content 兼容字符串/数组,原样持有)。
+type ResponseMessage struct {
+	Role    string          `json:"role,omitempty"`
+	Content json.RawMessage `json:"content,omitempty"`
+}
+
+// StreamChunk 流式 SSE data 帧的 OpenAI 形态(逐事件解析,计量与首 token 判定用)。
+// 透传仍用原始字节(字段改写白名单:兼容型供应商客户端可见行为零改写)。
+type StreamChunk struct {
+	ID      string         `json:"id,omitempty"`
+	Choices []StreamChoice `json:"choices,omitempty"`
+	Usage   *Usage         `json:"usage,omitempty"`
+}
+
+// StreamChoice 单个流式候选:delta 增量 + 终止原因。
+type StreamChoice struct {
+	Delta        Delta             `json:"delta"`
+	FinishReason *string           `json:"finish_reason,omitempty"`
+	ToolCalls    []json.RawMessage `json:"tool_calls,omitempty"`
+}
+
+// Delta 流式增量。reasoning_content 是国产系(DeepSeek R1 等)事实字段,统一在此识别。
+type Delta struct {
+	Role             string            `json:"role,omitempty"`
+	Content          *string           `json:"content,omitempty"`
+	ReasoningContent *string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []json.RawMessage `json:"tool_calls,omitempty"`
+}
+
+// Usage 统一 usage 形态(metering 归一化表的对齐基准);缺失字段为 0。
+type Usage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	ReasoningTokens  int64 `json:"reasoning_tokens,omitempty"`
+	CachedTokens     int64 `json:"cached_tokens,omitempty"`
+}
+
+// ErrInvalidRequest 入站请求不合法(model 缺失/messages 非法/非 JSON)。
+// 哨兵错误:出口统一映射 bad_request。
+var ErrInvalidRequest = errors.New("protocol: 非法入站请求")
+
+// ParseChatRequest 解析并校验入站请求:model 非空、messages 为非空数组且每条有 role。
+func ParseChatRequest(body []byte) (*ChatRequest, error) {
+	var req ChatRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, errors.Join(ErrInvalidRequest, err)
+	}
+	if req.Model == "" {
+		return nil, errors.Join(ErrInvalidRequest, errors.New("model 不能为空"))
+	}
+	if len(req.Messages) == 0 {
+		return nil, errors.Join(ErrInvalidRequest, errors.New("messages 不能为空"))
+	}
+	for i, m := range req.Messages {
+		if m.Role == "" {
+			return nil, errors.Join(ErrInvalidRequest, errors.New("messages["+itoa(i)+"] 缺 role"))
+		}
+	}
+	req.Raw = append(json.RawMessage(nil), body...)
+	return &req, nil
+}
+
+// ParseStreamChunk 解析单个 SSE data 帧为 OpenAI 形态(解析失败=上游协议异常,调用方归类处理)。
+func ParseStreamChunk(data []byte) (*StreamChunk, error) {
+	var c StreamChunk
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// HasContent 首 token 边界判定:是否携带实质内容
+// (content / reasoning_content / tool_call 增量任一非空)。
+// role 帧、空 delta、usage 终帧均不算(proxy-and-streaming「首 token 边界」)。
+func (c *StreamChunk) HasContent() bool {
+	for _, ch := range c.Choices {
+		d := ch.Delta
+		if (d.Content != nil && *d.Content != "") ||
+			(d.ReasoningContent != nil && *d.ReasoningContent != "") ||
+			len(d.ToolCalls) > 0 || len(ch.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// IsUsageOnly 判定是否 usage 终帧:无 choices 且带 usage。
+func (c *StreamChunk) IsUsageOnly() bool {
+	return len(c.Choices) == 0 && c.Usage != nil
+}
+
+// RewriteModel 出站 body 生成(字段改写白名单的唯一写入口):
+// 以 map[string]json.RawMessage 解原文 → 只替换 model → 重编,未知字段零丢失。
+// 字段顺序不保证与原文一致(JSON 对象语义无序),字段集合等价是契约。
+func RewriteModel(body []byte, upstreamModel string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return nil, errors.Join(ErrInvalidRequest, err)
+	}
+	fields["model"], _ = json.Marshal(upstreamModel)
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// itoa 避免 fmt 依赖的极小整数转字符串(仅错误信息用)。
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [20]byte
+	pos := len(b)
+	for i > 0 {
+		pos--
+		b[pos] = byte('0' + i%10)
+		i /= 10
+	}
+	return string(b[pos:])
+}

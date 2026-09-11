@@ -1,0 +1,26 @@
+{
+  "provider": "moonshot",
+  "scenario": "stream-basic",
+  "source_url": "https://platform.kimi.com/docs/api/chat",
+  "inbound": {
+    "model": "kimi-k2.6",
+    "stream": true,
+    "messages": [{ "role": "user", "content": "你好" }]
+  },
+  "upstream_raw": {
+    "stream": [
+      "{\"id\":\"km-1\",\"object\":\"chat.completion.chunk\",\"created\":1788900200,\"model\":\"kimi-k2.6\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}",
+      "{\"id\":\"km-1\",\"object\":\"chat.completion.chunk\",\"created\":1788900200,\"model\":\"kimi-k2.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"你好!\"},\"finish_reason\":null}]}",
+      "{\"id\":\"km-1\",\"object\":\"chat.completion.chunk\",\"created\":1788900200,\"model\":\"kimi-k2.6\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":null}",
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "events": [
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": true }
+    ]
+  }
+}

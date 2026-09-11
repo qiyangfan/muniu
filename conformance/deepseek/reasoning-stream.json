@@ -1,0 +1,30 @@
+{
+  "provider": "deepseek",
+  "scenario": "reasoning-stream",
+  "source_url": "https://api-docs.deepseek.com/guides/thinking_mode",
+  "inbound": {
+    "model": "deepseek-reasoner",
+    "stream": true,
+    "messages": [{ "role": "user", "content": "9.11 和 9.8 谁大?" }]
+  },
+  "upstream_raw": {
+    "stream": [
+      "{\"id\":\"ds-r1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null},\"finish_reason\":null}]}",
+      "{\"id\":\"ds-r1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"先比较小数部分:\"},\"finish_reason\":null}]}",
+      "{\"id\":\"ds-r1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"0.11 与 0.8,后者更大。\"},\"finish_reason\":null}]}",
+      "{\"id\":\"ds-r1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"9.8 更大。\"},\"finish_reason\":null}]}",
+      "{\"id\":\"ds-r1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}",
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "events": [
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": true }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "provider": "qwen",
+  "scenario": "stream-thinking",
+  "source_url": "https://help.aliyun.com/zh/model-studio/deep-thinking",
+  "inbound": {
+    "model": "qwen3-235b-a22b",
+    "stream": true,
+    "messages": [{ "role": "user", "content": "9.11 和 9.8 谁大?" }]
+  },
+  "upstream_raw": {
+    "stream": [
+      "{\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":\"\"},\"finish_reason\":null}]}",
+      "{\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"比较小数部分 0.11 与 0.8。\"},\"finish_reason\":null}]}",
+      "{\"choices\":[{\"index\":0,\"delta\":{\"content\":\"9.8 更大\"},\"finish_reason\":null}]}",
+      "{\"choices\":[],\"object\":\"chat.completion.chunk\",\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15,\"completion_tokens_details\":{\"reasoning_tokens\":3}}}",
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "usage": { "prompt_tokens": 10, "completion_tokens": 5, "reasoning_tokens": 3, "cached_tokens": 0 },
+    "events": [
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": true, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": true }
+    ]
+  }
+}

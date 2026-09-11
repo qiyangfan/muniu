@@ -1,0 +1,29 @@
+{
+  "provider": "glm",
+  "scenario": "stream-basic",
+  "source_url": "https://docs.bigmodel.cn/cn/guide/models/text/glm-4.6",
+  "inbound": {
+    "model": "glm-4.6",
+    "stream": true,
+    "thinking": { "type": "enabled" },
+    "messages": [{ "role": "user", "content": "9.11 和 9.8 谁大?" }]
+  },
+  "upstream_raw": {
+    "stream": [
+      "{\"id\":\"glm-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"\"},\"finish_reason\":null}]}",
+      "{\"id\":\"glm-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"比较小数部分 0.11 与 0.8。\"},\"finish_reason\":null}]}",
+      "{\"id\":\"glm-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"9.8 更大。\"},\"finish_reason\":null}]}",
+      "{\"id\":\"glm-1\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}",
+      "[DONE]"
+    ]
+  },
+  "expect": {
+    "events": [
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": true, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": false },
+      { "has_content": false, "is_usage": false, "is_done": true }
+    ]
+  }
+}

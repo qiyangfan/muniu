@@ -1,0 +1,33 @@
+version: 2
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    binary: muniu
+    ldflags:
+      - -s -w -X github.com/solvela/muniu/internal/version.Version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  use: github
+  # 变更说明以 git log 为唯一事实源;feat/fix 分组(兼容有无 scope 两种 conventional 形态),杂项折叠
+  groups:
+    - title: 功能
+      regexp: '^feat(\(.*\))?:'
+      order: 0
+    - title: 修复
+      regexp: '^fix(\(.*\))?:'
+      order: 1
+    - title: 其他
+      order: 999

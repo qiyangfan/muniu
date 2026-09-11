@@ -1,0 +1,55 @@
+// Failover 判定表(proxy-and-streaming「Failover 判定表」契约,改动须走 ADR):
+// 「适配器返回的 ErrorClass × 是否已过首 token × 流式与否」→ 动作。
+// 纯函数零 IO(architecture「包结构」)。
+package failover
+
+// Action 判定表输出的动作。
+type Action string
+
+// 动作常量(语义见判定表)。
+const (
+	ActionNextCandidate Action = "next_candidate" // 换下一候选(重放安全)
+	ActionAbort         Action = "abort"          // 断言出口:流内错误帧 + [DONE],关流
+	ActionReturn        Action = "return"         // 不换道直接返回(参数问题换家也会拒)
+	ActionSilent        Action = "silent"         // 静默退出(客户端断连)
+)
+
+// Decide 查判定表。非流式没有「已过首 token」态(首字节前全部可重放),stream=false 时
+// pastFirstToken 恒按 false 处理。
+// 补充格(表外防御,已在测试钉死):已过首 token 时 dial_fail/timeout_first 定义上不可出现,
+// 防御归 abort;mid_stream_fail 未过首 token(首 token 前断流)零输出可重放,归 next_candidate;
+// unknown 按 upstream_5xx 同待遇。
+func Decide(class ErrorClass, pastFirstToken bool, stream bool) Action {
+	if !stream {
+		pastFirstToken = false
+	}
+	switch class {
+	case ClassDialFail, ClassTimeoutFirst:
+		if pastFirstToken {
+			return ActionAbort // 防御格:不可出现
+		}
+		return ActionNextCandidate
+	case ClassUpstream5xx, ClassRateLimited, ClassAuthFailed, ClassUnknown:
+		if pastFirstToken {
+			return ActionAbort
+		}
+		return ActionNextCandidate
+	case ClassBadRequest:
+		if pastFirstToken {
+			return ActionAbort
+		}
+		return ActionReturn
+	case ClassMidStreamFail:
+		if pastFirstToken {
+			return ActionAbort
+		}
+		return ActionNextCandidate
+	case ClassContextCanceled:
+		return ActionSilent
+	default:
+		if pastFirstToken {
+			return ActionAbort
+		}
+		return ActionNextCandidate
+	}
+}

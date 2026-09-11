@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "muniu conformance fixture",
+  "type": "object",
+  "required": ["provider", "scenario", "source_url", "inbound", "upstream_raw", "expect"],
+  "additionalProperties": false,
+  "properties": {
+    "provider": { "type": "string", "description": "供应商标识(目录名一致)" },
+    "scenario": { "type": "string", "description": "场景名(文件名一致)" },
+    "source_url": { "type": "string", "minLength": 1, "description": "官方文档锚点,必填可溯源" },
+    "inbound": {
+      "type": "object",
+      "description": "OpenAI 形态的入站请求(网关收到什么)"
+    },
+    "upstream_raw": {
+      "type": "object",
+      "description": "脱敏的上游原始响应:流式给 stream 序列,非流式给 body+status",
+      "additionalProperties": false,
+      "properties": {
+        "stream": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "SSE data 载荷序列(不含 data: 前缀与空行,按到达序);载荷为 JSON 串或 [DONE]"
+        },
+        "status": { "type": "integer", "default": 200 },
+        "body": { "type": "object" }
+      }
+    },
+    "expect": {
+      "type": "object",
+      "required": [],
+      "additionalProperties": false,
+      "properties": {
+        "usage": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt_tokens": { "type": "integer" },
+            "completion_tokens": { "type": "integer" },
+            "reasoning_tokens": { "type": "integer" },
+            "cached_tokens": { "type": "integer" }
+          },
+          "description": "统一 Usage 形态断言(与 metering 归一表对齐)"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "has_content": { "type": "boolean" },
+              "is_usage": { "type": "boolean" },
+              "is_done": { "type": "boolean" }
+            }
+          },
+          "description": "流式逐事件 meta 断言,按序对齐 upstream_raw.stream"
+        },
+        "passthrough_lossless": {
+          "type": "boolean",
+          "default": true,
+          "description": "透传字节与上游原始字节逐字节等价"
+        }
+      }
+    }
+  }
+}

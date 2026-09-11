@@ -1,0 +1,83 @@
+# muniu 配置示例——复制为 muniu.yaml 后按需修改;真实配置已被 .gitignore 排除
+# 分工边界(docs/adr/0004):静态拓扑(providers/model_routes/pricing)走本文件,
+# 运行态(tenants/api_keys/usage)走 SQLite;密钥明文只允许存在于环境变量,
+# 本文件与数据库一律只存环境变量引用名。
+
+server:
+  addr: ":8787"
+  # 超时三层(秒),语义见 docs/design/proxy-and-streaming.md「超时模型」
+  timeouts:
+    dial: 5          # TCP+TLS 建连
+    first_token: 60  # 上游首个内容帧(非流式=响应首字节)
+    chunk_idle: 30   # 流式相邻两帧最大间隔,超时判上游僵死
+
+storage:
+  sqlite:
+    path: "data/muniu.db"   # WAL 模式;目录自动创建
+
+log:
+  level: info     # debug|info|warn|error
+  format: json    # json|text
+
+metering:
+  flush_interval_ms: 500   # usage_logs 异步批量落库间隔
+  flush_batch: 256         # 攒满即刷,不必等间隔
+
+# 上游供应商(静态拓扑)。weight 同优先级内加权轮询;priority 小者先被选中,
+# 仅在同优先级候选全部不可用时向更大 priority 降级。
+providers:
+  - name: deepseek
+    adapter: deepseek                     # 适配器类型:openai=兼容基座;deepseek/moonshot/glm=基座+quirk;anthropic/gemini=桥接(后续阶段)
+    base_url: "https://api.deepseek.com/v1"
+    keys:
+      - env: DEEPSEEK_API_KEY_1           # 只写环境变量名,绝不写明文
+      # - env: DEEPSEEK_API_KEY_2         # 多把 key 构成 key 池:平滑加权轮询 + 冷却/禁用
+      #   weight: 30                       # key 权重(缺省 1),EMA 健康度自动降权
+    weight: 70
+    priority: 0
+  - name: openai
+    adapter: openai
+    base_url: "https://api.openai.com/v1"
+    keys:
+      - env: OPENAI_API_KEY_1
+    weight: 30
+    priority: 1
+
+# 模型路由:键 = 对外模型别名(即入站请求的 model 字段),
+# 值 = 有序候选列表,failover 依此降级(语义见 docs/design/traffic-governance.md)
+model_routes:
+  deepseek-chat:
+    - { provider: deepseek, model: deepseek-v4-flash, priority: 0 }
+  gpt-4o-mini:
+    - { provider: openai, model: gpt-4o-mini, priority: 0 }
+  # 桥接型(Phase 3 起 Anthropic 可用;需 blank import adapter/bridge 的二进制,官方发布版已含):
+  # claude-sonnet:
+  #   - { provider: anthropic, model: claude-sonnet-4-5, priority: 0 }
+
+# 价目表:每百万 Token 价格,人类可读数值;加载期换算为整数 μ(货币百万分之一)参与运算,
+# 内部零浮点(docs/design/metering.md)。
+# 核对记录(2026-09-09,来源见 HANDOFF 验收记录「牌价核对表」):
+#   - gpt-4o-mini:$0.15 / $0.60(OpenAI 官方定价页)
+#   - deepseek-v4-flash:官方为峰/谷双价 + 缓存命中单独价;当前单一定价 schema 不支持,
+#     此处按保守原则取「峰时 + 缓存未命中」上限价($0.44 / $1.32),峰谷与缓存差价见开放决策项
+pricing:
+  deepseek-chat:
+    currency: USD
+    input: 0.44        # $0.44 / 百万输入 Token(峰时,缓存未命中)
+    cached_input: 0.014 # $0.014 / 百万缓存命中输入(峰时);缺省=input
+    output: 1.32       # $1.32 / 百万输出 Token(峰时)
+  gpt-4o-mini:
+    currency: USD
+    input: 0.15        # $0.15 / 百万输入 Token
+    output: 0.60       # $0.60 / 百万输出 Token
+
+# 语义缓存(默认关闭;开启需租户级开关 PATCH /admin/v1/tenants/{id}):
+# 同义问题命中缓存省上游,宁缺勿错(docs/design/semantic-cache.md)。
+# embedding_model 必须已在 model_routes 定义,否则启动校验失败。
+# semantic:
+#   enabled: true
+#   embedding_model: deepseek-chat   # 嵌入经本网关 /v1/embeddings 通道自调用
+#   dim: 1536                        # 嵌入向量维度,须与嵌入模型实际输出一致
+#   threshold: 0.97                  # 余弦相似度阈值(保守起步)
+#   ttl_hours: 24                    # 条目 TTL
+#   capacity: 10000                  # LRU 容量上限

@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+/* 色值经 @theme token(kongming 前端铁律);组件样式只引用 token */
+@theme {
+  --color-bg: #f7f7f5;
+  --color-panel: #ffffff;
+  --color-ink: #1c1c1a;
+  --color-muted: #6f6f69;
+  --color-brand: #2f6f4f;
+  --color-danger: #b3402a;
+  --font-sans: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}

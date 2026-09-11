@@ -1,0 +1,41 @@
+# Go 构建产物
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# 本地运行时数据(SQLite/日志)
+/data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# 环境变量与本地配置(muniu.example.yaml 入库,真实配置不入)
+.env
+.env.*
+muniu.yaml
+
+# Playwright 会话产物(控制台截图交付物已移至 docs/screenshots/)
+.playwright-mcp/
+
+# 前端工程(构建产物不入库,占位 .gitkeep 保留以支撑 go:embed)
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+
+# 覆盖率与压测产物
+coverage.out
+*.bench.txt
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+
+# codegraph 本地索引缓存(生成物)
+.codegraph/
+
+# TypeScript 增量构建缓存
+web/*.tsbuildinfo

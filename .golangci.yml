@@ -1,0 +1,21 @@
+version: "2"
+
+linters:
+  # standard = errcheck + govet + ineffassign + staticcheck + unused
+  default: standard
+  enable:
+    - misspell
+    - revive
+    - unconvert
+  settings:
+    revive:
+      severity: warning
+      rules:
+        # 仅显式启用 exported(导出符号必须有注释,项目约定为中文);
+        # golangci-lint 2.13 内置 revive 的 exported 无 sayRepetitive flag,故不传 arguments。
+        - name: exported
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

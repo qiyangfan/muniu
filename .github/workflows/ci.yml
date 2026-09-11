@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          # 与 mise.toml 钉死的版本一致:latest 会随上游大版本漂移,门禁不可复现
+          version: "2.13"
+      - name: go test (race)
+        run: go test -race ./...
+      - name: build (CGO_ENABLED=0)
+        run: CGO_ENABLED=0 go build ./...
+
+  web-check:
+    # 与 make check 的 web-check 同域:控制台 typecheck/lint 不进 CI,纯 web 改动会带着类型错误绿灯合并
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: typecheck + lint
+        working-directory: web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm lint

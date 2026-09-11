@@ -1,0 +1,40 @@
+{
+  "provider": "openai",
+  "scenario": "chat-basic",
+  "source_url": "https://platform.openai.com/docs/api-reference/chat/object",
+  "inbound": {
+    "model": "gpt-4o-mini",
+    "messages": [{ "role": "user", "content": "你好" }]
+  },
+  "upstream_raw": {
+    "status": 200,
+    "body": {
+      "id": "chatcmpl-basic1",
+      "object": "chat.completion",
+      "created": 1788900000,
+      "model": "gpt-4o-mini-2024-07-18",
+      "choices": [
+        {
+          "index": 0,
+          "message": { "role": "assistant", "content": "你好!有什么可以帮你?" },
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 11,
+        "completion_tokens": 9,
+        "total_tokens": 20,
+        "prompt_tokens_details": { "cached_tokens": 0 },
+        "completion_tokens_details": { "reasoning_tokens": 0 }
+      }
+    }
+  },
+  "expect": {
+    "usage": {
+      "prompt_tokens": 11,
+      "completion_tokens": 9,
+      "reasoning_tokens": 0,
+      "cached_tokens": 0
+    }
+  }
+}

@@ -1,0 +1,82 @@
+# 上游适配器与协议 Conformance(upstream-adapters)
+
+> muniu 的差异化立身之本。本文的归一化表与 fixture 格式是契约;**矩阵中的供应商行为细节执行时必须以官方文档逐家核对后回填**(矩阵初稿按 2026-09 已知形态写就,标 ⚠ 处为待核对项)。
+
+## 适配器分类学(ADR-0003)
+
+```
+internal/adapter/
+├── adapter.go        Adapter 接口 + 注册表
+├── openai.go         OpenAI 兼容基座(覆盖所有「OpenAI 兼容端点」供应商)
+├── quirks/           per-provider quirk patch:只声明「与基座的差异」,不整家居覆写
+│   ├── deepseek.go  moonshot.go  glm.go  qwen.go  doubao.go
+└── bridge/
+    ├── anthropic.go  Messages API ↔ OpenAI 形态全翻译
+    └── gemini.go     generateContent ↔ OpenAI 形态全翻译
+```
+
+三分法理由:国产五家(DeepSeek/Moonshot/GLM/Qwen/Doubao)主打 OpenAI 兼容端点,差异集中在**少数字段与流式形态**——用 quirk patch 表达差异,基座保持单一实现;Anthropic/Gemini 是真异构协议,值得整家桥接。**禁止为「OpenAI 兼容家」复制整套适配器**(one-api 式 per-provider 全量实现 = 维护灾难)。
+
+## Adapter 接口(草案,实现时可微调签名;方法集为契约)
+
+```go
+// Adapter 把入站 OpenAI 形态请求翻译为上游调用,并把上游响应/流归一化回 OpenAI 形态。
+type Adapter interface {
+    // Prepare:改写出站请求(URL/头/body),含鉴权头注入(key 由 keypool 提供)
+    Prepare(ctx context.Context, in *protocol.ChatRequest, out *Outbound) error
+    // Classify:把上游错误响应归类为 failover 判定表所需的 ErrorClass
+    Classify(status int, body []byte) failover.ErrorClass
+    // NormalizeUsage:上游 usage 原始 JSON → 统一 Usage(归一表见 metering)
+    NormalizeUsage(raw json.RawMessage) (protocol.Usage, error)
+    // StreamEvent:单事件的读侧归一(计量用),返回透传字节(见「字段改写白名单」)
+    StreamEvent(raw []byte) (passthrough []byte, meta EventMeta, err error)
+}
+```
+
+## 归一化:统一 Usage 形态(计量与 conformance 的对齐基准)
+
+| 统一字段 | OpenAI | Anthropic(桥接) | Gemini(桥接) | DeepSeek(quirk) | 备注置 |
+|---|---|---|---|---|---|
+| prompt_tokens | usage.prompt_tokens | usage.input_tokens | usageMetadata.promptTokenCount | prompt_tokens | — |
+| completion_tokens | usage.completion_tokens | usage.output_tokens | usageMetadata.candidatesTokenCount | completion_tokens | — |
+| reasoning_tokens | completion_tokens_details.reasoning_tokens | —(thinking 另计⚠) | thoughtsTokenCount⚠ | completion_tokens_details.reasoning_tokens | 缺失=0 |
+| cached_tokens | prompt_tokens_details.cached_tokens | cache_read_input_tokens | cachedContentTokenCount⚠ | prompt_cache_hit_tokens | miss 类字段忽略 |
+
+GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(以 conformance fixture 实证后登记)。
+
+## 字段改写白名单(客户端可见行为)
+
+默认**零改写**:基座与 quirk 对流式事件只读不写(读侧归一仅供计量)。桥接型(anthropic/gemini)是唯一改写者——它们必须把异构事件翻译为 OpenAI 形态(该翻译矩阵另立 `bridge/README.md`,随 Phase 2 编写并配 fixture)。此白名单的意义:兼容型供应商的客户端体验与直连**逐字节一致**,网关透明性可被 conformance 断言。
+
+## 协议矩阵(2026-09-09 官方文档核对后更新;⚠=仍待实证项)
+
+| 供应商 | 接入形态 | 鉴权 | 流式 reasoning | usage 特有 | 已知坑(登记后入 quirks+fixture) |
+|---|---|---|---|---|---|
+| OpenAI | openai 基座 | Bearer | reasoning 模型 ⚠ | prompt/completion_tokens_details | 组织头可选;beta 头漂移 ⚠ |
+| DeepSeek | openai 基座 | Bearer | `reasoning_content` delta,与 content 逐帧互斥、推理先出(thinking_mode 文档确认) | 顶层 `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens`(非 OpenAI details 嵌套);`completion_tokens_details.reasoning_tokens` 确认存在 | reasoning 与 content 互斥出现 |
+| Moonshot | openai 基座 | Bearer(已迁 platform.kimi.com;jwt 方案确认废弃) | 思考模型 `delta.reasoning_content` 确认 | 流式 usage **必须** `stream_options.include_usage` 才返回([DONE] 前独立帧、choices 空),否则缺失→估算路径;`cached_tokens` 为 OpenAI 风格命名 | 多轮须回传历史 reasoning_content;流中断可能无 usage 帧 |
+| GLM(智谱) | openai 基座 | Bearer 直连 API key(确认无需 JWT) | `delta.reasoning_content` 确认(thinking.type=enabled) | 流式 usage 返回方式 ⚠ 待实证 | `request_id` 回传头 ⚠ |
+| Qwen(DashScope 兼容模式) | openai 基座 | Bearer,base_url=dashscope.aliyuncs.com/compatible-mode/v1 | `enable_thinking` 开启,`delta.reasoning_content` 确认(首帧 reasoning 为空串) | `stream_options.include_usage` 支持:空 choices usage 终帧含 reasoning_tokens | 原生模式开思考须 incremental_output=true(兼容模式无此问题) |
+| Doubao(Arc) | openai 基座 | Bearer,base_url=ark.cn-beijing.volces.com/api/v3 | `delta.reasoning_content` | `stream_options.include_usage` | model 填模型名或推理接入点 ID(ep-xxx);文档站 JS 渲染无法逐字引用,按文档结构与公开 SDK 形态核对 |
+| Anthropic | bridge(已落地) | x-api-key + anthropic-version(2023-06-01) | thinking_delta → reasoning_content(桥接翻译) | input/output/cache_read_input_tokens → prompt/completion/cached_tokens | 事件类型机(message_start/content_block_delta/message_delta/message_stop);官方文档区域屏蔽,按公开契约实现待复核(见 bridge/README) |
+| Gemini | bridge | x-goog-api-key | thoughts 部分 | thoughtsTokenCount | 流式 alt=sse 形态(Phase 4 可选) |
+
+## Conformance 测试集(独立开源资产,目录即契约)
+
+```
+conformance/
+├── README.md               数据集说明:来源、回放方法、贡献规范
+├── schema.json             fixture 结构定义(JSON Schema)
+├── openai/chat-basic.json  每家每场景一文件:<provider>/<scenario>.json
+├── deepseek/reasoning-stream.json
+├── deepseek/usage-cache-tokens.json
+└── ...
+```
+
+fixture 形态:`{ "provider": "...", "scenario": "...", "source_url": "官方文档锚点", "inbound": {OpenAI 形态请求}, "upstream_raw": {录制的上游原始响应/SSE 序列(脱敏)}, "expect": {归一化断言: usage/字段/passthrough 等价性} }`。
+
+纪律:
+1. fixture 来自**官方文档与抓包脱敏**,不入真实 key、不含用户数据;
+2. CI 只回放 fixture(打 fake 上游),真上游冒烟走 `make smoke` 手动档;
+3. 新 quirk 修复必须先补一个能复现 bug 的 fixture(回归钉死),这正是「测试集是资产、网关是消费者」的落地;
+4. `source_url` 必填——每个字段断言可溯源,这是与「拍脑袋兼容」的分界线。

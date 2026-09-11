@@ -1,0 +1,153 @@
+// 本地估算路径(metering.md「计量语义」):上游 usage 缺失/断流中断时,
+// 输入=请求 messages 序列化后 tiktoken 计数,输出=已转发 delta 文本累计计数,
+// 一律置 estimated=true;reasoning/cached 估算不到就置 0,不猜。
+// 词表编译期嵌入(tiktoken-go-loader OfflineLoader),运行时零外联。
+package metering
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"sync"
+
+	tiktoken "github.com/pkoukk/tiktoken-go"
+	loader "github.com/pkoukk/tiktoken-go-loader"
+
+	"github.com/solvela/muniu/internal/protocol"
+)
+
+func init() {
+	// 离线加载器:词表随二进制发布,严禁运行时下载(单二进制零外联纪律)
+	tiktoken.SetBpeLoader(&loader.OfflineLoader{})
+}
+
+var (
+	encMu       sync.Mutex
+	encCache    = map[string]*tiktoken.Tiktoken{}
+	encodingFor = defaultEncodingFor // 模型前缀 → 编码名(变量便于测试替换)
+)
+
+// defaultEncodingFor 编码映射:已知前缀显式映射,未知模型缺省 o200k_base(metering 契约)。
+func defaultEncodingFor(model string) string {
+	switch {
+	// o200k 系(顺序敏感:gpt-4o/gpt-4.1 须先于 gpt-4 判定)
+	case strings.HasPrefix(model, "gpt-4o"),
+		strings.HasPrefix(model, "gpt-4.1"),
+		strings.HasPrefix(model, "o1"), strings.HasPrefix(model, "o3"), strings.HasPrefix(model, "o4"):
+		return "o200k_base"
+	case strings.HasPrefix(model, "gpt-4"), strings.HasPrefix(model, "gpt-3.5"):
+		return "cl100k_base"
+	default:
+		// deepseek/glm/qwen 等国产系与未知模型:openai 无对应词表,统一 o200k_base 近似
+		return "o200k_base"
+	}
+}
+
+// getEncoding 取编码实例(进程内缓存;tiktoken 实例并发安全)。
+func getEncoding(model string) (*tiktoken.Tiktoken, error) {
+	name := encodingFor(model)
+	encMu.Lock()
+	defer encMu.Unlock()
+	if enc, ok := encCache[name]; ok {
+		return enc, nil
+	}
+	enc, err := tiktoken.GetEncoding(name)
+	if err != nil {
+		return nil, fmt.Errorf("metering: 加载编码 %s: %w", name, err)
+	}
+	encCache[name] = enc
+	return enc, nil
+}
+
+// CountTokens 文本 token 计数(BPE,非粗估)。
+func CountTokens(text, model string) (int64, error) {
+	if text == "" {
+		return 0, nil
+	}
+	enc, err := getEncoding(model)
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(enc.Encode(text, nil, nil))), nil
+}
+
+// EstimateInputTokens 入站 messages 序列化后计数(计价口径的近似,契约明确)。
+func EstimateInputTokens(messages []map[string]any, model string) int64 {
+	b, err := json.Marshal(messages)
+	if err != nil {
+		return 0
+	}
+	n, _ := CountTokens(string(b), model)
+	return n
+}
+
+// EstimateOutputTokens 已转发 delta 文本累计计数。
+func EstimateOutputTokens(text, model string) int64 {
+	n, _ := CountTokens(text, model)
+	return n
+}
+
+// Pricing 单别名价目(μ/百万Token,经 ParsePrice 换算后的整数形态)。
+// CachedInputMicroPerM=0 表示缓存命中与输入同价(metering「缺省=input」契约)。
+type Pricing struct {
+	Currency             string
+	InputMicroPerM       int64
+	CachedInputMicroPerM int64
+	OutputMicroPerM      int64
+}
+
+// RowParams 落库行参数(NewRow 消费;字段语义与 usage_logs DDL 一一对应)。
+type RowParams struct {
+	RequestID     string
+	TenantID      string
+	APIKeyID      string
+	Provider      string
+	ModelAlias    string
+	UpstreamModel string
+	Stream        bool
+	Status        string // ok | error | client_cancel
+	ErrorClass    string // 可空
+	Usage         protocol.Usage
+	Estimated     bool
+	Pricing       *Pricing // nil 则成本记 0(如估算路径未接价目)
+	Currency      string   // 非空则覆盖价目币种(语义缓存命中行专用场景)
+	FirstTokenMs  *int64
+	TotalMs       int64
+}
+
+// NewRow 构造计量行:计价经 Cost 逐段向上取整(metering.md 契约),
+// 失败/断连请求也计量(成本按实际 token,如实记 error_class)。
+func NewRow(p RowParams) UsageRow {
+	var cost int64
+	currency := "CNY"
+	if p.Currency != "" {
+		currency = p.Currency
+	}
+	if p.Pricing != nil {
+		currency = p.Pricing.Currency
+		cost = CostWithCached(p.Usage.PromptTokens, p.Usage.CachedTokens, p.Usage.CompletionTokens,
+			p.Pricing.InputMicroPerM, p.Pricing.CachedInputMicroPerM, p.Pricing.OutputMicroPerM)
+	}
+	return UsageRow{
+		ID:                  newUsageID(),
+		RequestID:           p.RequestID,
+		TenantID:            p.TenantID,
+		APIKeyID:            p.APIKeyID,
+		Provider:            p.Provider,
+		ModelAlias:          p.ModelAlias,
+		UpstreamModel:       p.UpstreamModel,
+		Stream:              p.Stream,
+		Status:              p.Status,
+		ErrorClass:          p.ErrorClass,
+		PromptTokens:        p.Usage.PromptTokens,
+		CompletionTokens:    p.Usage.CompletionTokens,
+		ReasoningTokens:     p.Usage.ReasoningTokens,
+		CachedTokens:        p.Usage.CachedTokens,
+		Estimated:           p.Estimated,
+		CostMicro:           cost,
+		Currency:            currency,
+		LatencyFirstTokenMs: p.FirstTokenMs,
+		LatencyTotalMs:      p.TotalMs,
+		CreatedAt:           timeNowUTC(),
+	}
+}
