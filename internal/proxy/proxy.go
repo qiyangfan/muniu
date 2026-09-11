@@ -37,33 +37,37 @@ type Timeouts struct {
 
 // Config 代理装配参数(New 消费;结构化形态避免参数膨胀)。
 type Config struct {
-	Registry     *adapter.Registry
-	Routes       map[string][]config.Candidate
-	Pricing      *metering.PricingDirectory // 价目目录(动态改价:管理面原子替换,转发只读);nil = 成本记 0
-	Timeouts     Timeouts
-	Pipeline     *metering.Pipeline       // 计量管道;nil = 不计量(纯转发场景)
-	Pools        map[string]*keypool.Pool // provider → key 池;缺池则该 provider 无法出站
-	TPM          *ratelimit.TPM           // TPM 滑动窗口;请求完成后记账(前置判定在 Gate 中间件)
-	Cache        *semantic.Cache          // 语义缓存;nil = 关闭
-	TenantSwitch func(string) bool        // 租户语义缓存开关(装配层提供 DB 查询闭包)
-	RandIntn     func(int) int            // 候选起点随机源;nil 用全局随机(测试可注入)
-	Logger       *slog.Logger
+	Registry         *adapter.Registry
+	Routes           map[string][]config.Candidate
+	Pricing          *metering.PricingDirectory // 价目目录(动态改价:管理面原子替换,转发只读);nil = 成本记 0
+	Timeouts         Timeouts
+	Pipeline         *metering.Pipeline       // 计量管道;nil = 不计量(纯转发场景)
+	Pools            map[string]*keypool.Pool // provider → key 池;缺池则该 provider 无法出站
+	TPM              *ratelimit.TPM           // TPM 滑动窗口;请求完成后记账(前置判定在 Gate 中间件)
+	Cache            *semantic.Cache          // 语义缓存;nil = 关闭
+	TenantSwitch     func(string) bool        // 租户语义缓存开关(装配层提供 DB 查询闭包)
+	Capabilities     []config.ModelCapability // 模型能力目录(ADR-0010);空 = 全部零干预透传
+	StrictGovernance bool                     // true = 命中能力约束即 400(缺省宽松放行+留痕)
+	RandIntn         func(int) int            // 候选起点随机源;nil 用全局随机(测试可注入)
+	Logger           *slog.Logger
 }
 
 // Proxy 编排器:注册表 + 路由 + key 池 + 三层超时 + 计量管道。
 type Proxy struct {
-	registry *adapter.Registry
-	routes   map[string][]config.Candidate
-	pricing  *metering.PricingDirectory
-	timeouts Timeouts
-	pipeline *metering.Pipeline
-	pools    map[string]*keypool.Pool
-	tpm      *ratelimit.TPM
-	cache    *semantic.Cache
-	tenantSw func(string) bool
-	randIntn func(int) int
-	logger   *slog.Logger
-	client   *http.Client
+	registry  *adapter.Registry
+	routes    map[string][]config.Candidate
+	pricing   *metering.PricingDirectory
+	timeouts  Timeouts
+	pipeline  *metering.Pipeline
+	pools     map[string]*keypool.Pool
+	tpm       *ratelimit.TPM
+	cache     *semantic.Cache
+	tenantSw  func(string) bool
+	caps      map[governKey]config.ModelCapability
+	strictGov bool
+	randIntn  func(int) int
+	logger    *slog.Logger
+	client    *http.Client
 }
 
 // New 构造代理:路由候选按 priority 升序排序;HTTP 客户端带拨号层超时与连接池。
@@ -96,19 +100,25 @@ func New(cfg Config) *Proxy {
 	if randIntn == nil {
 		randIntn = func(n int) int { return rand.IntN(n) }
 	}
+	caps := make(map[governKey]config.ModelCapability, len(cfg.Capabilities))
+	for _, mc := range cfg.Capabilities {
+		caps[governKey{mc.Provider, mc.Model}] = mc
+	}
 	return &Proxy{
-		registry: cfg.Registry,
-		routes:   sorted,
-		pricing:  cfg.Pricing,
-		timeouts: cfg.Timeouts,
-		pipeline: cfg.Pipeline,
-		pools:    cfg.Pools,
-		tpm:      cfg.TPM,
-		cache:    cfg.Cache,
-		tenantSw: cfg.TenantSwitch,
-		randIntn: randIntn,
-		logger:   logger,
-		client:   &http.Client{Transport: transport},
+		registry:  cfg.Registry,
+		routes:    sorted,
+		pricing:   cfg.Pricing,
+		timeouts:  cfg.Timeouts,
+		pipeline:  cfg.Pipeline,
+		pools:     cfg.Pools,
+		tpm:       cfg.TPM,
+		cache:     cfg.Cache,
+		tenantSw:  cfg.TenantSwitch,
+		caps:      caps,
+		strictGov: cfg.StrictGovernance,
+		randIntn:  randIntn,
+		logger:    logger,
+		client:    &http.Client{Transport: transport},
 	}
 }
 
@@ -244,6 +254,34 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// govern 按目标候选解析能力约束并执行治理(目录未声明 → 原件零干预返回)。
+func (p *Proxy) govern(req *protocol.ChatRequest, cand failover.Candidate) (*protocol.ChatRequest, []governChange, string) {
+	capability, ok := p.caps[governKey{cand.Provider, cand.Model}]
+	if !ok {
+		return req, nil, ""
+	}
+	return governChat(req, capability, p.strictGov)
+}
+
+// traceGovern 留痕双通道(ADR-0010):结构化日志逐条明细 + 客户端可见响应头参数清单。
+// 头在响应提交前写入(此处位于任何 WriteHeader 之前);换道后无干预即清除上一目标残留。
+func (p *Proxy) traceGovern(w http.ResponseWriter, r *http.Request, cand failover.Candidate, changes []governChange) {
+	if len(changes) == 0 {
+		w.Header().Del("X-Muniu-Normalized")
+		return
+	}
+	params := make([]string, 0, len(changes))
+	for _, ch := range changes {
+		params = append(params, ch.Param)
+		p.logger.Info("请求参数治理干预",
+			"request_id", loggingRequestID(r.Context()),
+			"provider", cand.Provider, "model", cand.Model,
+			"param", ch.Param, "action", ch.Action, "from", ch.From, "to", ch.To,
+		)
+	}
+	w.Header().Set("X-Muniu-Normalized", strings.Join(params, ","))
+}
+
 // attempt 单候选执行:按流式与否分发,并在退出时计量第 11 步
 // (成功/失败/断连三态都记;defer 保证任何出口都落账)。
 func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, req *protocol.ChatRequest, cand failover.Candidate, key *keypool.Key, m *meterState) (handled bool, class failover.ErrorClass) {
@@ -254,7 +292,15 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, req *protocol.Ch
 		p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")
 		return true, failover.ClassUnknown
 	}
-	out, err := ad.Prepare(req, cand.Model, key.Value)
+	// 请求参数治理(ADR-0010):每次 attempt 从原始请求出发按目标 (provider, model) 重新治理——
+	// 换道后不得沿用上一目标的收敛结果(spec 换道重治理场景);strict 命中即 400 终结。
+	greq, gchanges, greject := p.govern(req, cand)
+	if greject != "" {
+		p.writeError(w, r, protocol.TypeBadRequest, "param_rejected", greject)
+		return true, failover.ClassBadRequest
+	}
+	p.traceGovern(w, r, cand, gchanges)
+	out, err := ad.Prepare(greq, cand.Model, key.Value)
 	if err != nil {
 		p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "出站请求构造失败")
 		return true, failover.ClassBadRequest

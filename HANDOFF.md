@@ -10,7 +10,7 @@
 - **Phase 0-4 代码与验证全部完成**;Phase 5 前置部分完成(见 2026-09-10 记录)。
 - **2026-09-11 全仓代码审查循环**:四个并行评审覆盖协议/转发/计量存储/管控/web CI,溯源核验后确认 33 项真实缺陷并全部修复(详见验收记录 11),`make check` 全绿。
 - **git 已完成首次全量提交**(2026-09-11,root commit,203 文件,方案 A′);tag v0.3.0 / 建远端 / push 待用户逐次指令。此后 09-11 的裁决与功能改动**未提交**(29+ 文件)。
-- Phase 5 剩余:T5.1 末段(kongming `.env` 对齐回填——本机无 kongming 仓库)、T5.2(kongming 侧改动,需用户指令)、T5.3 灰度 1 周+全量(真实环境计时)、T5.6 两周判据核对。
+- Phase 5 剩余:T5.1 末段已完成(2026-09-11 kongming 会话:alignment 表已回填,muniu.yaml 已补 dashscope 上游[openai 基座直连 compatible-mode]+三别名路由 qwen-plus/qwen-vl-max/text-embedding-v2,牌价走运营态待控制台录入;两文件未提交);T5.2 进行中(kongming 侧 ADR-007 已落盘,.env 三处切换待 muniu 启动+bootstrap 签 key 后执行);T5.3 灰度 1 周+全量(真实环境计时)、T5.6 两周判据核对。
 - **对照组 one-api 已补齐**:官方 v0.6.10 darwin-arm64 二进制同机同剧本背靠背对比,muniu 吞吐 80-150×、首字节 p50 低 1-2 个数量级(报告 docs/benchmarks/2026-09-10.md)。
 - **压测报告已出**:docs/benchmarks/2026-09-10.md(muniu 单边,oha 四档:峰值 37,951 rps@1000 并发 100% 成功率,首字节 p50 1.13ms@100),关键数字已回填 README。
 
@@ -40,6 +40,7 @@
 | 2026-09-11 | 语义缓存命中行 TotalMs 恒 0 | 命中延迟不可观测 | usage_logs 加列评估 | **无需迁移,直接测量**(已实现):`latency_total_ms` 列本就存在,命中行硬编码 0 是实现遗漏。recordCacheHit 现记「请求入口→命中判定」真实耗时(含嵌入自调用,命中路径主要延迟),兑现 semantic-cache.md「命中延迟单独字段」契约 |
 | 2026-09-11 | DeepSeek 402(余额不足)归 ClassUnknown,key 不冷却 | 欠费 key 被持续重试 | quirk 层覆写 Classify:402→auth_failed | **402→ClassRateLimited**(非 auth_failed,已实现):欠费是「充值即恢复」的暂态——auth_failed 会永久禁用 key(需人工重启恢复),与真实生命周期相反;限流冷却指数退避自动重探,即熔断器半开语义。判定表零改动,quirk 层落地+测试钉死 |
 | 2026-09-11 | reconcile.sql 口径修正(每尝试一行→DISTINCT) | 旧口径 ≤1% 判据不可达 | 已按「每尝试一行」实现修正 SQL | 已解决(口径随上项一并写入 metering.md) |
+| 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
 
@@ -68,3 +69,4 @@
 17. **第二轮审查循环(2026-09-11,P1 变更批)**:三域并行评审报 ~30 项,溯源核验确认 22 项并全部修复——高危:①吊销间隔零值缺省写在构造副本上,NewTicker(0) panic 配 revocations_url 即崩;②缓冲满时 saveBuffered 无限重试阻塞唯一 flushLoop,远端恢复也无法续传(重试前先 best-effort replay 自愈);中危:③ParseMultiplier 整数回绕把非法输入洗成合法倍率;④拉取循环无条件 upsert 致 updated_at churn(内容比对跳过);⑤/metrics 非恒时比较+匿名暴露违背 ADR-0009(改恒时+无 token 不挂载+Recover 包裹);⑥控制台编辑 yaml 行静默丢窗(StaticEntry 如实透出时区/窗);⑦「新增价目」alias 框 disabled 全流程不可用;⑧毒丸行永久阻塞续传(自愈剔除+告警);⑨PUT 双实现校验漂移(收敛 ParsePricingRecord);⑩openapi 响应缺 schema 致 api.ts 手写类型(补 schema 重生成);另修 URL 校验/Close 并发/版本单调防回退/启动即拉/alias trim/bp 值域断言/币种白名单/直方图升序校验/时钟符号宽松等。遗留:拓扑热替换(providers/routes)、直写 PG 汇、P2 参考部署 compose、At 时钟注入。终验:`make check` 全绿。
 17b. **第二轮审查循环收敛(2026-09-11 同日)**:评审→修复→复审完成,新增吊销循环回归测试(interval 缺省 panic 钉子/启动即拉/版本单调/Close 幂等),`make check` 全绿(18 包+lint 0 issues+race)。悬置项(下一批次):拓扑热替换 3.1、直写 PG 汇、P2 参考部署 compose、At 时钟注入。
 17c. **聚焦复审再修 3 项(2026-09-11)**:①非 200+合法 JSON 时吊销快照 nil err 解引用 panic;②毒丸删除在 MaxOpenConns(1) 下与游标互锁死锁(改为迭代收集+关游标后统一删,新增单连接回归测试);③控制面拉取比对跳过短路刷新重试(pendingRefresh 标记)。顺手:IngestSink 共享客户端、buffer_capacity≥flush_batch 防呆。终验 make check exit=0(18 包+lint 0 issues)。
+18. **模型能力目录与请求参数治理(2026-09-11,openspec model-capability-governance,ADR-0010)**:立法 ADR-0010(零内置声明制/逐 attempt 治理/留痕放行+strict 可选),宪法 upstream-adapters.md 增「请求参数治理」节(响应侧白名单不变)。落地:config `models` 段((provider,model) 二元组唯一+引用完整性+值域 fail-fast)与 `strict_governance` 全局开关;`proxy/governance.go` 治理纯函数——Raw 字节层 map 改写(未知字段零丢失)+ 结构字段副本同步(桥接消费 in.MaxTokens/in.Temperature),**原件永不被触碰,每次 attempt 从原始请求按目标 (provider,model) 重新治理**(spec 换道重治理场景);思考锁识别三家关闭思考方言(`enable_thinking:false`/`reasoning_effort:minimal`/`thinking.type:disabled`——协议形态识别,与能力零内置正交);attempt 在 adapter.Prepare 前挂接,strict 命中 400 `param_rejected`(上游零调用);留痕双通道:结构化日志逐条明细(request_id/provider/model/param/action/from/to)+ 响应头 `X-Muniu-Normalized`(换道无干预即清头,零干预请求字节逐字节不变)。测试先行:治理纯函数表驱动 7 组 + 集成钉子 3 组(换道重治理/留痕+出站改写/strict 400),先红后绿;muniu.example.yaml 注释样例;装配层接线(Capabilities/StrictGovernance)。终验:`make check` 全绿(vet+lint 0 issues+web+全包 race)。**代码审查迭代循环(同日)**:双域并行评审 + 聚焦复审两轮收敛,修复 7 项——summarize rune 边界截断、strict 拒绝消息补模型名、drop_params 空白值/协议结构字段(model/messages/stream)校验拒绝、drop 结构字段同步断言、换道后干预头残留断言、日志字段断言、缺 provider/model 校验用例,spec/tasks 措辞对齐实现;3 项疑似经溯源裁决不修(strict 400 不落计量账与 adapter_missing 早退模式一致/治理拒绝记 key EMA 与上游 400 同类语义/缺 provider continue 拆分报错为既有模式)。复审结论:通过,无可检出缺陷;`make check` 复验全绿。

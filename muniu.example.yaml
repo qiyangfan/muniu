@@ -108,3 +108,17 @@ pricing:
 #   threshold: 0.97                  # 余弦相似度阈值(保守起步)
 #   ttl_hours: 24                    # 条目 TTL
 #   capacity: 10000                  # LRU 容量上限
+
+# 模型能力目录(ADR-0010,可选):(provider, model) 二元组精确声明,零内置零通配;
+# 未声明的模型/参数 = 零干预透传。治理在每次换道尝试出站前按目标模型重新生效——
+# 一份客户端参数跨家换道时,按新模型约束重新 drop/clamp(参数兼容是换道正确性的组成部分)。
+# 干预默认留痕放行(结构化日志 + 响应头 X-Muniu-Normalized);strict_governance 可改 400 拒绝。
+# models:
+#   - provider: deepseek
+#     model: deepseek-reasoner
+#     drop_params: [temperature, top_p]   # 不支持参数黑名单(OpenAI 形态参数名)
+#     thinking_lock: true                 # 思考不可关:enable_thinking=false / reasoning_effort=minimal / thinking.type=disabled 指令被移除
+#   - provider: openai
+#     model: gpt-4o-mini
+#     max_output_tokens: 16384            # 输出上限,越界 clamp max_tokens(界内不动)
+# strict_governance: false                # true = 命中约束即 400(缺省宽松放行+留痕)

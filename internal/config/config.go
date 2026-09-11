@@ -106,6 +106,16 @@ type AuthCfg struct {
 	RevocationsIntervalSec int      `yaml:"revocations_interval_sec"` // 吊销收敛窗口,缺省 60s
 }
 
+// ModelCapability 模型能力声明(ADR-0010):(provider, model) 二元组必填、零通配、零内置。
+// 声明了约束才干预,未声明 = 零干预透传;治理语义见 upstream-adapters「请求参数治理」。
+type ModelCapability struct {
+	Provider        string   `yaml:"provider"`
+	Model           string   `yaml:"model"`
+	DropParams      []string `yaml:"drop_params"`       // 不支持参数黑名单(OpenAI 形态参数名)
+	ThinkingLock    bool     `yaml:"thinking_lock"`     // 思考不可关:关闭思考指令按策略处置
+	MaxOutputTokens int64    `yaml:"max_output_tokens"` // 输出上限(0=不限制);越界 clamp max_tokens
+}
+
 // Config muniu.yaml 的运行态形态(启动后只读)。
 type Config struct {
 	Server struct {
@@ -137,10 +147,12 @@ type Config struct {
 		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点;空 = 不拉取(standalone)
 		PollIntervalSec int    `yaml:"poll_interval_sec"` // 拉取间隔,缺省 60s
 	} `yaml:"control_plane"`
-	Providers   []Provider             `yaml:"providers"`
-	ModelRoutes map[string][]Candidate `yaml:"model_routes"`
-	Pricing     map[string]Price       `yaml:"pricing"`
-	Semantic    SemanticCfg            `yaml:"semantic"`
+	Providers        []Provider             `yaml:"providers"`
+	ModelRoutes      map[string][]Candidate `yaml:"model_routes"`
+	Pricing          map[string]Price       `yaml:"pricing"`
+	Semantic         SemanticCfg            `yaml:"semantic"`
+	Models           []ModelCapability      `yaml:"models"`            // 模型能力目录(ADR-0010)
+	StrictGovernance bool                   `yaml:"strict_governance"` // true = 命中约束即 400(缺省宽松放行+留痕)
 }
 
 // ProviderByName 按名称取 provider(路由解析用)。
@@ -362,6 +374,45 @@ func (c *Config) validate() error {
 			}
 			if _, err := metering.ParseMultiplier(tw.Multiplier); err != nil {
 				add("pricing[%s].time_windows[%d].multiplier %q 非法(须 (0,10] 内、≤4 位小数)", alias, j, tw.Multiplier)
+			}
+		}
+	}
+
+	// 模型能力目录(ADR-0010):声明制零内置;引用完整性、二元组唯一性、值域在此 fail-fast
+	seenCaps := map[string]bool{}
+	for i, mc := range c.Models {
+		where := fmt.Sprintf("models[%d](%s,%s)", i, mc.Provider, mc.Model)
+		if mc.Provider == "" {
+			add("models[%d] 缺 provider", i)
+			continue
+		}
+		if _, ok := c.ProviderByName(mc.Provider); !ok {
+			add("%s 引用不存在的 provider %q", where, mc.Provider)
+		}
+		if mc.Model == "" {
+			add("models[%d] 缺 model", i)
+		}
+		key := mc.Provider + "\x00" + mc.Model
+		if seenCaps[key] {
+			add("%s 重名声明((provider, model) 二元组必须唯一)", where)
+		}
+		seenCaps[key] = true
+		if mc.MaxOutputTokens < 0 {
+			add("%s max_output_tokens 不可为负: %d", where, mc.MaxOutputTokens)
+		}
+		for j, dp := range mc.DropParams {
+			// 空白值若放行会与运行时精确匹配永不命中,声明静默失效且零告警——必须 fail-fast
+			if strings.TrimSpace(dp) == "" {
+				add("%s drop_params[%d] 不可为空", where, j)
+				continue
+			}
+			if dp != strings.TrimSpace(dp) {
+				add("%s drop_params[%d] %q 含首尾空白(将导致声明静默失效)", where, j, dp)
+			}
+			// 协议结构字段是请求骨架而非采样参数:删除必然破坏出站请求,治理语义不覆盖
+			switch dp {
+			case "model", "messages", "stream":
+				add("%s drop_params[%d] %q 为协议结构字段,禁止声明治理", where, j, dp)
 			}
 		}
 	}
