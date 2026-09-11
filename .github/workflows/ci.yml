@@ -20,7 +20,8 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           # 与 mise.toml 钉死的版本一致:latest 会随上游大版本漂移,门禁不可复现
-          version: "2.13"
+          # (action 要求 v 前缀的完整版本号)
+          version: "v2.13"
       - name: go test (race)
         run: go test -race ./...
       - name: build (CGO_ENABLED=0)
@@ -32,8 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        # 版本经 web/package.json 的 packageManager 字段钉死:pnpm 9 不认识
+        # pnpm-workspace.yaml 的 allowBuilds(pnpm 11 字段)会报 packages field missing
       - uses: actions/setup-node@v4
         with:
           node-version: 22
