@@ -1,0 +1,14 @@
+# 构建上下文排除:密钥/数据/本地产物绝不进镜像层(dist/ 例外——交叉编译产物经 COPY 进镜像)
+.env
+.env.*
+.git
+data/
+bin/
+*.log
+*.db*
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+.playwright-mcp/
+.codegraph/
+muniu.yaml

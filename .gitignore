@@ -12,9 +12,10 @@
 *.db-shm
 *.log
 
-# 环境变量与本地配置(muniu.example.yaml 入库,真实配置不入)
+# 环境变量与本地配置(muniu.example.yaml 入库,真实配置不入;*.example 模板放行入库)
 .env
 .env.*
+!*.example
 muniu.yaml
 
 # Playwright 会话产物(控制台截图交付物已移至 docs/screenshots/)

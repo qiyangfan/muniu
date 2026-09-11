@@ -21,3 +21,13 @@
   bootstrap 起步值 rpm 120 / tpm 不限 / 日配额不限。
 - 灰度路径:先切非关键数据源一周 → 全量;每日对账(scripts/reconcile.sql),差异 >1% 立案。
 - 语义缓存:kongming 租户灰度期关闭(bootstrap 默认),基线确认后再经 PATCH 租户开启。
+
+## 切换状态(2026-09-11)
+- 租户 kongming 与专用 key 已签发(bootstrap);kongming `.env` 三处切换完成,
+  e2e 问答 + 计量 + 计价实证全过(详见 muniu HANDOFF 验收记录 19)。
+- 三别名牌价已录入运营态(`PUT /admin/v1/pricing`,官方定价页 2026-09-11 核对:
+  qwen-plus 0.8/2(0-128K 阶梯首档非思考)、qwen-vl-max 1.6/4、text-embedding-v2 0.7,
+  CNY/百万 token)。
+- 同日晚 muniu 常驻形态迁 podman 容器(命名卷全新库),key 与牌价**重签/重录过一次**
+  (数字不变,旧 key 已随旧库作废),对账以新 key 起算。
+- 灰度一周自 2026-09-11 起计时,期满对账达标 → 全量,本表与 ADR-007(kongming 侧)同步收口。

@@ -4,13 +4,15 @@
 
 ## 当前状态(2026-09-11,平台化定位裁决 + 动态改价)
 
+- **本机常驻形态已定(2026-09-11):podman 后台容器**(用户裁决:不搞开机自启,launchd 方案否决撤除;compose 命名网络亦不取——kongming dev 的 api/agent 是宿主直跑,容器网络 DNS 对宿主进程不可达,回环端口映射是唯一通路且隔离等价)。`make dev-up/down/status/restart/sql`:免拉取形态(宿主交叉编译 linux/arm64 + scratch 运行层,不依赖 registry——machine 死代理曾致拉取全灭);**两个硬约束已实证并绕开**:①machine 注入的死代理 env 须容器显式清空(否则出站 proxyconnect 拒);②SQLite WAL 在 virtiofs 宿主目录挂载上 disk I/O error(官方不支持网络 FS WAL)→计量库放命名卷 muniu-data,宿主查询走 `make dev-sql`。卷首建=全新库,key 与牌价已重签/重录(旧宿主 data/muniu.db 仅存当日验证行,弃用保留)。
+
 - **ADR-0005 已采纳**:muniu 定位 = LLM 网关**数据面**,双形态(standalone 单二进制默认 / cluster 无状态副本);平台能力(用户/钱包/支付/门户)归独立控制面产品(新仓库,PG 权威)。宪法非目标已相应修订。P1 演进项:自校验 key、配置源抽象、计量汇插拔;前置 ADR 0006/0007/0008 待立。
 - **动态改价已实现**(验收记录 14):价目 = 运营态,`PUT/DELETE /admin/v1/pricing/{alias}` + 控制台「价目管理」页,即时生效零重启;YAML 降级静态兜底。
 - **分时段倍率已实现**(验收记录 13):`timezone` + `time_windows[{window, multiplier}]`,加载期换算、热路径零改动。
 - **Phase 0-4 代码与验证全部完成**;Phase 5 前置部分完成(见 2026-09-10 记录)。
 - **2026-09-11 全仓代码审查循环**:四个并行评审覆盖协议/转发/计量存储/管控/web CI,溯源核验后确认 33 项真实缺陷并全部修复(详见验收记录 11),`make check` 全绿。
-- **git 已完成首次全量提交**(2026-09-11,root commit,203 文件,方案 A′);tag v0.3.0 / 建远端 / push 待用户逐次指令。此后 09-11 的裁决与功能改动**未提交**(29+ 文件)。
-- Phase 5 剩余:T5.1 末段已完成(2026-09-11 kongming 会话:alignment 表已回填,muniu.yaml 已补 dashscope 上游[openai 基座直连 compatible-mode]+三别名路由 qwen-plus/qwen-vl-max/text-embedding-v2,牌价走运营态待控制台录入;两文件未提交);T5.2 进行中(kongming 侧 ADR-007 已落盘,.env 三处切换待 muniu 启动+bootstrap 签 key 后执行);T5.3 灰度 1 周+全量(真实环境计时)、T5.6 两周判据核对。
+- **git 状态**:root commit(2026-09-11,方案 A′)后,09-11 的裁决与功能改动已由当日会话陆续提交;工作区现仅余接线与归档批次变更。tag v0.3.0 / 建远端 / push 待用户逐次指令;工作区与提交形态以 `git status`/`git log` 为唯一事实源。
+- Phase 5 剩余:T5.1/T5.2 **均已完成**(2026-09-11:bootstrap 已签租户 kongming+key;kongming `.env` 三处切换完成,e2e 问答/计量/计价实证全过,三别名牌价已录入运营态,见验收记录 19);T5.3 灰度一周(自 2026-09-11 起计时,每日对账)→ 全量;T5.6 两周判据核对。
 - **对照组 one-api 已补齐**:官方 v0.6.10 darwin-arm64 二进制同机同剧本背靠背对比,muniu 吞吐 80-150×、首字节 p50 低 1-2 个数量级(报告 docs/benchmarks/2026-09-10.md)。
 - **压测报告已出**:docs/benchmarks/2026-09-10.md(muniu 单边,oha 四档:峰值 37,951 rps@1000 并发 100% 成功率,首字节 p50 1.13ms@100),关键数字已回填 README。
 
@@ -22,7 +24,7 @@
    git tag v0.3.0 && git push -u origin main --tags
    ```
 2. 【执行会话】push 后:CI 绿链接回填;README 补 CI badge。
-3. 【用户+执行】kongming 侧:`bash scripts/bootstrap-kongming.sh`(签发 key)→ kongming 改 base_url/key + ADR(T5.2,需用户指令)→ 灰度一周→全量(T5.3,每日对账)。**ADR 草案已备**:`docs/kongming-adr-draft.md`(引入 muniu 的完整论证含否决清单与信任边界分析,拷入 kongming docs/adr/ 即可)。
+3. 【执行会话】T5.2 接线已完成(2026-09-11,验收记录 19;kongming 侧 ADR-007 已落盘并更新状态)。剩余 T5.3:灰度一周(每日对账 `scripts/reconcile.sql`,差异 >1% 立案;计量库在容器命名卷,经 `make dev-sql` 拷出后查询)→ 全量 → kongming ADR-007 转「已接受」。
 4. 【执行会话·已完成】压测:muniu 单边 + one-api 对照组均已出(见验收记录)。
 5. 【跨会话】两周生产观察期计时 → T5.6 v1.0.0 判据核对 → tag v1.0.0 待用户指令。
 
@@ -70,3 +72,5 @@
 17b. **第二轮审查循环收敛(2026-09-11 同日)**:评审→修复→复审完成,新增吊销循环回归测试(interval 缺省 panic 钉子/启动即拉/版本单调/Close 幂等),`make check` 全绿(18 包+lint 0 issues+race)。悬置项(下一批次):拓扑热替换 3.1、直写 PG 汇、P2 参考部署 compose、At 时钟注入。
 17c. **聚焦复审再修 3 项(2026-09-11)**:①非 200+合法 JSON 时吊销快照 nil err 解引用 panic;②毒丸删除在 MaxOpenConns(1) 下与游标互锁死锁(改为迭代收集+关游标后统一删,新增单连接回归测试);③控制面拉取比对跳过短路刷新重试(pendingRefresh 标记)。顺手:IngestSink 共享客户端、buffer_capacity≥flush_batch 防呆。终验 make check exit=0(18 包+lint 0 issues)。
 18. **模型能力目录与请求参数治理(2026-09-11,openspec model-capability-governance,ADR-0010)**:立法 ADR-0010(零内置声明制/逐 attempt 治理/留痕放行+strict 可选),宪法 upstream-adapters.md 增「请求参数治理」节(响应侧白名单不变)。落地:config `models` 段((provider,model) 二元组唯一+引用完整性+值域 fail-fast)与 `strict_governance` 全局开关;`proxy/governance.go` 治理纯函数——Raw 字节层 map 改写(未知字段零丢失)+ 结构字段副本同步(桥接消费 in.MaxTokens/in.Temperature),**原件永不被触碰,每次 attempt 从原始请求按目标 (provider,model) 重新治理**(spec 换道重治理场景);思考锁识别三家关闭思考方言(`enable_thinking:false`/`reasoning_effort:minimal`/`thinking.type:disabled`——协议形态识别,与能力零内置正交);attempt 在 adapter.Prepare 前挂接,strict 命中 400 `param_rejected`(上游零调用);留痕双通道:结构化日志逐条明细(request_id/provider/model/param/action/from/to)+ 响应头 `X-Muniu-Normalized`(换道无干预即清头,零干预请求字节逐字节不变)。测试先行:治理纯函数表驱动 7 组 + 集成钉子 3 组(换道重治理/留痕+出站改写/strict 400),先红后绿;muniu.example.yaml 注释样例;装配层接线(Capabilities/StrictGovernance)。终验:`make check` 全绿(vet+lint 0 issues+web+全包 race)。**代码审查迭代循环(同日)**:双域并行评审 + 聚焦复审两轮收敛,修复 7 项——summarize rune 边界截断、strict 拒绝消息补模型名、drop_params 空白值/协议结构字段(model/messages/stream)校验拒绝、drop 结构字段同步断言、换道后干预头残留断言、日志字段断言、缺 provider/model 校验用例,spec/tasks 措辞对齐实现;3 项疑似经溯源裁决不修(strict 400 不落计量账与 adapter_missing 早退模式一致/治理拒绝记 key EMA 与上游 400 同类语义/缺 provider continue 拆分报错为既有模式)。复审结论:通过,无可检出缺陷;`make check` 复验全绿。
+19. **T5.2 kongming 接线完成 + openspec 归档(2026-09-11)**:①muniu 启动(`DASHSCOPE_API_KEY` 自 kongming apps/agent/.env 注入,`OLLAMA_SMOKE_KEY` 占位,`MUNIU_ADMIN_TOKEN` 本地 dev 值);②`bootstrap-kongming.sh` 签发租户 kongming + mk- key(rpm 120);③直连冒烟 qwen-plus ok;④kongming `.env` 三处切换(KM_AGENT_LLM_BASE_URL 新增=127.0.0.1:8787/v1、KM_AGENT_LLM_API_KEY→mk- key、MODEL_REGISTRY_JSON qwen-vl 条目同改;备份 /tmp/.km-agent-env-pre-muniu.bak,重启即失);⑤e2e 实证:kongming admin 问答 verdict PASS,muniu 计量 +5 行(qwen-plus×3+text-embedding-v2×2 全 ok——embedding 经 kongming 回退链零配置走网关,与 ADR-007 论断一致);⑥三别名牌价经 `PUT /admin/v1/pricing` 录入运营态(官方定价页 2026-09-11 核对:qwen-plus 0.8/2、qwen-vl-max 1.6/4、text-embedding-v2 0.7,CNY/百万 token;qwen-plus 为 0-128K 阶梯首档非思考价),计价闭环实证 12in+1out→12μ ceil;⑦openspec 归档 `dynamic-pricing`/`model-capability-governance`(主 specs +3),`platform-data-plane` 保持活动(批次一完成,3.1/3.2/3.3/6.x 下一批次)。灰度一周计时自本日起。
+20. **本机常驻形态:podman 后台容器(2026-09-11,用户拍板「正常 podman 后台运行,不搞开机自启」)**:演化路径 nohup→launchd(误杀自愈实证后被否决撤除)→podman。落地:`Containerfile`(宿主交叉编译 linux/arm64 + `FROM scratch`,零 registry 拉取——machine 死代理曾致 `golang:1.27-alpine` 拉取全灭,免拉取形态使构建秒级且不依赖宿主代理存活)+ `.containerignore`(密钥/数据/本地库绝不进 context)+ `muniu.yaml` addr 改 0.0.0.0(容器内回环收不到端口转发,宿主侧由 `-p 127.0.0.1:8787:8787` 收回环)+ Makefile `dev-up/down/build/status/restart/sql`。**两个环境硬约束实证**:①podman machine 向所有容器注入其代理 env(`http_proxy=host.containers.internal:15732`),宿主代理不在则 Go 出站 proxyconnect 拒——容器以 `-e http_proxy=` 等显式清空;②SQLite WAL 在 podman machine virtiofs 宿主目录挂载上报 `disk I/O error (522)`(官方不支持网络 FS 的 WAL 共享内存)——计量库迁**命名卷 muniu-data**(machine 本地磁盘,WAL 可靠),宿主查询经 `make dev-sql`(podman cp 拷出+宿主 sqlite3,reconcile.sql 用法不变)。**数据迁移裁决**:卷首建=全新库,当日签发的 key 与三别名牌价随旧宿主库作废,已重签/重录(同牌价数字);旧库 `data/muniu.db`(8 行验证数据)留档弃用。终验:直连冒烟 200+计量落卷(cost 12μ 牌价生效)+kongming agent 重启加载新 key 后 e2e 问答 PASS+计量 5 行含计价。

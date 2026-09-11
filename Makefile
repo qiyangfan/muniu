@@ -43,6 +43,57 @@ build:
 run: build
 	./$(BIN)/muniu
 
+## podman 后台运行(本机常驻形态;先 cp .env.local.example .env.local 填真值)
+## 免拉取:宿主交叉编译 linux/arm64 静态二进制 + scratch 运行层(不依赖 registry 与代理);
+## 容器内绑 0.0.0.0,宿主侧经 -p 127.0.0.1:8787:8787 收回环;
+## 计量数据放命名卷 muniu-data(machine 本地磁盘——SQLite WAL 在 virtiofs 宿主目录挂载上
+## 会 disk I/O error,官方不支持网络 FS 上的 WAL),查询走 make dev-sql;
+## 显式清空 machine 注入的 http_proxy/https_proxy(宿主代理不在时出站会被 proxyconnect 拒绝)
+
+## dev-up: 构建镜像并后台起容器(已存在则先移除)
+.PHONY: dev-up
+dev-up: dev-down dev-build
+	podman volume exists muniu-data 2>/dev/null || podman volume create muniu-data >/dev/null
+	podman run -d --name muniu-gateway -p 127.0.0.1:8787:8787 \
+		--env-file .env.local \
+		-e http_proxy= -e https_proxy= -e HTTP_PROXY= -e HTTPS_PROXY= -e no_proxy= \
+		-e SSL_CERT_FILE=/etc/ssl/cert.pem \
+		-v $(CURDIR)/muniu.yaml:/app/muniu.yaml:ro \
+		-v $(CURDIR)/dist/ca-cert.pem:/etc/ssl/cert.pem:ro \
+		-v muniu-data:/app/data \
+		localhost/muniu:dev
+	@sleep 1 && curl -s -m 3 http://127.0.0.1:8787/healthz && echo
+
+## dev-sql: 拷出计量库并查询(make dev-sql 或 make dev-sql SQL='select …')
+## 已知边界:podman cp 为运行中热库快照,极端时点可能拷到写入中间态——
+## 对账语义有重跑兜底(差异 >1% 立案即复核);需严格一致快照时先 dev-down 再拷
+.PHONY: dev-sql
+dev-sql:
+	@mkdir -p /tmp/muniu-query && podman cp muniu-gateway:/app/data/. /tmp/muniu-query/ >/dev/null
+	@if [ -n "$(SQL)" ]; then sqlite3 /tmp/muniu-query/muniu.db "$(SQL)"; else sqlite3 /tmp/muniu-query/muniu.db; fi
+
+## dev-down: 停止并移除常驻容器(不存在则静默)
+.PHONY: dev-down
+dev-down:
+	@podman rm -f muniu-gateway 2>/dev/null || true
+
+## dev-build: 交叉编译 linux/arm64 静态二进制并构建 dev 镜像(版本注入宿主 git 描述)
+.PHONY: dev-build
+dev-build:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -ldflags "-s -w -X $(PKG)/internal/version.Version=$$(git describe --tags --always 2>/dev/null || echo dev)" -o dist/muniu-linux-arm64 ./cmd/muniu
+	cp /etc/ssl/cert.pem dist/ca-cert.pem
+	podman build -t localhost/muniu:dev .
+
+## dev-status: 容器状态 + healthz
+.PHONY: dev-status
+dev-status:
+	@podman ps --filter name=muniu-gateway --format '{{.Names}}  {{.Status}}'
+	@curl -s -m 3 http://127.0.0.1:8787/healthz && echo || echo "healthz: 无响应"
+
+## dev-restart: 重启常驻容器(重建镜像,改代码后)
+.PHONY: dev-restart
+dev-restart: dev-up
+
 ## bench: 全量基准测试
 .PHONY: bench
 bench:
