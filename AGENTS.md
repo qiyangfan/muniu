@@ -71,4 +71,6 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
 
 ## 明确不做(全局 Non-goals)
 
-商业化功能(计费支付/套餐商城)、Kubernetes Operator、插件市场、管理面 SSO、对 gRPC 的入站支持、高可用集群形态——出现此类诉求一律记 backlog,不进当前 phase。
+商业化与平台功能(计费支付/套餐商城/用户注册与门户/渠道管理门户——归独立控制面产品,边界见 ADR-0005)、Kubernetes Operator、插件市场、管理面 SSO、对 gRPC 的入站支持、分布式强一致限流——出现此类诉求一律记 backlog,不进当前 phase。
+
+集群**数据面**形态(无状态副本 + 控制面同步)不属于本清单,按 ADR-0005 演进;涉及跨仓契约的 P1 前置 ADR:0006(自校验 key 与状态同步)、0007(可插拔计量汇)、0008(集群限流语义)。

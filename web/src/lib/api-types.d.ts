@@ -401,6 +401,120 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/v1/pricing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 价目列表(source=db 运营覆盖含时段窗 / yaml 静态兜底缺省价) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 价目条目数组(pricing 包装键) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PricingListResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/pricing/{alias}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 在线改价(运行态覆盖,持久化+即时生效零重启;对 yaml 别名即建覆盖) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    alias: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["PricingView"];
+                };
+            };
+            responses: {
+                /** @description 已生效(返回落库条目) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PricingPutResponse"];
+                    };
+                };
+                /** @description 校验失败(整单拒绝) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        /** 撤销运行态覆盖(该别名回落 YAML 静态兜底) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    alias: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已撤销 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PricingDeleteResponse"];
+                    };
+                };
+                /** @description 无运行态覆盖 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -458,6 +572,41 @@ export interface components {
             capacity?: number;
             threshold?: number;
             embedding_model?: string;
+        };
+        PricingListResponse: {
+            pricing?: components["schemas"]["PricingView"][];
+        };
+        PricingPutResponse: {
+            ok?: boolean;
+            pricing?: components["schemas"]["PricingView"];
+        };
+        PricingDeleteResponse: {
+            ok?: boolean;
+        };
+        PricingWindow: {
+            /** @description HH:MM-HH:MM;终点 24:00=当日末;start>end 为跨午夜 */
+            window: string;
+            /** @description 倍率,≤4 位小数,取值 (0,10] */
+            multiplier: string;
+        };
+        PricingView: {
+            readonly alias?: string;
+            /**
+             * @description db=运营覆盖 / yaml=静态兜底
+             * @enum {string}
+             */
+            readonly source?: "db" | "yaml";
+            /** @enum {string} */
+            currency: "CNY" | "USD";
+            /** @description 峰时(缺省)价,十进制 ≤6 位小数(元/百万 Token) */
+            input: string;
+            /** @description 缓存命中价;空=缺省同 input */
+            cached_input?: string;
+            output: string;
+            /** @description UTC 或 ±HH:MM 固定偏移 */
+            timezone?: string;
+            time_windows?: components["schemas"]["PricingWindow"][];
+            readonly updated_at?: string;
         };
     };
     responses: never;

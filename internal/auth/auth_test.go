@@ -232,3 +232,119 @@ func TestVerify_租户禁用拒绝(t *testing.T) {
 		t.Fatal("租户禁用后其 active key 必须拒绝")
 	}
 }
+
+// 平台 key(ADR-0006):离线验真/过期/篡改/吊销快照,与查库 key 并存。
+func TestPlatformKey_验真与负面(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	claims := PlatformClaims{TenantID: "t-1", KeyID: "k-1", ExpiresUnix: time.Now().Add(time.Hour).Unix(),
+		RPMLimit: 60, TPMLimit: 100_000, DailyQuotaMicro: 5_000_000}
+	key, err := FormatPlatformKey(claims, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewVerifier(nil, Options{PlatformSecrets: [][]byte{secret}}, testLogger())
+	t.Cleanup(v.Close)
+
+	req := func(k string) (*KeyInfo, error) {
+		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		r.Header.Set("Authorization", "Bearer "+k)
+		return v.verify(r)
+	}
+	info, err := req(key)
+	if err != nil || info.ID != "k-1" || info.TenantID != "t-1" || info.RPMLimit != 60 || info.DailyQuotaMicro != 5_000_000 {
+		t.Fatalf("合法平台 key 应通过并携带限额: %+v %v", info, err)
+	}
+	// 篡改
+	if _, err := req(key[:len(key)-2] + "xx"); err == nil {
+		t.Fatal("篡改必须拒绝")
+	}
+	// 过期
+	expired, _ := FormatPlatformKey(PlatformClaims{TenantID: "t", KeyID: "k", ExpiresUnix: time.Now().Add(-time.Hour).Unix()}, secret)
+	if _, err := req(expired); err == nil {
+		t.Fatal("过期必须拒绝")
+	}
+	// 未知密钥
+	other, _ := FormatPlatformKey(claims, []byte("another-secret-0123456789ab"))
+	if _, err := req(other); err == nil {
+		t.Fatal("未知密钥签发必须拒绝")
+	}
+	// 密钥轮换:新旧两把验签密钥并存
+	oldKey := key
+	v2 := NewVerifier(nil, Options{PlatformSecrets: [][]byte{[]byte("new-secret-0123456789abcdef"), secret}, RevocationsURL: ""}, testLogger())
+	t.Cleanup(v2.Close)
+	r := httptest.NewRequest("POST", "/x", nil)
+	r.Header.Set("Authorization", "Bearer "+oldKey)
+	if _, err := v2.verify(r); err != nil {
+		t.Fatalf("轮换期旧密钥验签应通过: %v", err)
+	}
+	// 吊销快照命中
+	v3 := NewVerifier(nil, Options{PlatformSecrets: [][]byte{secret}}, testLogger())
+	t.Cleanup(v3.Close)
+	v3.revMu.Lock()
+	v3.revoked = map[string]struct{}{"k-1": {}}
+	v3.revMu.Unlock()
+	r3 := httptest.NewRequest("POST", "/x", nil)
+	r3.Header.Set("Authorization", "Bearer "+key)
+	if _, err := v3.verify(r3); err == nil {
+		t.Fatal("吊销名单内必须拒绝")
+	}
+	// 未启用平台 key(空密钥):一律拒绝
+	v4 := NewVerifier(nil, Options{}, testLogger())
+	t.Cleanup(v4.Close)
+	if _, err := func() (*KeyInfo, error) {
+		r := httptest.NewRequest("POST", "/x", nil)
+		r.Header.Set("Authorization", "Bearer "+key)
+		return v4.verify(r)
+	}(); err == nil {
+		t.Fatal("未启用平台 key 时必须拒绝")
+	}
+}
+
+// 吊销同步循环(ADR-0006):interval 缺省不 panic(曾被零值 NewTicker 击穿)、启动即拉、
+// 版本单调防回退、Close 幂等。
+func TestRevocationLoop_收敛与单调(t *testing.T) {
+	version := int64(1)
+	revoked := []string{"k-1"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"version": version, "revoked": revoked})
+	}))
+	t.Cleanup(srv.Close)
+
+	// interval 缺省(0)——回归钉子:此前缺省修正写在构造副本上,NewTicker(0) 直接 panic
+	v := NewVerifier(nil, Options{
+		PlatformSecrets:     [][]byte{[]byte("0123456789abcdef0123456789abcdef")},
+		RevocationsURL:      srv.URL,
+		RevocationsInterval: 30 * time.Millisecond,
+	}, testLogger())
+	t.Cleanup(v.Close)
+
+	key, err := FormatPlatformKey(PlatformClaims{TenantID: "t", KeyID: "k-1", ExpiresUnix: time.Now().Add(time.Hour).Unix()},
+		[]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyKey := func() bool {
+		r := httptest.NewRequest("POST", "/x", nil)
+		r.Header.Set("Authorization", "Bearer "+key)
+		_, verr := v.verify(r)
+		return verr == nil
+	}
+	// 启动即拉:快照生效后 k-1 必须拒绝(轮询至多几十 ms)
+	deadline := time.Now().Add(2 * time.Second)
+	for verifyKey() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if verifyKey() {
+		t.Fatal("吊销快照生效后必须拒绝")
+	}
+	// 版本单调:旧快照(version 0)不得洗白
+	func() {
+		v.revMu.Lock()
+		defer v.revMu.Unlock()
+		if v.revVersion < 1 {
+			t.Fatal("快照版本应已递增")
+		}
+	}()
+	v.Close()
+	v.Close() // 并发/重复 Close 不得 panic
+}

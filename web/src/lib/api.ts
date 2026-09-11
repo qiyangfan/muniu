@@ -6,6 +6,8 @@ export type KeyRecord = components["schemas"]["KeyRecord"];
 export type UsagePoint = components["schemas"]["UsagePoint"];
 export type ProviderInfo = components["schemas"]["ProviderInfo"];
 export type CacheStats = components["schemas"]["CacheStats"];
+export type PricingEntry = components["schemas"]["PricingView"];
+export type PricingWindow = components["schemas"]["PricingWindow"];
 
 const TOKEN_KEY = "muniu-admin-token";
 
@@ -60,6 +62,11 @@ export const api = {
   },
   providers: () => call<{ providers: ProviderInfo[] }>("GET", "/admin/v1/providers"),
   cacheStats: () => call<CacheStats>("GET", "/admin/v1/cache/stats"),
+  listPricing: () => call<{ pricing: PricingEntry[] }>("GET", "/admin/v1/pricing"),
+  putPricing: (alias: string, body: PricingEntry) =>
+    call<{ ok: boolean }>("PUT", `/admin/v1/pricing/${encodeURIComponent(alias)}`, body),
+  deletePricing: (alias: string) =>
+    call<{ ok: boolean }>("DELETE", `/admin/v1/pricing/${encodeURIComponent(alias)}`),
 };
 
 export type _Paths = paths; // 保留生成契约引用

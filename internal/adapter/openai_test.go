@@ -213,3 +213,30 @@ func TestOpenAI_StreamEvent_空载荷心跳(t *testing.T) {
 		}
 	}
 }
+
+// DeepSeek 402(余额不足)必须归限流而非未知:欠费 key 走冷却自动重探(充值即恢复),
+// 归 ClassUnknown 会让欠费 key 被持续选中重试且不触发任何冷却。
+func TestQuirk_DeepSeek402归类限流(t *testing.T) {
+	ad, err := For("deepseek", "https://api.deepseek.com/v1", "k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ad.Classify(402, nil); got != failover.ClassRateLimited {
+		t.Fatalf("402 应归 rate_limited: %v", got)
+	}
+	// 其余状态码仍走基座粗分表(差异只声明差异)
+	if got := ad.Classify(401, nil); got != failover.ClassAuthFailed {
+		t.Fatalf("401 应仍归 auth_failed: %v", got)
+	}
+	if got := ad.Classify(500, nil); got != failover.ClassUpstream5xx {
+		t.Fatalf("5xx 应仍归 upstream_5xx: %v", got)
+	}
+	if got := ad.Classify(429, nil); got != failover.ClassRateLimited {
+		t.Fatalf("429 应仍归 rate_limited: %v", got)
+	}
+	// 基座(无 quirk)对 402 维持 Phase 1 粒度:归 unknown,不由本测试改动
+	base := &OpenAI{}
+	if got := base.Classify(402, nil); got != failover.ClassUnknown {
+		t.Fatalf("基座 402 应维持 unknown: %v", got)
+	}
+}

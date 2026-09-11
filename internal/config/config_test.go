@@ -216,3 +216,62 @@ model_routes:
 		t.Fatalf("最小合法配置应通过: %v", err)
 	}
 }
+
+func TestLoad_分时段倍率窗合法(t *testing.T) {
+	cfg, err := Load(writeTemp(t, `
+pricing:
+  deepseek-chat:
+    currency: USD
+    input: 0.44
+    output: 1.32
+    timezone: "+08:00"
+    time_windows:
+      - { window: "00:30-08:30", multiplier: "0.5" }
+providers:
+  - { name: a, adapter: openai, base_url: "https://api.a.com/v1", keys: [{ env: K1 }], weight: 10 }
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`))
+	if err != nil {
+		t.Fatalf("合法分时段配置应通过: %v", err)
+	}
+	pr := cfg.Pricing["deepseek-chat"]
+	if pr.Timezone != "+08:00" || len(pr.TimeWindows) != 1 ||
+		pr.TimeWindows[0].Window != "00:30-08:30" || pr.TimeWindows[0].Multiplier != "0.5" {
+		t.Fatalf("分时段配置解析不符: %+v", pr)
+	}
+}
+
+func TestLoad_分时段倍率窗非法一次列全(t *testing.T) {
+	_, err := Load(writeTemp(t, `
+pricing:
+  a:
+    currency: USD
+    input: "0.44"
+    output: "1.32"
+    timezone: "Asia/Shanghai"
+    time_windows:
+      - { window: "25:00-26:00", multiplier: "0.5" }
+  b:
+    currency: USD
+    input: "0.44"
+    output: "1.32"
+    time_windows:
+      - { window: "00:30-08:30", multiplier: "0" }
+      - { window: "08:00-08:00", multiplier: "1.5" }
+providers:
+  - { name: x, adapter: openai, base_url: "https://api.x.com/v1", keys: [{ env: K1 }], weight: 10 }
+model_routes:
+  alias-x:
+    - { provider: x, model: upstream-x, priority: 0 }
+`))
+	if err == nil {
+		t.Fatal("非法分时段配置必须拒绝")
+	}
+	for _, want := range []string{"pricing[a]", "非法时区", "pricing[b].time_windows[0].multiplier", "pricing[b].time_windows[1]"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("校验错误应一次列全(缺 %q): %v", want, err)
+		}
+	}
+}

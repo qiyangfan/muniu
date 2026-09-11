@@ -22,6 +22,27 @@ log:
 metering:
   flush_interval_ms: 500   # usage_logs 异步批量落库间隔
   flush_batch: 256         # 攒满即刷,不必等间隔
+  # 计量汇(ADR-0007):local(缺省,落本地 SQLite)| ingest(投控制面,失败整批落本地缓冲,恢复续传)
+  # sink: ingest
+  # ingest_url: "http://control-plane:8080/internal/metering/ingest"
+  # ingest_token: "..."            # 可选 Bearer,支持环境变量引用展开
+  # buffer_capacity: 1000000       # 本地缓冲上限(行),超限阻塞并告警
+
+# 平台 key(ADR-0006,可选):HMAC 自校验载体 mk2-*,网关离线验真;空 = 未启用
+# auth:
+#   platform_key_secrets:          # base64 HMAC 密钥(解码后 ≥16 字节),多把支持轮换
+#     - "<base64 密钥,建议经环境变量注入后展开>"
+#   revocations_url: "http://control-plane:8080/internal/keys/revocations"
+#   revocations_interval_sec: 60   # 吊销收敛窗口
+
+# 控制面价目拉取(ADR-0005,可选):响应与管理 API 一致,覆盖写入即时生效;空 = 不拉取
+# control_plane:
+#   pricing_url: "http://control-plane:8080/internal/pricing/list"
+#   poll_interval_sec: 60
+
+# metrics(ADR-0009,可选):GET /metrics(Prometheus 文本协议;有管理 token 时需鉴权抓取)
+# metrics:
+#   enabled: true
 
 # 上游供应商(静态拓扑)。weight 同优先级内加权轮询;priority 小者先被选中,
 # 仅在同优先级候选全部不可用时向更大 priority 降级。
@@ -58,14 +79,20 @@ model_routes:
 # 内部零浮点(docs/design/metering.md)。
 # 核对记录(2026-09-09,来源见 HANDOFF 验收记录「牌价核对表」):
 #   - gpt-4o-mini:$0.15 / $0.60(OpenAI 官方定价页)
-#   - deepseek-v4-flash:官方为峰/谷双价 + 缓存命中单独价;当前单一定价 schema 不支持,
-#     此处按保守原则取「峰时 + 缓存未命中」上限价($0.44 / $1.32),峰谷与缓存差价见开放决策项
+#   - deepseek-v4-flash:峰谷双价 + 缓存命中单独价——峰时上限价配置如下,错峰半价可用
+#     time_windows 按倍率表达(见下方注释;契约见 metering.md「分时段倍率」)
 pricing:
   deepseek-chat:
     currency: USD
     input: 0.44        # $0.44 / 百万输入 Token(峰时,缓存未命中)
     cached_input: 0.014 # $0.014 / 百万缓存命中输入(峰时);缺省=input
     output: 1.32       # $1.32 / 百万输出 Token(峰时)
+    # 分时段倍率(可选):整张价目卡按窗缩放(保守向上取整),先声明先匹配,支持跨午夜窗
+    # timezone: "UTC"   # "UTC" 或 ±HH:MM 固定偏移(北京时间用 "+08:00");缺省 UTC
+    # time_windows:
+    #   - { window: "16:30-00:30", multiplier: "0.5" }   # DeepSeek 官方错峰时段半价(UTC 计)
+    # 在线改价:本节为静态兜底;厂商日常调价请走管理面 /admin/v1/pricing 或控制台「价目管理」
+    # (运行态覆盖,即时生效零重启;删除覆盖即回落本节价格)——见 docs/design/metering.md「动态价目」
   gpt-4o-mini:
     currency: USD
     input: 0.15        # $0.15 / 百万输入 Token

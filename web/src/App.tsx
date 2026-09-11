@@ -4,6 +4,7 @@ import Overview from "./pages/Overview";
 import Keys from "./pages/Keys";
 import Usage from "./pages/Usage";
 import Providers from "./pages/Providers";
+import Pricing from "./pages/Pricing";
 
 // 登录 = 输入 admin token,先经一次真实请求校验再进入(否则无效 token 表现为各页静默空白)
 function Login({ onOk }: { onOk: () => void }) {
@@ -55,6 +56,7 @@ const TABS = [
   { key: "keys", label: "密钥管理" },
   { key: "usage", label: "用量明细" },
   { key: "providers", label: "供应商健康" },
+  { key: "pricing", label: "价目管理" },
 ] as const;
 
 export default function App() {
@@ -95,6 +97,7 @@ export default function App() {
         {tab === "keys" && <Keys />}
         {tab === "usage" && <Usage />}
         {tab === "providers" && <Providers />}
+        {tab === "pricing" && <Pricing />}
       </main>
     </div>
   );

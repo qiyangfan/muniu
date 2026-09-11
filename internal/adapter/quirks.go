@@ -10,6 +10,7 @@ package adapter
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/solvela/muniu/internal/failover"
 	"github.com/solvela/muniu/internal/protocol"
@@ -19,6 +20,7 @@ import (
 type quirk struct {
 	base           Adapter
 	normalizeUsage func(raw json.RawMessage) (protocol.Usage, error)
+	classify       func(status int, body []byte) failover.ErrorClass
 }
 
 func (q *quirk) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey string) (*Outbound, error) {
@@ -26,6 +28,9 @@ func (q *quirk) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey string) 
 }
 
 func (q *quirk) Classify(status int, body []byte) failover.ErrorClass {
+	if q.classify != nil {
+		return q.classify(status, body)
+	}
 	return q.base.Classify(status, body)
 }
 
@@ -41,7 +46,8 @@ func (q *quirk) NormalizeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	return q.normalizeUsage(raw)
 }
 
-// newDeepseek DeepSeek quirk:缓存命中字段重映射(见 deepseek/usage-cache-tokens fixture)。
+// newDeepseek DeepSeek quirk:缓存命中字段重映射(见 deepseek/usage-cache-tokens fixture)
+// 与 402 余额不足归类(裁决 2026-09-11:HANDOFF 开放决策项)。
 func newDeepseek(base Adapter) Adapter {
 	return &quirk{base: base, normalizeUsage: func(raw json.RawMessage) (protocol.Usage, error) {
 		var u struct {
@@ -62,6 +68,13 @@ func newDeepseek(base Adapter) Adapter {
 			ReasoningTokens:  u.CompletionDetails.ReasoningTokens,
 			CachedTokens:     u.PromptCacheHit,
 		}, nil
+	}, classify: func(status int, body []byte) failover.ErrorClass {
+		// 402 = 欠费:充值即恢复的暂态。归限流冷却(指数退避、自动重探)而非 401 式禁用
+		// (禁用需人工重启恢复)——大厂熔断器「半开自动探测」语义;判定表 rate_limited 行为换道。
+		if status == http.StatusPaymentRequired {
+			return failover.ClassRateLimited
+		}
+		return base.Classify(status, body)
 	}}
 }
 

@@ -81,9 +81,14 @@ func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failov
 		tenantID, apiKeyID = info.TenantID, info.ID
 	}
 	var pricing *metering.Pricing
-	if pr, ok := p.pricing[modelAlias]; ok {
+	if pt := p.pricing.Get(modelAlias); pt != nil {
+		// 分时段倍率:按当前时刻选窗(加载期已换算为整数有效价,此处零浮点查表);
+		// 目录由管理面改价后原子替换,本请求读到的是当前快照
+		pr := pt.At(time.Now())
 		pricing = &pr
 	}
+
+	UpstreamTotal.Inc(cand.Provider, errorClassOf(m))
 
 	// TPM 记账:请求完成后按实际 token 计入滑动窗口(traffic-governance 契约)
 	if p.tpm != nil {
@@ -92,6 +97,8 @@ func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failov
 		}
 	}
 
+	RequestsTotal.Inc(modelAlias, m.status)
+	RequestDuration.Observe(float64(total))
 	p.pipeline.Submit(metering.NewRow(metering.RowParams{
 		RequestID:     logging.RequestIDFrom(r.Context()),
 		TenantID:      tenantID,

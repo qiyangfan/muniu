@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/solvela/muniu/internal/admin"
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
+	"github.com/solvela/muniu/internal/metering"
 	"github.com/solvela/muniu/internal/store"
 )
 
@@ -227,4 +229,125 @@ func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 	if got := probe(); got != 401 {
 		t.Fatalf("吊销后必须即时 401(缓存已清), 实际 %d", got)
 	}
+}
+
+// 动态改价全流程(动态价目契约,metering.md):GET 展示 yaml 兜底 → PUT 运行态覆盖
+// (持久化+目录刷新即时生效)→ DELETE 撤销覆盖回落 yaml;校验失败整单拒绝。
+func TestAdmin_动态改价全流程(t *testing.T) {
+	db := openDB(t)
+	staticDefs := map[string]metering.Pricing{
+		"alias-yaml": {Currency: "USD", InputMicroPerM: 440_000, OutputMicroPerM: 1_320_000},
+	}
+	// 复刻装配层合并:静态兜底 + DB 覆盖 → 目录整体替换
+	rebuild := func() *metering.PricingDirectory {
+		tables := map[string]*metering.PricingTable{}
+		for alias, def := range staticDefs {
+			tbl, err := metering.NewPricingTable(def, time.UTC, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tables[alias] = tbl
+		}
+		rows, err := store.ListPricing(db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			tz := time.UTC
+			if r.Timezone == "+08:00" {
+				tz = time.FixedZone("cst", 8*3600)
+			}
+			var wins []metering.WindowSpec
+			for _, w := range r.Windows {
+				s, e, err := metering.ParseWindowMinutes(w.Window)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wins = append(wins, metering.WindowSpec{StartMin: s, EndMin: e, BasisPoints: w.BasisPoints})
+			}
+			tbl, err := metering.NewPricingTable(metering.Pricing{
+				Currency: r.Currency, InputMicroPerM: r.InputMicro,
+				CachedInputMicroPerM: r.CachedInputMicro, OutputMicroPerM: r.OutputMicro,
+			}, tz, wins)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tables[r.Alias] = tbl
+		}
+		return metering.NewPricingDirectory(tables)
+	}
+	dir := rebuild()
+	h := admin.New(admin.Deps{
+		DB: db, Token: "t",
+		Providers:     []config.Provider{{Name: "p1", Adapter: "openai", BaseURL: "https://x/v1", Keys: []config.KeyRef{{Env: "K1", Weight: 5}}}},
+		PricingDir:    dir,
+		StaticPricing: buildStaticEntries(staticDefs),
+		RefreshPricing: func() error {
+			*dir = *rebuild()
+			return nil
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	// 1) PUT 前:GET 显示 yaml 兜底来源,目录为静态价
+	code, body := call(t, h, "GET", "/admin/v1/pricing", "t", "")
+	if code != 200 || !strings.Contains(body, `"source":"yaml"`) || !strings.Contains(body, `"input":"0.44"`) {
+		t.Fatalf("GET 应列出 yaml 兜底: %d %s", code, body)
+	}
+	if got := dir.Get("alias-yaml").At(time.Now()); got.InputMicroPerM != 440_000 {
+		t.Fatalf("改价前应为静态价: %+v", got)
+	}
+
+	// 2) PUT 运行态覆盖(半价 + 时段窗):持久化 + 刷新,目录即时生效
+	putBody := `{"currency":"USD","input":"0.22","output":"0.66","timezone":"+08:00","time_windows":[{"window":"00:30-08:30","multiplier":"0.5"}]}`
+	code, body = call(t, h, "PUT", "/admin/v1/pricing/alias-yaml", "t", putBody)
+	if code != 200 || !strings.Contains(body, `"ok":true`) {
+		t.Fatalf("PUT 应成功: %d %s", code, body)
+	}
+	code, body = call(t, h, "GET", "/admin/v1/pricing", "t", "")
+	if code != 200 || !strings.Contains(body, `"source":"db"`) || !strings.Contains(body, `"input":"0.22"`) ||
+		!strings.Contains(body, `"multiplier":"0.5"`) {
+		t.Fatalf("PUT 后 GET 应显示 db 来源与新价: %d %s", code, body)
+	}
+	// 目录已刷新:PUT 的 input/output 为缺省(峰时)价,窗口按倍率缩放
+	// 窗内(北京 04:00)= 0.22×0.5 = 0.11(110000μ);窗外(北京 12:00)= 缺省 0.22
+	cst := time.FixedZone("cst", 8*3600)
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputMicroPerM != 110_000 {
+		t.Fatalf("刷新后窗内应 0.22×0.5=0.11: %+v", got)
+	}
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 12, 0, 0, 0, cst)); got.InputMicroPerM != 220_000 {
+		t.Fatalf("窗外应为 DB 缺省价 0.22: %+v", got)
+	}
+
+	// 3) 校验失败整单拒绝(不落库不刷新)
+	code, _ = call(t, h, "PUT", "/admin/v1/pricing/alias-yaml", "t",
+		`{"currency":"USD","input":"0.22","output":"0.66","time_windows":[{"window":"00:00-24:00","multiplier":"0"}]}`)
+	if code != 400 {
+		t.Fatalf("非法 multiplier 应 400: %d", code)
+	}
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputMicroPerM != 110_000 {
+		t.Fatalf("拒绝后目录不应变化(窗内仍 0.11): %+v", got)
+	}
+
+	// 4) DELETE 撤销覆盖:回落 yaml 静态价;重复删除 404
+	code, _ = call(t, h, "DELETE", "/admin/v1/pricing/alias-yaml", "t", "")
+	if code != 200 {
+		t.Fatalf("DELETE 应成功: %d", code)
+	}
+	if got := dir.Get("alias-yaml").At(time.Now()); got.InputMicroPerM != 440_000 {
+		t.Fatalf("删除后应回落 yaml 静态价: %+v", got)
+	}
+	code, _ = call(t, h, "DELETE", "/admin/v1/pricing/alias-yaml", "t", "")
+	if code != 404 {
+		t.Fatalf("重复 DELETE 应 404: %d", code)
+	}
+}
+
+// buildStaticEntries 测试辅助:静态价目 → 管理面展示形态(与装配层同构)。
+func buildStaticEntries(defs map[string]metering.Pricing) map[string]admin.StaticEntry {
+	out := make(map[string]admin.StaticEntry, len(defs))
+	for alias, def := range defs {
+		out[alias] = admin.StaticEntry{Def: def, Timezone: "UTC", TimeWindows: []admin.PricingWindowView{}}
+	}
+	return out
 }

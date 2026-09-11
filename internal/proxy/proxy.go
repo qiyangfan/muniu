@@ -39,7 +39,7 @@ type Timeouts struct {
 type Config struct {
 	Registry     *adapter.Registry
 	Routes       map[string][]config.Candidate
-	Pricing      map[string]metering.Pricing // model 别名 → 价目;缺价目则成本记 0
+	Pricing      *metering.PricingDirectory // 价目目录(动态改价:管理面原子替换,转发只读);nil = 成本记 0
 	Timeouts     Timeouts
 	Pipeline     *metering.Pipeline       // 计量管道;nil = 不计量(纯转发场景)
 	Pools        map[string]*keypool.Pool // provider → key 池;缺池则该 provider 无法出站
@@ -54,7 +54,7 @@ type Config struct {
 type Proxy struct {
 	registry *adapter.Registry
 	routes   map[string][]config.Candidate
-	pricing  map[string]metering.Pricing
+	pricing  *metering.PricingDirectory
 	timeouts Timeouts
 	pipeline *metering.Pipeline
 	pools    map[string]*keypool.Pool
@@ -178,9 +178,10 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}
 	}
 	// 语义缓存检索(T4.5):命中即回放并计量,未命中记住相位供出站成功后入库
+	hitStart := time.Now()
 	res, cph := p.lookupCache(r, req)
 	if res != nil {
-		p.recordCacheHit(r, req, res)
+		p.recordCacheHit(r, req, res, hitStart)
 		if req.Stream {
 			p.replayStream(tw, r, res)
 		} else {

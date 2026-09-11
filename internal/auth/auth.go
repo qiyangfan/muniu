@@ -134,9 +134,15 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 // ---- 校验中间件 ----
 
 // Options 校验缓存参数;零值取默认(TTL 10s,容量 10k)。
+// 平台 key 三项为可选:Secrets 空即未启用(mk2- 一律拒绝);RevocationsURL 空 = 不做吊销同步
+// (平台 key 仅受有效期约束,高危场景应配置)。
 type Options struct {
 	TTL      time.Duration
 	Capacity int
+
+	PlatformSecrets     [][]byte      // HMAC 验签密钥(任一通过即有效,支持轮换)
+	RevocationsURL      string        // 吊销名单端点:{"version":N,"revoked":["key_id",...]}
+	RevocationsInterval time.Duration // 拉取间隔(吊销收敛窗口),零值取 60s
 }
 
 // Verifier Bearer key 校验器(中间件持有,进程内单例)。
@@ -147,6 +153,13 @@ type Verifier struct {
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry // key_hash → 条目
+
+	revMu       sync.RWMutex
+	revoked     map[string]struct{}
+	revVersion  int64
+	revStop     chan struct{}
+	revStopOnce sync.Once
+	revClient   *http.Client
 }
 
 // cacheEntry 缓存条目:任意字段访问须持 v.mu。
@@ -168,7 +181,7 @@ type KeyInfo struct {
 
 type ctxKey struct{}
 
-// NewVerifier 构造校验器。
+// NewVerifier 构造校验器;配置了吊销端点时启动拉取循环(Close 退出)。
 func NewVerifier(db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
 	if opts.TTL <= 0 {
 		opts.TTL = 10 * time.Second
@@ -176,7 +189,102 @@ func NewVerifier(db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
 	if opts.Capacity <= 0 {
 		opts.Capacity = 10_000
 	}
-	return &Verifier{db: db, opts: opts, logger: logger, cache: map[string]cacheEntry{}}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	// 缺省修正必须在构造副本之前(零值 interval 会使 NewTicker panic)
+	if opts.RevocationsInterval <= 0 {
+		opts.RevocationsInterval = 60 * time.Second
+	}
+	v := &Verifier{
+		db: db, opts: opts, logger: logger, cache: map[string]cacheEntry{},
+		revClient: &http.Client{Timeout: 5 * time.Second},
+	}
+	if opts.RevocationsURL != "" {
+		v.revoked = map[string]struct{}{}
+		v.revStop = make(chan struct{})
+		go v.revocationLoop() // 启动即拉一次,不等首个周期(重启后吊销立即收敛)
+	}
+	return v
+}
+
+// Close 停止吊销同步循环(进程退出/测试收尾;并发安全 sync.Once)。
+func (v *Verifier) Close() {
+	if v.revStop == nil {
+		return
+	}
+	v.revStopOnce.Do(func() { close(v.revStop) })
+}
+
+// revocationLoop 吊销名单拉取循环:启动即拉;失败保持上一次快照并告警;
+// 版本单调(仅应用 version >= 本地版本的快照,防旧快照回退);Close 经 ctx 立即中断在途请求。
+func (v *Verifier) revocationLoop() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-v.revStop
+		cancel()
+	}()
+	fetch := func() {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.opts.RevocationsURL, nil)
+		if err != nil {
+			v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
+			return
+		}
+		resp, err := v.revClient.Do(req)
+		if err != nil {
+			select {
+			case <-v.revStop:
+				return
+			default:
+			}
+			v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
+			return
+		}
+		var body struct {
+			Version int64    `json:"version"`
+			Revoked []string `json:"revoked"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			v.logger.Warn("吊销名单拉取失败", "status", resp.StatusCode)
+			return
+		}
+		if decodeErr != nil {
+			v.logger.Warn("吊销名单响应非法", "error_detail", decodeErr.Error())
+			return
+		}
+		set := make(map[string]struct{}, len(body.Revoked))
+		for _, id := range body.Revoked {
+			set[id] = struct{}{}
+		}
+		v.revMu.Lock()
+		if body.Version >= v.revVersion { // 单调防回退:旧快照(乱序/滞后副本)不得洗白已吊销 key
+			v.revoked = set
+			v.revVersion = body.Version
+		}
+		v.revMu.Unlock()
+	}
+	fetch()
+	ticker := time.NewTicker(v.opts.RevocationsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-v.revStop:
+			return
+		case <-ticker.C:
+			fetch()
+		}
+	}
+}
+
+// revokedContains 平台 key 吊销判定(无快照 = 未启用同步,视作不吊销)。
+func (v *Verifier) revokedContains(keyID string) bool {
+	v.revMu.RLock()
+	defer v.revMu.RUnlock()
+	_, ok := v.revoked[keyID]
+	return ok
 }
 
 // Middleware 返回鉴权中间件:成功 → KeyInfo 挂 ctx;失败 → 401 auth_failed 信封。
@@ -196,9 +304,47 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// verify 单次校验:缓存命中且未过期直接放行,否则查库并回填。
+// verify 单次校验:平台 key(mk2-)走离线验真,查库 key(mk-)走缓存/查库。
 func (v *Verifier) verify(r *http.Request) (*KeyInfo, error) {
-	plaintext, err := bearerOf(r)
+	h := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if h == "" {
+		return nil, errors.New("缺少 Authorization 头")
+	}
+	if !strings.HasPrefix(h, prefix) {
+		return nil, errors.New("鉴权头非 Bearer 形态")
+	}
+	raw := strings.TrimSpace(h[len(prefix):])
+	if strings.HasPrefix(raw, PlatformKeyPrefix) {
+		return v.verifyPlatform(raw)
+	}
+	return v.verifyLookup(raw)
+}
+
+// verifyPlatform 自校验平台 key(ADR-0006):HMAC 离线验真 + 吊销快照;不进缓存(HMAC µs 级,免吊销滞留)。
+func (v *Verifier) verifyPlatform(raw string) (*KeyInfo, error) {
+	if len(v.opts.PlatformSecrets) == 0 {
+		return nil, errors.New("平台 key 未启用")
+	}
+	claims, err := ParsePlatformKey(raw, v.opts.PlatformSecrets, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if v.revokedContains(claims.KeyID) {
+		return nil, errors.New("平台 key 已吊销")
+	}
+	return &KeyInfo{
+		ID:              claims.KeyID,
+		TenantID:        claims.TenantID,
+		RPMLimit:        claims.RPMLimit,
+		TPMLimit:        claims.TPMLimit,
+		DailyQuotaMicro: claims.DailyQuotaMicro,
+	}, nil
+}
+
+// verifyLookup 查库 key(现有路径,行为不变)。
+func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
+	plaintext, err := bearerOfValue(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -261,17 +407,8 @@ func (v *Verifier) Invalidate() {
 	v.cache = map[string]cacheEntry{}
 }
 
-// bearerOf 解析 Authorization: Bearer <key>;任何形态问题都归一为校验失败。
-func bearerOf(r *http.Request) (string, error) {
-	h := r.Header.Get("Authorization")
-	const prefix = "Bearer "
-	if h == "" {
-		return "", errors.New("缺少 Authorization 头")
-	}
-	if !strings.HasPrefix(h, prefix) {
-		return "", errors.New("鉴权头非 Bearer 形态")
-	}
-	key := strings.TrimSpace(h[len(prefix):])
+// bearerOfValue key 明文的形态校验(mk- 前缀 + 46 长度)。
+func bearerOfValue(key string) (string, error) {
 	if len(key) != 3+plaintextBodyLen || !strings.HasPrefix(key, "mk-") {
 		return "", errors.New("key 形态非法")
 	}

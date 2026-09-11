@@ -15,6 +15,7 @@ import (
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
+	"github.com/solvela/muniu/internal/metering"
 	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/store"
 )
@@ -22,8 +23,18 @@ import (
 // CacheStatsProvider 语义缓存统计源(装配注入;nil 时统计端点返回空态)。
 type CacheStatsProvider func() map[string]any
 
+// StaticEntry YAML 静态兜底价目的展示形态(GET 列表 yaml 来源行;窗口如实透出,
+// 防止控制台编辑 yaml 行时静默丢窗)。
+type StaticEntry struct {
+	Def         metering.Pricing
+	Timezone    string
+	TimeWindows []PricingWindowView
+}
+
 // Deps 管理面依赖。Verifier 供吊销 key / 变更租户后即时清空鉴权缓存
 // (不注入则依赖 TTL 自然收敛,「立即生效」承诺不成立)。
+// Pricing 三件套支撑动态改价:PricingDir 转发热路径消费的目录;StaticPricing 为 YAML 静态兜底价
+// (GET 列表展示用);RefreshPricing 由装配层注入——持久化成功后重建目录并原子替换。
 type Deps struct {
 	DB         *sql.DB
 	Token      string
@@ -31,7 +42,12 @@ type Deps struct {
 	Pools      map[string]*keypool.Pool
 	CacheStats CacheStatsProvider
 	Verifier   *auth.Verifier
-	Logger     *slog.Logger
+
+	PricingDir     *metering.PricingDirectory
+	StaticPricing  map[string]StaticEntry
+	RefreshPricing func() error
+
+	Logger *slog.Logger
 }
 
 // New 构造管理面 handler;token 为空返回 nil(管理面关闭)。
@@ -52,6 +68,9 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /admin/v1/usage", usage(d))
 	mux.HandleFunc("GET /admin/v1/providers", providers(d))
 	mux.HandleFunc("GET /admin/v1/cache/stats", cacheStats(d))
+	mux.HandleFunc("GET /admin/v1/pricing", pricingList(d))
+	mux.HandleFunc("PUT /admin/v1/pricing/{alias}", pricingPut(d))
+	mux.HandleFunc("DELETE /admin/v1/pricing/{alias}", pricingDelete(d))
 	return authAdmin(d.Token, d.Logger, mux)
 }
 
@@ -359,5 +378,8 @@ func Routes() []string {
 		"GET /admin/v1/usage",
 		"GET /admin/v1/providers",
 		"GET /admin/v1/cache/stats",
+		"GET /admin/v1/pricing",
+		"PUT /admin/v1/pricing/{alias}",
+		"DELETE /admin/v1/pricing/{alias}",
 	}
 }

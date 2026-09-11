@@ -247,3 +247,21 @@ func (p *Pool) byID(id string) *keyState {
 	}
 	return nil
 }
+
+// StateCounts 全池状态计数(观测/metrics 用):healthy/cooldown/disabled。
+func (p *Pool) StateCounts(now time.Time) map[string]int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string]int{}
+	for _, k := range p.keys {
+		switch {
+		case k.disabled:
+			out["disabled"]++
+		case now.Before(k.cooldownUntil):
+			out["cooldown"]++
+		default:
+			out["healthy"]++
+		}
+	}
+	return out
+}

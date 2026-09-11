@@ -310,3 +310,51 @@ func TestRegress_SSE心跳不可见(t *testing.T) {
 		t.Fatalf("空 data 心跳不得透传给客户端: %q", body)
 	}
 }
+
+// TestRegress_分时段倍率落账 分时段倍率窗必须在计量行真实生效(端到端):
+// 全天半价窗下 cost_micro = 缺省价的一半(usage prompt 7 / completion 9,input 2μ/tok output 8μ/tok
+// → 基准 86μ,半价 43μ),钉住 record() → PricingTable.At 的接线。
+func TestRegress_分时段倍率落账(t *testing.T) {
+	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
+	reg := adapter.NewRegistry()
+	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
+	db, err := store.Open(filepath.Join(t.TempDir(), "tw.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	tbl, err := metering.NewPricingTable(
+		metering.Pricing{Currency: "CNY", InputMicroPerM: 2_000_000, OutputMicroPerM: 8_000_000},
+		time.UTC,
+		[]metering.WindowSpec{{StartMin: 0, EndMin: 1440, BasisPoints: 5000}}, // 全天半价
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pricingDir := metering.NewPricingDirectory(map[string]*metering.PricingTable{"alias-a": tbl})
+	p := New(Config{
+		Registry: reg,
+		Routes: map[string][]config.Candidate{
+			"alias-a": {{Provider: "prov-a", Model: "up-a", Priority: 0, Weight: 1}},
+		},
+		Pricing:  pricingDir,
+		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
+		Pipeline: pipeline,
+		Pools:    map[string]*keypool.Pool{"prov-a": keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "k", Weight: 1}})},
+		RandIntn: func(n int) int { return 0 },
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	ts := httptest.NewServer(p.Handler())
+	t.Cleanup(ts.Close)
+
+	code, _ := foPost(t, ts, `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
+	if code != 200 {
+		t.Fatalf("应 200: %d", code)
+	}
+	rows := waitRows(t, db, 1)
+	// 基准 86μ = ceil(7×2) + ceil(9×8);半价 43μ = ceil(7×1) + ceil(9×4)
+	if rows[0].CostMicro != 43 {
+		t.Fatalf("半价窗应落账 43μ,实际 %d", rows[0].CostMicro)
+	}
+}

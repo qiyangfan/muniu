@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/url"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/goccy/go-yaml"
+
+	"github.com/solvela/muniu/internal/metering"
 )
 
 // 适配器形态枚举(upstream-adapters「适配器分类学」;bridge 两家 Phase 2+ 落地)。
@@ -67,13 +70,23 @@ type Candidate struct {
 	Weight   int    `yaml:"weight"`
 }
 
+// PriceWindow 分时段倍率窗(metering.md「计价」契约):整张价目卡按倍率缩放。
+// 多窗**按声明顺序先匹配优先**;支持跨午夜(如 16:30-00:30)。
+type PriceWindow struct {
+	Window     string `yaml:"window"`     // "HH:MM-HH:MM";终点 24:00=当日末;start>end 为跨午夜
+	Multiplier string `yaml:"multiplier"` // 人类可读倍率("0.5" 表半价);≤4 位小数,取值 (0,10]
+}
+
 // Price 人类可读价目(百万 Token);数值换算在装配期经 metering.ParsePrice 完成。
 // CachedInput 缺省=Input(metering「缓存价」契约)。
+// TimeWindows 缺省无 → 恒缺省价;配置后按时区判定窗口,先声明先匹配,无命中回落缺省价。
 type Price struct {
-	Currency    string `yaml:"currency"`
-	Input       string `yaml:"input"`
-	CachedInput string `yaml:"cached_input"`
-	Output      string `yaml:"output"`
+	Currency    string        `yaml:"currency"`
+	Input       string        `yaml:"input"`
+	CachedInput string        `yaml:"cached_input"`
+	Output      string        `yaml:"output"`
+	Timezone    string        `yaml:"timezone"` // "UTC" 或 ±HH:MM 固定偏移;缺省 UTC(不引 tzdata,DST 时区请换算为 UTC 表达)
+	TimeWindows []PriceWindow `yaml:"time_windows"`
 }
 
 // SemanticCfg 语义缓存配置(T4.5;enabled=true 时 embedding_model 必填,缺省值见 validate)。
@@ -84,6 +97,13 @@ type SemanticCfg struct {
 	Threshold      float32 `yaml:"threshold"`       // 缺省 0.97
 	TTLHours       int     `yaml:"ttl_hours"`       // 缺省 24
 	Capacity       int     `yaml:"capacity"`        // 缺省 10000
+}
+
+// AuthCfg 平台 key 配置(ADR-0006;全部可选,Secrets 空即平台 key 未启用,standalone 零回归)。
+type AuthCfg struct {
+	PlatformKeySecrets     []string `yaml:"platform_key_secrets"`     // base64 编码的 HMAC 密钥(解码后 ≥16 字节),支持多把轮换
+	RevocationsURL         string   `yaml:"revocations_url"`          // 吊销名单端点(可选)
+	RevocationsIntervalSec int      `yaml:"revocations_interval_sec"` // 吊销收敛窗口,缺省 60s
 }
 
 // Config muniu.yaml 的运行态形态(启动后只读)。
@@ -101,10 +121,22 @@ type Config struct {
 		Level  string `yaml:"level"`
 		Format string `yaml:"format"`
 	} `yaml:"log"`
+	Auth    AuthCfg `yaml:"auth"`
+	Metrics struct {
+		Enabled bool `yaml:"enabled"` // 缺省 false;启用后 GET /metrics(Prometheus 文本协议,ADR-0009)
+	} `yaml:"metrics"`
 	Metering struct {
-		FlushIntervalMs int `yaml:"flush_interval_ms"`
-		FlushBatch      int `yaml:"flush_batch"`
+		FlushIntervalMs int    `yaml:"flush_interval_ms"`
+		FlushBatch      int    `yaml:"flush_batch"`
+		Sink            string `yaml:"sink"`            // local(缺省) | ingest
+		IngestURL       string `yaml:"ingest_url"`      // sink=ingest 必填
+		IngestToken     string `yaml:"ingest_token"`    // 可选 Bearer(支持 ${VAR} 展开)
+		BufferCapacity  int    `yaml:"buffer_capacity"` // ingest 失败的本地缓冲上限(行),缺省 1_000_000
 	} `yaml:"metering"`
+	ControlPlane struct {
+		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点;空 = 不拉取(standalone)
+		PollIntervalSec int    `yaml:"poll_interval_sec"` // 拉取间隔,缺省 60s
+	} `yaml:"control_plane"`
 	Providers   []Provider             `yaml:"providers"`
 	ModelRoutes map[string][]Candidate `yaml:"model_routes"`
 	Pricing     map[string]Price       `yaml:"pricing"`
@@ -224,6 +256,42 @@ func (c *Config) validate() error {
 	if c.Metering.FlushIntervalMs < 0 || c.Metering.FlushBatch < 0 {
 		add("metering 配置非法(flush_interval_ms/flush_batch 不可为负)")
 	}
+	switch c.Metering.Sink {
+	case "", "local":
+	case "ingest":
+		if c.Metering.IngestURL == "" {
+			add("metering.sink=ingest 时 ingest_url 必填")
+		}
+		// 缓冲容量须 ≥ 攒批量:否则单批永远装不进缓冲,续传死锁(config 防呆,ADR-0007)
+		if c.Metering.BufferCapacity != 0 && c.Metering.BufferCapacity < c.Metering.FlushBatch {
+			add("metering.buffer_capacity(%d) 不可小于 flush_batch(%d)", c.Metering.BufferCapacity, c.Metering.FlushBatch)
+		}
+	default:
+		add("metering.sink 非法 %q(允许 local|ingest)", c.Metering.Sink)
+	}
+	if c.Metering.BufferCapacity < 0 {
+		add("metering.buffer_capacity 不可为负")
+	}
+	for i, sec := range c.Auth.PlatformKeySecrets {
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sec))
+		if err != nil || len(raw) < 16 {
+			add("auth.platform_key_secrets[%d] 非法(须 base64,解码后 ≥16 字节)", i)
+		}
+	}
+	if c.Auth.RevocationsURL != "" && len(c.Auth.PlatformKeySecrets) == 0 {
+		add("配置了 revocations_url 但未启用 platform_key_secrets(吊销同步无对象)")
+	}
+	if c.Auth.RevocationsIntervalSec < 0 {
+		add("auth.revocations_interval_sec 不可为负")
+	}
+	if c.ControlPlane.PollIntervalSec < 0 {
+		add("control_plane.poll_interval_sec 不可为负")
+	}
+	if c.ControlPlane.PricingURL != "" {
+		if u, err := url.Parse(c.ControlPlane.PricingURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			add("control_plane.pricing_url 非法: %q", c.ControlPlane.PricingURL)
+		}
+	}
 
 	if len(c.Providers) == 0 {
 		add("providers 至少需要一个")
@@ -281,6 +349,20 @@ func (c *Config) validate() error {
 	for alias, pr := range c.Pricing {
 		if !legalCurrency[strings.ToUpper(pr.Currency)] {
 			add("pricing[%s] currency 非法 %q(允许 CNY|USD)", alias, pr.Currency)
+		}
+		// 分时段倍率窗:直接引用 metering 解析器做 fail-fast(单一事实源,消息聚合一次报全)
+		if pr.Timezone != "" {
+			if _, err := metering.ParseZoneOffset(pr.Timezone); err != nil {
+				add("pricing[%s] %v", alias, err)
+			}
+		}
+		for j, tw := range pr.TimeWindows {
+			if _, _, err := metering.ParseWindowMinutes(tw.Window); err != nil {
+				add("pricing[%s].time_windows[%d] %v", alias, j, err)
+			}
+			if _, err := metering.ParseMultiplier(tw.Multiplier); err != nil {
+				add("pricing[%s].time_windows[%d].multiplier %q 非法(须 (0,10] 内、≤4 位小数)", alias, j, tw.Multiplier)
+			}
 		}
 	}
 

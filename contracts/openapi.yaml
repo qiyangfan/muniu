@@ -58,6 +58,42 @@ components:
         capacity: { type: integer }
         threshold: { type: number }
         embedding_model: { type: string }
+    PricingListResponse:
+      type: object
+      properties:
+        pricing:
+          type: array
+          items: { $ref: "#/components/schemas/PricingView" }
+    PricingPutResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        pricing: { $ref: "#/components/schemas/PricingView" }
+    PricingDeleteResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+    PricingWindow:
+      type: object
+      required: [window, multiplier]
+      properties:
+        window: { type: string, description: "HH:MM-HH:MM;终点 24:00=当日末;start>end 为跨午夜" }
+        multiplier: { type: string, description: "倍率,≤4 位小数,取值 (0,10]" }
+    PricingView:
+      type: object
+      required: [currency, input, output]
+      properties:
+        alias: { type: string, readOnly: true }
+        source: { type: string, enum: [db, yaml], readOnly: true, description: "db=运营覆盖 / yaml=静态兜底" }
+        currency: { type: string, enum: [CNY, USD] }
+        input: { type: string, description: "峰时(缺省)价,十进制 ≤6 位小数(元/百万 Token)" }
+        cached_input: { type: string, description: "缓存命中价;空=缺省同 input" }
+        output: { type: string }
+        timezone: { type: string, description: "UTC 或 ±HH:MM 固定偏移" }
+        time_windows:
+          type: array
+          items: { $ref: "#/components/schemas/PricingWindow" }
+        updated_at: { type: string, readOnly: true }
 paths:
   /healthz:
     get:
@@ -132,3 +168,39 @@ paths:
       summary: 语义缓存统计
       responses:
         "200": { description: 命中率/条数/开关状态 }
+  /admin/v1/pricing:
+    get:
+      summary: 价目列表(source=db 运营覆盖含时段窗 / yaml 静态兜底缺省价)
+      responses:
+        "200":
+          description: 价目条目数组(pricing 包装键)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingListResponse" }
+  /admin/v1/pricing/{alias}:
+    put:
+      summary: 在线改价(运行态覆盖,持久化+即时生效零重启;对 yaml 别名即建覆盖)
+      parameters:
+        - { name: alias, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PricingView" }
+      responses:
+        "200":
+          description: 已生效(返回落库条目)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingPutResponse" }
+        "400": { description: 校验失败(整单拒绝) }
+    delete:
+      summary: 撤销运行态覆盖(该别名回落 YAML 静态兜底)
+      parameters:
+        - { name: alias, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: 已撤销
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingDeleteResponse" }
+        "404": { description: 无运行态覆盖 }

@@ -66,9 +66,9 @@ func newFoHarness(t *testing.T, upA *testkit.Upstream, statusB int, bodyB string
 				{Provider: "prov-b", Model: "up-b", Priority: 1, Weight: 1},
 			},
 		},
-		Pricing: map[string]metering.Pricing{
+		Pricing: mustDir(t, map[string]metering.Pricing{
 			"alias-a": {Currency: "CNY", InputMicroPerM: 2_000_000, OutputMicroPerM: 8_000_000},
-		},
+		}),
 		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
 		Pipeline: pipeline,
 		Pools:    map[string]*keypool.Pool{"prov-a": poolA, "prov-b": poolB},
@@ -83,6 +83,20 @@ func newFoHarness(t *testing.T, upA *testkit.Upstream, statusB int, bodyB string
 // flush 排干计量管道(断言落库前必须调用;管道批量窗口为小时级以防测试抖动)。
 func (h *foHarness) flush() {
 	_ = h.pipeline.Close()
+}
+
+// mustDir 静态价目目录构造(测试 harness;无窗口恒缺省价)。
+func mustDir(t *testing.T, defs map[string]metering.Pricing) *metering.PricingDirectory {
+	t.Helper()
+	tables := make(map[string]*metering.PricingTable, len(defs))
+	for alias, def := range defs {
+		tbl, err := metering.NewPricingTable(def, time.UTC, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tables[alias] = tbl
+	}
+	return metering.NewPricingDirectory(tables)
 }
 
 // foPost 发请求并返回 (状态码, body)。
@@ -324,9 +338,9 @@ func TestEmbeddings_透传与计量(t *testing.T) {
 			"emb-alias": {{Provider: "prov-a", Model: "up-emb", Priority: 0, Weight: 1}},
 		},
 		// 仅 input 价:output=0 → 成本只算输入段(embedding 计价契约)
-		Pricing: map[string]metering.Pricing{
+		Pricing: mustDir(t, map[string]metering.Pricing{
 			"emb-alias": {Currency: "CNY", InputMicroPerM: 2_000_000},
-		},
+		}),
 		Timeouts: Timeouts{Dial: time.Second, FirstToken: 5 * time.Second, ChunkIdle: 5 * time.Second},
 		Pipeline: pipeline,
 		Pools:    map[string]*keypool.Pool{"prov-a": poolA},

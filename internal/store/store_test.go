@@ -2,6 +2,7 @@
 package store
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -167,5 +168,90 @@ func TestSumCostToday_过滤estimated与当日(t *testing.T) {
 	otherKey, _ := SumCostToday(db, "", "k2", now.Format("2006-01-02T00:00:00Z"))
 	if otherKey != 0 {
 		t.Fatalf("其他 key 应为 0,实际 %d", otherKey)
+	}
+}
+
+// openTestStore 开临时库(迁移自动执行)。
+func openTestStore(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := Open(filepath.Join(t.TempDir(), "pricing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// 动态价目 CRUD(0004):upsert 覆盖、窗口 JSON 往返、删除回落语义(删行即无)。
+func TestPricing_CRUD(t *testing.T) {
+	db := openTestStore(t)
+	rec := PricingRecord{
+		Alias: "alias-a", Currency: "USD",
+		InputMicro: 440_000, CachedInputMicro: 14_000, OutputMicro: 1_320_000,
+		Timezone: "+08:00",
+		Windows:  []PricingWindowRecord{{Window: "00:30-08:30", BasisPoints: 5000}},
+	}
+	if err := UpsertPricing(db, rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := GetPricing(db, "alias-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Currency != "USD" || got.InputMicro != 440_000 || got.Timezone != "+08:00" ||
+		len(got.Windows) != 1 || got.Windows[0] != (PricingWindowRecord{Window: "00:30-08:30", BasisPoints: 5000}) {
+		t.Fatalf("读回不符: %+v", got)
+	}
+	// 覆盖写:窗口替换 + cached 归零(缺省语义)
+	rec.Windows = []PricingWindowRecord{{Window: "16:30-00:30", BasisPoints: 5000}, {Window: "00:00-00:30", BasisPoints: 5000}}
+	rec.CachedInputMicro = 0
+	if err := UpsertPricing(db, rec); err != nil {
+		t.Fatal(err)
+	}
+	all, err := ListPricing(db)
+	if err != nil || len(all) != 1 || len(all[0].Windows) != 2 || all[0].CachedInputMicro != 0 {
+		t.Fatalf("覆盖写不符: %+v %v", all, err)
+	}
+	// 时区缺省补 UTC
+	rec2 := rec
+	rec2.Alias = "alias-b"
+	rec2.Timezone = ""
+	if err := UpsertPricing(db, rec2); err != nil {
+		t.Fatal(err)
+	}
+	got2, _ := GetPricing(db, "alias-b")
+	if got2.Timezone != "UTC" {
+		t.Fatalf("空时区应缺省 UTC: %+v", got2)
+	}
+	// 删除:行消失,再读 ErrNotFound
+	n, err := DeletePricing(db, "alias-a")
+	if err != nil || n != 1 {
+		t.Fatalf("删除应命中 1 行: %d %v", n, err)
+	}
+	if _, err := GetPricing(db, "alias-a"); err != ErrNotFound {
+		t.Fatalf("删除后应 ErrNotFound: %v", err)
+	}
+}
+
+// 毒丸行自愈(0005):损坏 payload 在单连接(MaxOpenConns(1))下读取不得死锁,
+// 损坏行被剔除并计入 skipped,合法行不受影响。
+func TestPendingBufferedRows_毒丸行自愈(t *testing.T) {
+	db := openTestStore(t)
+	if _, err := db.Exec(`INSERT INTO metering_buffer (row_id, payload, created_at) VALUES ('bad','{broken',?)`,
+		time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	// JSON 键 = UsageRow Go 字段名(encoding/json 大小写不敏感匹配)
+	valid := `{"ID":"good","RequestID":"r1","Provider":"p","ModelAlias":"m","UpstreamModel":"m","Stream":false,"Status":"ok","PromptTokens":1,"CompletionTokens":2,"Estimated":false,"CostMicro":0,"Currency":"CNY","TenantID":"t","APIKeyID":"k","LatencyTotalMs":5,"CreatedAt":"2026-09-11T00:00:00Z"}`
+	if _, err := db.Exec(`INSERT INTO metering_buffer (row_id, payload, created_at) VALUES ('good',?,?)`,
+		valid, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	rows, skipped, err := PendingBufferedRows(db, 10)
+	if err != nil {
+		t.Fatalf("毒丸不得导致错误(自愈剔除): %v", err)
+	}
+	if len(skipped) != 1 || len(rows) != 1 || rows[0].Row.ID != "good" {
+		t.Fatalf("自愈结果不符: skipped=%v rows=%+v", skipped, rows)
 	}
 }

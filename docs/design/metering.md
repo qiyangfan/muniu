@@ -2,7 +2,14 @@
 
 ## 计量语义(契约)
 
-每个请求一行 `usage_logs`(含失败请求,`error_class` 区分),字段与来源优先级:
+**每次上游尝试一行** `usage_logs`(含失败请求,`error_class` 区分)。failover 换道 N 次即同 `request_id` 落 N 行——每行如实对应一次真实上游调用与其成本归因(provider/model/错误类),合并成「每请求一行」会丢失重试链路的可追责性。读侧口径由此统一:
+
+- **请求数** = `COUNT(DISTINCT request_id)`(控制台/对账不按行数计请求);
+- **token/成本** 只取终态成功行(`status='ok'` 携带上游权威 usage);错误/断连行 usage 为 0 或估算,单列作故障证据;
+- 语义缓存命中行(`provider='semantic-cache'`)未到达上游,跨系统对账时两侧剔除;
+- 对账实现见 `scripts/reconcile.sql`(判据:两侧按日差异 ≤1%)。
+
+字段与来源优先级:
 
 1. **上游 usage 帧**(归一表见 upstream-adapters,quirk/桥接各自落地)——唯一权威来源;
 2. **本地估算**(上游缺失/断言中断):输入=请求 messages 序列化后 tiktoken 计数;输出=已转发 delta 文本累计计数;`estimated=true`。
@@ -16,7 +23,31 @@
   `cost_micro = ceil(in_tokens × pin / 1e6) + ceil(out_tokens × pout / 1e6)`(逐段向上取整,误差 ≤2μ/请求,对供应商友好;规则进 conformance 断言)。
 - cached/reasoning 差异价(Phase 3 落地):pricing 增列 `cached_input`(缺省=input),计价扩为三段
   `ceil(未命中输入×input) + ceil(缓存命中×cached_input) + ceil(输出×output)`(实现 `metering.CostWithCached`,逐段独立取整)。
+- **分时段倍率**(2026-09-11 开放):pricing 增 `timezone`("UTC" 或 ±HH:MM 固定偏移,缺省 UTC;不引 tzdata——
+  单二进制零外联纪律,受 DST 影响的时区应换算为 UTC 表达)与 `time_windows[{window, multiplier}]`:
+  `window` 形如 "HH:MM-HH:MM"(终点 `24:00`=当日末;start>end 为跨午夜窗,如 `16:30-00:30`);
+  `multiplier` ≤4 位小数、取值 (0,10],作用于整张价目卡(三段统一缩放)。
+  换算发生在**加载期一次性完成**(基点整数运算,有效价向上取整——窗口价永不低估),运行时零浮点查表;
+  多窗按**声明顺序先匹配优先**(重叠即声明序 precedence),无命中回落缺省价;
+  `cached_input` 缺省=input 的语义在窗口内保持(0 值缩放仍为 0,由 CostWithCached 统一解析)。
+  设计取舍记录:选倍率而非逐窗全价(厂商错峰价的真实形态是整卡折扣,配置最简);
+  判定精确到请求完成时刻(`record` 时选窗,行内价目即该窗有效价,对账可逐行复核)。
 - **禁止 float 参与任何金额运算**(conventions 铁则);配额扣减即 `SUM(cost_micro)` 聚合,同一整数域。
+
+## 动态价目(运营态,2026-09-11 开放)
+
+厂商改价是**运维动作**,不应触碰配置中心更不应重启——价目归入 ADR-0004 的「运行态」一侧:
+
+- **合并语义**:YAML `pricing` 降级为静态兜底;SQLite `model_pricing` 表(迁移 0004)为运营覆盖。
+  解析按别名:DB 行存在即整体取代该别名(含窗口),否则回落 YAML;`DELETE /admin/v1/pricing/{alias}` 撤销覆盖即回落。
+- **生效路径**:管理面 `PUT /admin/v1/pricing/{alias}`(人类可读价目/倍率,同一套零浮点解析器校验)→ 持久化 →
+  重建合并表 → `PricingDirectory` 原子替换。转发只读目录,在途请求用旧表完成,**下一请求即新价,零重启**。
+- **入口**:`GET/PUT/DELETE /admin/v1/pricing`(管理 API)+ 控制台「价目管理」页。
+- **兜底纪律**:重建时任何非法行(DB 脏数据)使重建整体失败并保持旧目录——宁可维持旧价,不让脏数据进热路径;
+  刷新失败时持久化已生效,下次刷新/重启收敛(日志告警)。
+- 配置中心的职责边界不变:只管静态拓扑(providers/model_routes/pricing 兜底),改拓扑仍需重启(低频且要求全链一致)。
+- **控制面纳管期间撤销覆盖非粘性**:已配置 `control_plane.pricing_url` 的实例,每轮按控制面全量期望同步(内容不变跳过);
+  本地 DELETE 撤销会在下一轮被控制面期望重新覆盖——纳管实例的撤销必须在控制面侧执行。
 
 ## 异步落库(背压优先于丢单)
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 	"unicode/utf8"
 
 	"github.com/solvela/muniu/internal/auth"
@@ -150,7 +151,8 @@ func splitForReplay(content string, size int) []string {
 }
 
 // recordCacheHit 命中行计量:provider=semantic-cache,cost 0(semantic-cache.md「计量与可观测」)。
-func (p *Proxy) recordCacheHit(r *http.Request, req *protocol.ChatRequest, res *semantic.LookupResult) {
+// TotalMs 记请求入口到命中判定的真实耗时(含嵌入自调用——命中路径的主要延迟),兑现契约「命中延迟单独字段」。
+func (p *Proxy) recordCacheHit(r *http.Request, req *protocol.ChatRequest, res *semantic.LookupResult, hitStart time.Time) {
 	if p.pipeline == nil {
 		return
 	}
@@ -163,7 +165,7 @@ func (p *Proxy) recordCacheHit(r *http.Request, req *protocol.ChatRequest, res *
 		RequestID: loggingRequestID(r.Context()), TenantID: tenantID, APIKeyID: apiKeyID,
 		Provider: "semantic-cache", ModelAlias: req.Model, UpstreamModel: "semantic-cache",
 		Stream: req.Stream, Status: "ok",
-		Usage: usageOf(res), Currency: "CNY", TotalMs: 0,
+		Usage: usageOf(res), Currency: "CNY", TotalMs: time.Since(hitStart).Milliseconds(),
 	}))
 }
 
