@@ -33,6 +33,9 @@ jobs:
         run: |
           cd web && pnpm install --frozen-lockfile && pnpm build
           test -f dist/index.html # 产物校验:缺 index.html 即失败,不带占位产物发布
+          # vite build 清空 dist 会连带删掉 gitignore 豁免的 .gitkeep(tracked 文件被删
+          # = git 状态 dirty = goreleaser 拒发),构建后恢复占位
+          [ -f dist/.gitkeep ] || touch dist/.gitkeep
       - uses: goreleaser/goreleaser-action@v7
         with:
           args: release --clean
