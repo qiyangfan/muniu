@@ -32,13 +32,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         # 版本经 web/package.json 的 packageManager 字段钉死:pnpm 9 不认识
         # pnpm-workspace.yaml 的 allowBuilds(pnpm 11 字段)会报 packages field missing;
         # action 默认只读仓库根 package.json,须显式指向 web/
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm

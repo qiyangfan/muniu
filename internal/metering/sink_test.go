@@ -45,12 +45,20 @@ func row(id string) store.UsageRow {
 	return store.UsageRow{ID: id, RequestID: "req-" + id, PromptTokens: 1, CompletionTokens: 2}
 }
 
-func TestPipeline_远端失败缓冲续传(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "buf.db"))
+// openSinkDB 与产品 store.Open 对齐:busy_timeout 兜住 flushLoop 写与测试读的锁竞争
+// (CI 慢环境下裸开连接会 SQLITE_BUSY,首跑实证)
+func openSinkDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "buf.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+func TestPipeline_远端失败缓冲续传(t *testing.T) {
+	db := openSinkDB(t)
 	// 本地汇在远端成功时不落库,故无需 usage_logs 表;缓冲表需真实迁移
 	if _, err := db.Exec(`CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
 		t.Fatal(err)
@@ -78,8 +86,17 @@ func TestPipeline_远端失败缓冲续传(t *testing.T) {
 	if len(got) != 2 || got[0].ID != "r1" || got[1].ID != "r2" {
 		t.Fatalf("续传批次不符: %+v", got)
 	}
-	if n, _ := store.CountBufferedRows(db); n != 0 {
-		t.Fatalf("缓冲应排空,实际 %d", n)
+	// 排空断言轮询:缓冲删除在 flushLoop 后台执行,慢环境下断言可能先于删除到达
+	drainDeadline := time.Now().Add(3 * time.Second)
+	for {
+		n, _ := store.CountBufferedRows(db)
+		if n == 0 {
+			break
+		}
+		if time.Now().After(drainDeadline) {
+			t.Fatalf("缓冲应排空,实际 %d", n)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	_ = p.Close()
 }

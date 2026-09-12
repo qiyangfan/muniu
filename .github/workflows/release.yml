@@ -21,10 +21,10 @@ jobs:
       # 控制台必须先于 goreleaser 构建:go:embed 静态嵌入 dist,缺步会发布出空壳控制台的二进制
       # pnpm 版本经 web/package.json 的 packageManager 字段钉死(与本地/ci 一致);
       # action 默认只读仓库根 package.json,须显式指向 web/
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
