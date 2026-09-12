@@ -53,45 +53,82 @@ func NewIndex(dim int) VectorIndex {
 type HNSWIndex struct {
 	mu sync.RWMutex
 	g  *hnsw.Graph[string]
+	// vectors 存活条目(id→归一化向量)。上游 Graph.Delete 留悬空 entry/elevator
+	// 引用(v0.6.1 Search 层间下降 nodes[elevator] 对已删节点得 nil → SIGSEGV),
+	// 故删除走墓碑:图只增不删,TopK 过滤死节点;墓碑过半才全量重建(均摊 O(1))。
+	vectors map[string][]float32
+	dead    map[string]struct{}
 }
 
 // NewHNSWIndex 构造(dim 仅作维度记录,HNSW 自按向量维度断言)。
 func NewHNSWIndex(dim int) *HNSWIndex {
 	g := hnsw.NewGraph[string]()
 	g.Distance = hnsw.CosineDistance
-	return &HNSWIndex{g: g}
+	return &HNSWIndex{g: g, vectors: make(map[string][]float32), dead: make(map[string]struct{})}
 }
 
-// Add 追加条目。
+// Add 追加条目(重复存活 id 幂等忽略;命中墓碑 id 则重建后插,见图结构一致性)。
 func (ix *HNSWIndex) Add(id string, vec []float32) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	ix.g.Add(hnsw.MakeNode(id, normalize(vec)))
+	if _, dup := ix.vectors[id]; dup {
+		return
+	}
+	if _, tomb := ix.dead[id]; tomb {
+		delete(ix.dead, id)
+		ix.rebuildLocked()
+	}
+	nv := normalize(vec)
+	ix.vectors[id] = nv
+	ix.g.Add(hnsw.MakeNode(id, nv))
 }
 
-// Remove 删除条目。
+// Remove 删除条目(墓碑标记:规避上游 Delete 悬空引用缺陷,见 vectors 字段注释)。
 func (ix *HNSWIndex) Remove(id string) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
-	_ = ix.g.Delete(id)
+	if _, ok := ix.vectors[id]; !ok {
+		return
+	}
+	delete(ix.vectors, id)
+	ix.dead[id] = struct{}{}
+	// 墓碑过半才重建:重图结构并清墓碑,保证死节点不随累积劣化召回
+	if len(ix.dead) > len(ix.vectors) {
+		ix.rebuildLocked()
+	}
+}
+
+// rebuildLocked 全量重建(调用方持写锁)。
+func (ix *HNSWIndex) rebuildLocked() {
+	ix.g = hnsw.NewGraph[string]()
+	ix.g.Distance = hnsw.CosineDistance
+	ix.dead = make(map[string]struct{})
+	for id, v := range ix.vectors {
+		ix.g.Add(hnsw.MakeNode(id, v))
+	}
 }
 
 // Len 条数。
 func (ix *HNSWIndex) Len() int {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
-	return ix.g.Len()
+	return len(ix.vectors)
 }
 
-// TopK 近似余弦 Top-K(分数降序)。
+// TopK 近似余弦 Top-K(分数降序)。墓碑节点过滤:死节点可能占名额致召回略少,
+// 语义缓存「宁缺勿错」容忍;墓碑过半已在 Remove 时重建兜底。
 func (ix *HNSWIndex) TopK(query []float32, k int) []Hit {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
-	nodes := ix.g.Search(normalize(query), k)
+	q := normalize(query)
+	nodes := ix.g.Search(q, k)
 	hits := make([]Hit, 0, len(nodes))
 	for _, n := range nodes {
+		if _, alive := ix.vectors[n.Key]; !alive {
+			continue
+		}
 		// coder/hnsw 距离=1-余弦相似度,还原为相似度
-		hits = append(hits, Hit{ID: n.Key, Score: 1 - ix.g.Distance(n.Value, normalize(query))})
+		hits = append(hits, Hit{ID: n.Key, Score: 1 - ix.g.Distance(n.Value, q)})
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	return hits

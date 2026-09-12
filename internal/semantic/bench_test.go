@@ -1,3 +1,5 @@
+//go:build eval
+
 // T4.4 向量索引选型评估:1 万条 1536 维 Top5,暴力 vs HNSW 延迟对比。
 // 判据(semantic-cache.md):暴力 p99 < 5ms → 零依赖;否则引一个纯 Go HNSW。
 // 实测结论(本机 2026-09-10):暴力 p99≈21ms 超判据 → 引 github.com/coder/hnsw。

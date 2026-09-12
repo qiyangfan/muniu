@@ -94,10 +94,10 @@ dev-status:
 .PHONY: dev-restart
 dev-restart: dev-up
 
-## bench: 全量基准测试
+## bench: 全量基准测试(eval tag:选型评估含 1 万×1536 维构建,-race 下插桩放大 10 倍+,不进常规门禁)
 .PHONY: bench
 bench:
-	$(GO) test -bench=. -benchmem -run=^$$ ./...
+	$(GO) test -tags=eval -bench=. -benchmem -run=^$$ ./...
 
 ## smoke: 真上游冒烟(需真实 key 注入环境变量;CI 中禁跑)
 ## 用法: make smoke PROVIDER=deepseek
