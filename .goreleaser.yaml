@@ -1,7 +1,8 @@
 version: 2
 
 builds:
-  - env:
+  - main: ./cmd/muniu # goreleaser 默认找仓库根,main 实际在 cmd/muniu(与 make build 一致)
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
