@@ -19,7 +19,7 @@
 ## 限额计划(traffic-governance 流程)
 - rpm_limit / tpm_limit / daily_quota_micro:按 kongming 现有用量 ×2 起步,灰度一周后回调;
   bootstrap 起步值 rpm 120 / tpm 不限 / 日配额不限。
-- 灰度路径:先切非关键数据源一周 → 全量;每日对账(scripts/reconcile.sql),差异 >1% 立案。
+- 灰度路径:一周正常使用无故障(2026-09-12 判据修订:个人本地项目不适用生产式每日对账,月末与上游账单一次量级核对);reconcile.sql 保留作按需自检工具。
 - 语义缓存:kongming 租户灰度期关闭(bootstrap 默认),基线确认后再经 PATCH 租户开启。
 
 ## 切换状态(2026-09-11)
@@ -30,4 +30,4 @@
   CNY/百万 token)。
 - 同日晚 muniu 常驻形态迁 podman 容器(命名卷全新库),key 与牌价**重签/重录过一次**
   (数字不变,旧 key 已随旧库作废),对账以新 key 起算。
-- 灰度一周自 2026-09-11 起计时,期满对账达标 → 全量,本表与 ADR-007(kongming 侧)同步收口。
+- 灰度一周自 2026-09-11 起计时,期满无故障 → 全量,本表与 ADR-007(kongming 侧)同步收口。

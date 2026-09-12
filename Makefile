@@ -48,13 +48,14 @@ run: build
 ## 容器内绑 0.0.0.0,宿主侧经 -p 127.0.0.1:8787:8787 收回环;
 ## 计量数据放命名卷 muniu-data(machine 本地磁盘——SQLite WAL 在 virtiofs 宿主目录挂载上
 ## 会 disk I/O error,官方不支持网络 FS 上的 WAL),查询走 make dev-sql;
-## 显式清空 machine 注入的 http_proxy/https_proxy(宿主代理不在时出站会被 proxyconnect 拒绝)
+## 显式清空 machine 注入的 http_proxy/https_proxy(宿主代理不在时出站会被 proxyconnect 拒绝);
+## --restart=unless-stopped:容器崩溃自愈(非开机自启——podman machine 未起不拉起)
 
 ## dev-up: 构建镜像并后台起容器(已存在则先移除)
 .PHONY: dev-up
 dev-up: dev-down dev-build
 	podman volume exists muniu-data 2>/dev/null || podman volume create muniu-data >/dev/null
-	podman run -d --name muniu-gateway -p 127.0.0.1:8787:8787 \
+	podman run -d --name muniu-gateway --restart=unless-stopped -p 127.0.0.1:8787:8787 \
 		--env-file .env.local \
 		-e http_proxy= -e https_proxy= -e HTTP_PROXY= -e HTTPS_PROXY= -e no_proxy= \
 		-e SSL_CERT_FILE=/etc/ssl/cert.pem \
