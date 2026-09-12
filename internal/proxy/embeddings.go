@@ -37,7 +37,8 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求不符合 OpenAI embeddings 格式")
 		return
 	}
-	cands, ok := p.routes[req.Model]
+	topo := p.topo.Load() // 请求入口加载一次:全程同快照
+	cands, ok := topo.routes[req.Model]
 	if !ok || len(cands) == 0 {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 		return
@@ -56,7 +57,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			req = nreq
-			if cands, ok = p.routes[req.Model]; !ok || len(cands) == 0 {
+			if cands, ok = topo.routes[req.Model]; !ok || len(cands) == 0 {
 				p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 				return
 			}
@@ -80,7 +81,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 				"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
 			return
 		}
-		pool := p.pools[cand.Provider]
+		pool := topo.pools[cand.Provider]
 		key := pool.Pick(time.Now())
 		if key == nil {
 			p.logger.Warn("provider key 池不可用,跳过候选",
@@ -118,7 +119,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 // attemptEmbeddings 单候选非流式透传:2xx 整包回写 + usage 计量,非 2xx 归类不写信封(耗尽路径出)。
 func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand failover.Candidate, key *keypool.Key, req *protocol.EmbeddingRequest, m *meterState) (bool, failover.ErrorClass) {
 	m.stream = false
-	adI, ok := p.registry.Get(cand.Provider)
+	adI, ok := p.topo.Load().adapters[cand.Provider]
 	if !ok {
 		return true, failover.ClassUnknown
 	}

@@ -1,18 +1,82 @@
 @import "tailwindcss";
 
-/* 色值经 @theme token(kongming 前端铁律);组件样式只引用 token */
+/* 色值经 @theme token(前端宪法 Article 3/10:组件只许引用 token 类,禁 #hex/字面色板)。
+   词汇表与 kongming/jinguan 同名,值 = 木牛品牌色的语义化(松木青主色,原 brand/danger/muted 收编)。
+   暗色策略(宪法 Article 10):普通 @theme 直出变量,工具类引用 var(--color-*),
+   故 .dark 覆盖同名变量即可整仓翻转;图表 SVG 运行时 var(--color-*) 取色同样跟随。
+   每新增一个 token,必须同时在 .dark 补值(宪法 Article 10 硬性约束)。 */
+@custom-variant dark (&:is(.dark *));
+
 @theme {
-  --color-bg: #f7f7f5;
-  --color-panel: #ffffff;
-  --color-ink: #1c1c1a;
-  --color-muted: #6f6f69;
-  --color-brand: #2f6f4f;
-  --color-danger: #b3402a;
   --font-sans: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --color-background: #f7f7f5; /* 宣纸灰白 */
+  --color-foreground: #1c1c1a; /* 墨字 */
+  --color-card: #fff;
+  --color-card-foreground: #1c1c1a;
+  --color-popover: #fff;
+  --color-popover-foreground: #1c1c1a;
+  --color-primary: #2f6f4f; /* 松木青(原 brand) */
+  --color-primary-foreground: #fff;
+  --color-secondary: #eef0ec;
+  --color-secondary-foreground: #1c1c1a;
+  --color-muted: #efefec; /* 弱底/骨架屏 */
+  --color-muted-foreground: #6f6f69; /* 原 muted 文字灰归位至此 */
+  --color-accent: #e9f0eb;
+  --color-accent-foreground: #27543d;
+  --color-destructive: #b3402a; /* 赭红(原 danger) */
+  --color-destructive-foreground: #fff;
+  --color-success: #3d8f63;
+  --color-success-foreground: #fff;
+  --color-warning: #b07d2e;
+  --color-warning-foreground: #fff;
+  --color-border: #e2e2de;
+  --color-input: #e2e2de;
+  --color-ring: #2f6f4f;
+  --color-chart-series-2: #a8c5b5; /* 图表第二系列(原 Overview 字面 hex 收编) */
 }
 
-body {
-  background: var(--color-bg);
-  color: var(--color-ink);
-  font-family: var(--font-sans);
+/* Tailwind v4 裸 border 落 currentColor,须在此统一收敛到 token,否则描边随文字变色(照抄双仓基线) */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+}
+
+:root {
+  color-scheme: light;
+}
+
+/* 松木青夜:与浅色同一词汇表逐名覆盖,值整体提亮一档保对比(正文 ≥4.5:1,Article 10);
+   未 layer 化,级联优先于 @theme 的 :root 输出。挂载入口:index.html 防 FOUC 内联脚本 + lib/theme.ts */
+.dark {
+  color-scheme: dark;
+
+  --color-background: #131512; /* 松烟夜 */
+  --color-foreground: #e6e9e4; /* 月白字 */
+  --color-card: #1b1f1b;
+  --color-card-foreground: #e6e9e4;
+  --color-popover: #1b1f1b;
+  --color-popover-foreground: #e6e9e4;
+  --color-primary: #63a984; /* 夜松:暗底提亮一档 */
+  --color-primary-foreground: #0c1510;
+  --color-secondary: #232823;
+  --color-secondary-foreground: #e6e9e4;
+  --color-muted: #232823;
+  --color-muted-foreground: #98a29a;
+  --color-accent: #1f2b23; /* 暗松针底 */
+  --color-accent-foreground: #93c8a8;
+  --color-destructive: #e07a5f; /* 赭红提亮:暗下软底徽章文字对比 ≥4.5:1 */
+  --color-destructive-foreground: #2b0d05; /* 暗红底配深字(同 warning 的暗字范式) */
+  --color-success: #58a97e;
+  --color-success-foreground: #0c1510;
+  --color-warning: #d1a04a;
+  --color-warning-foreground: #231a05;
+  --color-border: #2b302a;
+  --color-input: #2b302a;
+  --color-ring: #63a984;
+  --color-chart-series-2: #7fae94; /* 淡竹青提亮 */
 }

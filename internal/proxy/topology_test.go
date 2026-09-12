@@ -1,0 +1,149 @@
+package proxy
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/solvela/muniu/internal/adapter"
+	"github.com/solvela/muniu/internal/config"
+	"github.com/solvela/muniu/internal/keypool"
+)
+
+// 拓扑热替换管道测试(3.1):池保留语义 + 校验拒绝 + 替换生效 + 构建失败回滚。
+
+func topoConfig(name, baseURL string) Config {
+	prov := config.Provider{
+		Name: name, Adapter: "openai", BaseURL: baseURL,
+		Keys: []config.KeyRef{{Env: name + "_KEY", Weight: 1}},
+	}
+	pool := keypool.NewPool([]keypool.KeyInput{{ID: name + "-K1", Value: "sk-" + name, Weight: 1}})
+	return Config{
+		Providers: []config.Provider{prov},
+		Routes: map[string][]config.Candidate{
+			"m1": {{Provider: name, Model: "model-x", Priority: 1, Weight: 1}},
+		},
+		Pools: map[string]*keypool.Pool{name: pool},
+	}
+}
+
+func buildOK(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
+	pool := keypool.NewPool([]keypool.KeyInput{
+		{ID: prov.Name + "-K2", Value: "sk-new-" + prov.Name, Weight: 1},
+	})
+	return pool, adapter.NewOpenAI("http://"+prov.Name+".test", ""), nil
+}
+
+func TestTopology_InitialSnapshotFromNew(t *testing.T) {
+	cfg := topoConfig("alpha", "http://alpha")
+	p := New(cfg)
+	providers, pools := p.Topology()
+	if len(providers) != 1 || providers[0].Name != "alpha" {
+		t.Fatalf("初始快照 providers 异常: %v", providers)
+	}
+	if pools["alpha"] == nil {
+		t.Fatal("初始快照缺 alpha 池")
+	}
+	if _, ok := p.topo.Load().routes["m1"]; !ok {
+		t.Fatal("初始快照缺 m1 路由")
+	}
+}
+
+func TestTopology_Replace_CreatedAndReplaced(t *testing.T) {
+	cfg := topoConfig("alpha", "http://alpha")
+	p := New(cfg)
+	oldPool := func() *keypool.Pool { s := p.topo.Load(); return s.pools["alpha"] }()
+
+	// 替换:alpha 换 base_url(配置变更→池与适配器重建) + 新增 beta
+	next := topoConfig("alpha", "http://alpha-v2")
+	beta := topoConfig("beta", "http://beta")
+	next.Providers = append(next.Providers, beta.Providers...)
+	next.Routes["m2"] = []config.Candidate{{Provider: "beta", Model: "model-y", Priority: 1}}
+
+	stats, err := p.ReplaceTopology(next, buildOK)
+	if err != nil {
+		t.Fatalf("替换失败: %v", err)
+	}
+	if stats.Created != 2 || stats.Reused != 0 || stats.Removed != 0 {
+		t.Fatalf("统计异常: %+v", stats)
+	}
+	s := p.topo.Load()
+	if s.pools["alpha"] == oldPool {
+		t.Fatal("配置变更的 provider 池应重建,却复用了旧池")
+	}
+	if _, ok := s.routes["m2"]; !ok {
+		t.Fatal("新路由未生效")
+	}
+}
+
+func TestTopology_Replace_UnchangedProviderKeepsRuntimePool(t *testing.T) {
+	cfg := topoConfig("alpha", "http://alpha")
+	p := New(cfg)
+	oldPool := func() *keypool.Pool { s := p.topo.Load(); return s.pools["alpha"] }()
+
+	// alpha 配置逐字未变(仅追加一个新路由):池必须复用(冷却/EMA 运行态无损)
+	next := topoConfig("alpha", "http://alpha")
+	next.Routes["m2"] = []config.Candidate{{Provider: "alpha", Model: "model-y", Priority: 2}}
+	stats, err := p.ReplaceTopology(next, buildOK)
+	if err != nil {
+		t.Fatalf("替换失败: %v", err)
+	}
+	if stats.Reused != 1 {
+		t.Fatalf("未变 provider 应复用池,统计: %+v", stats)
+	}
+	if s := p.topo.Load(); s.pools["alpha"] != oldPool {
+		t.Fatal("配置未变的 provider 池指针应保持(运行态无损)")
+	}
+}
+
+func TestTopology_Replace_RemovedProvider(t *testing.T) {
+	cfg := topoConfig("alpha", "http://alpha")
+	beta := topoConfig("beta", "http://beta")
+	cfg.Providers = append(cfg.Providers, beta.Providers...)
+	cfg.Routes["m2"] = []config.Candidate{{Provider: "beta", Model: "model-y", Priority: 1}}
+	p := New(cfg)
+
+	stats, err := p.ReplaceTopology(topoConfig("alpha", "http://alpha"), buildOK)
+	if err != nil {
+		t.Fatalf("替换失败: %v", err)
+	}
+	if stats.Removed != 1 {
+		t.Fatalf("消失的 provider 应计入 Removed: %+v", stats)
+	}
+	if _, ok := p.topo.Load().routes["m2"]; ok {
+		t.Fatal("被移除 provider 的路由应不可达")
+	}
+}
+
+func TestTopology_Replace_RejectInvalid(t *testing.T) {
+	cfg := topoConfig("alpha", "http://alpha")
+	p := New(cfg)
+
+	// 空路由拒绝
+	if _, err := p.ReplaceTopology(Config{}, buildOK); err == nil {
+		t.Fatal("空路由应被拒绝")
+	}
+	// 候选引用未定义 provider 拒绝
+	bad := topoConfig("alpha", "http://alpha")
+	bad.Routes["m9"] = []config.Candidate{{Provider: "ghost", Model: "m", Priority: 1}}
+	if _, err := p.ReplaceTopology(bad, buildOK); err == nil {
+		t.Fatal("候选引用未定义 provider 应被拒绝")
+	}
+	// 池构建失败拒绝(buildPool 报错→整体回滚)
+	failing := topoConfig("alpha", "http://alpha-v3")
+	beta := topoConfig("beta", "http://beta")
+	failing.Providers = append(failing.Providers, beta.Providers...)
+	failing.Routes["m2"] = []config.Candidate{{Provider: "beta", Model: "model-y", Priority: 1}}
+	if _, err := p.ReplaceTopology(failing, func(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
+		if prov.Name == "beta" {
+			return nil, nil, errors.New("env 缺失")
+		}
+		return buildOK(prov)
+	}); err == nil {
+		t.Fatal("池构建失败应整体拒绝替换")
+	}
+	// 上述拒绝后旧快照原封不动(含 alpha 运行态)
+	s := p.topo.Load()
+	if _, ok := s.routes["m1"]; !ok || s.pools["alpha"] == nil {
+		t.Fatal("拒绝替换后旧快照必须保持")
+	}
+}

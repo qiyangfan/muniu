@@ -1,6 +1,11 @@
 // 用量明细:维度筛选 + 时间范围 + 聚合表。
 import { useEffect, useState } from "react";
 import { api, type UsagePoint } from "../lib/api";
+import { Button } from "../components/ui/button";
+import { ErrorAlert } from "../components/ui/alert";
+import { Table, TBody, TD, TH, THead, TR } from "../components/ui/table";
+import { Skeleton } from "../components/ui/skeleton";
+import { EmptyState } from "../components/empty-state";
 
 const DIMS = ["day", "key", "model", "provider"] as const;
 
@@ -8,48 +13,79 @@ export default function Usage() {
   const [dim, setDim] = useState<(typeof DIMS)[number]>("day");
   const [points, setPoints] = useState<UsagePoint[]>([]);
   const [err, setErr] = useState("");
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     // 401/网络错误必须可见:静默吞掉会渲染成「空报表」,与真实零用量无法区分
-    api.usage({ group_by: dim })
-      .then((r) => { setPoints(r.points); setErr(""); })
-      .catch((e) => setErr(e.message));
+    api
+      .usage({ group_by: dim })
+      .then((r) => {
+        setPoints(r.points);
+        setErr("");
+        setLoaded(true);
+      })
+      .catch((e) => {
+        setErr(e.message);
+        setLoaded(true);
+      });
   }, [dim]);
 
   return (
     <div className="space-y-4">
-      {err && <div className="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-700">加载失败:{err}</div>}
+      {err && <ErrorAlert>加载失败:{err}</ErrorAlert>}
       <div className="flex gap-2">
         {DIMS.map((d) => (
-          <button
+          <Button
             key={d}
+            size="sm"
+            variant={dim === d ? "default" : "secondary"}
+            aria-pressed={dim === d}
             onClick={() => setDim(d)}
-            className={"px-3 py-1.5 rounded-md text-sm " + (dim === d ? "bg-[var(--color-brand)] text-white" : "bg-[var(--color-panel)] text-[var(--color-muted)]")}
           >
             {d}
-          </button>
+          </Button>
         ))}
       </div>
-      <table className="w-full bg-[var(--color-panel)] rounded-xl text-sm">
-        <thead>
-          <tr className="text-left text-[var(--color-muted)]">
-            <th className="p-3">维度</th><th className="p-3">请求</th><th className="p-3">输入 tok</th>
-            <th className="p-3">输出 tok</th><th className="p-3">缓存命中</th><th className="p-3">成本 μ</th>
-          </tr>
-        </thead>
-        <tbody>
-          {points.map((p) => (
-            <tr key={p.dim} className="border-t border-black/5">
-              <td className="p-3 font-mono">{p.dim}</td>
-              <td className="p-3">{p.requests}</td>
-              <td className="p-3">{p.prompt_tokens}</td>
-              <td className="p-3">{p.completion_tokens}</td>
-              <td className="p-3">{p.cache_hits}</td>
-              <td className="p-3">{p.cost_micro}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {!loaded ? (
+        <div className="space-y-2">
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+          <Skeleton className="h-12 w-full" />
+        </div>
+      ) : (
+        <Table>
+          <THead>
+            <TR>
+              <TH>维度</TH>
+              <TH>请求</TH>
+              <TH>输入 tok</TH>
+              <TH>输出 tok</TH>
+              <TH>缓存命中</TH>
+              <TH>成本 μ</TH>
+            </TR>
+          </THead>
+          <TBody>
+            {points.length === 0 ? (
+              <TR>
+                <TD colSpan={6}>
+                  <EmptyState>暂无用量数据</EmptyState>
+                </TD>
+              </TR>
+            ) : (
+              points.map((p) => (
+                <TR key={p.dim}>
+                  <TD className="font-mono">{p.dim}</TD>
+                  <TD>{p.requests}</TD>
+                  <TD>{p.prompt_tokens}</TD>
+                  <TD>{p.completion_tokens}</TD>
+                  <TD>{p.cache_hits}</TD>
+                  <TD>{p.cost_micro}</TD>
+                </TR>
+              ))
+            )}
+          </TBody>
+        </Table>
+      )}
     </div>
   );
 }

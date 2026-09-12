@@ -109,11 +109,11 @@ type AuthCfg struct {
 // ModelCapability 模型能力声明(ADR-0010):(provider, model) 二元组必填、零通配、零内置。
 // 声明了约束才干预,未声明 = 零干预透传;治理语义见 upstream-adapters「请求参数治理」。
 type ModelCapability struct {
-	Provider        string   `yaml:"provider"`
-	Model           string   `yaml:"model"`
-	DropParams      []string `yaml:"drop_params"`       // 不支持参数黑名单(OpenAI 形态参数名)
-	ThinkingLock    bool     `yaml:"thinking_lock"`     // 思考不可关:关闭思考指令按策略处置
-	MaxOutputTokens int64    `yaml:"max_output_tokens"` // 输出上限(0=不限制);越界 clamp max_tokens
+	Provider        string   `yaml:"provider" json:"provider"` // json tag:拓扑控制面下发契约(3.2)显式化
+	Model           string   `yaml:"model" json:"model"`
+	DropParams      []string `yaml:"drop_params" json:"drop_params"`             // 不支持参数黑名单(OpenAI 形态参数名)
+	ThinkingLock    bool     `yaml:"thinking_lock" json:"thinking_lock"`         // 思考不可关:关闭思考指令按策略处置
+	MaxOutputTokens int64    `yaml:"max_output_tokens" json:"max_output_tokens"` // 输出上限(0=不限制);越界 clamp max_tokens
 }
 
 // Config muniu.yaml 的运行态形态(启动后只读)。
@@ -145,6 +145,7 @@ type Config struct {
 	} `yaml:"metering"`
 	ControlPlane struct {
 		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点;空 = 不拉取(standalone)
+		TopologyURL     string `yaml:"topology_url"`      // 控制面拓扑端点(3.2);空 = 文件源(现状等价)
 		PollIntervalSec int    `yaml:"poll_interval_sec"` // 拉取间隔,缺省 60s
 	} `yaml:"control_plane"`
 	Providers        []Provider             `yaml:"providers"`
@@ -316,6 +317,11 @@ func (c *Config) validate() error {
 	if c.ControlPlane.PricingURL != "" {
 		if u, err := url.Parse(c.ControlPlane.PricingURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			add("control_plane.pricing_url 非法: %q", c.ControlPlane.PricingURL)
+		}
+	}
+	if c.ControlPlane.TopologyURL != "" {
+		if u, err := url.Parse(c.ControlPlane.TopologyURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			add("control_plane.topology_url 非法: %q", c.ControlPlane.TopologyURL)
 		}
 	}
 

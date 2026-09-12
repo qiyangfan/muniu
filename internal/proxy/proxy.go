@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
@@ -39,6 +40,7 @@ type Timeouts struct {
 // Config 代理装配参数(New 消费;结构化形态避免参数膨胀)。
 type Config struct {
 	Registry         *adapter.Registry
+	Providers        []config.Provider // provider 定义(拓扑快照的池保留基准,3.1)
 	Routes           map[string][]config.Candidate
 	Pricing          *metering.PricingDirectory // 价目目录(动态改价:管理面原子替换,转发只读);nil = 成本记 0
 	Timeouts         Timeouts
@@ -54,18 +56,16 @@ type Config struct {
 	Logger           *slog.Logger
 }
 
-// Proxy 编排器:注册表 + 路由 + key 池 + 三层超时 + 计量管道。
+// Proxy 编排器:注册表 + 拓扑快照(路由/池/适配器/能力目录,3.1 原子热替换) + 三层超时 + 计量管道。
 type Proxy struct {
-	registry  *adapter.Registry
-	routes    map[string][]config.Candidate
+	registry  *adapter.Registry                // 启动装配容器(转发路径不再读——adapter 随拓扑快照)
+	topo      atomic.Pointer[topologySnapshot] // 请求入口 Load 一次,全程同快照(换道视图一致)
 	pricing   *metering.PricingDirectory
 	timeouts  Timeouts
 	pipeline  *metering.Pipeline
-	pools     map[string]*keypool.Pool
 	tpm       *ratelimit.TPM
 	cache     *semantic.Cache
 	tenantSw  func(string) bool
-	caps      map[governKey]config.ModelCapability
 	strictGov bool
 	plugins   *plugin.Registry
 	randIntn  func(int) int
@@ -75,16 +75,6 @@ type Proxy struct {
 
 // New 构造代理:路由候选按 priority 升序排序;HTTP 客户端带拨号层超时与连接池。
 func New(cfg Config) *Proxy {
-	sorted := make(map[string][]config.Candidate, len(cfg.Routes))
-	for alias, cands := range cfg.Routes {
-		cs := append([]config.Candidate(nil), cands...)
-		for i := 1; i < len(cs); i++ { // 插入排序:候选列表极短
-			for j := i; j > 0 && cs[j].Priority < cs[j-1].Priority; j-- {
-				cs[j], cs[j-1] = cs[j-1], cs[j]
-			}
-		}
-		sorted[alias] = cs
-	}
 	transport := &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
 		DialContext:         (&net.Dialer{Timeout: cfg.Timeouts.Dial, KeepAlive: 30 * time.Second}).DialContext,
@@ -103,27 +93,53 @@ func New(cfg Config) *Proxy {
 	if randIntn == nil {
 		randIntn = func(n int) int { return rand.IntN(n) }
 	}
-	caps := make(map[governKey]config.ModelCapability, len(cfg.Capabilities))
-	for _, mc := range cfg.Capabilities {
-		caps[governKey{mc.Provider, mc.Model}] = mc
-	}
-	return &Proxy{
+	p := &Proxy{
 		registry:  cfg.Registry,
-		routes:    sorted,
 		pricing:   cfg.Pricing,
 		timeouts:  cfg.Timeouts,
 		pipeline:  cfg.Pipeline,
-		pools:     cfg.Pools,
 		tpm:       cfg.TPM,
 		cache:     cfg.Cache,
 		tenantSw:  cfg.TenantSwitch,
 		plugins:   cfg.Plugins,
-		caps:      caps,
 		strictGov: cfg.StrictGovernance,
 		randIntn:  randIntn,
 		logger:    logger,
 		client:    &http.Client{Transport: transport},
 	}
+	p.topo.Store(&topologySnapshot{
+		providers: append([]config.Provider(nil), cfg.Providers...),
+		routes:    sortRoutes(cfg.Routes),
+		pools:     cfg.Pools,
+		adapters:  initialAdapters(cfg),
+		caps:      buildCaps(cfg.Capabilities),
+	})
+	return p
+}
+
+// initialAdapters 启动期从装配注册表提取各 provider 的适配器(拓扑快照初始形态;
+// 转发路径此后只读快照——热替换失败回滚时新旧适配器不混用)。
+// 兼容未传 Providers 的调用方:从路由候选引用的 provider 集合提取。
+func initialAdapters(cfg Config) map[string]adapter.Adapter {
+	names := map[string]bool{}
+	for _, prov := range cfg.Providers {
+		names[prov.Name] = true
+	}
+	for _, cands := range cfg.Routes {
+		for _, c := range cands {
+			names[c.Provider] = true
+		}
+	}
+	out := make(map[string]adapter.Adapter, len(names))
+	for name := range names {
+		if cfg.Registry == nil {
+			continue
+		}
+		if ad, ok := cfg.Registry.Get(name); ok {
+			out[name] = ad
+		}
+	}
+	return out
 }
 
 // Handler 返回挂载到 mux 的入口(POST /v1/chat/completions)。
@@ -180,7 +196,8 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求不符合 OpenAI Chat Completions 格式")
 		return
 	}
-	cands, ok := p.routes[req.Model]
+	topo := p.topo.Load() // 请求入口加载一次:全程同快照,换道候选视图一致
+	cands, ok := topo.routes[req.Model]
 	if !ok || len(cands) == 0 {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 		return
@@ -200,7 +217,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			req = nreq
-			if cands, ok = p.routes[req.Model]; !ok || len(cands) == 0 {
+			if cands, ok = topo.routes[req.Model]; !ok || len(cands) == 0 {
 				p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 				return
 			}
@@ -244,7 +261,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 第 9 步:取 key → 执行 → 按 Decide 动作分支 → 结果回写 key 池
-		pool := p.pools[cand.Provider]
+		pool := topo.pools[cand.Provider]
 		key := pool.Pick(time.Now())
 		if key == nil {
 			// 该 provider 全部 key 冷却/禁用:跳过候选,不计错误类
@@ -281,8 +298,9 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 }
 
 // govern 按目标候选解析能力约束并执行治理(目录未声明 → 原件零干预返回)。
-func (p *Proxy) govern(req *protocol.ChatRequest, cand failover.Candidate) (*protocol.ChatRequest, []governChange, string) {
-	capability, ok := p.caps[governKey{cand.Provider, cand.Model}]
+// s 由调用方传入(与适配器取自同一快照),治理与出站构造不跨快照错位。
+func (p *Proxy) govern(s *topologySnapshot, req *protocol.ChatRequest, cand failover.Candidate) (*protocol.ChatRequest, []governChange, string) {
+	capability, ok := s.caps[governKey{cand.Provider, cand.Model}]
 	if !ok {
 		return req, nil, ""
 	}
@@ -311,16 +329,17 @@ func (p *Proxy) traceGovern(w http.ResponseWriter, r *http.Request, cand failove
 // attempt 单候选执行:按流式与否分发,并在退出时计量第 11 步
 // (成功/失败/断连三态都记;defer 保证任何出口都落账)。
 func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, req *protocol.ChatRequest, cand failover.Candidate, key *keypool.Key, m *meterState) (handled bool, class failover.ErrorClass) {
-	ad, ok := p.registry.Get(cand.Provider)
+	snap := p.topo.Load() // 单次加载:同一 attempt 的适配器与治理目录取自同一快照
+	ad, ok := snap.adapters[cand.Provider]
 	if !ok {
-		// config 校验保证 provider 已注册;防御性兜底
+		// 拓扑快照保证 provider 已装配;防御性兜底
 		p.logger.Error("provider 未注册", "provider", cand.Provider)
 		p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")
 		return true, failover.ClassUnknown
 	}
 	// 请求参数治理(ADR-0010):每次 attempt 从原始请求出发按目标 (provider, model) 重新治理——
 	// 换道后不得沿用上一目标的收敛结果(spec 换道重治理场景);strict 命中即 400 终结。
-	greq, gchanges, greject := p.govern(req, cand)
+	greq, gchanges, greject := p.govern(snap, req, cand)
 	if greject != "" {
 		p.writeError(w, r, protocol.TypeBadRequest, "param_rejected", greject)
 		return true, failover.ClassBadRequest

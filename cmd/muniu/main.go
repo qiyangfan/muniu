@@ -131,31 +131,38 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 	tpm := ratelimit.NewTPM()
 
 	// 适配器注册:Phase 2 仅 openai 基座+quirks;key 取 provider 第一把 key 的环境变量值
+	// buildPool 同时服务启动构建与拓扑热替换(3.2 控制面源):env 解析+建池+adapter 注册一体
 	registry := adapter.NewRegistry()
-	pools := make(map[string]*keypool.Pool, len(cfg.Providers))
-	for _, p := range cfg.Providers {
-		if len(p.Keys) == 0 {
-			return nil, nil, nil, errors.New("provider " + p.Name + " 无可用 key 引用")
+	buildPool := func(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
+		if len(prov.Keys) == 0 {
+			return nil, nil, fmt.Errorf("provider %s 无可用 key 引用", prov.Name)
 		}
-		// key 池:全部 key 环境变量注入;任一缺失即启动失败(静态拓扑 fail-fast)
-		inputs := make([]keypool.KeyInput, 0, len(p.Keys))
+		inputs := make([]keypool.KeyInput, 0, len(prov.Keys))
 		first := ""
-		for i, kr := range p.Keys {
+		for i, kr := range prov.Keys {
 			v := os.Getenv(kr.Env)
 			if v == "" {
-				return nil, nil, nil, fmt.Errorf("provider %s 的 key 环境变量 %s 未设置", p.Name, kr.Env)
+				return nil, nil, fmt.Errorf("provider %s 的 key 环境变量 %s 未设置", prov.Name, kr.Env)
 			}
 			if i == 0 {
 				first = v
 			}
 			inputs = append(inputs, keypool.KeyInput{ID: kr.Env, Value: v, Weight: kr.Weight})
 		}
-		pools[p.Name] = keypool.NewPool(inputs)
-		ad, err := adapter.For(p.Adapter, p.BaseURL, first)
+		ad, err := adapter.For(prov.Adapter, prov.BaseURL, first)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("provider %s: %w", p.Name, err)
+			return nil, nil, fmt.Errorf("provider %s: %w", prov.Name, err)
 		}
-		registry.Register(p.Name, ad)
+		registry.Register(prov.Name, ad) // 启动装配容器;转发路径改读拓扑快照(3.1)
+		return keypool.NewPool(inputs), ad, nil
+	}
+	pools := make(map[string]*keypool.Pool, len(cfg.Providers))
+	for _, p := range cfg.Providers {
+		pool, _, err := buildPool(p)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		pools[p.Name] = pool
 	}
 
 	// 价目:人类可读 → μ 整数(加载期一次性换算,全链路零浮点);
@@ -286,9 +293,10 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 	}
 
 	chatProxy := proxy.New(proxy.Config{
-		Registry: registry,
-		Routes:   cfg.ModelRoutes,
-		Pricing:  pricingDir,
+		Registry:  registry,
+		Providers: cfg.Providers,
+		Routes:    cfg.ModelRoutes,
+		Pricing:   pricingDir,
 		Timeouts: proxy.Timeouts{
 			Dial:       cfg.Server.Timeouts.DialDuration(),
 			FirstToken: cfg.Server.Timeouts.FirstTokenDuration(),
@@ -304,6 +312,49 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		Plugins:          pluginReg,
 		Logger:           logger,
 	})
+
+	// 控制面拓扑热替换(3.2 双驱动的控制面侧;文件源为缺省,配置 topology_url 后启用):
+	// 启动即拉、ETag 条件请求(304 跳过)、失败/损坏保持当前快照并告警降级(3.3);
+	// 池构建复用启动闭包 buildPool(env 解析+adapter 注册),配置未变 provider 运行态无损
+	if cfg.ControlPlane.TopologyURL != "" {
+		interval := time.Duration(cfg.ControlPlane.PollIntervalSec) * time.Second
+		if interval <= 0 {
+			interval = 60 * time.Second
+		}
+		go func() {
+			client := &http.Client{Timeout: 10 * time.Second}
+			etag := ""
+			syncOnce := func() {
+				payload, newETag, notModified, err := config.FetchTopology(client, cfg.ControlPlane.TopologyURL, etag)
+				if err != nil {
+					logger.Warn("控制面拓扑拉取失败,保持当前快照", "error_detail", err.Error())
+					return
+				}
+				if notModified {
+					return
+				}
+				providers, routes, models := payload.ToTopology()
+				stats, rerr := chatProxy.ReplaceTopology(proxy.Config{
+					Providers:    providers,
+					Routes:       routes,
+					Capabilities: models,
+				}, buildPool)
+				if rerr != nil {
+					logger.Warn("拓扑替换被拒绝,保持当前快照", "error_detail", rerr.Error())
+					return
+				}
+				etag = newETag
+				logger.Info("控制面拓扑已热替换", "reused", stats.Reused,
+					"created", stats.Created, "removed", stats.Removed)
+			}
+			syncOnce() // 启动即拉,不等首个周期
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for range ticker.C {
+				syncOnce()
+			}
+		}()
+	}
 
 	// 业务路由全链:顺序即契约 request_id → recover → access_log → auth → quota → ratelimit
 	platformSecrets := make([][]byte, 0, len(cfg.Auth.PlatformKeySecrets))

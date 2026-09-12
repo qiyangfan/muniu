@@ -125,6 +125,13 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 token 数,muniu 的取舍是「宁可记账精确、偶发小额超限」,不做预留式伪精确(预留复杂度与 token
 上限的不可知性不成比例)。
 
+## 双形态部署
+
+- **standalone(缺省,一等公民)**:`muniu` 一条命令起服——单二进制 + 内嵌 SQLite,`muniu.yaml` 静态拓扑/价目,零外部依赖。
+- **cluster(无状态副本)**:多副本 + LB + 控制面(价目/拓扑/吊销下发,计量 ingest 回推)。参考部署样例与控制面对接契约见 [deploy/cluster/](deploy/cluster/README.md);每实例分片语义与集群口径见 [docs/design/cluster-semantics.md](docs/design/cluster-semantics.md)。
+
+配置开关:`control_plane.topology_url` / `pricing_url` / `auth.revocations_url` / `metering.sink: ingest`——全部缺省关闭,standalone 行为零回归。
+
 ## 文档地图
 
 | 文档 | 内容 |

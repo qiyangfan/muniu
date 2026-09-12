@@ -2,7 +2,14 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
-## 当前状态(2026-09-12,WASM 插件运行时落地)
+## 当前状态(2026-09-12,出站面与 Responses 入站裁决落地)
+
+- **B 档四项裁决与立项(2026-09-12,用户点名升格,架构师独立裁决)**:①桥接工具多轮 = 缺陷级,立 openspec `upstream-egress-batch`(多轮标记检出→桥接候选**适配性豁免**跳过/独占时 400 `bridge_tool_roundtrip_unsupported` 明确信封/EMA 豁免——修「透传吃上游 400」的不诚实失败;含 Gemini 经官方 OpenAI 兼容层轻形态接入,quirk 以冒烟实测为准);③Responses API 入站 = 战略项,**ADR-0012 已立**(边缘翻译/无状态 v1/N+M 边缘适配),openspec `responses-api-inbound` 已立(POST /v1/responses、跨协议共享语义缓存、GET 恒 404);②Gemini 归入 ① 同 change;④images/audio/files **不立项**(新计量维度+零消费者,维持 backlog)。两 change `openspec validate` 通过,实施顺序:gateway-parity → upstream-egress-batch → responses-api-inbound(依赖其错误契约)。
+
+- **openspec change `gateway-parity` 已立待实施(2026-09-12)**:对标同类网关(one-api/new-api/LiteLLM)的三处标配缺口,全部为加法——①`GET /v1/models`+`/{model}` 模型发现(读拓扑快照,鉴权但绕过配额/限流/计量,错误契约 +`not_found` 404);②key 生命周期(签发暴露已有 tpm/日配额列、`mk-` 增 `expires_at` 迁移 0006、verify 后单点过期判定缓存零改动、新增 `PATCH /admin/v1/keys/{id}`);③`/metrics` 补 token 三向/缓存判定/流式首字节三组序列。proposal/design/tasks/specs(model-discovery/api-key-lifecycle/usage-metrics)齐全,`openspec validate` 通过;明确不做:key 白名单/启停、OTel、成本序列、兑换码等(见 design「明确不做」)。platform-data-plane 6.x(cluster 参考部署)仍在原 change 排队。
+
+- **配置源抽象 P1 完成(2026-09-12,platform-data-plane 3.1/3.2/3.3)**:拓扑快照(providers/routes/能力目录)`atomic.Pointer` 原子热替换——请求入口 Load 一次全程同快照,池运行态(冷却/EMA)在 provider 配置未变时无损保留;控制面拉取源 ETag 条件请求、损坏快照拒绝应用、失败保持降级,文件源缺省=现状等价零回归;`make check` 全绿。
+
 
 - **WASM 插件运行时已全量落地(2026-09-12,ADR-0011,openspec `wasm-plugin-runtime` 14/14 任务)**:wazero v1.12.0 宿主(零传递依赖)、自定薄 ABI v0 冻结(`docs/design/plugin-abi.md`)、实例池/资源隔离/containment、链路挂点(限流后、语义缓存与候选循环前)、管理 API 三端点(openapi+api-types 同步,漂移门禁绿)、per-plugin 指标、样例插件 pii-masker(Rust wasm32-unknown-unknown)全流程冒烟实证;`make check` 全绿,change 已归档(主 specs +plugin-runtime)。README CI badge 已补(HANDOFF 下一步 #2 收口)。
 
@@ -23,8 +30,11 @@
 1. 【用户·已完成 2026-09-12】GitHub 建仓 + tag + push(实际建仓 qiyangfan/muniu 私有——gh 登录账号与旧计划 solvela 不符,以实际为准;v0.3.0 已发布,见验收记录 21)。
 2. 【执行会话·已完成 2026-09-12】README 补 CI badge(指向 actions/workflows/ci.yml;仓库私有,badge 公网渲染待仓库公开后自然生效)。
 3. 【执行会话】T5.2 接线已完成(2026-09-11,验收记录 19;kongming 侧 ADR-007 已落盘并更新状态)。剩余 T5.3:灰度一周(2026-09-12 判据修订,验收记录 22)→ 全量 → kongming ADR-007 转「已接受」。
-4. 【执行会话·已完成】压测:muniu 单边 + one-api 对照组均已出(见验收记录)。
-5. 【跨会话】两周生产观察期计时 → T5.6 v1.0.0 判据核对 → tag v1.0.0 待用户指令。
+4. 【执行会话】实施 openspec change `gateway-parity`(模型发现/key 生命周期/指标深度,proposal/design/tasks/specs 已立且 validate 通过):按 tasks.md 顺序推进,契约前置(1.1/1.2)→ 模型发现 → key 生命周期 → 指标 → 收尾;每任务收尾 `make check` 全绿。
+5. 【执行会话】实施 openspec change `upstream-egress-batch`(桥接工具多轮显式边界 + Gemini 轻形态;先 1 桥接后 2 Gemini)。
+6. 【执行会话】实施 openspec change `responses-api-inbound`(ADR-0012 落地;依赖 5 的桥接边界契约;映射表冻结→fixture→实现→端到端)。
+7. 【执行会话·已完成】压测:muniu 单边 + one-api 对照组均已出(见验收记录)。
+8. 【跨会话】两周生产观察期计时 → T5.6 v1.0.0 判据核对 → tag v1.0.0 待用户指令。
 
 ## 开放决策项
 
@@ -41,6 +51,7 @@
 | 2026-09-11 | DeepSeek 402(余额不足)归 ClassUnknown,key 不冷却 | 欠费 key 被持续重试 | quirk 层覆写 Classify:402→auth_failed | **402→ClassRateLimited**(非 auth_failed,已实现):欠费是「充值即恢复」的暂态——auth_failed 会永久禁用 key(需人工重启恢复),与真实生命周期相反;限流冷却指数退避自动重探,即熔断器半开语义。判定表零改动,quirk 层落地+测试钉死 |
 | 2026-09-11 | reconcile.sql 口径修正(每尝试一行→DISTINCT) | 旧口径 ≤1% 判据不可达 | 已按「每尝试一行」实现修正 SQL | 已解决(口径随上项一并写入 metering.md) |
 | 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
+| 2026-09-12 | B 档四项(Responses 入站/images/Gemini 出站/桥接工具往返)用户点名升格 | backlog 升格规则要求用户点名后先 ADR 再排期;四项价值/成本不等,不应捆绑同判 | 架构师独立裁决分层:桥接工具边界=缺陷级先行;Gemini=成本被低估的轻形态;Responses=战略项先 ADR;images/audio=新计量维度零消费者 | **①②③ 立项,④ 不立项**:ADR-0012 + openspec `upstream-egress-batch`/`responses-api-inbound` 已立(validate 通过);桥接边界方案升级为「候选适配性豁免跳过 + 独占时明确信封 + EMA 豁免」(比单纯 fail-fast 更符合换道哲学,详见 egress-batch design) |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
 
@@ -76,3 +87,4 @@
 22. **WASM 插件运行时(2026-09-12,ADR-0011,openspec `wasm-plugin-runtime`,14 任务全勾)**:①ADR-0011 立法 + ROADMAP backlog 挂接;②wazero v1.12.0 白名单接入(go.sum 仅 +1 直接依赖,零传递,直接依赖 5→6);③ABI v0 冻结 `docs/design/plugin-abi.md`(6 导出+2 imports;版本探测=导出函数而非定制 section,工具链无关——design 已同步);④fixture 以纯 Go 字节装配器实现(`internal/testkit/wasmplugin.go`,12 行为分支,wat 源码注释存档;无 wabt 工具链依赖);⑤宿主:每插件独立 runtime(内存硬顶)+ 通道池(借还/毒化补建/空闲回收)+ epoch 超时/trap/超内存/exit 四态 containment + fail_open 兜底;⑥挂点=限流后、语义缓存检索与候选循环前,单次执行(脱敏先于缓存键计算,PII 不进缓存/计量),改写留痕头 X-Muniu-Plugin,改写产物重解析重路由,禁用态 nil 短路;⑦管理 API 注册/列表/启停/替换(SHA-256 固定版本,替换热生效在途不扰,启停状态跨替换保持),openapi.yaml+api-types 同步、漂移门禁绿;⑧指标四类进 /metrics;⑨**pii-masker 样例插件冒烟实证**:构建→注册(启动日志「pii-masker started」经宿主 log 透传)→生效(手机/邮箱/身份证→[PHONE]/[EMAIL]/[ID],留痕头在)→热替换(自定义规则即时生效,replaced=true 新哈希)→拒载(非法正则 400 plugin_rejected,旧版本继续服务)→禁用(原载荷透传无留痕)→/metrics(calls{verdict}/duration 直方图 le="5" 命中);**踩坑留证**:wasip1 self-contained libc 的 C dlmalloc 与 ABI malloc/free 导出同名冲突(任一符号裁决都坏一方,实证正则 pattern 串被未对齐分配打烂 panic)→样例目标改 wasm32-unknown-unknown(零 WASI 导入沙箱面更小,文档措辞全量同步);arena 须 plugin_start 一次性 grow 预留——否则 dlmalloc 与 arena 同顶续页重叠,宿主写入打烂堆元数据(实证 OOB containment);⑩压测对照(docs/benchmarks/2026-09-12-plugin.md):禁用态零回退,启用 pass 插件 +2.1% 延迟/+23 allocs。终验:`make check` exit=0(19 包 race + lint 0 issues + web 门禁);change 已归档 `2026-09-12-wasm-plugin-runtime`(主 specs +plugin-runtime)。
 23. **插件运行时代码审查迭代循环(2026-09-12,3 轮收敛,上限 5)**:三域并行评审(宿主并发/集成链路/测试样例文档)报 19 项候选,溯源核验**全部属实、零虚构**,逐项修复;R2 复审确认 10/12 闭环 + 新发现 freeOff 无超时挂死链(high,与探测超时同威胁模型的漏网点:恶意插件 free 死循环→实例不归还→池满级联→Close 卡死)+ proc_exit 分类不完整 + 钳制旁路钉子缺失;R3 聚焦复审判定可收敛,补最后 1 个 P3 用例。代表性修复——①注册探测链全程带超时(plugin_start 死循环有界拒载,FixtureStartLoop 钉死);②按插件持有者计数的热替换 drain(在途请求在旧版本完整跑完,快照已取未执行不再被误拒,TestRegistry_HotSwap_在途不扰 钉死);③池等待唤醒缺口(kick 通道+stop 广播,Close 死锁链消除);④双重 free 守卫(结果复用入参 buffer 只 free 一次,对齐冻结契约);⑤资源硬顶统一生效(Max* 常量接入 fill() 钳制 + admin PUT 校验 400,堵 wazero 页数超限 panic 与负值溢出);⑥freeOff 独立短超时 + free 失败即 poison(不可信清理代码有界化);⑦classifyCallError 以 ctx.Err() 仲裁 proc_exit(0xffffffff) 与宿主取消(wazero 错误编码不可区分的宿主侧仲裁);⑧留痕头后置(产物被拒的 400 不带 X-Muniu-Plugin);⑨文档对齐(ADR/归档 design「6 导出」、ABI 文档补 16MiB 结果上限/探测超时/free 独立超时、分支计数 11→12);⑩覆盖补齐(embeddings 双用例、空注册表生产形态基准=禁用态逐项持平、free 死循环/探测超时/资源钳制钉子)。终验:`make check` exit=0(19 包 race + lint 0 issues + web 门禁)。
 23. **T5.3 灰度判据修订(2026-09-12,用户确认)**:个人本地项目低流量,生产式「每日对账,差异 ≤1%」不适用——对账分母近零(日调用量个位数)且上游账单天级延迟,比例判据失真。新判据:**灰度一周(自 2026-09-11)内正常使用无 5xx/无挂起/问答行为无回归,月末与上游 dashscope 账单做一次量级核对**;`scripts/reconcile.sql` 保留作按需自检工具。ADR-007(kongming 侧)灰度条款与状态行、alignment 限额计划段已同步。附带:dev 容器加 `--restart=unless-stopped`(容器崩溃自愈;非开机自启——podman machine 未起不拉起),消除「隔几天再用时网关已死」形态。依据:接线实况核查(三处切换在位/租户+key+牌价运营态/20 行计量全 ok/6877μ)全部满足 ADR-007 技术预期。
+24. **配置源抽象:拓扑热替换 + 控制面拉取源(2026-09-12,platform-data-plane 批次三,3.1/3.2/3.3)**:①`internal/proxy/topology.go`:providers/routes/能力目录构成不可变快照,`atomic.Pointer` 原子替换(请求入口 Load 一次,换道视图一致,零锁);②管道:轻校验(路由非空/候选 provider 已定义/池构建失败)整体拒绝保持旧快照,provider 配置 DeepEqual 未变则池原样保留(冷却/EMA 无损),新增/变更经 buildPool 回调(env 解析+NewPool+adapter 重注册,与启动共用同一闭包,消除重复);③控制面拉取源 `config.FetchTopology`:ETag 条件请求(304 跳过)、非法 JSON/不完整快照拒绝应用、上游 5xx 报错保持——main.go 轮询循环(启动即拉,间隔复用 poll_interval_sec),文件源缺省=现状等价(零回归);④admin 供应商健康页经 `Topology()` 读快照(与热替换同步)。测试:proxy 拓扑 5 组(初建/建改/保留/移除/拒绝+构建失败回滚)+config 拉取 4 组(200/304/损坏×3/5xx)。文档:`docs/design/cluster-semantics.md`(每实例分片语义与集群口径,6.2)。终验:`make check` exit=0(19 包 race+lint 0 issues+web)。**代码审查迭代循环(同日,R1→R2 两轮收敛)**:R1 全覆盖评审确认 5 项缺陷全部修复——[高]ReplaceTopology 失败路径 registry 注册副作用不可回滚,致「旧池+新适配器」混合转发状态:裁决 adapter 实例随拓扑快照(attempt/attemptEmbeddings 改读快照,Registry 降级为启动装配容器,热替换失败回滚新旧适配器天然不混用);[低]config.Validate 补 control_plane.topology_url 合法性校验(与 pricing_url 同款);[低]ModelCapability 补 json tag(拓扑下发契约显式化,无既有序列化消费点=零行为变更)。R2 复审新发现 1 项次生缺陷并修复:govern 与 attempt 各自独立 Load 快照,热替换瞬间可能治理/出站跨快照错位——attempt 内单次 Load 传递 snapshot,govern 改收快照参数;新增回归钉子 5 组(初建/建改/保留/移除/拒绝+构建失败回滚)+拉取 4 组(200/304/损坏×3/5xx)。终验:`make check` exit=0。

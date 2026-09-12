@@ -74,3 +74,28 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
 商业化与平台功能(计费支付/套餐商城/用户注册与门户/渠道管理门户——归独立控制面产品,边界见 ADR-0005)、Kubernetes Operator、插件市场、管理面 SSO、对 gRPC 的入站支持、分布式强一致限流——出现此类诉求一律记 backlog,不进当前 phase。
 
 集群**数据面**形态(无状态副本 + 控制面同步)不属于本清单,按 ADR-0005 演进;涉及跨仓契约的 P1 前置 ADR:0006(自校验 key 与状态同步)、0007(可插拔计量汇)、0008(集群限流语义)。
+
+## 前端宪法(隆中聚合层单源)
+
+`web/` 控制台统一遵循聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10);本节为执行摘要,冲突时以宪法为准。
+
+- 元原则:**用组件不用手搓;用默认不胡乱覆盖;用 token 不用魔法值。**
+- muniu 是「本地标准件」仓:无 Radix 大依赖也能干活,但 `web/src/components/ui/` 的组件名、
+  props API、变体名必须与 kongming/jinguan 对齐(组件注释「本地标准件,API 对齐 kongming」);
+  ui/ 标准件的**语义级改动**应先发生在 kongming,再手工对齐本仓(双仓逐字节一致规则不适用本仓)。
+- 色彩:只引用 index.css @theme 语义 token(词汇表三仓同名),禁 `#hex`/字面色板;图表第二
+  系列走 `--color-chart-series-2`。暗色是一级公民(`.dark` 覆盖同名变量整仓翻转):
+  **新增 token 必须同时在 `.dark` 补值**;主题契约 = index.html 防 FOUC 内联脚本 + `lib/theme.ts`
+  (key `muniu-theme`),双侧注释互指,改动必须同步(Article 3/10)。
+- 组件:基础交互件一律 `components/ui/`,业务代码禁裸 `<button>/<input>/<select>/<textarea>`;
+  破坏性操作必须 AlertDialog 确认(禁 window.confirm);≥2 处同类 UI 必须抽公共组件;
+  间距只用 Tailwind 刻度(Article 1/2/4)。
+- 页面骨架只用标准件:FormRow / Table / ErrorAlert / NoticeBanner / EmptyState / Skeleton /
+  StatCard,禁每页手搓;错误走 ErrorAlert(role=alert),禁静默空白(Article 6/7)。
+- 响应式:窄屏顶栏 flex-wrap 两行折行,表格滚动由 ui/Table 自带,统计网格带 `md:` 折降;
+  多屏验收 = 375/768/1280 三档不横向溢出(Article 9)。
+- **web 依赖白名单**(对齐铁律 3 的白名单制):react 系 / vite 系 / tailwind v4 / lucide-react /
+  recharts / clsx / tailwind-merge / class-variance-authority / radix-ui / openapi-typescript;
+  之外的任何 `pnpm add` 先记 HANDOFF 开放项。
+- 收尾门禁:`pnpm typecheck && pnpm lint` + `pnpm exec vite build --outDir /tmp/dist-check`
+  (禁直接写 web/dist,那是 Go embed 的发布产物)+ 宪法 Article 8 自检 grep + 亮暗两态走查。

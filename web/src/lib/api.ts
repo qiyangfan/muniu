@@ -19,7 +19,10 @@ export function setToken(t: string): void {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -50,13 +53,25 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export const api = {
   listTenants: () => call<{ tenants: Tenant[] }>("GET", "/admin/v1/tenants"),
   createTenant: (name: string) => call<{ id: string }>("POST", "/admin/v1/tenants", { name }),
-  patchTenant: (id: string, patch: Partial<Pick<Tenant, "status">> & { daily_quota_micro?: number; tpm_limit?: number; semantic_cache_enabled?: boolean }) =>
-    call<{ ok: boolean }>("PATCH", `/admin/v1/tenants/${id}`, patch),
+  patchTenant: (
+    id: string,
+    patch: Partial<Pick<Tenant, "status">> & {
+      daily_quota_micro?: number;
+      tpm_limit?: number;
+      semantic_cache_enabled?: boolean;
+    },
+  ) => call<{ ok: boolean }>("PATCH", `/admin/v1/tenants/${id}`, patch),
   listKeys: () => call<{ keys: KeyRecord[] }>("GET", "/admin/v1/keys"),
   createKey: (tenant: string, name: string, rpm_limit: number) =>
     call<{ key: string; prefix: string }>("POST", "/admin/v1/keys", { tenant, name, rpm_limit }),
   revokeKey: (prefix: string) => call<{ revoked: number }>("DELETE", `/admin/v1/keys/${prefix}`),
-  usage: (q: { group_by: string; from?: string; to?: string; tenant_id?: string; key_id?: string }) => {
+  usage: (q: {
+    group_by: string;
+    from?: string;
+    to?: string;
+    tenant_id?: string;
+    key_id?: string;
+  }) => {
     const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]);
     return call<{ points: UsagePoint[] }>("GET", `/admin/v1/usage?${qs}`);
   },

@@ -2,7 +2,7 @@ GO ?= go
 BIN := bin
 PKG := github.com/solvela/muniu
 
-## check: 全量质量门禁(vet + lint + web typecheck/lint + race test)——任何交付前必须全绿
+## check: 全量质量门禁(vet + lint + web typecheck/lint/format + race test/覆盖率)——任何交付前必须全绿
 .PHONY: check
 check: vet lint web-check test
 
@@ -10,7 +10,7 @@ check: vet lint web-check test
 .PHONY: web-check
 web-check:
 	@command -v pnpm >/dev/null 2>&1 || { echo "[web-check] pnpm 未安装,跳过控制台门禁"; exit 0; }
-	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint
+	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm format:check
 
 ## web-build: 构建控制台产物到 web/dist(嵌入二进制)
 .PHONY: web-build
@@ -28,10 +28,11 @@ lint:
 	@command -v golangci-lint >/dev/null 2>&1 || { echo "[lint] golangci-lint 未安装,跳过"; exit 0; }
 	golangci-lint run
 
-## test: 竞态检测下的全量测试
+## test: 竞态检测下的全量测试 + 全局覆盖率门禁(total ≥65%,JaCoCo 同位一票否决;阈值只升不降)
 .PHONY: test
 test:
-	$(GO) test -race ./...
+	$(GO) test -race -covermode=atomic -coverprofile=coverage.out ./...
+	$(GO) tool cover -func=coverage.out | awk '/^total:/ {gsub("%",""); total=$$3; if (total+0 < 65) { printf "coverage gate FAIL: %.1f%% < 65%%\n", total; exit 1 } printf "coverage gate PASS: %.1f%%\n", total }'
 
 ## build: 纯静态单二进制(CGO_ENABLED=0),版本号由 git tag 注入
 .PHONY: build

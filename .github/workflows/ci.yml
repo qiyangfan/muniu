@@ -22,8 +22,11 @@ jobs:
           # 与 mise.toml 钉死的版本一致:latest 会随上游大版本漂移,门禁不可复现
           # (action 要求 v 前缀的完整版本号)
           version: "v2.13"
-      - name: go test (race)
-        run: go test -race ./...
+      # 覆盖率门禁与 make test 同式:race + atomic profile,聚合 total <65% 即红
+      - name: go test (race) + coverage gate
+        run: |
+          go test -race -covermode=atomic -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | awk '/^total:/ {gsub("%","",$3); if ($3+0 < 65) { printf "coverage gate FAIL: %.1f%% < 65%%\n", $3; exit 1 } printf "coverage gate PASS: %.1f%%\n", $3 }'
       - name: build (CGO_ENABLED=0)
         run: CGO_ENABLED=0 go build ./...
 
@@ -40,12 +43,14 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - name: typecheck + lint
+      - name: typecheck + lint + format
         working-directory: web
         run: |
           pnpm install --frozen-lockfile
           pnpm typecheck
           pnpm lint
+          pnpm lint:css
+          pnpm format:check

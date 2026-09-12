@@ -2,6 +2,26 @@
 // 价目为运营态数据:改价即时生效零重启;yaml 兜底行编辑即建 DB 覆盖。
 import { useCallback, useEffect, useState } from "react";
 import { api, type PricingEntry } from "../lib/api";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { Select } from "../components/ui/select";
+import { Textarea } from "../components/ui/textarea";
+import { Badge } from "../components/ui/badge";
+import { Card } from "../components/ui/card";
+import { ErrorAlert } from "../components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../components/ui/alert-dialog";
+import { Table, TBody, TD, TH, THead, TR } from "../components/ui/table";
+import { EmptyState } from "../components/empty-state";
+import { FormRow } from "../components/form-row";
 
 const EMPTY: PricingEntry = {
   currency: "CNY",
@@ -25,7 +45,10 @@ function textToWindows(text: string): { windows: PricingEntry["time_windows"]; b
     .filter((line) => line !== "")
     .map((line) => {
       const parts = line.split(/\s+/);
-      if (parts.length !== 2) { bad = true; return { window: "", multiplier: "" }; }
+      if (parts.length !== 2) {
+        bad = true;
+        return { window: "", multiplier: "" };
+      }
       return { window: parts[0], multiplier: parts[1] };
     });
   return { windows, bad };
@@ -37,10 +60,16 @@ export default function Pricing() {
   const [editing, setEditing] = useState<string | null>(null); // 正在编辑的 alias(null=列表态)
   const [form, setForm] = useState<PricingEntry>(EMPTY);
   const [winText, setWinText] = useState("");
+  const [busy, setBusy] = useState(false); // 保存防重复
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    api.listPricing()
-      .then((r) => { setEntries(r.pricing); setErr(""); })
+    api
+      .listPricing()
+      .then((r) => {
+        setEntries(r.pricing);
+        setErr("");
+      })
       .catch((e) => setErr(e.message));
   }, []);
   useEffect(refresh, [refresh]);
@@ -58,9 +87,16 @@ export default function Pricing() {
 
   const save = async () => {
     const alias = (editing ?? "").trim();
-    if (!alias) { setErr("alias 必填"); return; }
+    if (!alias) {
+      setErr("alias 必填");
+      return;
+    }
     const { windows, bad } = textToWindows(winText);
-    if (bad) { setErr("时段窗每行须为「窗口 倍率」两段,如 16:30-00:30 0.5"); return; }
+    if (bad) {
+      setErr("时段窗每行须为「窗口 倍率」两段,如 16:30-00:30 0.5");
+      return;
+    }
+    setBusy(true);
     try {
       await api.putPricing(alias, {
         currency: form.currency ?? "CNY",
@@ -75,11 +111,12 @@ export default function Pricing() {
       refresh();
     } catch (e2) {
       setErr((e2 as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
 
   const remove = async (alias: string) => {
-    if (!window.confirm(`撤销 ${alias} 的运行态覆盖?该别名将回落 YAML 静态价。`)) return;
     try {
       await api.deletePricing(alias);
       setErr("");
@@ -89,106 +126,213 @@ export default function Pricing() {
     }
   };
 
-  const input = "rounded-md border border-black/10 px-3 py-2";
   if (editing !== null) {
     return (
       <div className="space-y-4">
-        {err && <div className="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-700">错误:{err}</div>}
-        <form
-          className="bg-[var(--color-panel)] rounded-xl p-4 space-y-3 text-sm"
-          onSubmit={(e) => { e.preventDefault(); void save(); }}
-        >
-          <div className="flex gap-2 items-center">
-            <label className="w-20 text-right text-[var(--color-muted)]">别名</label>
-            {/* 新增态须可输入别名(否则新增流程不可用);编辑已有行时锁定 */}
-            <input className={input + " flex-1"} value={editing} disabled={editing !== ""} placeholder="model 别名"
-              onChange={(e) => setEditing(e.target.value)} />
-          </div>
-          <div className="flex gap-2 items-center">
-            <label className="w-20 text-right text-[var(--color-muted)]">币种</label>
-            <select className={input} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value as PricingEntry["currency"] })}>
-              <option value="CNY">CNY</option>
-              <option value="USD">USD</option>
-            </select>
-          </div>
-          <div className="flex gap-2 items-center">
-            <label className="w-20 text-right text-[var(--color-muted)]">输入价</label>
-            <input className={input + " w-40"} value={form.input ?? ""} placeholder="0.44"
-              onChange={(e) => setForm({ ...form, input: e.target.value })} required />
-            <span className="text-[var(--color-muted)]">缓存命中价(空=同输入价)</span>
-            <input className={input + " w-32"} value={form.cached_input ?? ""} placeholder="0.014"
-              onChange={(e) => setForm({ ...form, cached_input: e.target.value })} />
-          </div>
-          <div className="flex gap-2 items-center">
-            <label className="w-20 text-right text-[var(--color-muted)]">输出价</label>
-            <input className={input + " w-40"} value={form.output ?? ""} placeholder="1.32"
-              onChange={(e) => setForm({ ...form, output: e.target.value })} required />
-            <span className="text-[var(--color-muted)]">时区</span>
-            <input className={input + " w-28"} value={form.timezone ?? "UTC"} placeholder="UTC / +08:00"
-              onChange={(e) => setForm({ ...form, timezone: e.target.value })} />
-          </div>
-          <div className="flex gap-2 items-start">
-            <label className="w-20 text-right text-[var(--color-muted)] pt-2">时段窗</label>
-            <textarea
-              className={input + " flex-1 font-mono"}
-              rows={3}
-              value={winText}
-              placeholder={"每行一条:窗口 倍率\n16:30-00:30 0.5"}
-              onChange={(e) => setWinText(e.target.value)}
-            />
-          </div>
-          <div className="flex gap-2 justify-end">
-            <button type="button" className={input} onClick={() => setEditing(null)}>取消</button>
-            <button className="rounded-md bg-[var(--color-brand)] text-white px-4 py-2">保存并生效</button>
-          </div>
-        </form>
+        {err && <ErrorAlert>错误:{err}</ErrorAlert>}
+        <Card>
+          <form
+            className="grid gap-4 p-4 text-sm"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
+          >
+            <FormRow label="别名" htmlFor="pricing-alias">
+              {/* 新增态须可输入别名(否则新增流程不可用);编辑已有行时锁定 */}
+              <Input
+                id="pricing-alias"
+                value={editing}
+                disabled={editing !== ""}
+                placeholder="model 别名"
+                onChange={(e) => setEditing(e.target.value)}
+              />
+            </FormRow>
+            <FormRow label="币种" htmlFor="pricing-currency" className="w-40">
+              <Select
+                id="pricing-currency"
+                value={form.currency}
+                onChange={(e) =>
+                  setForm({ ...form, currency: e.target.value as PricingEntry["currency"] })
+                }
+              >
+                <option value="CNY">CNY</option>
+                <option value="USD">USD</option>
+              </Select>
+            </FormRow>
+            <div className="flex flex-wrap gap-2">
+              <FormRow label="输入价" htmlFor="pricing-input" className="w-40">
+                <Input
+                  id="pricing-input"
+                  value={form.input ?? ""}
+                  placeholder="0.44"
+                  onChange={(e) => setForm({ ...form, input: e.target.value })}
+                  required
+                />
+              </FormRow>
+              <FormRow
+                label="缓存命中价(空=同输入价)"
+                htmlFor="pricing-cached-input"
+                className="w-40"
+              >
+                <Input
+                  id="pricing-cached-input"
+                  value={form.cached_input ?? ""}
+                  placeholder="0.014"
+                  onChange={(e) => setForm({ ...form, cached_input: e.target.value })}
+                />
+              </FormRow>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <FormRow label="输出价" htmlFor="pricing-output" className="w-40">
+                <Input
+                  id="pricing-output"
+                  value={form.output ?? ""}
+                  placeholder="1.32"
+                  onChange={(e) => setForm({ ...form, output: e.target.value })}
+                  required
+                />
+              </FormRow>
+              <FormRow label="时区" htmlFor="pricing-timezone" className="w-40">
+                <Input
+                  id="pricing-timezone"
+                  value={form.timezone ?? "UTC"}
+                  placeholder="UTC / +08:00"
+                  onChange={(e) => setForm({ ...form, timezone: e.target.value })}
+                />
+              </FormRow>
+            </div>
+            <FormRow label="时段窗" htmlFor="pricing-time-windows">
+              <Textarea
+                id="pricing-time-windows"
+                className="font-mono"
+                rows={3}
+                value={winText}
+                placeholder={"每行一条:窗口 倍率\n16:30-00:30 0.5"}
+                onChange={(e) => setWinText(e.target.value)}
+              />
+            </FormRow>
+            <div className="flex gap-2 justify-end">
+              <Button type="button" variant="outline" onClick={() => setEditing(null)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={busy}>
+                保存并生效
+              </Button>
+            </div>
+          </form>
+        </Card>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
-      {err && <div className="bg-red-50 border border-red-200 rounded-md p-3 text-sm text-red-700">错误:{err}</div>}
+      {err && <ErrorAlert>错误:{err}</ErrorAlert>}
       <div className="flex justify-end">
-        <button className="rounded-md bg-[var(--color-brand)] text-white px-4 py-2" onClick={startNew}>新增价目</button>
+        <Button onClick={startNew}>新增价目</Button>
       </div>
-      <table className="w-full bg-[var(--color-panel)] rounded-xl text-sm">
-        <thead>
-          <tr className="text-left text-[var(--color-muted)]">
-            <th className="p-3">别名</th><th className="p-3">来源</th><th className="p-3">币种</th>
-            <th className="p-3">输入</th><th className="p-3">缓存命中</th><th className="p-3">输出</th>
-            <th className="p-3">时段窗</th><th className="p-3">更新时间</th><th className="p-3"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((p) => (
-            <tr key={p.alias} className="border-t border-black/5">
-              <td className="p-3 font-mono">{p.alias}</td>
-              <td className="p-3">
-                <span className={"px-2 py-0.5 rounded-md text-xs " + (p.source === "db" ? "bg-emerald-100 text-emerald-800" : "bg-gray-100 text-gray-600")}>
-                  {p.source === "db" ? "运行态" : "yaml 兜底"}
-                </span>
-              </td>
-              <td className="p-3">{p.currency}</td>
-              <td className="p-3 font-mono">{p.input}</td>
-              <td className="p-3 font-mono">{p.cached_input || <span className="text-[var(--color-muted)]">=输入</span>}</td>
-              <td className="p-3 font-mono">{p.output}</td>
-              <td className="p-3 font-mono text-xs">
-                {(p.time_windows ?? []).length === 0
-                  ? <span className="text-[var(--color-muted)]">—</span>
-                  : (p.time_windows ?? []).map((w, i) => <div key={`${w.window}-${i}`}>{w.window} ×{w.multiplier}</div>)}
-              </td>
-              <td className="p-3 text-xs text-[var(--color-muted)]">{p.updated_at || "—"}</td>
-              <td className="p-3">
-                <button className="text-[var(--color-brand)] mr-3" onClick={() => p.alias && startEdit({ ...p, alias: p.alias })}>编辑</button>
-                {p.source === "db" && (
-                  <button className="text-[var(--color-danger)]" onClick={() => p.alias && remove(p.alias)}>撤销覆盖</button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Table>
+        <THead>
+          <TR>
+            <TH>别名</TH>
+            <TH>来源</TH>
+            <TH>币种</TH>
+            <TH>输入</TH>
+            <TH>缓存命中</TH>
+            <TH>输出</TH>
+            <TH>时段窗</TH>
+            <TH>更新时间</TH>
+            <TH>
+              <span className="sr-only">操作</span>
+            </TH>
+          </TR>
+        </THead>
+        <TBody>
+          {entries.length === 0 ? (
+            <TR>
+              <TD colSpan={9}>
+                <EmptyState>暂无价目</EmptyState>
+              </TD>
+            </TR>
+          ) : (
+            entries.map((p) => (
+              <TR key={p.alias}>
+                <TD className="font-mono">{p.alias}</TD>
+                <TD>
+                  <Badge variant={p.source === "db" ? "success" : "secondary"}>
+                    {p.source === "db" ? "运行态" : "yaml 兜底"}
+                  </Badge>
+                </TD>
+                <TD>{p.currency}</TD>
+                <TD className="font-mono">{p.input}</TD>
+                <TD className="font-mono">
+                  {p.cached_input || <span className="text-muted-foreground">=输入</span>}
+                </TD>
+                <TD className="font-mono">{p.output}</TD>
+                <TD className="font-mono text-xs">
+                  {(p.time_windows ?? []).length === 0 ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    (p.time_windows ?? []).map((w, i) => (
+                      <div key={`${w.window}-${i}`}>
+                        {w.window} ×{w.multiplier}
+                      </div>
+                    ))
+                  )}
+                </TD>
+                <TD className="text-xs text-muted-foreground">{p.updated_at || "—"}</TD>
+                <TD>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => p.alias && startEdit({ ...p, alias: p.alias })}
+                  >
+                    编辑
+                  </Button>
+                  {p.source === "db" && (
+                    <Button
+                      variant="ghost-destructive"
+                      size="xs"
+                      onClick={() => p.alias && setRemoveTarget(p.alias)}
+                    >
+                      撤销覆盖
+                    </Button>
+                  )}
+                </TD>
+              </TR>
+            ))
+          )}
+        </TBody>
+      </Table>
+
+      <AlertDialog
+        open={removeTarget !== null}
+        onOpenChange={(o) => {
+          if (!o) setRemoveTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>撤销运行态覆盖</AlertDialogTitle>
+            <AlertDialogDescription>
+              {removeTarget ? `撤销 ${removeTarget} 的运行态覆盖?该别名将回落 YAML 静态价。` : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (!removeTarget) return;
+                void remove(removeTarget);
+              }}
+            >
+              撤销覆盖
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

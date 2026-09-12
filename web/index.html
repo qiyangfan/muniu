@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>muniu 控制台</title>
+    <script>
+      // 防 FOUC:首帧前按「localStorage 手动值 → 系统偏好 → 亮色」挂 .dark,
+      // 契约同 src/lib/theme.ts(key muniu-theme 与优先级钉死,双侧注释互指,改动必须同步)
+      (function () {
+        try {
+          var t = localStorage.getItem("muniu-theme");
+          var dark =
+            t === "dark" ||
+            (t !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
