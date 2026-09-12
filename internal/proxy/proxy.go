@@ -20,6 +20,7 @@ import (
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
+	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/ratelimit"
 	"github.com/solvela/muniu/internal/semantic"
@@ -48,6 +49,7 @@ type Config struct {
 	TenantSwitch     func(string) bool        // 租户语义缓存开关(装配层提供 DB 查询闭包)
 	Capabilities     []config.ModelCapability // 模型能力目录(ADR-0010);空 = 全部零干预透传
 	StrictGovernance bool                     // true = 命中能力约束即 400(缺省宽松放行+留痕)
+	Plugins          *plugin.Registry         // WASM 插件注册表(ADR-0011);nil = 插件禁用,主路径零开销
 	RandIntn         func(int) int            // 候选起点随机源;nil 用全局随机(测试可注入)
 	Logger           *slog.Logger
 }
@@ -65,6 +67,7 @@ type Proxy struct {
 	tenantSw  func(string) bool
 	caps      map[governKey]config.ModelCapability
 	strictGov bool
+	plugins   *plugin.Registry
 	randIntn  func(int) int
 	logger    *slog.Logger
 	client    *http.Client
@@ -114,6 +117,7 @@ func New(cfg Config) *Proxy {
 		tpm:       cfg.TPM,
 		cache:     cfg.Cache,
 		tenantSw:  cfg.TenantSwitch,
+		plugins:   cfg.Plugins,
 		caps:      caps,
 		strictGov: cfg.StrictGovernance,
 		randIntn:  randIntn,
@@ -180,6 +184,28 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !ok || len(cands) == 0 {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 		return
+	}
+
+	// 插件请求体钩子(ADR-0011):单次执行,先于语义缓存检索——脱敏必须发生在
+	// 缓存键计算之前,敏感载荷不得进语义缓存;改写未发生不做重解析(零开销路径)
+	if p.plugins != nil {
+		res, done := p.applyPlugins(tw, r, body)
+		if done {
+			return
+		}
+		if len(res.ModifiedBy) > 0 {
+			nreq, err := protocol.ParseChatRequest(res.Body)
+			if err != nil {
+				p.writeError(tw, r, protocol.TypeBadRequest, "plugin_rejected", "插件改写后的请求体不是合法请求")
+				return
+			}
+			req = nreq
+			if cands, ok = p.routes[req.Model]; !ok || len(cands) == 0 {
+				p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
+				return
+			}
+			p.markPluginModified(tw, r, res.ModifiedBy)
+		}
 	}
 
 	// 生命周期第 8 步:构造候选迭代器(同 priority 加权随机起点,priority 递增降级)

@@ -1,0 +1,26 @@
+# 样例插件构建模板(ADR-0011 任务 6.1):plugins/** 变更时构建 wasm 并上传 artifact。
+# 宿主(Go)侧测试与发布不依赖 Rust 工具链——本 workflow 独立可选,失败不阻塞网关 CI。
+name: plugins
+on:
+  push:
+    branches: [main]
+    paths: ["plugins/**", ".github/workflows/plugins.yml"]
+  pull_request:
+    paths: ["plugins/**", ".github/workflows/plugins.yml"]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Build pii-masker
+        working-directory: plugins/pii-masker
+        run: |
+          cargo build --release --target wasm32-unknown-unknown
+          cp target/wasm32-unknown-unknown/release/pii_masker.wasm ./pii_masker.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pii-masker-wasm
+          path: plugins/pii-masker/pii_masker.wasm

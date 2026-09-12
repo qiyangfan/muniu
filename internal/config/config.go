@@ -153,6 +153,20 @@ type Config struct {
 	Semantic         SemanticCfg            `yaml:"semantic"`
 	Models           []ModelCapability      `yaml:"models"`            // 模型能力目录(ADR-0010)
 	StrictGovernance bool                   `yaml:"strict_governance"` // true = 命中约束即 400(缺省宽松放行+留痕)
+	Plugins          []PluginCfg            `yaml:"plugins"`           // WASM 插件静态注册(ADR-0011;运行态增改走管理面)
+}
+
+// PluginCfg 单个 WASM 插件的静态声明(ADR-0011)。资源缺省值与硬顶见 plugin 包
+// ResourceDefaults;启用态、版本替换的运行态操作走管理面,重启后回到本 YAML 声明。
+type PluginCfg struct {
+	Name           string            `yaml:"name"`
+	Path           string            `yaml:"path"`             // wasm 二进制路径(支持 ${VAR} 展开)
+	Enabled        *bool             `yaml:"enabled"`          // 缺省 true;nil 区分「未配置」与「显式停用」
+	FailOpen       bool              `yaml:"fail_open"`        // true = 调用失败放行原请求;安全类插件(如 PII 脱敏)务必保持 false
+	TimeoutMs      int64             `yaml:"timeout_ms"`       // 单次调用超时;0 = 缺省 50
+	MemoryLimitMiB int               `yaml:"memory_limit_mib"` // 实例内存上限;0 = 缺省 64
+	PoolSize       int               `yaml:"pool_size"`        // 实例池;0 = 缺省 8
+	Config         map[string]string `yaml:"config"`           // 透传插件的键值配置(get_config)
 }
 
 // ProviderByName 按名称取 provider(路由解析用)。
@@ -302,6 +316,37 @@ func (c *Config) validate() error {
 	if c.ControlPlane.PricingURL != "" {
 		if u, err := url.Parse(c.ControlPlane.PricingURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			add("control_plane.pricing_url 非法: %q", c.ControlPlane.PricingURL)
+		}
+	}
+
+	pluginNames := map[string]bool{}
+	for i, pl := range c.Plugins {
+		if pl.Enabled == nil { // 缺省启用;nil 区分「未配置」与「显式停用」
+			v := true
+			c.Plugins[i].Enabled = &v
+		}
+		if pl.Name == "" {
+			add("plugins[%d] 缺 name", i)
+			continue
+		}
+		if pluginNames[pl.Name] {
+			add("plugins[%d] name %q 重名", i, pl.Name)
+		}
+		pluginNames[pl.Name] = true
+		if pl.Path == "" {
+			add("plugins[%d](%s) 缺 path", i, pl.Name)
+		}
+		if pl.TimeoutMs < 0 {
+			add("plugins[%d](%s) timeout_ms 不可为负", i, pl.Name)
+		}
+		if pl.TimeoutMs > 10_000 {
+			add("plugins[%d](%s) timeout_ms(%d) 超过硬顶 10000(请求体钩子超 10s 属配错)", i, pl.Name, pl.TimeoutMs)
+		}
+		if pl.MemoryLimitMiB < 0 || pl.MemoryLimitMiB > 256 {
+			add("plugins[%d](%s) memory_limit_mib 须在 1..256,实际 %d", i, pl.Name, pl.MemoryLimitMiB)
+		}
+		if pl.PoolSize < 0 || pl.PoolSize > 64 {
+			add("plugins[%d](%s) pool_size 须在 1..64,实际 %d", i, pl.Name, pl.PoolSize)
 		}
 	}
 

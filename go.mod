@@ -3,17 +3,18 @@ module github.com/solvela/muniu
 go 1.27.0
 
 require (
+	github.com/coder/hnsw v0.6.1
 	github.com/goccy/go-yaml v1.19.2
 	github.com/google/uuid v1.6.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/pkoukk/tiktoken-go-loader v0.0.2
+	github.com/tetratelabs/wazero v1.12.0
 	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.58.0
 )
 
 require (
 	github.com/chewxy/math32 v1.10.1 // indirect
-	github.com/coder/hnsw v0.6.1 // indirect
 	github.com/dlclark/regexp2 v1.10.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/renameio v1.0.1 // indirect

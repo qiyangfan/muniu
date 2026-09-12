@@ -16,6 +16,7 @@ import (
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
+	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/store"
 )
@@ -46,6 +47,7 @@ type Deps struct {
 	PricingDir     *metering.PricingDirectory
 	StaticPricing  map[string]StaticEntry
 	RefreshPricing func() error
+	Plugins        *plugin.Registry // WASM 插件注册表(ADR-0011);nil = 端点返回禁用态
 
 	Logger *slog.Logger
 }
@@ -71,6 +73,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /admin/v1/pricing", pricingList(d))
 	mux.HandleFunc("PUT /admin/v1/pricing/{alias}", pricingPut(d))
 	mux.HandleFunc("DELETE /admin/v1/pricing/{alias}", pricingDelete(d))
+	registerPlugins(mux, d)
 	return authAdmin(d.Token, d.Logger, mux)
 }
 
@@ -381,5 +384,8 @@ func Routes() []string {
 		"GET /admin/v1/pricing",
 		"PUT /admin/v1/pricing/{alias}",
 		"DELETE /admin/v1/pricing/{alias}",
+		"GET /admin/v1/plugins",
+		"PUT /admin/v1/plugins/{name}",
+		"PATCH /admin/v1/plugins/{name}",
 	}
 }

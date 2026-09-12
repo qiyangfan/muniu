@@ -27,6 +27,7 @@ import (
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
 	"github.com/solvela/muniu/internal/metrics"
+	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/proxy"
 	"github.com/solvela/muniu/internal/ratelimit"
@@ -254,6 +255,36 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		return en == 1
 	}
 
+	// WASM 插件注册表(ADR-0011):YAML 静态声明注册(运行态增改走管理面,重启回落本声明)。
+	// 注册即校验:wasm magic → 编译 → 探测实例 → ABI 版本 → plugin_start,任一失败启动即断(fail-fast)。
+	pluginReg := plugin.NewRegistry() // 恒建:管理面运行态注册端点依赖;空表快照零堆分配
+	{
+		for _, pc := range cfg.Plugins {
+			bin, perr := os.ReadFile(pc.Path)
+			if perr != nil {
+				return nil, nil, nil, fmt.Errorf("插件 %s 读取失败: %w", pc.Name, perr)
+			}
+			mib := pc.MemoryLimitMiB
+			if mib == 0 {
+				mib = 64 // plugin.ResourceDefaults 对齐;config 层保持零值语义
+			}
+			if _, _, rerr := pluginReg.Register(plugin.Options{
+				Name:             pc.Name,
+				Binary:           bin,
+				Config:           pc.Config,
+				Enabled:          pc.Enabled != nil && *pc.Enabled,
+				FailOpen:         pc.FailOpen,
+				TimeoutMs:        pc.TimeoutMs,
+				MemoryLimitPages: uint32(mib) * 16, // 64KiB/页
+				PoolSize:         pc.PoolSize,
+				Logger:           logger,
+			}); rerr != nil {
+				return nil, nil, nil, fmt.Errorf("插件 %s 注册失败: %w", pc.Name, rerr)
+			}
+			logger.Info("WASM 插件已注册", "plugin", pc.Name, "fail_open", pc.FailOpen)
+		}
+	}
+
 	chatProxy := proxy.New(proxy.Config{
 		Registry: registry,
 		Routes:   cfg.ModelRoutes,
@@ -270,6 +301,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		TenantSwitch:     tenantSw,
 		Capabilities:     cfg.Models,
 		StrictGovernance: cfg.StrictGovernance,
+		Plugins:          pluginReg,
 		Logger:           logger,
 	})
 
@@ -318,6 +350,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		PricingDir:     pricingDir,
 		StaticPricing:  staticHuman,
 		RefreshPricing: refreshPricing,
+		Plugins:        pluginReg,
 	}
 	if cacheInst != nil {
 		adminDeps.CacheStats = cacheInst.Stats
@@ -469,6 +502,9 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		late.set(func(context.Context, string, string) ([]float32, error) {
 			return nil, errors.New("已关闭")
 		})
+		if pluginReg != nil {
+			pluginReg.Close() // 等待在途插件调用完成后关停(热替换同一语义)
+		}
 		verifier.Close()
 		_ = pipeline.Close() // 退出前排干计量存量
 	}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,8 +18,11 @@ import (
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
+
 	"github.com/solvela/muniu/internal/metering"
+	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/store"
+	"github.com/solvela/muniu/internal/testkit"
 )
 
 func openDB(t *testing.T) *sql.DB {
@@ -350,4 +354,167 @@ func buildStaticEntries(defs map[string]metering.Pricing) map[string]admin.Stati
 		out[alias] = admin.StaticEntry{Def: def, Timezone: "UTC", TimeWindows: []admin.PricingWindowView{}}
 	}
 	return out
+}
+
+// ---- 插件管理端点(ADR-0011 任务 5.1)----
+
+func newAdminWithPlugins(t *testing.T, db *sql.DB, reg *plugin.Registry) http.Handler {
+	t.Helper()
+	h := admin.New(admin.Deps{
+		DB:        db,
+		Token:     "tok",
+		Providers: []config.Provider{{Name: "p1", Adapter: "openai", BaseURL: "https://x/v1", Keys: []config.KeyRef{{Env: "K1", Weight: 5}}}},
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Plugins:   reg,
+	})
+	if h == nil {
+		t.Fatal("Handler 不应为 nil")
+	}
+	return h
+}
+
+func writeFixtureWasm(t *testing.T, kind testkit.PluginFixtureKind) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "plugin.wasm")
+	if err := os.WriteFile(p, testkit.FixturePlugin(kind), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestAdmin_Plugins_注册列表启停替换(t *testing.T) {
+	db := openDB(t)
+	reg := plugin.NewRegistry()
+	t.Cleanup(reg.Close)
+	h := newAdminWithPlugins(t, db, reg)
+
+	// 注册(经文件路径)
+	wasmPath := writeFixtureWasm(t, testkit.FixturePass)
+	status, body := call(t, h, "PUT", "/admin/v1/plugins/masker", "tok",
+		`{"path":"`+wasmPath+`","fail_open":false,"timeout_ms":50,"config":{"k":"v"}}`)
+	if status != 200 {
+		t.Fatalf("注册应 200: %d %s", status, body)
+	}
+	var put struct {
+		SHA256   string `json:"sha256"`
+		Replaced bool   `json:"replaced"`
+		Enabled  bool   `json:"enabled"`
+	}
+	if err := json.Unmarshal([]byte(body), &put); err != nil {
+		t.Fatal(err)
+	}
+	if put.Replaced || !put.Enabled || len(put.SHA256) != 64 {
+		t.Fatalf("注册回执不符: %s", body)
+	}
+
+	// 列表
+	status, body = call(t, h, "GET", "/admin/v1/plugins", "tok", "")
+	if status != 200 || !strings.Contains(body, `"name":"masker"`) {
+		t.Fatalf("列表应含 masker: %d %s", status, body)
+	}
+
+	// 启停
+	status, body = call(t, h, "PATCH", "/admin/v1/plugins/masker", "tok", `{"enabled":false}`)
+	if status != 200 || !strings.Contains(body, `"enabled":false`) {
+		t.Fatalf("停用应 200: %d %s", status, body)
+	}
+	if reg.Enabled("masker") {
+		t.Fatal("停用后注册表应反映 false")
+	}
+
+	// 版本替换:哈希变化 + replaced=true;启停状态沿用(false)
+	wasmPath2 := writeFixtureWasm(t, testkit.FixtureModifyEcho)
+	status, body = call(t, h, "PUT", "/admin/v1/plugins/masker", "tok", `{"path":"`+wasmPath2+`"}`)
+	if status != 200 {
+		t.Fatalf("替换应 200: %d %s", status, body)
+	}
+	var put2 struct {
+		SHA256   string `json:"sha256"`
+		Replaced bool   `json:"replaced"`
+		Enabled  bool   `json:"enabled"`
+	}
+	_ = json.Unmarshal([]byte(body), &put2)
+	if !put2.Replaced || put2.SHA256 == put.SHA256 {
+		t.Fatalf("替换回执不符: %s", body)
+	}
+	if reg.Enabled("masker") {
+		t.Fatal("版本替换不得改变启停状态(替换前为 false)")
+	}
+
+	// 未知插件 PATCH → 404
+	status, _ = call(t, h, "PATCH", "/admin/v1/plugins/ghost", "tok", `{"enabled":true}`)
+	if status != 404 {
+		t.Fatalf("未知插件应 404,实际 %d", status)
+	}
+}
+
+func TestAdmin_Plugins_拒载与文件缺失(t *testing.T) {
+	db := openDB(t)
+	reg := plugin.NewRegistry()
+	t.Cleanup(reg.Close)
+	h := newAdminWithPlugins(t, db, reg)
+
+	// 非 wasm 文件拒载 400,注册表不受影响
+	bad := filepath.Join(t.TempDir(), "bad.wasm")
+	_ = os.WriteFile(bad, []byte("not wasm"), 0o600)
+	status, body := call(t, h, "PUT", "/admin/v1/plugins/bad", "tok", `{"path":"`+bad+`"}`)
+	if status != 400 || !strings.Contains(body, "plugin_rejected") {
+		t.Fatalf("非 wasm 应 400 拒载: %d %s", status, body)
+	}
+
+	// 路径不存在 → 400
+	status, _ = call(t, h, "PUT", "/admin/v1/plugins/x", "tok", `{"path":"/nonexistent/p.wasm"}`)
+	if status != 400 {
+		t.Fatalf("文件缺失应 400,实际 %d", status)
+	}
+
+	// ABI 不匹配拒载
+	bin := writeFixtureWasm(t, testkit.FixtureAbiMismatch)
+	status, body = call(t, h, "PUT", "/admin/v1/plugins/abi", "tok", `{"path":"`+bin+`"}`)
+	if status != 400 || !strings.Contains(body, "ABI") {
+		t.Fatalf("ABI 不匹配应 400: %d %s", status, body)
+	}
+
+	// 拒载风暴后注册表仍可用:注册合法插件
+	good := writeFixtureWasm(t, testkit.FixturePass)
+	status, _ = call(t, h, "PUT", "/admin/v1/plugins/good", "tok", `{"path":"`+good+`"}`)
+	if status != 200 {
+		t.Fatalf("拒载后注册合法插件应成功,实际 %d", status)
+	}
+}
+
+func TestAdmin_Plugins_未启用运行时(t *testing.T) {
+	db := openDB(t)
+	h := newAdmin(t, db, "tok", nil) // Deps.Plugins == nil
+	status, body := call(t, h, "PUT", "/admin/v1/plugins/x", "tok", `{"path":"/tmp/a"}`)
+	if status != 400 || !strings.Contains(body, "plugins_disabled") {
+		t.Fatalf("未启用运行时应 400 plugins_disabled: %d %s", status, body)
+	}
+	status, _ = call(t, h, "PATCH", "/admin/v1/plugins/x", "tok", `{"enabled":true}`)
+	if status != 400 || !strings.Contains(body, "plugins_disabled") {
+		t.Fatalf("未启用运行时 PATCH 应 400 plugins_disabled: %d %s", status, body)
+	}
+}
+
+func TestAdmin_Plugins_资源参数钳制(t *testing.T) {
+	db := openDB(t)
+	reg := plugin.NewRegistry()
+	t.Cleanup(reg.Close)
+	h := newAdminWithPlugins(t, db, reg)
+	wasmPath := writeFixtureWasm(t, testkit.FixturePass)
+	for name, body := range map[string]string{
+		"负超时":  `{"path":"` + wasmPath + `","timeout_ms":-1}`,
+		"超时超限": `{"path":"` + wasmPath + `","timeout_ms":20000}`,
+		"负内存":  `{"path":"` + wasmPath + `","memory_limit_mib":-64}`,
+		"内存超限": `{"path":"` + wasmPath + `","memory_limit_mib":512}`,
+		"池超限":  `{"path":"` + wasmPath + `","pool_size":1000}`,
+	} {
+		status, _ := call(t, h, "PUT", "/admin/v1/plugins/x", "tok", body)
+		if status != 400 {
+			t.Fatalf("%s 应 400 拒绝,实际 %d", name, status)
+		}
+	}
+	if _, ok := reg.SHA256("x"); ok {
+		t.Fatal("被拒参数不得留下注册记录")
+	}
 }

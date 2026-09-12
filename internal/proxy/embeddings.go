@@ -42,6 +42,27 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 		return
 	}
+	// 插件请求体钩子(ADR-0011):与 chat 同链序(限流后、候选循环前,单次执行);
+	// embeddings 输入同样承载业务载荷,脱敏必须在出站与计量之前
+	if p.plugins != nil {
+		res, done := p.applyPlugins(tw, r, body)
+		if done {
+			return
+		}
+		if len(res.ModifiedBy) > 0 {
+			nreq, err := protocol.ParseEmbeddingRequest(res.Body)
+			if err != nil {
+				p.writeError(tw, r, protocol.TypeBadRequest, "plugin_rejected", "插件改写后的请求体不是合法请求")
+				return
+			}
+			req = nreq
+			if cands, ok = p.routes[req.Model]; !ok || len(cands) == 0 {
+				p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
+				return
+			}
+			p.markPluginModified(tw, r, res.ModifiedBy)
+		}
+	}
 	fcs := make([]failover.Candidate, len(cands))
 	for i, c := range cands {
 		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}

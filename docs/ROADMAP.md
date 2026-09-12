@@ -27,7 +27,7 @@
 
 ## Backlog(明确不进当前阶段,防 scope creep)
 
-SIGHUP/文件监听热加载 · OpenAI Responses API 入站桥接 · Redis 后端分布式限流 · Anthropic Messages 入站形态 · gRPC 入站 · MCP/A2A 协议(观察 agentgateway 动向) · 告警通知(webhook) · 控制台多用户/SSO · 插件机制(WASM) · 请求级 cost 预算中断。
+SIGHUP/文件监听热加载 · OpenAI Responses API 入站桥接 · Redis 后端分布式限流 · Anthropic Messages 入站形态 · gRPC 入站 · MCP/A2A 协议(观察 agentgateway 动向) · 告警通知(webhook) · 控制台多用户/SSO · ~~插件机制(WASM)~~(已升格:ADR-0011,openspec change `wasm-plugin-runtime`) · 请求级 cost 预算中断。
 Backlog 升格规则:用户点名 + 影响当前架构设计时,先补 ADR 再排期。
 
 ## 配套:人类 Go 学习路径(与执行并行,写给仓库所有者)

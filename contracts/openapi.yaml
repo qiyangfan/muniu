@@ -94,6 +94,37 @@ components:
           type: array
           items: { $ref: "#/components/schemas/PricingWindow" }
         updated_at: { type: string, readOnly: true }
+    PluginInfo:
+      type: object
+      properties:
+        name: { type: string }
+        sha256: { type: string, description: "内容哈希固定版本" }
+        enabled: { type: boolean }
+        fail_open: { type: boolean, description: "true=插件失效放行原请求" }
+        binary_bytes: { type: integer }
+    PluginPutRequest:
+      type: object
+      required: [path]
+      properties:
+        path: { type: string, description: "wasm 二进制本地路径(服务端读取)" }
+        enabled: { type: boolean, description: "新注册缺省 true;替换时沿用原状态(忽略)" }
+        fail_open: { type: boolean }
+        timeout_ms: { type: integer, description: "单次调用超时,0=缺省 50" }
+        memory_limit_mib: { type: integer, description: "实例内存上限,0=缺省 64" }
+        pool_size: { type: integer, description: "实例池,0=缺省 8" }
+        config:
+          type: object
+          additionalProperties: { type: string }
+          description: "透传插件配置(get_config 键值)"
+    PluginPutResponse:
+      type: object
+      properties:
+        name: { type: string }
+        sha256: { type: string }
+        enabled: { type: boolean }
+        fail_open: { type: boolean }
+        binary_bytes: { type: integer }
+        replaced: { type: boolean, description: "true=版本替换(新请求热生效,在途请求旧版本完成)" }
 paths:
   /healthz:
     get:
@@ -204,3 +235,48 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/PricingDeleteResponse" }
         "404": { description: 无运行态覆盖 }
+  /admin/v1/plugins:
+    get:
+      summary: 插件列表(含停用;SHA-256 固定版本)
+      responses:
+        "200":
+          description: 插件数组(plugins 包装键)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plugins:
+                    type: array
+                    items: { $ref: "#/components/schemas/PluginInfo" }
+  /admin/v1/plugins/{name}:
+    put:
+      summary: 注册插件/版本替换(注册即校验 wasm magic→编译→ABI 版本→plugin_start;失败拒载)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PluginPutRequest" }
+      responses:
+        "200":
+          description: 已生效(replaced=true 为热替换,新请求走新版本,在途请求旧版本完成)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginPutResponse" }
+        "400": { description: 拒载(非 wasm/ABI 不匹配/plugin_start 失败)或文件不可读 }
+    patch:
+      summary: 插件启停(停用后主路径零开销)
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: 已切换 }
+        "404": { description: 插件不存在 }

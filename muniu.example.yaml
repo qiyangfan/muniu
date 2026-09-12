@@ -122,3 +122,20 @@ pricing:
 #     model: gpt-4o-mini
 #     max_output_tokens: 16384            # 输出上限,越界 clamp max_tokens(界内不动)
 # strict_governance: false                # true = 命中约束即 400(缺省宽松放行+留痕)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WASM 插件(ADR-0011,可选):沙箱执行的请求体钩子,限流后、语义缓存与上游候选前单次执行。
+# ABI v0 契约见 docs/design/plugin-abi.md;样例插件 plugins/pii-masker(Rust wasm32-unknown-unknown)。
+# 默认 fail_closed:插件超时/超内存/崩溃即拒绝该请求(安全类插件语义);fail_open 慎用。
+# 重启后以本节声明为准;运行态增改走管理面 API(不落盘,见 openapi.yaml 插件端点)。
+# plugins:
+#   - name: pii-masker
+#     path: ./plugins/pii-masker/pii_masker.wasm   # wasm32-unknown-unknown 二进制(路径支持环境变量展开)
+#     enabled: true                                # 缺省 true;启停可经管理面在线切换
+#     fail_open: false                             # true = 插件失效放行原请求——安全类插件务必 false
+#     timeout_ms: 50                               # 单次调用超时(wazero epoch 中断)
+#     memory_limit_mib: 64                         # 实例内存硬顶
+#     pool_size: 8                                 # 实例池(并发复用,空闲回收)
+#     config:                                      # 透传插件配置(get_config 键值)
+#       rules: |
+#         [{"pattern":"1[3-9]\\d{9}","replacement":"[PHONE]"},{"pattern":"\\d{17}[0-9X]","replacement":"[ID]"}]

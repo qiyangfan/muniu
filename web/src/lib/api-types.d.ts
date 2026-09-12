@@ -515,6 +515,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/v1/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 插件列表(含停用;SHA-256 固定版本) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 插件数组(plugins 包装键) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            plugins?: components["schemas"]["PluginInfo"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/plugins/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 注册插件/版本替换(注册即校验 wasm magic→编译→ABI 版本→plugin_start;失败拒载) */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["PluginPutRequest"];
+                };
+            };
+            responses: {
+                /** @description 已生效(replaced=true 为热替换,新请求走新版本,在途请求旧版本完成) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PluginPutResponse"];
+                    };
+                };
+                /** @description 拒载(非 wasm/ABI 不匹配/plugin_start 失败)或文件不可读 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** 插件启停(停用后主路径零开销) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    name: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        enabled: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description 已切换 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 插件不存在 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -607,6 +727,41 @@ export interface components {
             timezone?: string;
             time_windows?: components["schemas"]["PricingWindow"][];
             readonly updated_at?: string;
+        };
+        PluginInfo: {
+            name?: string;
+            /** @description 内容哈希固定版本 */
+            sha256?: string;
+            enabled?: boolean;
+            /** @description true=插件失效放行原请求 */
+            fail_open?: boolean;
+            binary_bytes?: number;
+        };
+        PluginPutRequest: {
+            /** @description wasm 二进制本地路径(服务端读取) */
+            path: string;
+            /** @description 新注册缺省 true;替换时沿用原状态(忽略) */
+            enabled?: boolean;
+            fail_open?: boolean;
+            /** @description 单次调用超时,0=缺省 50 */
+            timeout_ms?: number;
+            /** @description 实例内存上限,0=缺省 64 */
+            memory_limit_mib?: number;
+            /** @description 实例池,0=缺省 8 */
+            pool_size?: number;
+            /** @description 透传插件配置(get_config 键值) */
+            config?: {
+                [key: string]: string;
+            };
+        };
+        PluginPutResponse: {
+            name?: string;
+            sha256?: string;
+            enabled?: boolean;
+            fail_open?: boolean;
+            binary_bytes?: number;
+            /** @description true=版本替换(新请求热生效,在途请求旧版本完成) */
+            replaced?: boolean;
         };
     };
     responses: never;

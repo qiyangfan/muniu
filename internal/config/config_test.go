@@ -275,3 +275,79 @@ model_routes:
 		}
 	}
 }
+
+func TestLoad_插件配置缺省与解析(t *testing.T) {
+	cfg := loadOK(t, `
+plugins:
+  - name: pii-masker
+    path: ./plugins/pii_masker.wasm
+    config:
+      rules: phone
+  - name: guard
+    path: ./plugins/guard.wasm
+    enabled: false
+    fail_open: true
+    timeout_ms: 200
+    memory_limit_mib: 32
+    pool_size: 4
+providers:
+  - { name: x, adapter: openai, base_url: "https://api.x.com/v1", keys: [{ env: K1 }], weight: 10 }
+model_routes:
+  alias-x:
+    - { provider: x, model: upstream-x, priority: 0 }
+`)
+	if len(cfg.Plugins) != 2 {
+		t.Fatalf("应解析 2 个插件,实际 %d", len(cfg.Plugins))
+	}
+	p0 := cfg.Plugins[0]
+	if p0.Enabled == nil || *p0.Enabled != true {
+		t.Fatalf("enabled 缺省应为 true: %+v", p0.Enabled)
+	}
+	if p0.TimeoutMs != 0 || p0.MemoryLimitMiB != 0 || p0.PoolSize != 0 {
+		t.Fatalf("未配置的资源项应保持零值(由运行时取缺省): %+v", p0)
+	}
+	if p0.Config["rules"] != "phone" {
+		t.Fatalf("config 透传不符: %+v", p0.Config)
+	}
+	p1 := cfg.Plugins[1]
+	if *p1.Enabled != false || !p1.FailOpen || p1.TimeoutMs != 200 || p1.MemoryLimitMiB != 32 || p1.PoolSize != 4 {
+		t.Fatalf("显式配置项解析不符: %+v", p1)
+	}
+}
+
+func TestLoad_插件配置非法一次列全(t *testing.T) {
+	_, err := Load(writeTemp(t, `
+plugins:
+  - { path: ./a.wasm }
+  - { name: dup, path: ./a.wasm }
+  - { name: dup, path: ./b.wasm }
+  - { name: neg, path: ./c.wasm, timeout_ms: -1, memory_limit_mib: 999, pool_size: 99 }
+  - { name: huge, path: ./d.wasm, timeout_ms: 20000 }
+providers:
+  - { name: x, adapter: openai, base_url: "https://api.x.com/v1", keys: [{ env: K1 }], weight: 10 }
+model_routes:
+  alias-x:
+    - { provider: x, model: upstream-x, priority: 0 }
+`))
+	if err == nil {
+		t.Fatal("非法插件配置必须拒绝")
+	}
+	for _, want := range []string{
+		"plugins[0] 缺 name", "plugins[2] name \"dup\" 重名", "plugins[3](neg) timeout_ms 不可为负",
+		"plugins[3](neg) memory_limit_mib", "plugins[3](neg) pool_size", "plugins[4](huge) timeout_ms(20000) 超过硬顶",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("校验错误应一次列全(缺 %q): %v", want, err)
+		}
+	}
+}
+
+// loadOK 加载合法配置的测试助手(失败即 Fatal)。
+func loadOK(t *testing.T, y string) *Config {
+	t.Helper()
+	cfg, err := Load(writeTemp(t, y))
+	if err != nil {
+		t.Fatalf("配置应合法: %v", err)
+	}
+	return cfg
+}

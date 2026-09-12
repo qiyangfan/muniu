@@ -26,6 +26,8 @@ key 池状态、限流窗口、apikey 缓存全部进程内内存态,由 mutex �
 6. **限流判定**:RPM 令牌桶(`x/time/rate`,per apikey);Phase 3 加 TPM 滑动窗口;拒绝 → `rate_limited`(带 `Retry-After`)。
 7. **请求解析与校验**:入站 body 按 OpenAI Chat Completions DTO 解析(`internal/protocol`);model 别名不存在、messages 非法 → `bad_request`;**解析后立即持有完整字节**(适配器转换基于此,Body 不可重读问题在此消灭)。
 8. **路由解析**:model_routes 查候选有序列表 → 构造候选迭代器(同 priority 加权随机,priority 递增降级,见 traffic-governance)。
+   - **7a. 插件请求体钩子(ADR-0011,可选)**:WASM 插件链对请求体检查/改写/拒绝,单次执行,位于限流(第 6 步)之后、语义缓存检索与候选循环之前——脱敏发生在缓存键计算之前,敏感载荷不得进语义缓存与计量 inputText;改写留痕头 `X-Muniu-Plugin`,拒绝 `plugin_rejected`,containment 默认 fail_closed(`plugin_failed`)。详见「插件运行时」节。
+
 9. **逐候选执行**(failover 循环):取 key(key 池平滑加权轮询+冷却过滤)→ 适配器翻译请求(adapter)→ 出站调用(三层超时)→ 按首 token 边界语义处理成败。
 10. **响应转发**:非流式=整包改写回写;流式=SSE 逐事件透传(归一化 quirk 字段,见 proxy-and-streaming)。
 11. **计量**:归一 usage(上游 usage 帧 > 本地估算,estimated 标志)→ 计价(pricing 表)→ 投递计量 channel(异步落库);失败请求也计量(记 error_class,成本 0)。
@@ -36,10 +38,21 @@ key 池状态、限流窗口、apikey 缓存全部进程内内存态,由 mutex �
 ## 中间件链(顺序即契约)
 
 ```
-request_id → recover → access_log → auth → quota → ratelimit → handler(解析→路由→failover 循环→转发→计量)
+request_id → recover → access_log → auth → quota → ratelimit → handler(解析→路由→[插件钩子]→语义缓存→failover 循环→转发→计量)
 ```
 
 实现:标准库 `http.ServeMux`(Go 1.22+ method+pattern)+ 约 30 行 chain 辅助函数,不引第三方路由/中间件库(ADR-0002)。
+
+## 插件运行时(ADR-0011)
+
+WASM 插件在宿主沙箱内对入站请求载荷做检查/改写/拒绝;契约冻结于 `plugin-abi.md`(ABI v0:wazero 宿主、自定薄 ABI、6 导出 + 2 imports)。
+
+- **链序位置**:限流之后、语义缓存检索与上游候选循环之前,单次执行(生命周期 7a)。插件面向入站业务载荷,与上游候选无关——failover 换道不重跑插件;插件产物仍完整经过请求参数治理(ADR-0010),两层正交。
+- **隔离边界**:每插件独立 wazero runtime + 实例内存硬顶(缺省 64MiB)+ 单次调用超时(缺省 50ms,epoch 中断)+ 实例池(缺省 8,空闲回收);插件 trap/超时/超内存只损失该请求与该实例,进程不受影响。
+- **失败语义**:默认 fail_closed(异常即 `plugin_failed` 500 拒绝);per-plugin `fail_open` 显式放行原请求(安全类插件禁用此项);插件主动拒绝走 `plugin_rejected` 400。
+- **注册与生命周期**:YAML 静态声明(启动注册,重启回落)+ 管理 API 运行态注册/版本替换/启停(不持久化);内容 SHA-256 固定版本,注册即校验(wasm magic → 编译 → ABI 版本探测 → plugin_start);替换热生效,在途请求在旧版本上完成。
+- **包依赖方向**:`internal/plugin` 仅依赖 protocol/metrics 等基建叶子包,被 proxy 消费,不反向依赖业务包;wazero 是依赖白名单唯一运行时级新增(零传递依赖)。
+- **可观测**:per-plugin 调用计数{verdict}/耗时直方图/containment{kind}/实例水位进 `/metrics`;注册/替换/启停/containment 全量结构化审计日志(不落请求载荷)。
 
 ## 包结构与依赖方向
 
@@ -53,6 +66,7 @@ internal/
   keypool/            key 选择/冷却/健康度(依赖 config 的拓扑)
   failover/           候选迭代器与错误分类→动作判定(纯函数,零 IO,依赖 protocol)
   ratelimit/          RPM 令牌桶 + TPM 滑动窗口 + 配额判定
+  plugin/             WASM 插件运行时(ADR-0011):wazero 宿主/实例池/注册表(依赖 protocol+metrics)
   proxy/              编排:9-12 步实现,唯一允许「认识所有包」的组装层
   auth/ tenant/       apikey 校验/签发、租户与配额读侧
   metering/           usage 归一、估算(tiktoken 封装)、计价、异步批量落库
