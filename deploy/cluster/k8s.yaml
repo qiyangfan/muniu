@@ -1,0 +1,42 @@
+# muniu cluster 形态 Kubernetes 参考部署(等价形态,节选级样例)
+# 与 compose 形态同构:2 副本 Deployment + Service;配置走 ConfigMap(muniu.cluster.yaml);
+# 敏感值(upstream key / admin token / ingest token / 平台 key 密钥)走 Secret。
+# SSE 同样要求 LB/Ingress 侧 proxy_buffering off(nginx ingress 默认已关;自建网关自行确认)。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: muniu
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: muniu}
+  template:
+    metadata:
+      labels: {app: muniu}
+    spec:
+      containers:
+        - name: muniu
+          image: ghcr.io/qiyangfan/muniu:v0.3.0   # 占位:替换为实际发布镜像或本地构建
+          ports: [{containerPort: 8787}]
+          env:
+            - name: DEEPSEEK_API_KEY_1
+              valueFrom: {secretKeyRef: {name: muniu-upstream, key: deepseek-1}}
+            - name: MUNIU_ADMIN_TOKEN
+              valueFrom: {secretKeyRef: {name: muniu-upstream, key: admin-token}}
+            - name: JINGUAN_INGEST_TOKEN
+              valueFrom: {secretKeyRef: {name: muniu-upstream, key: ingest-token}}
+            - name: MUNIU_PLATFORM_KEY_SECRET
+              valueFrom: {secretKeyRef: {name: muniu-upstream, key: platform-key-secret}}
+          volumeMounts: [{name: conf, mountPath: /muniu.yaml, subPath: muniu.yaml}]
+          readinessProbe: {tcpSocket: {port: 8787}, periodSeconds: 5}
+      volumes:
+        - name: conf
+          configMap: {name: muniu-conf}           # kubectl create configmap muniu-conf --from-file=muniu.cluster.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: muniu
+spec:
+  selector: {app: muniu}
+  ports: [{port: 8787, targetPort: 8787}]

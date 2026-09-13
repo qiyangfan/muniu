@@ -38,9 +38,10 @@ metering:
 #   revocations_url: "http://control-plane:8080/internal/keys/revocations"
 #   revocations_interval_sec: 60   # 吊销收敛窗口
 
-# 控制面价目拉取(ADR-0005,可选):响应与管理 API 一致,覆盖写入即时生效;空 = 不拉取
+# 控制面拉取(ADR-0005,可选):价目/拓扑经控制面下发(响应与管理 API 一致),覆盖写入即时生效;空 = 不拉取
 # control_plane:
 #   pricing_url: "http://control-plane:8080/internal/pricing/list"
+#   topology_url: "http://control-plane:8080/internal/topology"   # 拓扑热替换(providers/model_routes/能力目录)
 #   poll_interval_sec: 60
 
 # metrics(ADR-0009,可选):GET /metrics(Prometheus 文本协议;有管理 token 时需鉴权抓取)

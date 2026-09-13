@@ -70,6 +70,11 @@ type Candidate struct {
 	Weight   int    `yaml:"weight"`
 }
 
+// MaxTopologyInt 拓扑数值域上界:weight/priority 的契约语义是数据面 int——failover
+// 加权随机的 total 累加是 int 运算,超域巨值会溢出为负使加权随机失效。YAML validate
+// 与 ReplaceTopology 守门(控制面下发路径)两个入口共用同一域。
+const MaxTopologyInt = int64(1<<31 - 1)
+
 // PriceWindow 分时段倍率窗(metering.md「计价」契约):整张价目卡按倍率缩放。
 // 多窗**按声明顺序先匹配优先**;支持跨午夜(如 16:30-00:30)。
 type PriceWindow struct {
@@ -384,12 +389,15 @@ func (c *Config) validate() error {
 			if k.Env == "" {
 				add("providers[%d](%s).keys[%d] 缺 env 引用名", i, p.Name, j)
 			}
+			if int64(k.Weight) > MaxTopologyInt {
+				add("providers[%d](%s).keys[%d] weight 超出数值域(≤%d)", i, p.Name, j, MaxTopologyInt)
+			}
 		}
-		if p.Weight <= 0 {
-			add("providers[%d](%s) weight 必须 >0, 实际 %d", i, p.Name, p.Weight)
+		if p.Weight <= 0 || int64(p.Weight) > MaxTopologyInt {
+			add("providers[%d](%s) weight 必须 >0 且 ≤%d, 实际 %d", i, p.Name, MaxTopologyInt, p.Weight)
 		}
-		if p.Priority < 0 {
-			add("providers[%d](%s) priority 必须 ≥0, 实际 %d", i, p.Name, p.Priority)
+		if p.Priority < 0 || int64(p.Priority) > MaxTopologyInt {
+			add("providers[%d](%s) priority 必须在 [0,%d], 实际 %d", i, p.Name, MaxTopologyInt, p.Priority)
 		}
 	}
 
@@ -405,8 +413,11 @@ func (c *Config) validate() error {
 			if cd.Model == "" {
 				add("model_routes[%s].candidates[%d] 缺 model", alias, j)
 			}
-			if cd.Priority < 0 {
-				add("model_routes[%s].candidates[%d] priority 必须 ≥0", alias, j)
+			if cd.Priority < 0 || int64(cd.Priority) > MaxTopologyInt {
+				add("model_routes[%s].candidates[%d] priority 必须在 [0,%d], 实际 %d", alias, j, MaxTopologyInt, cd.Priority)
+			}
+			if int64(cd.Weight) > MaxTopologyInt {
+				add("model_routes[%s].candidates[%d] weight 超出数值域(≤%d)", alias, j, MaxTopologyInt)
 			}
 		}
 	}

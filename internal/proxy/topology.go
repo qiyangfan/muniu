@@ -57,6 +57,30 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		return TopologyStats{}, errors.New("拓扑替换被拒绝: 池构建回调缺失")
 	}
 	old := p.topo.Load()
+	// 数值域守门(与 YAML validate 同规):weight/priority 契约 = 数据面 int 语义,
+	// 超域巨值下发后进入 failover 加权累加会溢出为负,加权随机失效且跨仓无从定位。
+	for _, prov := range cfg.Providers {
+		if prov.Weight <= 0 || int64(prov.Weight) > config.MaxTopologyInt {
+			return TopologyStats{}, fmt.Errorf(
+				"拓扑替换被拒绝: provider %q weight 必须 >0 且 ≤%d, 实际 %d", prov.Name, int64(config.MaxTopologyInt), prov.Weight)
+		}
+		if prov.Priority < 0 || int64(prov.Priority) > config.MaxTopologyInt {
+			return TopologyStats{}, fmt.Errorf(
+				"拓扑替换被拒绝: provider %q priority 必须在 [0,%d], 实际 %d", prov.Name, int64(config.MaxTopologyInt), prov.Priority)
+		}
+	}
+	for alias, cands := range cfg.Routes {
+		for _, c := range cands {
+			if c.Priority < 0 || int64(c.Priority) > config.MaxTopologyInt {
+				return TopologyStats{}, fmt.Errorf(
+					"拓扑替换被拒绝: model_routes[%q] priority 必须在 [0,%d], 实际 %d", alias, int64(config.MaxTopologyInt), c.Priority)
+			}
+			if int64(c.Weight) > config.MaxTopologyInt {
+				return TopologyStats{}, fmt.Errorf(
+					"拓扑替换被拒绝: model_routes[%q] weight 超出数值域(≤%d)", alias, int64(config.MaxTopologyInt))
+			}
+		}
+	}
 	known := map[string]bool{}
 	for _, prov := range cfg.Providers {
 		known[prov.Name] = true

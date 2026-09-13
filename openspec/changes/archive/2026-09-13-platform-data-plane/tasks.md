@@ -36,11 +36,11 @@
 
 ## 6. 参考部署与文档(P2)
 
-- [!] 6.1 cluster 形态 compose/k8s 参考部署(阻塞:非外部依赖,本批次上下文预算耗尽,下一批次首项完成)
+- [x] 6.1 cluster 形态 compose/k8s 参考部署(deploy/cluster/:README 讲解 + 工件四件 compose/nginx/muniu.cluster.yaml/k8s;控制面对接指向锦官真实端点,topology 下发端点锦官未实现、以文件源静态拓扑兜底并如实标注)
 - [x] 6.2 design 文档显式化每实例分片语义(keypool 冷却/TPM/语义缓存)与集群口径
-- [ ] 6.3 README/HANDOFF 双形态部署章节更新
+- [x] 6.3 README/HANDOFF 双形态部署章节更新(README「双形态部署」章节链接 deploy/cluster/ 与 cluster-semantics.md;HANDOFF 当前状态写回部署口径)
 
 ## 7. 范围外(关联记录,不在本仓)
 
-- [!] 7.1 控制面产品立项(阻塞:边界外——另立仓库,需用户立项决策)(另立仓库):用户体系/钱包账本(管理员手工入账兜底)/`PaymentProvider` 抽象与 mock/渠道与价目下发 API/PG 权威存储
+- [x] 7.1 控制面产品立项(边界外——另立仓库):用户体系/钱包账本(管理员手工入账兜底)/`PaymentProvider` 抽象与 mock/渠道与价目下发 API/PG 权威存储(**已落地:锦官 jinguan 仓,2026-09-12 五 change 实施,三管子端点 /control/v1/pricing、/control/v1/key-revocations、/ingest/usage 已与本仓对接联调**)
 - [!] 7.2 真实支付 PSP adapter(阻塞:边界外——待商业验证;此前不写支付代码)(待商业验证后,实现一个 provider + 契约测试;此前不写支付代码)

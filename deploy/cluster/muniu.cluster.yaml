@@ -1,0 +1,70 @@
+# muniu cluster 形态配置样例(挂载为各副本容器内 /muniu.yaml)
+# 与 standalone(muniu.example.yaml)的差异:四根管子全部指向锦官——
+#   ①价目下发 GET /control/v1/pricing(拉取无认证头,靠部署网络隔离保护,现实契约)
+#   ②key 吊销快照 GET /control/v1/key-revocations(同上)
+#   ③计量 ingest POST /ingest/usage(Bearer 独立静态 token,${VAR} 环境变量展开)
+#   ④拓扑下发 GET /control/v1/topology(同①;变更经 PUT /admin/topology 热替换生效)
+# 联调实录(2026-09-13):首拉热替换 reused=0/created=1/removed=1;变更轮 reused=1/created=0/removed=0
+# (池运行态无损);锦官失联后 WARN 保持当前快照,数据面存活。
+
+server:
+  addr: ":8787"
+  timeouts:
+    dial: 5
+    first_token: 60
+    chunk_idle: 30
+
+storage:
+  sqlite:
+    path: "data/muniu.db"   # 副本本地仅计量缓冲(可重放可丢弃)
+
+log:
+  level: info
+  format: json
+
+metering:
+  flush_interval_ms: 500
+  flush_batch: 256
+  settlement: CNY
+  fx_usd_cny_milli: 7200
+  sink: ingest                                            # 计量推控制面;失败落本地缓冲,恢复按序续传
+  ingest_url: "http://control-plane:8090/ingest/usage"
+  ingest_token: "${JINGUAN_INGEST_TOKEN}"
+  buffer_capacity: 1000000
+
+auth:
+  platform_key_secrets:                                   # base64 HMAC 密钥,建议环境变量注入后展开
+    - "${MUNIU_PLATFORM_KEY_SECRET}"
+  revocations_url: "http://control-plane:8090/control/v1/key-revocations"
+  revocations_interval_sec: 60                            # 吊销收敛窗口 = 本值,有界可配
+
+control_plane:
+  pricing_url: "http://control-plane:8090/control/v1/pricing"
+  topology_url: "http://control-plane:8090/control/v1/topology"
+  poll_interval_sec: 60
+
+metrics:
+  enabled: true
+
+# ── 以下静态拓扑为启动兜底(控制面不可达时副本以它起服;首个拉取周期即被锦官拓扑
+#    热替换)。topology_url 就绪后日常拓扑运营走锦官 PUT /admin/topology,本段可精简;
+#    价目(pricing)同理为控制面拉取失败时的兜底。上游 key 走环境变量(全副本同源注入)。
+providers:
+  - name: deepseek
+    adapter: deepseek
+    base_url: "https://api.deepseek.com/v1"
+    keys:
+      - env: DEEPSEEK_API_KEY_1
+    weight: 100
+    priority: 0
+
+model_routes:
+  deepseek-chat:
+    - { provider: deepseek, model: deepseek-v4-flash, priority: 0 }
+
+pricing:
+  deepseek-chat:
+    currency: USD
+    input: 0.44
+    cached_input: 0.014
+    output: 1.32

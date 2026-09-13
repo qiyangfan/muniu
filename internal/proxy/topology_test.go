@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/solvela/muniu/internal/adapter"
@@ -144,6 +145,38 @@ func TestTopology_Replace_RejectInvalid(t *testing.T) {
 	// 上述拒绝后旧快照原封不动(含 alpha 运行态)
 	s := p.topo.Load()
 	if _, ok := s.routes["m1"]; !ok || s.pools["alpha"] == nil {
+		t.Fatal("拒绝替换后旧快照必须保持")
+	}
+}
+
+// TestTopology_Replace_RejectsOutOfIntDomain 数值域守门:weight/priority 超出数据面 int 域
+// (failover 加权累加为 int 运算,超域巨值溢出为负使加权随机失效)必须整体拒绝且旧快照保持。
+func TestTopology_Replace_RejectsOutOfIntDomain(t *testing.T) {
+	cfg := topoConfig("alpha", "http://alpha")
+	p := New(cfg)
+
+	huge := int(math.MaxInt32) + 1
+	next := topoConfig("alpha", "http://alpha-v2")
+	next.Providers[0].Weight = huge // provider weight 超域
+	if _, err := p.ReplaceTopology(next, buildOK); err == nil {
+		t.Fatal("provider weight 超 int 域应拒绝替换")
+	}
+
+	next2 := topoConfig("alpha", "http://alpha-v2")
+	next2.Providers[0].Priority = -1 // priority 负值与 YAML validate 同规拒绝
+	if _, err := p.ReplaceTopology(next2, buildOK); err == nil {
+		t.Fatal("provider priority 负值应拒绝替换")
+	}
+
+	next3 := topoConfig("alpha", "http://alpha-v2")
+	next3.Routes["m1"] = []config.Candidate{{Provider: "alpha", Model: "model-x", Priority: 1, Weight: huge}}
+	if _, err := p.ReplaceTopology(next3, buildOK); err == nil {
+		t.Fatal("candidate weight 超 int 域应拒绝替换")
+	}
+
+	// 三次拒绝后旧快照原封不动
+	s := p.topo.Load()
+	if s.pools["alpha"] == nil || s.providers[0].BaseURL != "http://alpha" {
 		t.Fatal("拒绝替换后旧快照必须保持")
 	}
 }

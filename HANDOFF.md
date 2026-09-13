@@ -2,7 +2,10 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
-## 当前状态(2026-09-12,批量执行:gateway-parity 完成 + credit 基座落地 + 桥接边界完成)
+## 当前状态(2026-09-13,platform-data-plane 与 upstream-egress-batch 收尾归档,活动 change 仅剩 backlog 项;此前批次见验收记录 25-27)
+
+- **platform-data-plane 已收尾归档(2026-09-13)**:6.1 cluster 参考部署工件化——`deploy/cluster/` 四件(compose/nginx LB SSE 三件套/muniu.cluster.yaml/k8s.yaml),控制面对接指向锦官真实端点(/control/v1/pricing、/control/v1/key-revocations 无认证头靠网络隔离,ingest Bearer token),**topology 下发端点锦官尚未实现,如实标注**:上游拓扑暂走挂载文件静态源,锦官就绪后填 `control_plane.topology_url` 即切热替换;6.3 README「双形态部署」+ HANDOFF 口径写回;7.1 清单更正(控制面已由锦官仓落地);随后 `openspec archive` 归档(7.2 真实 PSP 待商业验证,边界外登记保留)。
+- **拓扑下发管子已通(2026-09-13,锦官 `publish-topology` 落地,muniu 侧零开发)**:锦官新增 `GET /control/v1/topology`(ETag 内容哈希/304)+ `PUT /admin/topology` 整包录入;`topology_url` 拉取管道(3.2)直接对接。联调实录(独立实例 poll=2s):首拉热替换 reused=0/created=1/removed=1 → 变更轮 reused=1/created=0/removed=0(池运行态无损)→ 锦官停机 WARN 保持当前快照、数据面存活;deploy/cluster 工件已启用 topology_url 并附实录,muniu.example.yaml 补注释样例。**四根管子(价目/吊销/ingest/拓扑)齐了。**
 
 - **credit 计量基座落地(2026-09-12,用户两轮裁决驱动)**:①内部记账单位 μ(1e-6)→ **credit(1 credit = 本位币 1e-9)**,迁移 0007 四表列重命名 + 存量 ×1000 换算(api_keys/tenants 的 daily_quota、usage_logs 的 cost、model_pricing 三价);②credit 锚定**本位币**(metering.settlement,CNY|USD,缺省 CNY),不锚定上游账单币种;异币种报价加载期按 fx_usd_cny_milli(1 USD = fx/1000 CNY,方向恒定)一次换算(SettlePrice 纯函数 + 契约测试);价目表示层不变(厂商原报价十进制)。③key 签发/PATCH/列表全链 `daily_quota_credits`;**踩坑**:0007 曾在补段前被测试库记账(「迁移应用后禁改」纪律实证),遗留库 cmd/muniu/data/muniu.db 已手工修复 schema。
 
@@ -33,9 +36,9 @@
 2. 【执行会话·已完成 2026-09-12】README 补 CI badge(指向 actions/workflows/ci.yml;仓库私有,badge 公网渲染待仓库公开后自然生效)。
 3. 【执行会话】T5.2 接线已完成(2026-09-11,验收记录 19;kongming 侧 ADR-007 已落盘并更新状态)。剩余 T5.3:灰度一周(2026-09-12 判据修订,验收记录 22)→ 全量 → kongming ADR-007 转「已接受」。
 4. 【执行会话·已完成 2026-09-12】gateway-parity 14/14;upstream-egress-batch 桥接边界(1.x/3.1)已完成。
-5. 【执行会话】upstream-egress-batch 剩余 2.1-2.3/3.2(Gemini 轻形态)——阻塞待用户提供 GEMINI_API_KEY 后冒烟。
+5. 【用户裁决·无限搁置 2026-09-13】upstream-egress-batch 剩余 2.1-2.3(Gemini 轻形态):①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者。change 已归档(桥接边界 delta 合入主 specs;gemini-egress delta 移除),设计留档 archive design.md,未来解锁重新立项。
 6. 【执行会话·已完成 2026-09-12】responses-api-inbound 7/7(ADR-0012 落地,见验收记录 26)。
-6a. 【执行会话】platform-data-plane 6.1 cluster 参考部署 compose。
+6a. 【执行会话·已完成 2026-09-13】platform-data-plane 6.1 参考部署工件化 + 6.3 文档;change 已归档。
 6b. 【跨仓记录·非本快照任务项】kongming 计价归一(架构裁决:可行且应当)——kongming 实现 ADR-0007 ingest 接收端点接收 muniu usage 推送 + 下线自有模型计价;muniu 侧零开发(sink=ingest 已实现)。
 7. 【执行会话·已完成】压测:muniu 单边 + one-api 对照组均已出(见验收记录)。
 8. 【时间依赖阻塞】两周生产观察期计时 → T5.6 v1.0.0 判据核对 → tag v1.0.0 待用户指令。
@@ -57,6 +60,7 @@
 | 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
 | 2026-09-12 | B 档四项(Responses 入站/images/Gemini 出站/桥接工具往返)用户点名升格 | backlog 升格规则要求用户点名后先 ADR 再排期;四项价值/成本不等,不应捆绑同判 | 架构师独立裁决分层:桥接工具边界=缺陷级先行;Gemini=成本被低估的轻形态;Responses=战略项先 ADR;images/audio=新计量维度零消费者 | **①②③ 立项,④ 不立项**:ADR-0012 + openspec `upstream-egress-batch`/`responses-api-inbound` 已立(validate 通过);桥接边界方案升级为「候选适配性豁免跳过 + 独占时明确信封 + EMA 豁免」(比单纯 fail-fast 更符合换道哲学,详见 egress-batch design) |
 | 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属 | 修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③④非本批因果链,下一批次处置 |
+| 2026-09-13 | upstream-egress-batch Gemini 三项(冒烟/quirk/价目)待外部 GEMINI_API_KEY,无限期挂起污染活动清单 | 继续 etc 等待 / 归档并登记搁置 / 立即放弃 | **用户裁决:无限搁置**——①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者;纯新增零沉没成本 | change 归档(anthropic-bridge delta 合入主 specs;gemini-egress delta 随裁决移除,不把未打算满足的 MUST 合入主 specs);设计论述留档 design.md,未来解锁按原设计「轻形态+冒烟先行」重新立项 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
 

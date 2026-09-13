@@ -353,3 +353,35 @@ func loadOK(t *testing.T, y string) *Config {
 	}
 	return cfg
 }
+
+// TestLoad_拓扑数值域守门:weight/priority 超出数据面 int 域(MaxTopologyInt)必须在
+// YAML 入口拒绝——超域巨值下发进 failover 加权累加会溢出为负,加权随机失效。
+func TestLoad_拓扑数值域守门(t *testing.T) {
+	p := writeTemp(t, `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+        weight: 2147483648
+    weight: 2147483649
+    priority: 0
+model_routes:
+  m1:
+    - { provider: a, model: m, priority: 0, weight: 2147483648 }
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal("超 int 域的 weight/priority 必须被拒")
+	}
+	for _, want := range []string{
+		"keys[0] weight 超出数值域",
+		"weight 必须 >0 且 ≤2147483647",
+		"candidates[0] weight 超出数值域",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误信息缺 %q: %v", want, err)
+		}
+	}
+}
