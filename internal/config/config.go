@@ -155,6 +155,10 @@ type Config struct {
 		TopologyURL     string `yaml:"topology_url"`      // 控制面拓扑端点(3.2);空 = 文件源(现状等价)
 		PollIntervalSec int    `yaml:"poll_interval_sec"` // 拉取间隔,缺省 60s
 	} `yaml:"control_plane"`
+	RateLimit struct {
+		Backend   string `yaml:"backend"`    // inmem(缺省,实例自治)| redis(共享视图,cluster 形态;ADR-0008 修订)
+		RedisAddr string `yaml:"redis_addr"` // backend=redis 必填(host:port)
+	} `yaml:"ratelimit"`
 	Providers        []Provider             `yaml:"providers"`
 	ModelRoutes      map[string][]Candidate `yaml:"model_routes"`
 	Pricing          map[string]Price       `yaml:"pricing"`

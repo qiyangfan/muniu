@@ -14,6 +14,10 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on: [muniu-a, muniu-b]
 
+  redis:                                            # 限流共享视图(ADR-0008 修订):
+    image: docker.io/library/redis:8-alpine         # RPM/TPM 共享计数,消除 ×N;不可达各副本降级实例自治并告警
+    # redis 仅承载限流计数器(可丢失可重建),不持久化、不做主从——down 不丢计量数据
+
   muniu-a: &muniu
     image: ghcr.io/qiyangfan/muniu:v0.3.0          # 占位:本地构建或替换为实际发布镜像
     environment:
@@ -23,6 +27,7 @@ services:
       - MUNIU_PLATFORM_KEY_SECRET=${MUNIU_PLATFORM_KEY_SECRET}  # yaml ${VAR} 展开引用,缺失即 fail-fast 拒启
     volumes:
       - ./muniu.cluster.yaml:/muniu.yaml:ro         # 控制面 URL 全指向锦官(见本文件)
+    depends_on: [redis]
     # 副本本地 SQLite 仅承载计量缓冲(可重放可丢弃);生产建议挂本地盘而非共享卷
   muniu-b:
     <<: *muniu

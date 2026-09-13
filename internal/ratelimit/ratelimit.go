@@ -30,6 +30,11 @@ func New() *Limiter {
 	return newWithIdle(time.Hour)
 }
 
+// NewWithClock 注入时钟源(语义对拍/确定性测试用;时间序列驱动)。
+func NewWithClock(now func() time.Time) *Limiter {
+	return &Limiter{m: map[string]*bucket{}, idle: time.Hour, now: now}
+}
+
 // newWithIdle 测试可注入淘汰阈值与时钟。
 func newWithIdle(idle time.Duration) *Limiter {
 	return &Limiter{m: map[string]*bucket{}, idle: idle, now: time.Now}

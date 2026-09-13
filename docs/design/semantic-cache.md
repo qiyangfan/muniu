@@ -27,7 +27,7 @@
 
 ## 计量与可观测
 
-命中行照记 `usage_logs`:`provider='semantic-cache'`,`cost_micro=0`,`cached_tokens=0`,命中延迟单独字段;控制台展示命中率/节省 token 数(Phase 4 控制台首屏图表)。
+命中行照记 `usage_logs`:`provider='semantic-cache'`,`cost_credits=0`,`cached_tokens=0`,命中延迟单独字段;控制台展示命中率/节省 token 数(Phase 4 控制台首屏图表)。
 
 ## Non-goals
 

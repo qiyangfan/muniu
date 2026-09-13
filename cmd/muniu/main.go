@@ -129,6 +129,24 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 	}
 	pipeline := metering.NewPipeline(db, meteringOpts, logger)
 	tpm := ratelimit.NewTPM()
+	// 限流计数后端(ADR-0008 修订):inmem 缺省(实例自治,零变更);redis 共享视图(cluster)。
+	var sharedBackend ratelimit.SharedBackend
+	var tpmRecorder ratelimit.TPMRecorder = tpm
+	switch cfg.RateLimit.Backend {
+	case "", "inmem":
+	case "redis":
+		if cfg.RateLimit.RedisAddr == "" {
+			logger.Error("ratelimit.backend=redis 需要配置 ratelimit.redis_addr")
+			os.Exit(1)
+		}
+		shared := ratelimit.NewRedisBackend(cfg.RateLimit.RedisAddr, logger)
+		sharedBackend = shared
+		tpmRecorder = shared
+		logger.Info("限流共享视图启用(redis)", "addr", cfg.RateLimit.RedisAddr)
+	default:
+		logger.Error("ratelimit.backend 须为 inmem|redis", "got", cfg.RateLimit.Backend)
+		os.Exit(1)
+	}
 
 	// 适配器注册:Phase 2 仅 openai 基座+quirks;key 取 provider 第一把 key 的环境变量值
 	// buildPool 同时服务启动构建与拓扑热替换(3.2 控制面源):env 解析+建池+adapter 注册一体
@@ -311,7 +329,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		},
 		Pipeline:         pipeline,
 		Pools:            pools,
-		TPM:              tpm,
+		TPM:              tpmRecorder,
 		Cache:            cacheInst,
 		TenantSwitch:     tenantSw,
 		Capabilities:     cfg.Models,
@@ -380,6 +398,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		TPM:    tpm,
 		Quota:  ratelimit.NewQuota(db, ratelimit.Options{}, logger),
 		Logger: logger,
+		Shared: sharedBackend,
 	}
 	chatMux := http.NewServeMux()
 	chatMux.Handle("POST /v1/chat/completions", chatProxy.Handler())

@@ -46,7 +46,7 @@ type Config struct {
 	Timeouts         Timeouts
 	Pipeline         *metering.Pipeline       // 计量管道;nil = 不计量(纯转发场景)
 	Pools            map[string]*keypool.Pool // provider → key 池;缺池则该 provider 无法出站
-	TPM              *ratelimit.TPM           // TPM 滑动窗口;请求完成后记账(前置判定在 Gate 中间件)
+	TPM              ratelimit.TPMRecorder    // TPM 记账回填(*TPM 或 redis 后端;前置判定在 Gate 中间件)
 	Cache            *semantic.Cache          // 语义缓存;nil = 关闭
 	TenantSwitch     func(string) bool        // 租户语义缓存开关(装配层提供 DB 查询闭包)
 	Capabilities     []config.ModelCapability // 模型能力目录(ADR-0010);空 = 全部零干预透传
@@ -63,7 +63,7 @@ type Proxy struct {
 	pricing   *metering.PricingDirectory
 	timeouts  Timeouts
 	pipeline  *metering.Pipeline
-	tpm       *ratelimit.TPM
+	tpm       ratelimit.TPMRecorder
 	cache     *semantic.Cache
 	tenantSw  func(string) bool
 	strictGov bool

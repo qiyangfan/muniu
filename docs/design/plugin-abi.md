@@ -1,7 +1,7 @@
 # Muniu 插件 ABI v0(冻结)
 
 - 状态:**v0 已冻结(2026-09-12)**;任何变更走 ADR(ABI v1 或废弃)。
-- 宿主实现:`internal/plugin`;参考实现:`plugins/pii-masker`(Rust wasm32-unknown-unknown)。
+- 宿主实现:`internal/plugin`;参考实现:`plugins/pii-masker` 与 `plugins/json-redactor`(Rust wasm32-unknown-unknown,经 `muniu-plugin-sdk` 承接全部 ABI 机制——插件作者零 unsafe,见 `plugins/README.md`)。
 - 本文与 ADR-0011、openspec change `wasm-plugin-runtime` 的 design Decisions 一一对应。
 
 ## 0. 模块形态

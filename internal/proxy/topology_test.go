@@ -14,7 +14,7 @@ import (
 
 func topoConfig(name, baseURL string) Config {
 	prov := config.Provider{
-		Name: name, Adapter: "openai", BaseURL: baseURL,
+		Name: name, Adapter: "openai", BaseURL: baseURL, Weight: 1,
 		Keys: []config.KeyRef{{Env: name + "_KEY", Weight: 1}},
 	}
 	pool := keypool.NewPool([]keypool.KeyInput{{ID: name + "-K1", Value: "sk-" + name, Weight: 1}})

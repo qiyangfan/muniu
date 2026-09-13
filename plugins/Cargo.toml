@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["sdk", "pii-masker", "json-redactor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+muniu-plugin-sdk = { path = "sdk" }
+
+[profile.release]
+panic = "abort"   # wasm 无 unwind;abort 兑现「错误即 trap 即 containment」
+opt-level = "s"
+strip = true

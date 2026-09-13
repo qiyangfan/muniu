@@ -1,0 +1,14 @@
+[package]
+name = "json-redactor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "muniu 样例 WASM 插件:JSON Pointer 字段级脱敏(remove/replace,支持 * 通配段;ABI v0;目标 wasm32-unknown-unknown)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+muniu-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true

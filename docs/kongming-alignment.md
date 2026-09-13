@@ -17,7 +17,7 @@
 - 别名与上游模型名直通(不换名),kongming 侧切换只改 base_url/key 两项。
 
 ## 限额计划(traffic-governance 流程)
-- rpm_limit / tpm_limit / daily_quota_micro:按 kongming 现有用量 ×2 起步,灰度一周后回调;
+- rpm_limit / tpm_limit / daily_quota_credits:按 kongming 现有用量 ×2 起步,灰度一周后回调;
   bootstrap 起步值 rpm 120 / tpm 不限 / 日配额不限。
 - 灰度路径:一周正常使用无故障(2026-09-12 判据修订:个人本地项目不适用生产式每日对账,月末与上游账单一次量级核对);reconcile.sql 保留作按需自检工具。
 - 语义缓存:kongming 租户灰度期关闭(bootstrap 默认),基线确认后再经 PATCH 租户开启。

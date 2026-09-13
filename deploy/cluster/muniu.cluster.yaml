@@ -43,6 +43,10 @@ control_plane:
   topology_url: "http://control-plane:8090/control/v1/topology"
   poll_interval_sec: 60
 
+ratelimit:
+  backend: redis                        # 共享视图(cluster 形态,ADR-0008 修订):×N 消除
+  redis_addr: "redis:6379"              # 后端不可达各副本自动降级实例自治并告警,恢复自动回共享视图
+
 metrics:
   enabled: true
 

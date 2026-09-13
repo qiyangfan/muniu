@@ -115,11 +115,11 @@ smoke:
 chaos:
 	MUNIU_CHAOS=1 $(GO) test -tags=chaos -race ./internal/proxy/ -run TestChaos -v
 
-## plugin-build: 构建 pii-masker 样例插件(Rust wasm32-wasip1;无 Rust 工具链时跳过并提示)
+## plugin-build: 构建全部样例插件(Cargo workspace,Rust → wasm32-unknown-unknown;无 Rust 工具链时跳过并提示)
 .PHONY: plugin-build
 plugin-build:
-	@command -v cargo >/dev/null 2>&1 || { echo "[plugin-build] cargo 未安装,跳过(见 plugins/pii-masker/README.md)"; exit 0; }
-	plugins/pii-masker/build.sh
+	@command -v cargo >/dev/null 2>&1 || { echo "[plugin-build] cargo 未安装,跳过(见 plugins/README.md)"; exit 0; }
+	plugins/build.sh
 
 ## tidy: 依赖整理(新增依赖后必跑)
 .PHONY: tidy

@@ -1,5 +1,10 @@
 # cluster 形态参考部署(6.1)
 
+## 限流共享视图(ADR-0008 修订)
+
+`muniu.cluster.yaml` 已配 `ratelimit.backend: redis`(compose 内含 redis 服务):RPM/TPM 计数跨副本共享,消除实例独立计数的 ×N 松弛;redis 不可达时各副本自动降级实例自治并告警,恢复后自动回共享视图(宁有弱限制,勿无限制)。日配额的全局权威仍由控制面 ingest 聚合承担。
+
+
 > 参考样例而非生产清单:两副本 muniu(无状态)+ nginx 轮询 LB + 控制面(锦官/任意
 > 实现下述契约端点的服务)。镜像以两仓实际发布渠道为准,或经根 `Containerfile` 构建。
 

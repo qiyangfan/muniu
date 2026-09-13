@@ -1,0 +1,10 @@
+[package]
+name = "muniu-plugin-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "muniu WASM 插件 SDK:封装 ABI v0 全部导出与内存策略,插件作者零 unsafe 只写钩子逻辑"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

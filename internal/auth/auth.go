@@ -554,3 +554,9 @@ func KeyFrom(ctx context.Context) *KeyInfo {
 	}
 	return nil
 }
+
+// WithKeyInfo 将鉴权后的 key 信息注入请求上下文(限流共享后端的中间件测试用;
+// 生产路径由鉴权中间件注入,不经过本函数)。
+func WithKeyInfo(ctx context.Context, info *KeyInfo) context.Context {
+	return context.WithValue(ctx, ctxKey{}, info)
+}

@@ -39,13 +39,15 @@ return protocol.Usage{
 - 输入 = 请求 messages 序列化后 tiktoken 计数(词表编译期嵌入,运行时零下载);
 - 输出 = 已转发 delta 文本累计计数(流式边转发边攒);
 - reasoning/cached 估算不到就置 0,**不猜**;
-- 计价与对账:`SUM(cost_micro) WHERE estimated=0`——估算行只是参考,不进对账口径。
+- 计价与对账:`SUM(cost_credits) WHERE estimated=0`——估算行只是参考,不进对账口径。
 
 这套兜底的真实价值在故障时:断流断言出口后,已转发部分照常估算计费——供应商少赚的部分如实记录,用户的账单不缺行。
 
 ## 计价:整数的仪式感
 
 成本从第一天起就是整数:`cost_micro = ceil(输入tokens×输入价/1e6) + ceil(输出tokens×输出价/1e6)`,逐段向上取整(μ = 货币百万分之一,价格经 `metering.ParsePrice` 从人类可读 "2.00" 解析,全程不碰 float)。测试先行的负面用例还抓过一个真 bug:`strconv.ParseInt` 接受负号,负价差一点漏过校验。
+
+> 修订(2026-09-13):计量基座已由 μ(1e-6)迁移为 credit(1 credit = 本位币 1e-9,迁移 0007),上式与字段名(`cost_credits`)口径相应 ×1000;「整数仪式感」纪律不变。
 
 Phase 3 加入缓存价后扩为三段:`ceil(未命中输入×input) + ceil(缓存命中×cached_input) + ceil(输出×output)`,DeepSeek 的 `prompt_cache_hit_tokens` 直接参与分档计费。
 

@@ -2,13 +2,14 @@
 
 - 状态:已接受(2026-09-11)
 - 依据:ADR-0005(数据面双形态)
+- 修订(2026-09-13):载体限额字段随 credit 计量基座(迁移 0007)由 `daily_quota_micro` 回写为 `daily_quota_credits`,以代码 `internal/auth/platform.go` 为准。
 
 ## 决策
 
 平台 key(控制面签发)采用 **HMAC 自校验载体**,网关离线验真,不查任何库:
 
 - 形态:`mk2-<base64url(payload)>.<base64url(tag)>`;
-  `payload = "pkey.v1|<tenant_id>|<key_id>|<expires_unix>|<rpm>|<tpm>|<daily_quota_micro>"`,
+  `payload = "pkey.v1|<tenant_id>|<key_id>|<expires_unix>|<rpm>|<tpm>|<daily_quota_credits>"`,
   `tag = HMAC-SHA256(secret, payload) 截断 128bit`。限额随载体下发(签发时定,续签/换发生效)——这是「控制面失联仍可鉴权与限额」的代价,文档化。
 - 验证:网关配置验签密钥列表(支持轮换:任一密钥验通过即有效;过期/篡改/格式非法一律 401);平台 key **不进验证缓存**(HMAC 验真 µs 级,避免吊销缓存staleness)。
 - 吊销:控制面递增版本并暴露吊销名单端点;网关按可配间隔(默认 60s)拉取版本化快照,失败保持上一次快照并告警——吊销收敛窗口 = 拉取间隔(有界、可配),高危场景可即时收紧间隔。

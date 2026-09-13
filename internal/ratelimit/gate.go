@@ -23,10 +23,15 @@ type Gate struct {
 	TPM    *TPM
 	Quota  *Quota
 	Logger *slog.Logger
+	// Shared 可选共享计数后端(ADR-0008 修订);nil = 现状 inmem 语义(零变更)。
+	Shared SharedBackend
 }
 
 // Middleware 三闸串联:任一拒绝即终止(信封已写)。无鉴权信息的链路直接放行。
 func (g *Gate) Middleware(next http.Handler) http.Handler {
+	if g.Shared != nil {
+		return g.sharedMiddleware(next)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := auth.KeyFrom(r.Context())
 		if info != nil {

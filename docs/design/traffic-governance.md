@@ -22,7 +22,7 @@
 |---|---|---|
 | RPM 令牌桶 | `golang.org/x/time/rate`,桶容=N,速率=N/min | 硬闸,拒绝即 429 + `Retry-After`(Phase 2) |
 | TPM 滑动窗口 | 60×1s 环形桶,计数**已完成请求的 token 数** | 硬闸:窗口总量 ≥ tpm_limit 时拒绝新请求(Phase 3)。固有近似:在途请求 token 未计,误差 ≤ 单窗口并发量,如实写进文档不做伪精确 |
-| 日配额 | 已耗成本(μ 微单位,见 metering)≥ daily_quota_micro → 402 | 见下「一致性声明」 |
+| 日配额 | 已耗成本(credit,1 credit = 本位币 1e-9,见 metering)≥ daily_quota_credits → 402 | 见下「一致性声明」 |
 
 **配额一致性声明(契约)**:配额/TPM 均为**事后记账**模型——请求进行时无法预知最终 token 数,因此存在「同刻并发小幅超限」窗口。muniu 的取舍:**宁可记账精确、偶发小额超限,不做预留式伪精确**(预留模型复杂度不成比例,且 token 上限本就未知)。该取舍写入 README FAQ,面试可直接讲。
 

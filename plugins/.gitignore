@@ -1,0 +1,4 @@
+# workspace 构建产物统一落根 target/;各插件目录仅留落位后的发布产物(不入库)
+target/
+pii_masker.wasm
+json_redactor.wasm

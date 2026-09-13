@@ -44,6 +44,12 @@ metering:
 #   topology_url: "http://control-plane:8080/internal/topology"   # 拓扑热替换(providers/model_routes/能力目录)
 #   poll_interval_sec: 60
 
+# 限流计数后端(ADR-0008 修订):inmem(缺省,实例自治,零依赖)| redis(共享视图,
+# cluster 形态消除 ×N;后端不可达自动降级实例自治并告警,恢复自动回共享视图)
+# ratelimit:
+#   backend: redis
+#   redis_addr: "127.0.0.1:6379"
+
 # metrics(ADR-0009,可选):GET /metrics(Prometheus 文本协议;有管理 token 时需鉴权抓取)
 # metrics:
 #   enabled: true
@@ -129,11 +135,11 @@ pricing:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WASM 插件(ADR-0011,可选):沙箱执行的请求体钩子,限流后、语义缓存与上游候选前单次执行。
-# ABI v0 契约见 docs/design/plugin-abi.md;样例插件 plugins/pii-masker(Rust wasm32-unknown-unknown)。
+# ABI v0 契约见 docs/design/plugin-abi.md;样例插件与 SDK 见 plugins/(构建:./plugins/build.sh)。
 # 默认 fail_closed:插件超时/超内存/崩溃即拒绝该请求(安全类插件语义);fail_open 慎用。
 # 重启后以本节声明为准;运行态增改走管理面 API(不落盘,见 openapi.yaml 插件端点)。
 # plugins:
-#   - name: pii-masker
+#   - name: pii-masker                           # 内容扫描:正则规则脱敏自由文本(引擎层 ASCII 词边界,紧贴中文命中)
 #     path: ./plugins/pii-masker/pii_masker.wasm   # wasm32-unknown-unknown 二进制(路径支持环境变量展开)
 #     enabled: true                                # 缺省 true;启停可经管理面在线切换
 #     fail_open: false                             # true = 插件失效放行原请求——安全类插件务必 false
@@ -143,3 +149,10 @@ pricing:
 #     config:                                      # 透传插件配置(get_config 键值)
 #       rules: |
 #         [{"pattern":"1[3-9]\\d{9}","replacement":"[PHONE]"},{"pattern":"\\d{17}[0-9X]","replacement":"[ID]"}]
+#
+#   - name: json-redactor                        # 结构定向:JSON Pointer 字段级删除/替换(与内容扫描正交)
+#     path: ./plugins/json-redactor/json_redactor.wasm
+#     enabled: true
+#     config:
+#       rules: |
+#         [{"pointer":"/messages/*/name","op":"remove"},{"pointer":"/metadata/user_id","op":"replace","value":"[REDACTED]"}]

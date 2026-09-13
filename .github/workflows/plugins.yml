@@ -1,4 +1,5 @@
-# 样例插件构建模板(ADR-0011 任务 6.1):plugins/** 变更时构建 wasm 并上传 artifact。
+# 样例插件构建(ADR-0011 任务 6.1,plugin-rust-sdk 起改为 workspace 全量构建):
+# plugins/** 变更时构建全部插件 wasm、跑 Rust 宿主单测并上传 artifact。
 # 宿主(Go)侧测试与发布不依赖 Rust 工具链——本 workflow 独立可选,失败不阻塞网关 CI。
 name: plugins
 on:
@@ -15,12 +16,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Build pii-masker
-        working-directory: plugins/pii-masker
+      - name: Build plugins (workspace)
+        working-directory: plugins
         run: |
           cargo build --release --target wasm32-unknown-unknown
-          cp target/wasm32-unknown-unknown/release/pii_masker.wasm ./pii_masker.wasm
+          cp target/wasm32-unknown-unknown/release/pii_masker.wasm pii-masker/pii_masker.wasm
+          cp target/wasm32-unknown-unknown/release/json_redactor.wasm json-redactor/json_redactor.wasm
+      - name: Rust tests (host)
+        working-directory: plugins
+        run: cargo test
       - uses: actions/upload-artifact@v4
         with:
           name: pii-masker-wasm
           path: plugins/pii-masker/pii_masker.wasm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: json-redactor-wasm
+          path: plugins/json-redactor/json_redactor.wasm

@@ -63,7 +63,7 @@
 ## 对账与可观测
 
 - `estimated=false` 的行为唯一对账口径;`estimated=true` 仅成本参考。
-- 聚合读侧(auth/quota 中间件消费):当日已耗 = `SUM(cost_micro) WHERE created_at ≥ 当日 AND estimated=false`,进程内缓存 30s(配额一致性声明见 traffic-governance)。
+- 聚合读侧(auth/quota 中间件消费):当日已耗 = `SUM(cost_credits) WHERE created_at ≥ 当日 AND estimated=false`,进程内缓存 30s(配额一致性声明见 traffic-governance)。
 - 每请求 slog 成本字段:`prompt_tokens/completion_tokens/reasoning_tokens/cached_tokens/cost_credits/estimated`。
 
 ## 测试要求(测试先行域)
