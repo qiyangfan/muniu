@@ -16,6 +16,29 @@ const STATE_VARIANT: Record<string, VariantProps<typeof badgeVariants>["variant"
   unknown: "secondary",
 };
 
+// key 池状态 → 中文;键与 STATE_VARIANT 一一对应
+const STATE_LABELS: Record<string, string> = {
+  healthy: "正常",
+  cooldown: "冷却中",
+  disabled: "已停用",
+  unknown: "未知",
+};
+
+// 常见 adapter → 供应商展示名;未收录的值原样保留
+const ADAPTER_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  deepseek: "DeepSeek",
+  anthropic: "Anthropic",
+  gemini: "Gemini",
+  azure: "Azure",
+  ollama: "Ollama",
+};
+
+const adapterLabel = (adapter: string | undefined): string => {
+  const key = (adapter ?? "").toLowerCase();
+  return ADAPTER_LABELS[key] ?? adapter ?? "—";
+};
+
 export default function Providers() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [err, setErr] = useState("");
@@ -51,17 +74,20 @@ export default function Providers() {
           <Card key={p.name} className="space-y-2 p-4">
             <div className="flex justify-between">
               <span className="font-semibold">{p.name}</span>
-              <span className="text-xs text-muted-foreground">{p.adapter}</span>
+              <span className="text-xs text-muted-foreground">{adapterLabel(p.adapter)}</span>
             </div>
             <div className="text-xs break-all text-muted-foreground">{p.base_url}</div>
-            <div className="text-xs">
-              weight={p.weight} priority={p.priority}
+            <div className="text-xs text-muted-foreground">
+              权重 {p.weight} · 优先级 {p.priority}
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               {(p.keys ?? []).map((k) => (
-                <Badge key={k.id} variant={STATE_VARIANT[k.state ?? "unknown"]}>
-                  {k.id}:{k.state}
-                </Badge>
+                <span key={k.id} className="flex items-center gap-1.5 text-xs">
+                  <span className="font-mono">{k.id}</span>
+                  <Badge variant={STATE_VARIANT[k.state ?? "unknown"]}>
+                    {STATE_LABELS[k.state ?? "unknown"]}
+                  </Badge>
+                </span>
               ))}
             </div>
           </Card>

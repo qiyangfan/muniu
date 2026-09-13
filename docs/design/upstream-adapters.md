@@ -68,7 +68,7 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 | Qwen(DashScope 兼容模式) | openai 基座 | Bearer,base_url=dashscope.aliyuncs.com/compatible-mode/v1 | `enable_thinking` 开启,`delta.reasoning_content` 确认(首帧 reasoning 为空串) | `stream_options.include_usage` 支持:空 choices usage 终帧含 reasoning_tokens | 原生模式开思考须 incremental_output=true(兼容模式无此问题) |
 | Doubao(Arc) | openai 基座 | Bearer,base_url=ark.cn-beijing.volces.com/api/v3 | `delta.reasoning_content` | `stream_options.include_usage` | model 填模型名或推理接入点 ID(ep-xxx);文档站 JS 渲染无法逐字引用,按文档结构与公开 SDK 形态核对 |
 | Anthropic | bridge(已落地) | x-api-key + anthropic-version(2023-06-01) | thinking_delta → reasoning_content(桥接翻译) | input/output/cache_read_input_tokens → prompt/completion/cached_tokens | 事件类型机(message_start/content_block_delta/message_delta/message_stop);官方文档区域屏蔽,按公开契约实现待复核(见 bridge/README) |
-| Gemini | bridge | x-goog-api-key | thoughts 部分 | thoughtsTokenCount | 流式 alt=sse 形态(Phase 4 可选) |
+| Gemini | openai 兼容层(egress-batch 裁决,见下节) | Bearer | 兼容层形态待冒烟实证 ⚠ | 兼容层 usage 键名待冒烟 ⚠ | 原生 bridge 方案已裁撤,以「Gemini 接入方向」节为准 |
 
 ## Conformance 测试集(独立开源资产,目录即契约)
 
@@ -89,3 +89,17 @@ fixture 形态:`{ "provider": "...", "scenario": "...", "source_url": "官方文
 2. CI 只回放 fixture(打 fake 上游),真上游冒烟走 `make smoke` 手动档;
 3. 新 quirk 修复必须先补一个能复现 bug 的 fixture(回归钉死),这正是「测试集是资产、网关是消费者」的落地;
 4. `source_url` 必填——每个字段断言可溯源,这是与「拍脑袋兼容」的分界线。
+
+## 桥接工具多轮显式边界(upstream-egress-batch 契约)
+
+Anthropic 桥接的响应侧 `tool_use → tool_calls` 翻译完整;**请求侧多轮中途标记**(`role=tool` 消息或 assistant 消息带非空 `tool_calls`)的翻译未实现。此类流量对桥接候选的处理不是透传也不是一律拒绝,而是:
+
+1. **检测**:候选出站前判定请求是否处于工具循环中途;仅声明 `tools` 参数不触发(首轮合法)。
+2. **候选适配性豁免**:桥接候选跳过,继续换道(failover 判定表新格);发生在取 key 之前,**不计 key EMA/冷却**(适配性不匹配 ≠ 上游故障,与 adapter_missing、strict 治理拒绝同口径);结构化日志留痕,客户端无感。
+3. **终态信封**:全部候选耗尽且无任何真实上游错误 → 400 `bridge_tool_roundtrip_unsupported` 自解释信封(而非上游 400 转发的 `upstream_error`)。
+
+判定位置在候选循环取 key 之前(`internal/proxy/bridgegate.go`);桥接型适配器以 `adapter.Bridger` 接口标记,新增桥接家实现标记即自动纳入判定。
+
+## Gemini 接入方向(upstream-egress-batch 裁决)
+
+走 Gemini 官方 **OpenAI 兼容端点**(openai 基座 + quirk 覆写实测偏差),**不新建原生 adapter**;接入前先真上游冒烟记录偏差清单,quirk 只覆盖实测项(零内置隐式知识,与 ADR-0010 同哲学);fixture 从冒烟实录脱敏装配。上面的矩阵行「Gemini bridge」为旧计划形态,以本节为准。美元报价经本位币结算链处理(metering.md「本位币与 credit」:`metering.settlement` + `fx_usd_cny_milli`)。

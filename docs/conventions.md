@@ -21,7 +21,7 @@
 ## 日志(slog)
 
 - 结构化字段 snake_case;每请求必有 `request_id`。
-- 字段命名表:`request_id / tenant_id / api_key_id / provider / model_alias / upstream_model / prompt_tokens / completion_tokens / reasoning_tokens / cached_tokens / cost_micro / currency / latency_first_token_ms / latency_total_ms / error_class / estimated`。
+- 字段命名表:`request_id / tenant_id / api_key_id / provider / model_alias / upstream_model / prompt_tokens / completion_tokens / reasoning_tokens / cached_tokens / cost_credits / currency / latency_first_token_ms / latency_total_ms / error_class / estimated`。
 - 用户可读错误与内部技术详情分离:HTTP 响应只给归一化 message,技术细节(err 链、上游 body)进日志 `error_detail` 字段(借鉴 kongming 范式)。
 
 ## 错误信封(对外契约,改此格式=契约级)
@@ -30,14 +30,14 @@
 {
   "error": {
     "message": "上游供应商暂时不可用,已尝试全部候选",   // 用户可读,中文优先
-    "type": "upstream_error",       // bad_request|auth_failed|rate_limited|quota_exceeded|timeout|upstream_error|internal
+    "type": "upstream_error",       // bad_request|auth_failed|rate_limited|quota_exceeded|not_found|timeout|upstream_error|internal
     "code": "all_candidates_failed", // 机器码,snake_case
     "request_id": "01J..."
   }
 }
 ```
 
-HTTP 状态映射:`bad_request→400`,`auth_failed→401`,`quota_exceeded→402`,`rate_limited→429`,`timeout→504`,`upstream_error→502`,`internal→500`。
+HTTP 状态映射:`bad_request→400`,`auth_failed→401`,`quota_exceeded→402`,`rate_limited→429`,`not_found→404`,`timeout→504`,`upstream_error→502`,`internal→500`。
 
 ## 测试范式
 
@@ -51,7 +51,8 @@ HTTP 状态映射:`bad_request→400`,`auth_failed→401`,`quota_exceeded→402`
 
 - SQLite(modernc 纯 Go 驱动),WAL 模式,`busy_timeout=5s`,`foreign_keys=ON`。
 - 迁移:SQL 文件嵌 `internal/store/migrations/`(embed),文件名 `0001_init.sql` 顺序编号,`schema_migrations` 表记录;**禁止修改已应用的迁移,只追加新文件**。
-- Schema 纪律(沿 kongming):状态列 `TEXT + CHECK`,禁魔数;主键 UUIDv7 字符串;时间列 TEXT RFC3339;金额列 INTEGER(μ 微单位,货币百万分之一,见 metering)+ currency 列。
+- Schema 纪律(沿 kongming):状态列 `TEXT + CHECK`,禁魔数;主键 UUIDv7 字符串;时间列 TEXT RFC3339;金额列 INTEGER(**credit** 单位,1 credit = 本位币十亿分之一,见 metering)+ currency 列;配额列 `daily_quota_credits` 同单位。
+- JSON 出站纪律:身份字段(ID)一律 string(UUIDv7 主键,禁 int64 主键——JS float64 在 2⁵³ 失真,Snowflake 事故);64 位数量字段(token/credit/限额)出站 JSON number(消费方需要比较/聚合/图表数值),整数精确边界 2⁵³ ≈ 9.0e15 credit(≈900 万本币);仅当聚合结果可能越界的接口,该字段须改为 string 出站(OpenRouter 惯例),存储与计算层不动。
 
 ## 配置
 

@@ -1,0 +1,28 @@
+{
+  "provider": "responses-inbound",
+  "scenario": "stream-event-sequence",
+  "source_url": "docs/design/proxy-and-streaming.md「Responses 入站翻译」;docs/design/adr/0012-responses-api-inbound.md",
+  "upstream_raw": {
+    "chat_sse": [
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}",
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"你\"}}]}",
+      "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"好\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}"
+    ]
+  },
+  "expect": {
+    "event_sequence": [
+      "response.created",
+      "response.output_item.added",
+      "response.output_text.delta",
+      "response.output_text.delta",
+      "response.output_item.done",
+      "response.completed"
+    ],
+    "invariants": {
+      "created_first": true,
+      "completed_last": true,
+      "delta_between_created_and_completed": true,
+      "completed_usage": {"input_tokens": 10, "output_tokens": 2}
+    }
+  }
+}

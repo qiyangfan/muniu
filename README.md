@@ -35,12 +35,12 @@ muniu 是一个**单二进制、OpenAI 兼容入站**的 LLM 网关,用 Go 写�
 
 | 域 | 能力 |
 |---|---|
-| 接入 | OpenAI 兼容入站(chat/completions + embeddings);上游适配矩阵:DeepSeek / Moonshot / GLM(方言适配)、Qwen / Doubao(基座直用)、任意 OpenAI 兼容端点(如 ollama)、Anthropic(协议桥接) |
-| 鉴权与租户 | `mk-` 平台 key 签发(SHA-256 落库 + LRU 缓存)、多租户隔离、日配额(事后记账模型) |
+| 接入 | OpenAI 兼容入站(chat/completions + embeddings + models 模型发现 + responses 无状态翻译 v1,ADR-0012);上游适配矩阵:DeepSeek / Moonshot / GLM(方言适配)、Qwen / Doubao(基座直用)、任意 OpenAI 兼容端点(如 ollama)、Anthropic(协议桥接) |
+| 鉴权与租户 | `mk-` 平台 key 签发(SHA-256 落库 + LRU 缓存;key 级 RPM/TPM/日配额与过期时刻,运行态 PATCH 调整)、多租户隔离、日配额(事后记账模型) |
 | 流量治理 | RPM 令牌桶 + TPM 滑动窗口;key 池平滑加权轮询 + EMA 健康度 + 三态状态机(健康/冷却/禁用);failover 首 token 边界语义;请求参数治理(模型能力目录,换道重治理,Raw 字节层改写零丢失) |
 | 计量计费 | 流式 usage 归一 + tiktoken 离线估算兜底;分时段倍率;动态改价零重启;异步批量落库 + 缓冲续传 |
 | 语义缓存 | HNSW 向量索引、相似度 0.97、「宁缺勿错」准入策略、租户级开关、TTL 24h |
-| 运维观测 | 内嵌 React 控制台(单二进制自带)、管理 API、Prometheus `/metrics`(零依赖文本协议直写)、结构化访问日志 |
+| 运维观测 | 内嵌 React 控制台(单二进制自带)、管理 API、Prometheus `/metrics`(零依赖文本协议直写:请求/token 流向/缓存判定/流式首字节延迟/上游错误分类)、结构化访问日志 |
 
 ## 为什么再造一个网关
 
@@ -71,6 +71,15 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 本地无供应商 key 时,任何 OpenAI 兼容端点(如 [ollama](https://ollama.com))都可直接当上游:
 `adapter: openai` + `base_url: "http://127.0.0.1:11434/v1"`。
+
+## 双形态(ADR-0005)
+
+muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:
+
+- **standalone(缺省,一等公民)**:单二进制 + 内嵌 SQLite,上面的快速开始即此形态;租户/key/价目为运营态(管理面在线改),拓扑走 YAML。
+- **cluster(无状态副本)**:多副本 + LB,SQLite 降级本地缓冲;租户/key/价目/拓扑经控制面拉取(`metering.pricing_url` / `auth.revocations_url` / `control_plane.topology_url`,ETag 条件请求、损坏拒绝应用、失联保持降级),计量经 `metering.sink: ingest` 推送控制面(失败落本地缓冲,恢复按序续传,ADR-0007);限流为实例级自治 + 控制面全局预算(ADR-0008)。每实例本地状态盘点与集群口径见 `docs/design/cluster-semantics.md`。
+
+本位币与 credit(计量计费):`cost_credits`/`daily_quota_credits` 均为 credit 整数,1 credit = 本位币(`metering.settlement`,CNY|USD)的十亿分之一;异币种报价经 `metering.fx_usd_cny_milli` 加载期一次换算。
 
 ## 控制台与语义缓存
 

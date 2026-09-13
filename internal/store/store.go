@@ -141,18 +141,20 @@ func versionOf(name string) (int64, error) {
 
 // APIKey api_keys 行的读侧形态(鉴权消费)。TenantStatus 来自 JOIN tenants,
 // 供鉴权层一并判定租户禁用(管控面冻结租户必须对数据面生效)。
+// ExpiresAt 可空(NULL = 永不过期,迁移 0006);过期判定由鉴权层以当前时钟执行。
 type APIKey struct {
-	ID              string
-	TenantID        string
-	Name            string
-	KeyHash         string
-	Prefix          string
-	Status          string
-	RPMLimit        int64
-	TPMLimit        int64
-	DailyQuotaMicro int64
-	Currency        string
-	TenantStatus    string
+	ID                string
+	TenantID          string
+	Name              string
+	KeyHash           string
+	Prefix            string
+	Status            string
+	RPMLimit          int64
+	TPMLimit          int64
+	DailyQuotaCredits int64
+	Currency          string
+	TenantStatus      string
+	ExpiresAt         *time.Time
 }
 
 // ErrNotFound 查无此行(哨兵,调用方 errors.Is 判定)。
@@ -172,19 +174,28 @@ func TenantIDByName(db *sql.DB, name string) (string, error) {
 }
 
 // GetAPIKeyByHash 按 sha256 hex 查 key;吊销行也返回,启用与否由调用方按 Status/TenantStatus 判定。
+// expires_at 列损坏(非 RFC3339)按查询错误返回——宁可拒绝该 key,不放行时间语义不明的凭据。
 func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
 	row := db.QueryRow(`SELECT k.id, k.tenant_id, k.name, k.key_hash, k.prefix, k.status,
-		k.rpm_limit, k.tpm_limit, k.daily_quota_micro, k.currency, IFNULL(t.status,'')
+		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at
 		FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
 		WHERE k.key_hash = ?`, hash)
 	var k APIKey
+	var exp sql.NullString
 	err := row.Scan(&k.ID, &k.TenantID, &k.Name, &k.KeyHash, &k.Prefix, &k.Status,
-		&k.RPMLimit, &k.TPMLimit, &k.DailyQuotaMicro, &k.Currency, &k.TenantStatus)
+		&k.RPMLimit, &k.TPMLimit, &k.DailyQuotaCredits, &k.Currency, &k.TenantStatus, &exp)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: 查 api_key: %w", err)
+	}
+	if exp.Valid && exp.String != "" {
+		t, perr := time.Parse(time.RFC3339, exp.String)
+		if perr != nil {
+			return nil, fmt.Errorf("store: api_key %s expires_at 非法: %w", k.Prefix, perr)
+		}
+		k.ExpiresAt = &t
 	}
 	return &k, nil
 }
@@ -206,7 +217,7 @@ type UsageRow struct {
 	ReasoningTokens     int64
 	CachedTokens        int64
 	Estimated           bool
-	CostMicro           int64
+	CostCredits         int64
 	Currency            string
 	LatencyFirstTokenMs *int64 // 可空(未过首 token 的失败请求)
 	LatencyTotalMs      int64
@@ -227,7 +238,7 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 		id, request_id, tenant_id, api_key_id, provider, model_alias, upstream_model,
 		stream, status, error_class,
 		prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens,
-		estimated, cost_micro, currency, latency_first_token_ms, latency_total_ms, created_at)
+		estimated, cost_credits, currency, latency_first_token_ms, latency_total_ms, created_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return fmt.Errorf("store: 预编译计量插入: %w", err)
@@ -249,7 +260,7 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 		if _, err := stmt.Exec(r.ID, r.RequestID, r.TenantID, r.APIKeyID, r.Provider,
 			r.ModelAlias, r.UpstreamModel, stream, r.Status, nullIfEmpty(r.ErrorClass),
 			r.PromptTokens, r.CompletionTokens, r.ReasoningTokens, r.CachedTokens,
-			estimated, r.CostMicro, r.Currency, firstToken, r.LatencyTotalMs,
+			estimated, r.CostCredits, r.Currency, firstToken, r.LatencyTotalMs,
 			r.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("store: 写计量行 %s: %w", r.ID, err)
 		}
@@ -260,11 +271,11 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 	return nil
 }
 
-// SumCostToday 当日已耗成本(μ)聚合,配额判定读侧:
+// SumCostToday 当日已耗成本(credit)聚合,配额判定读侧:
 // 仅计 estimated=0 行(metering 对账口径);dayStartUTC 为当日零点(RFC3339 字符串序比较成立)。
 // tenantID/apiKeyID 传空串则该维度不过滤(Phase 3 租户聚合复用)。
 func SumCostToday(db *sql.DB, tenantID, apiKeyID, dayStartUTC string) (int64, error) {
-	q := `SELECT COALESCE(SUM(cost_micro),0) FROM usage_logs
+	q := `SELECT COALESCE(SUM(cost_credits),0) FROM usage_logs
 		WHERE estimated = 0 AND created_at >= ?`
 	args := []any{dayStartUTC}
 	if tenantID != "" {

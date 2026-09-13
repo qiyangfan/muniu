@@ -129,7 +129,7 @@ func TestScalePrice(t *testing.T) {
 }
 
 func TestPricingTable_At(t *testing.T) {
-	def := Pricing{Currency: "USD", InputMicroPerM: 440_000, OutputMicroPerM: 1_320_000}
+	def := Pricing{Currency: "USD", InputCreditsPerM: 440_000, OutputCreditsPerM: 1_320_000}
 	utc, _ := ParseZoneOffset("UTC")
 
 	t.Run("无窗口恒缺省", func(t *testing.T) {
@@ -165,8 +165,8 @@ func TestPricingTable_At(t *testing.T) {
 		for _, c := range cases {
 			now := time.Date(2026, 9, 11, c.h, c.m, 0, 0, time.UTC)
 			got := tbl.At(now)
-			wantIn := def.InputMicroPerM / 2
-			if c.halfOff && got.InputMicroPerM != wantIn {
+			wantIn := def.InputCreditsPerM / 2
+			if c.halfOff && got.InputCreditsPerM != wantIn {
 				t.Fatalf("%02d:%02d 应半价: %+v", c.h, c.m, got)
 			}
 			if !c.halfOff && got != def {
@@ -184,7 +184,7 @@ func TestPricingTable_At(t *testing.T) {
 			t.Fatal(err)
 		}
 		now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
-		if got := tbl.At(now); got.InputMicroPerM != 440_000*8/10 {
+		if got := tbl.At(now); got.InputCreditsPerM != 440_000*8/10 {
 			t.Fatalf("重叠窗应先声明者赢: %+v", got)
 		}
 	})
@@ -199,7 +199,7 @@ func TestPricingTable_At(t *testing.T) {
 			t.Fatal(err)
 		}
 		// UTC 16:30 = 北京 00:30 → 命中
-		if got := tbl.At(time.Date(2026, 9, 11, 16, 30, 0, 0, time.UTC)); got.InputMicroPerM != 220_000 {
+		if got := tbl.At(time.Date(2026, 9, 11, 16, 30, 0, 0, time.UTC)); got.InputCreditsPerM != 220_000 {
 			t.Fatalf("UTC16:30(北京00:30)应半价: %+v", got)
 		}
 		// UTC 00:30 = 北京 08:30 → 不命中(终点不含)
@@ -210,7 +210,7 @@ func TestPricingTable_At(t *testing.T) {
 
 	t.Run("倍率作用于三段价且 cached 缺省语义保持", func(t *testing.T) {
 		// def 的 cached=0 表示「缺省=input」:缩放后仍为 0,CostWithCached 的缺省解析不受影响
-		defWithCached := Pricing{Currency: "CNY", InputMicroPerM: 999_999, CachedInputMicroPerM: 0, OutputMicroPerM: 3}
+		defWithCached := Pricing{Currency: "CNY", InputCreditsPerM: 999_999, CachedInputCreditsPerM: 0, OutputCreditsPerM: 3}
 		tbl, err := NewPricingTable(defWithCached, utc, []WindowSpec{
 			{StartMin: 0, EndMin: 1440, BasisPoints: 5000},
 		})
@@ -218,7 +218,7 @@ func TestPricingTable_At(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := tbl.At(time.Date(2026, 9, 11, 1, 0, 0, 0, time.UTC))
-		if got.InputMicroPerM != 500_000 || got.CachedInputMicroPerM != 0 || got.OutputMicroPerM != 2 {
+		if got.InputCreditsPerM != 500_000 || got.CachedInputCreditsPerM != 0 || got.OutputCreditsPerM != 2 {
 			t.Fatalf("窗口三段缩放不符(999999×0.5 ceil=500000, 3×0.5 ceil=2): %+v", got)
 		}
 	})
@@ -226,30 +226,31 @@ func TestPricingTable_At(t *testing.T) {
 
 func TestFormatPrice(t *testing.T) {
 	cases := []struct {
-		micro int64
-		want  string
+		credits int64
+		want    string
 	}{
-		{440_000, "0.44"},
+		{440_000_000, "0.44"},
 		{0, "0"},
-		{1, "0.000001"},
-		{1_000_000, "1"},
-		{14_000, "0.014"},
-		{123_456_123_456, "123456.123456"},
-		{-440_000, "-0.44"},
+		{1, "0.000000001"},
+		{1_000, "0.000001"},
+		{1_000_000_000, "1"},
+		{14_000_000, "0.014"},
+		{123_456_123_456_000, "123456.123456"},
+		{-440_000_000, "-0.44"},
 	}
 	for _, c := range cases {
-		if got := FormatPrice(c.micro); got != c.want {
-			t.Fatalf("FormatPrice(%d) = %q, 期望 %q", c.micro, got, c.want)
+		if got := FormatPrice(c.credits); got != c.want {
+			t.Fatalf("FormatPrice(%d) = %q, 期望 %q", c.credits, got, c.want)
 		}
 	}
 	// 恒等往返:FormatPrice(ParsePrice(x)) == x(规范化形态)
-	for _, in := range []string{"0.44", "0.014", "2", "0.000001"} {
-		micro, err := ParsePrice(in)
+	for _, in := range []string{"0.44", "0.014", "2", "0.000001", "0.00000001"} {
+		credits, err := ParsePrice(in)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := FormatPrice(micro); got != in {
-			t.Fatalf("往返不符: %s → %d → %s", in, micro, got)
+		if got := FormatPrice(credits); got != in {
+			t.Fatalf("往返不符: %s → %d → %s", in, credits, got)
 		}
 	}
 }
@@ -282,7 +283,7 @@ func TestFormatMultiplier(t *testing.T) {
 }
 
 func TestPricingDirectory(t *testing.T) {
-	def := Pricing{Currency: "CNY", InputMicroPerM: 100}
+	def := Pricing{Currency: "CNY", InputCreditsPerM: 100}
 	tbl, err := NewPricingTable(def, time.UTC, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +296,7 @@ func TestPricingDirectory(t *testing.T) {
 		t.Fatal("未配置别名应返回 nil")
 	}
 	// 整体替换原子生效
-	tbl2, _ := NewPricingTable(Pricing{Currency: "CNY", InputMicroPerM: 200}, time.UTC, nil)
+	tbl2, _ := NewPricingTable(Pricing{Currency: "CNY", InputCreditsPerM: 200}, time.UTC, nil)
 	d.Replace(map[string]*PricingTable{"b": tbl2})
 	if d.Get("a") != nil || d.Get("b") == nil {
 		t.Fatal("Replace 后旧表应消失、新表生效")

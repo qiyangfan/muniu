@@ -100,15 +100,15 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 	rows := []UsageRow{
 		{ID: uuid.Must(uuid.NewV7()).String(), RequestID: "r1", TenantID: "t1", APIKeyID: "k1",
 			Provider: "deepseek", ModelAlias: "m1", UpstreamModel: "u", Status: "ok",
-			PromptTokens: 100, CompletionTokens: 50, CostMicro: 500, Currency: "CNY",
+			PromptTokens: 100, CompletionTokens: 50, CostCredits: 500, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
 		{ID: uuid.Must(uuid.NewV7()).String(), RequestID: "r2", TenantID: "t1", APIKeyID: "k1",
 			Provider: "semantic-cache", ModelAlias: "m1", UpstreamModel: "u", Status: "ok",
-			PromptTokens: 100, CompletionTokens: 50, CostMicro: 0, Currency: "CNY",
+			PromptTokens: 100, CompletionTokens: 50, CostCredits: 0, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
 		{ID: uuid.Must(uuid.NewV7()).String(), RequestID: "r3", TenantID: "t1", APIKeyID: "k2",
 			Provider: "deepseek", ModelAlias: "m2", UpstreamModel: "u", Status: "error",
-			PromptTokens: 10, CompletionTokens: 0, Estimated: true, CostMicro: 999, Currency: "CNY",
+			PromptTokens: 10, CompletionTokens: 0, Estimated: true, CostCredits: 999, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
 	}
 	if err := InsertUsageBatch(db, rows); err != nil {
@@ -130,11 +130,11 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 		byProv[p.Dim] = p
 	}
 	ds := byProv["deepseek"]
-	if ds.Requests != 2 || ds.CostMicro != 500 {
+	if ds.Requests != 2 || ds.CostCredits != 500 {
 		t.Fatalf("deepseek 聚合不符(estimated 须剔除): %+v", ds)
 	}
 	sc := byProv["semantic-cache"]
-	if sc.CacheHits != 1 || sc.CostMicro != 0 {
+	if sc.CacheHits != 1 || sc.CostCredits != 0 {
 		t.Fatalf("语义缓存命中口径不符: %+v", sc)
 	}
 
@@ -143,7 +143,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 	if err != nil || len(days) != 1 {
 		t.Fatalf("按日聚合不符: %v %v", days, err)
 	}
-	if days[0].Requests != 3 || days[0].CostMicro != 500 {
+	if days[0].Requests != 3 || days[0].CostCredits != 500 {
 		t.Fatalf("按日口径不符: %+v", days[0])
 	}
 

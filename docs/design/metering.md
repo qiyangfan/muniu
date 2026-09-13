@@ -18,9 +18,9 @@
 
 ## 计价(整数运算,零浮点)
 
-- 内部记账单位:**货币的百万分之一(μ)**——`cost_micro`(μCNY / μUSD,由 `currency` 列区分),int64。
-- 配置价目**人类可读**(如 `input: 2.00` 表示 ¥2.00/百万 Token),加载期一次性换算为整数 `μ/百万Token`,此后全链路纯整数:
-  `cost_micro = ceil(in_tokens × pin / 1e6) + ceil(out_tokens × pout / 1e6)`(逐段向上取整,误差 ≤2μ/请求,对供应商友好;规则进 conformance 断言)。
+- 内部记账单位:**credit,1 credit = **本位币**(metering.settlement,CNY|USD)的十亿分之一(1e-9)**——`cost_credits`,int64,`currency` 列恒记本位币。选型:①美元廉价档($0.003/百万Token)在 1e-9 下逐 token 恰为整数 credit;②锚定本位币而非各上游账单币种,配额域单币种自洽。异币种报价加载期按 `fx_usd_cny_milli`(1 USD = fx/1000 CNY)一次换算。
+- 配置价目**人类可读**(如 `input: 2.00` 表示 ¥2.00/百万 Token),加载期一次性换算为整数 `credit/百万Token`,此后全链路纯整数:
+  `cost_credits = ceil(in_tokens × pin / 1e6) + ceil(out_tokens × pout / 1e6)`(pin/pout 单位 credit/百万Token;逐段向上取整,误差 ≤2 credit = 2e-9 本币/请求;规则进 conformance 断言)。
 - cached/reasoning 差异价(Phase 3 落地):pricing 增列 `cached_input`(缺省=input),计价扩为三段
   `ceil(未命中输入×input) + ceil(缓存命中×cached_input) + ceil(输出×output)`(实现 `metering.CostWithCached`,逐段独立取整)。
 - **分时段倍率**(2026-09-11 开放):pricing 增 `timezone`("UTC" 或 ±HH:MM 固定偏移,缺省 UTC;不引 tzdata——
@@ -32,7 +32,7 @@
   `cached_input` 缺省=input 的语义在窗口内保持(0 值缩放仍为 0,由 CostWithCached 统一解析)。
   设计取舍记录:选倍率而非逐窗全价(厂商错峰价的真实形态是整卡折扣,配置最简);
   判定精确到请求完成时刻(`record` 时选窗,行内价目即该窗有效价,对账可逐行复核)。
-- **禁止 float 参与任何金额运算**(conventions 铁则);配额扣减即 `SUM(cost_micro)` 聚合,同一整数域。
+- **禁止 float 参与任何金额运算**(conventions 铁则);配额扣减即 `SUM(cost_credits)` 聚合,同一整数域;配额字段 `daily_quota_credits` 以 credit 计(抽象额度单位,可直接表达 820 亿这类自然大数)。
 
 ## 动态价目(运营态,2026-09-11 开放)
 
@@ -64,7 +64,7 @@
 
 - `estimated=false` 的行为唯一对账口径;`estimated=true` 仅成本参考。
 - 聚合读侧(auth/quota 中间件消费):当日已耗 = `SUM(cost_micro) WHERE created_at ≥ 当日 AND estimated=false`,进程内缓存 30s(配额一致性声明见 traffic-governance)。
-- 每请求 slog 成本字段:`prompt_tokens/completion_tokens/reasoning_tokens/cached_tokens/cost_micro/estimated`。
+- 每请求 slog 成本字段:`prompt_tokens/completion_tokens/reasoning_tokens/cached_tokens/cost_credits/estimated`。
 
 ## 测试要求(测试先行域)
 

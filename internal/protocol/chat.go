@@ -62,6 +62,7 @@ type StreamChunk struct {
 // StreamChoice 单个流式候选:delta 增量 + 终止原因。
 type StreamChoice struct {
 	Delta        Delta             `json:"delta"`
+	Index        *int              `json:"index,omitempty"` // v1 仅消费 index 0(responses 流式映射的防御性过滤)
 	FinishReason *string           `json:"finish_reason,omitempty"`
 	ToolCalls    []json.RawMessage `json:"tool_calls,omitempty"`
 }

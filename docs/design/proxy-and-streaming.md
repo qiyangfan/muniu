@@ -32,8 +32,9 @@
 | bad_request_400 | 参数被上游拒 | **不换道**直接返回(参数问题换家也会拒;桥接翻译缺陷另行走 adapter 修复) | 断言 |
 | mid_stream_fail | 流中断/帧间超时/解析崩 | —(定义上已过首 token) | 断言 |
 | context_canceled | 客户端断连 | 静默退出,不换道不计失败 | 静默退出,计量已发生部分 |
+| **候选适配性豁免(桥接工具限制)** | 请求含 role=tool / assistant.tool_calls 且候选为桥接型(BridgeKind 标记) | **跳过候选,不计 key EMA/冷却**(适配性不匹配≠上游故障);候选取 key 之前生效 | —(检测在候选循环,先于 attempt) |
 
-候选耗尽仍失败 → 最终错误信封 `code=all_candidates_failed`;候选列表耗尽的 429/401 类错误在信封 `message` 中如实说明「已尝试全部候选」。非流式请求没有「已过首 token」态(首字节前全部可重放)。
+候选耗尽仍失败 → 最终错误信封 `code=all_candidates_failed`;候选列表耗尽的 429/401 类错误在信封 `message` 中如实说明「已尝试全部候选」。**全部候选因桥接豁免跳过且无任何真实上游错误** → 最终信封 `code=bridge_tool_roundtrip_unsupported`(400,自解释文案;upstream-egress-batch 契约)。非流式请求没有「已过首 token」态(首字节前全部可重放)。
 
 ## SSE 透传实现契约
 
@@ -64,3 +65,45 @@ data: [DONE]
 ## 测试矩阵(fake 上游剧本 × 判定表全格)
 
 `internal/testkit` 剧本库:`normal`(正常流)/`slow_chunk`(帧间超时触发)/`mid_stream_cut`(流中断)/`half_frame`(半帧+补齐)/`usage_missing`(估算路径)/`stream_429`(冷却+换道)/`stream_5xx_after_first_token`(断言路径)/`client_disconnect`(取消传导)。每个剧本对应至少一个表驱动用例,断言:客户端可见字节序列、usage 落库行、key 池状态变化三项。
+
+## Responses 入站翻译(ADR-0012,契约;fixture 与测试钉死本表)
+
+`POST /v1/responses` 在管道入口前**边缘翻译**为规范 chat 请求(治理/缓存/插件/限流/failover/计量零改动);响应与流式事件反向映射。错误信封沿用 conventions;`not_found` 见模型发现契约。
+
+### 请求映射表
+
+| Responses 入站 | 规范 chat | 约束 |
+|---|---|---|
+| `model` | `model`(别名) | 必填,路由解析与 chat 同规 |
+| `instructions` | system 消息(置于最前) | 与 input 显式 system 并存时 instructions 在前 |
+| `input`(string) | 单条 user 消息(content=原文字符串) | 快捷形态 |
+| `input[]` type=message | 同 role 消息 | content parts 仅接受 input_text/output_text(文本按序拼接);其余类型 400 `input_item_unsupported` |
+| `input[]` type=function_call | assistant 消息带 tool_calls(call_id/name/arguments 直映) | |
+| `input[]` type=function_call_output | role=tool 消息(tool_call_id=call_id,content=output) | |
+| `tools[]` type=function | chat tools(name/description/parameters 从顶层移入 function) | |
+| `tool_choice` | tool_choice | auto/none/required/具名 function 同映射(具名移入 function) |
+| `max_output_tokens` | `max_tokens` | |
+| `temperature` / `top_p` / `stream` | 同名透传 | |
+| `previous_response_id` | **400 `previous_response_id_unsupported`** | 无状态 v1:静默忽略会丢失客户端上下文,属危险失败 |
+| `background=true` | **400 `background_unsupported`** | |
+| `store` / `metadata` | 忽略(白名单,不转发) | |
+
+### 显式拒绝清单(400,bad_request)
+
+- `previous_response_id_unsupported`:无状态网关不支持服务端会话存储
+- `background_unsupported`:不支持后台模式
+- `input_item_unsupported`:v1 仅支持文本与函数调用项(如 input_image 拒绝)
+- `input_invalid`:input 缺失或结构非法
+
+### 响应与流式事件映射
+
+- 非流式:chat.completion → `{id, object:"response", status:"completed", model, output[], usage}`;`id` = `resp_` + request_id(追责链路一致)。output[]:reasoning_content 存在时 → `{type:"reasoning", text}` 只读项;assistant 文本 → `{type:"message", content:[{type:"output_text"}]}`;tool_calls → `{type:"function_call", name/call_id/arguments}`。
+- 流式最小事件集(顺序不变式:created 首帧、completed 终帧、delta 仅出现于两者之间;usage 恒携带,无上游 usage 补零值):
+  `response.created` → `response.output_item.added` → (`response.output_text.delta` | `response.function_call_arguments.delta`)* → `response.output_item.done` → `response.completed`(携带 usage)。
+  usage 映射:prompt→input_tokens(含 cached details),completion→output_tokens(reasoning 为其上游子集,只入 output_tokens_details.reasoning_tokens,不与 output 相加——加法即客户端可见双计),total=input+output。
+- 流中失败(上游 mid_stream_fail 或异常收尾无 [DONE]):发 `response.failed`(携带归一错误信息)后终止——诚实失败,不伪造 completed。
+- `GET /v1/responses/{id}`:恒 404 `not_found`、code `response_not_found`(无状态网关不存储 response;与模型发现 404 的 code 区分,避免对账混淆)。
+
+### 与既有子系统的交互
+
+翻译产物与「手工构造的等价 chat 请求」逐字节同构 ⇒ 治理/插件/限流/failover/计量行为等价(钉子测试锁死);语义缓存键取翻译后规范请求 ⇒ **跨协议缓存命中**(等价 chat 先写、Responses 命中)。工具多轮流量经 anthropic 出站受桥接边界契约约束(显式 400/豁免,不静默)。

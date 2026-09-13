@@ -24,13 +24,13 @@ func seedQuota(t *testing.T, tenantQuota int64) *Quota {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status, daily_quota_micro, created_at)
+	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status, daily_quota_credits, created_at)
 		VALUES (?,?,?,?,?,?,?,?)`,
 		uuid.Must(uuid.NewV7()).String(), quotaTenant, "k", "hash-quota", "mk-quota", "active", 100, now); err != nil {
 		t.Fatal(err)
 	}
 	// 租户聚合闸(迁移 0002 加列)
-	if _, err := db.Exec(`UPDATE tenants SET daily_quota_micro = ? WHERE id = ?`, tenantQuota, quotaTenant); err != nil {
+	if _, err := db.Exec(`UPDATE tenants SET daily_quota_credits = ? WHERE id = ?`, tenantQuota, quotaTenant); err != nil {
 		t.Fatal(err)
 	}
 	return NewQuota(db, Options{CacheTTL: 30 * time.Second}, slog.Default())
@@ -41,7 +41,7 @@ func TestQuota_key级边界恰差1微单位(t *testing.T) {
 	// 聚合缓存会掩盖同窗口内的增量,故把 TTL 压到 1ms 验证纯边界语义
 	q.ttl = time.Millisecond
 	now := time.Now()
-	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaMicro: 100}
+	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaCredits: 100}
 
 	// 已耗 99μ:放行
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 99, now)
@@ -59,7 +59,7 @@ func TestQuota_key级边界恰差1微单位(t *testing.T) {
 func TestQuota_缓存30秒过期后生效(t *testing.T) {
 	q := seedQuota(t, 0)
 	now := time.Now()
-	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaMicro: 100}
+	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaCredits: 100}
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 100, now)
 	if exceeded := q.exceeded(info, now); !exceeded {
 		t.Fatal("100/100 应拒绝")
@@ -81,7 +81,7 @@ func TestQuota_租户聚合第二道闸(t *testing.T) {
 	// key 自己额度 100 未超,但租户聚合 50 已超 → 拒
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 30, now)
 	insertUsage(t, q, "k-2", quotaTenant, "key-2", 25, now)
-	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaMicro: 100}
+	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaCredits: 100}
 	if exceeded := q.exceeded(info, now); !exceeded {
 		t.Fatal("租户聚合 55/50 超限应拒绝(key 未超)")
 	}
@@ -91,7 +91,7 @@ func TestQuota_quota0不限(t *testing.T) {
 	q := seedQuota(t, 0)
 	now := time.Now()
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 1_000_000, now)
-	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaMicro: 0}
+	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaCredits: 0}
 	if exceeded := q.exceeded(info, now); exceeded {
 		t.Fatal("quota=0 视为不限")
 	}
@@ -105,7 +105,7 @@ func insertUsage(t *testing.T, q *Quota, reqID, tenantID, keyID string, cost int
 		ID: uuid.Must(uuid.NewV7()).String(), RequestID: reqID,
 		TenantID: tenantID, APIKeyID: keyID,
 		Provider: "p", ModelAlias: "m", UpstreamModel: "u",
-		Status: "ok", CostMicro: cost, Currency: "CNY",
+		Status: "ok", CostCredits: cost, Currency: "CNY",
 		LatencyTotalMs: 1, CreatedAt: at.UTC(),
 	}
 	if err := store.InsertUsageBatch(q.db, []store.UsageRow{row}); err != nil {

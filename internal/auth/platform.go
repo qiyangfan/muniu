@@ -1,6 +1,6 @@
 // 自校验平台 key(ADR-0006):HMAC 签名载体,网关离线验真,不查任何库。
 // 形态:mk2-<base64url(payload)>.<base64url(tag128)>;
-// payload = "pkey.v1|<tenant_id>|<key_id>|<expires_unix>|<rpm>|<tpm>|<daily_quota_micro>"。
+// payload = "pkey.v1|<tenant_id>|<key_id>|<expires_unix>|<rpm>|<tpm>|<daily_quota_credits>"。
 // 限额随载体下发(签发时定,换发生效)——控制面失联时鉴权与限额仍可用;吊销经版本化名单同步收敛。
 package auth
 
@@ -29,12 +29,12 @@ var ErrPlatformKey = errors.New("auth: 平台 key 无效")
 
 // PlatformClaims 平台 key 载体字段(限额签发时定,换发生效——ADR-0006 已知取舍)。
 type PlatformClaims struct {
-	TenantID        string
-	KeyID           string
-	ExpiresUnix     int64
-	RPMLimit        int64
-	TPMLimit        int64
-	DailyQuotaMicro int64
+	TenantID          string
+	KeyID             string
+	ExpiresUnix       int64
+	RPMLimit          int64
+	TPMLimit          int64
+	DailyQuotaCredits int64
 }
 
 // FormatPlatformKey 签发平台 key(控制面产品同构实现;此处供测试与未来本地签发)。
@@ -45,7 +45,7 @@ func FormatPlatformKey(c PlatformClaims, secret []byte) (string, error) {
 	if strings.ContainsAny(c.TenantID+c.KeyID, "|") {
 		return "", fmt.Errorf("auth: 标识不得包含分隔符 |")
 	}
-	if c.RPMLimit < 0 || c.TPMLimit < 0 || c.DailyQuotaMicro < 0 {
+	if c.RPMLimit < 0 || c.TPMLimit < 0 || c.DailyQuotaCredits < 0 {
 		return "", fmt.Errorf("auth: 限额不可为负(0=不限)")
 	}
 	if len(secret) < 16 {
@@ -107,7 +107,7 @@ func platformPayload(c PlatformClaims) string {
 		strconv.FormatInt(c.ExpiresUnix, 10),
 		strconv.FormatInt(c.RPMLimit, 10),
 		strconv.FormatInt(c.TPMLimit, 10),
-		strconv.FormatInt(c.DailyQuotaMicro, 10),
+		strconv.FormatInt(c.DailyQuotaCredits, 10),
 	}, "|")
 }
 
@@ -129,6 +129,6 @@ func parsePlatformPayload(s string) (*PlatformClaims, error) {
 	}
 	return &PlatformClaims{
 		TenantID: parts[1], KeyID: parts[2], ExpiresUnix: nums[0],
-		RPMLimit: nums[1], TPMLimit: nums[2], DailyQuotaMicro: nums[3],
+		RPMLimit: nums[1], TPMLimit: nums[2], DailyQuotaCredits: nums[3],
 	}, nil
 }

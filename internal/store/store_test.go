@@ -105,7 +105,7 @@ func TestInsertUsageBatch_批量写入与幂等(t *testing.T) {
 		TenantID: "01900000-0000-7000-8000-000000000001", APIKeyID: "key-1",
 		Provider: "deepseek", ModelAlias: "alias-a", UpstreamModel: "up-a",
 		Stream: true, Status: "ok", PromptTokens: 10, CompletionTokens: 20,
-		Estimated: false, CostMicro: 8800, Currency: "CNY",
+		Estimated: false, CostCredits: 8800, Currency: "CNY",
 		LatencyFirstTokenMs: &first, LatencyTotalMs: 500,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -143,7 +143,7 @@ func TestSumCostToday_过滤estimated与当日(t *testing.T) {
 	mk := func(id, status string, estimated bool, cost int64, at time.Time) UsageRow {
 		return UsageRow{ID: id, RequestID: id, TenantID: "t1", APIKeyID: "k1",
 			Provider: "p", ModelAlias: "m", UpstreamModel: "u",
-			Status: status, Estimated: estimated, CostMicro: cost,
+			Status: status, Estimated: estimated, CostCredits: cost,
 			LatencyTotalMs: 1, CreatedAt: at}
 	}
 	rows := []UsageRow{
@@ -187,7 +187,7 @@ func TestPricing_CRUD(t *testing.T) {
 	db := openTestStore(t)
 	rec := PricingRecord{
 		Alias: "alias-a", Currency: "USD",
-		InputMicro: 440_000, CachedInputMicro: 14_000, OutputMicro: 1_320_000,
+		InputCredits: 440_000, CachedInputCredits: 14_000, OutputCredits: 1_320_000,
 		Timezone: "+08:00",
 		Windows:  []PricingWindowRecord{{Window: "00:30-08:30", BasisPoints: 5000}},
 	}
@@ -198,18 +198,18 @@ func TestPricing_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Currency != "USD" || got.InputMicro != 440_000 || got.Timezone != "+08:00" ||
+	if got.Currency != "USD" || got.InputCredits != 440_000 || got.Timezone != "+08:00" ||
 		len(got.Windows) != 1 || got.Windows[0] != (PricingWindowRecord{Window: "00:30-08:30", BasisPoints: 5000}) {
 		t.Fatalf("读回不符: %+v", got)
 	}
 	// 覆盖写:窗口替换 + cached 归零(缺省语义)
 	rec.Windows = []PricingWindowRecord{{Window: "16:30-00:30", BasisPoints: 5000}, {Window: "00:00-00:30", BasisPoints: 5000}}
-	rec.CachedInputMicro = 0
+	rec.CachedInputCredits = 0
 	if err := UpsertPricing(db, rec); err != nil {
 		t.Fatal(err)
 	}
 	all, err := ListPricing(db)
-	if err != nil || len(all) != 1 || len(all[0].Windows) != 2 || all[0].CachedInputMicro != 0 {
+	if err != nil || len(all) != 1 || len(all[0].Windows) != 2 || all[0].CachedInputCredits != 0 {
 		t.Fatalf("覆盖写不符: %+v %v", all, err)
 	}
 	// 时区缺省补 UTC
@@ -242,7 +242,7 @@ func TestPendingBufferedRows_毒丸行自愈(t *testing.T) {
 		t.Fatal(err)
 	}
 	// JSON 键 = UsageRow Go 字段名(encoding/json 大小写不敏感匹配)
-	valid := `{"ID":"good","RequestID":"r1","Provider":"p","ModelAlias":"m","UpstreamModel":"m","Stream":false,"Status":"ok","PromptTokens":1,"CompletionTokens":2,"Estimated":false,"CostMicro":0,"Currency":"CNY","TenantID":"t","APIKeyID":"k","LatencyTotalMs":5,"CreatedAt":"2026-09-11T00:00:00Z"}`
+	valid := `{"ID":"good","RequestID":"r1","Provider":"p","ModelAlias":"m","UpstreamModel":"m","Stream":false,"Status":"ok","PromptTokens":1,"CompletionTokens":2,"Estimated":false,"CostCredits":0,"Currency":"CNY","TenantID":"t","APIKeyID":"k","LatencyTotalMs":5,"CreatedAt":"2026-09-11T00:00:00Z"}`
 	if _, err := db.Exec(`INSERT INTO metering_buffer (row_id, payload, created_at) VALUES ('good',?,?)`,
 		valid, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		t.Fatal(err)

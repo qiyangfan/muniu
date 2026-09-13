@@ -86,7 +86,7 @@ pricing:
 	if err != nil {
 		t.Fatal(err)
 	}
-	plaintext, _, err := auth.CreateKey(kdb, "default", "e2e", 60)
+	plaintext, _, err := auth.CreateKey(kdb, "default", "e2e", 60, auth.KeyOpts{})
 	if err != nil {
 		t.Fatalf("签发失败: %v", err)
 	}
@@ -136,11 +136,11 @@ func TestE2E_流式_透传与计量落账(t *testing.T) {
 
 	rows := waitUsageLogs(t, adb, 1)
 	r := rows[0]
-	// testkit usage 帧:prompt 12 / completion 34;价目 2.00/8.00 → 24+272=296μ
+	// testkit usage 帧:prompt 12 / completion 34;价目 2.00/8.00 → 24+272=29600 credit(价目 2.00/8.00 元/M)
 	assertRow(t, r, map[string]any{
 		"stream": float64(1), "status": "ok",
 		"prompt_tokens": float64(12), "completion_tokens": float64(34),
-		"cost_micro": float64(296), "estimated": float64(0), "currency": "CNY",
+		"cost_credits": float64(296000), "estimated": float64(0), "currency": "CNY",
 		"model_alias": e2eAlias, "provider": "openai",
 	})
 }
@@ -165,7 +165,7 @@ func TestE2E_非流式_透传与计量落账(t *testing.T) {
 	assertRow(t, rows[0], map[string]any{
 		"stream": float64(0), "status": "ok",
 		"prompt_tokens": float64(7), "completion_tokens": float64(9),
-		"cost_micro": float64(86), "estimated": float64(0),
+		"cost_credits": float64(86000), "estimated": float64(0),
 	})
 }
 
@@ -225,7 +225,7 @@ func queryUsageLogs(t *testing.T, db *sql.DB, rows *[]map[string]any) {
 	t.Helper()
 	q := `SELECT stream AS stream, status AS status,
 		prompt_tokens AS prompt_tokens, completion_tokens AS completion_tokens,
-		cost_micro AS cost_micro, estimated AS estimated,
+		cost_credits AS cost_credits, estimated AS estimated,
 		IFNULL(currency,'') AS currency, IFNULL(model_alias,'') AS model_alias,
 		IFNULL(provider,'') AS provider, IFNULL(request_id,'') AS request_id
 		FROM usage_logs ORDER BY created_at`
@@ -347,7 +347,7 @@ pricing:
 	if err != nil {
 		t.Fatal(err)
 	}
-	plaintext, _, err := auth.CreateKey(kdb, "default", "cache-e2e", 600)
+	plaintext, _, err := auth.CreateKey(kdb, "default", "cache-e2e", 600, auth.KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,13 +394,13 @@ pricing:
 	}
 	t.Cleanup(func() { _ = assertDB.Close() })
 	var rows []struct {
-		Provider  string
-		CostMicro int64
+		Provider    string
+		CostCredits int64
 	}
 	deadline := time.Now().Add(3 * time.Second) // 计量批量落库窗口轮询
 	for {
 		rows = nil
-		rs, err := assertDB.Query(`SELECT provider, cost_micro FROM usage_logs ORDER BY created_at`)
+		rs, err := assertDB.Query(`SELECT provider, cost_credits FROM usage_logs ORDER BY created_at`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -411,8 +411,8 @@ pricing:
 				t.Fatal(err)
 			}
 			rows = append(rows, struct {
-				Provider  string
-				CostMicro int64
+				Provider    string
+				CostCredits int64
 			}{p, c})
 		}
 		_ = rs.Close()
@@ -434,10 +434,10 @@ pricing:
 		t.Fatalf("provider 分布不符: %+v", byProvider)
 	}
 	for _, r := range rows {
-		if r.Provider == "semantic-cache" && (r.CostMicro != 0) {
+		if r.Provider == "semantic-cache" && (r.CostCredits != 0) {
 			t.Fatalf("命中行必须 cost 0: %+v", r)
 		}
-		if r.Provider == "chat-fake" && r.CostMicro != 86 {
+		if r.Provider == "chat-fake" && r.CostCredits != 86000 {
 			t.Fatalf("上游行成本不符: %+v", r)
 		}
 	}

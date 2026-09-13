@@ -165,10 +165,17 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		pools[p.Name] = pool
 	}
 
-	// 价目:人类可读 → μ 整数(加载期一次性换算,全链路零浮点);
-	// 分时段倍率窗在同一次加载期换算出各窗有效三段价,运行时查表(metering.md「计价」)
-	// 价目:人类可读 → μ 整数(加载期一次性换算,全链路零浮点)。
+	// 价目:人类可读 → credit 整数(加载期一次性换算,全链路零浮点);
+	// 分时段倍率窗在同一次加载期换算出各窗有效三段价,运行时查表(metering.md「计价」)。
+	// credit 锚定本位币(metering.settlement,缺省 CNY);异币种报价按 fx_usd_cny_milli
+	// 一次换算(构造价目表时执行,热路径零变化)。
 	// YAML = 静态兜底;model_pricing 表 = 运营覆盖(管理面在线改价),合并语义见 pricing.go
+	// 本位币规范化:大小写归一 + 空值缺省 CNY(validate 只校验未写回,装配侧兜底)
+	settlement := strings.ToUpper(cfg.Metering.Settlement)
+	if settlement == "" {
+		settlement = metering.SettlementCNY
+	}
+	fxCnyPerUsdMilli := cfg.Metering.FXUSDCNYMilli
 	staticDefs := make(map[string]staticPricing, len(cfg.Pricing))
 	for alias, pr := range cfg.Pricing {
 		inMicro, err := metering.ParsePrice(pr.Input)
@@ -187,10 +194,10 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 			}
 		}
 		def := metering.Pricing{
-			Currency:             strings.ToUpper(pr.Currency),
-			InputMicroPerM:       inMicro,
-			CachedInputMicroPerM: cachedMicro,
-			OutputMicroPerM:      outMicro,
+			Currency:               strings.ToUpper(pr.Currency),
+			InputCreditsPerM:       inMicro,
+			CachedInputCreditsPerM: cachedMicro,
+			OutputCreditsPerM:      outMicro,
 		}
 		zone := time.UTC
 		if pr.Timezone != "" {
@@ -214,7 +221,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		staticDefs[alias] = staticPricing{def: def, zone: zone, specs: specs}
 	}
 	rebuildPricing := func() (map[string]*metering.PricingTable, error) {
-		return buildPricingTables(db, staticDefs)
+		return buildPricingTables(db, staticDefs, settlement, fxCnyPerUsdMilli)
 	}
 	initialTables, err := rebuildPricing()
 	if err != nil {
@@ -377,9 +384,22 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 	chatMux := http.NewServeMux()
 	chatMux.Handle("POST /v1/chat/completions", chatProxy.Handler())
 	chatMux.Handle("POST /v1/embeddings", chatProxy.HandlerEmbeddings())
+	// Responses 入站(ADR-0012):翻译后进同一管道,鉴权/配额/限流与 chat 同规
+	chatMux.Handle("POST /v1/responses", chatProxy.HandlerResponses())
+	// 无状态边界:不存储 response,恒 404(挂鉴权链,不泄漏给未鉴权方)
+	chatMux.Handle("GET /v1/responses/{id}", chatProxy.HandlerResponsesStateless())
 	chat := server.Chain(chatMux,
 		server.RequestID, server.Recover(logger), server.AccessLog(logger),
 		verifier.Middleware, gate.Middleware)
+
+	// 模型发现(gateway-parity):数据面鉴权必须,但刻意不挂配额/限流/计量/插件——
+	// 只读元数据面零上游成本,且配额耗尽的客户端恰需列模型诊断(诊断链路不被成本闸阻断)
+	modelsMux := http.NewServeMux()
+	modelsMux.Handle("GET /v1/models", chatProxy.HandlerModels())
+	modelsMux.Handle("GET /v1/models/{model}", chatProxy.HandlerModels())
+	models := server.Chain(modelsMux,
+		server.RequestID, server.Recover(logger), server.AccessLog(logger),
+		verifier.Middleware)
 
 	// 管理面(T4.1):MUNIU_ADMIN_TOKEN 未配置则整体关闭(含控制台——无后端的空壳页
 	// 不该对外暴露,与告警文案保持一致)
@@ -449,6 +469,10 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 	root := http.NewServeMux()
 	root.Handle("POST /v1/chat/completions", chat)
 	root.Handle("POST /v1/embeddings", chat)
+	root.Handle("POST /v1/responses", chat)
+	root.Handle("GET /v1/responses/{id}", chat)
+	root.Handle("GET /v1/models", models)
+	root.Handle("GET /v1/models/{model}", models)
 	root.Handle("GET /healthz", health)
 	if metricsEnabled {
 		metricsHandler := server.Recover(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -465,7 +489,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		}))
 		root.Handle("GET /metrics", metricsHandler)
 	}
-	routes := []string{"POST /v1/chat/completions", "POST /v1/embeddings", "GET /healthz"}
+	routes := []string{"POST /v1/chat/completions", "POST /v1/embeddings", "POST /v1/responses", "GET /v1/responses/{id}", "GET /v1/models", "GET /v1/models/{model}", "GET /healthz"}
 	if adminHandler != nil {
 		root.Handle("/admin/v1/", adminHandler)
 		root.Handle("GET /console/", web.Handler())
@@ -513,8 +537,8 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 					}
 					// 内容未变化则跳过:避免 updated_at 失去「最后真实变更」语义与无谓写放大
 					if existing, gerr := store.GetPricing(db, rec.Alias); gerr == nil &&
-						existing.Currency == rec.Currency && existing.InputMicro == rec.InputMicro &&
-						existing.CachedInputMicro == rec.CachedInputMicro && existing.OutputMicro == rec.OutputMicro &&
+						existing.Currency == rec.Currency && existing.InputCredits == rec.InputCredits &&
+						existing.CachedInputCredits == rec.CachedInputCredits && existing.OutputCredits == rec.OutputCredits &&
 						existing.Timezone == rec.Timezone && windowsEqual(existing.Windows, rec.Windows) {
 						continue
 					}

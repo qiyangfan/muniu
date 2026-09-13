@@ -120,3 +120,11 @@ func (r *Registry) Names() []string {
 	sort.Strings(names)
 	return names
 }
+
+// Bridger 桥接型适配器标记(出站协议翻译,非 OpenAI 原生形态;基座/quirk 不实现)。
+// proxy 据此对「工具多轮中途流量」做适配性豁免判定(upstream-egress-batch 契约):
+// 桥接请求侧 role=tool/tool_calls 翻译未实现,此类流量对该候选不可服务。
+// 断言接口实现,无登记表——新增桥接型适配器时实现本接口即自动纳入判定。
+type Bridger interface {
+	BridgeKind() string
+}

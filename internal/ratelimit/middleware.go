@@ -37,7 +37,7 @@ func (l *Limiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// QuotaPlaceholder 日配额占位中间件(Phase 3 落地硬闸:已耗成本 ≥ daily_quota_micro → 402)。
+// QuotaPlaceholder 日配额占位中间件(Phase 3 落地硬闸:已耗成本 ≥ daily_quota_credits → 402)。
 // 当前永放行——占位是为了把中间件链顺序先钉死(顺序即契约)。
 func QuotaPlaceholder(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

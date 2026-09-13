@@ -50,7 +50,7 @@ func ensureInternalEmbedKey(db *sql.DB, logger *slog.Logger) string {
 			}
 		}
 	}
-	plaintext, _, err := auth.CreateKey(db, "default", internalEmbedKeyName, 600)
+	plaintext, _, err := auth.CreateKey(db, "default", internalEmbedKeyName, 600, auth.KeyOpts{})
 	if err != nil {
 		logger.Error("内部嵌入 key 签发失败", "error_detail", err.Error())
 		return ""

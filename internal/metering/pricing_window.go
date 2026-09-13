@@ -137,7 +137,7 @@ func ParseZoneOffset(s string) (*time.Location, error) {
 	return time.FixedZone(s, off), nil
 }
 
-// ScalePrice 倍率缩放:ceil(micro × bp / 1e4)——向上取整保守计价(窗口价永不低估);
+// ScalePrice 倍率缩放:ceil(credits × bp / 1e4)——向上取整保守计价(窗口价永不低估);
 // 溢出防护同 ParsePrice 换算。
 func ScalePrice(micro, bp int64) (int64, error) {
 	if micro == 0 {
@@ -177,23 +177,23 @@ func NewPricingTable(def Pricing, zone *time.Location, specs []WindowSpec) (*Pri
 	}
 	t := &PricingTable{loc: zone, def: def}
 	for _, sp := range specs {
-		in, err := ScalePrice(def.InputMicroPerM, sp.BasisPoints)
+		in, err := ScalePrice(def.InputCreditsPerM, sp.BasisPoints)
 		if err != nil {
 			return nil, fmt.Errorf("metering: 时段窗 %d-%d input 价缩放: %w", sp.StartMin, sp.EndMin, err)
 		}
-		cached, err := ScalePrice(def.CachedInputMicroPerM, sp.BasisPoints)
+		cached, err := ScalePrice(def.CachedInputCreditsPerM, sp.BasisPoints)
 		if err != nil {
 			return nil, fmt.Errorf("metering: 时段窗 %d-%d cached_input 价缩放: %w", sp.StartMin, sp.EndMin, err)
 		}
-		out, err := ScalePrice(def.OutputMicroPerM, sp.BasisPoints)
+		out, err := ScalePrice(def.OutputCreditsPerM, sp.BasisPoints)
 		if err != nil {
 			return nil, fmt.Errorf("metering: 时段窗 %d-%d output 价缩放: %w", sp.StartMin, sp.EndMin, err)
 		}
 		t.windows = append(t.windows, scaledWindow{
 			spec: sp,
 			pricing: Pricing{
-				Currency: def.Currency, InputMicroPerM: in,
-				CachedInputMicroPerM: cached, OutputMicroPerM: out,
+				Currency: def.Currency, InputCreditsPerM: in,
+				CachedInputCreditsPerM: cached, OutputCreditsPerM: out,
 			},
 		})
 	}

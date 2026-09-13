@@ -17,7 +17,7 @@ type Tenant struct {
 	ID                  string `json:"id"`
 	Name                string `json:"name"`
 	Status              string `json:"status"`
-	DailyQuotaMicro     int64  `json:"daily_quota_micro"`
+	DailyQuotaCredits   int64  `json:"daily_quota_credits"`
 	TPMLimit            int64  `json:"tpm_limit"`
 	SemanticCacheEnable bool   `json:"semantic_cache_enabled"`
 	CreatedAt           string `json:"created_at"`
@@ -25,7 +25,7 @@ type Tenant struct {
 
 // ListTenants 租户列表(创建时间升序)。
 func ListTenants(db *sql.DB) ([]Tenant, error) {
-	rows, err := db.Query(`SELECT id, name, status, daily_quota_micro, tpm_limit,
+	rows, err := db.Query(`SELECT id, name, status, daily_quota_credits, tpm_limit,
 		semantic_cache_enabled, created_at FROM tenants ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列出租户: %w", err)
@@ -35,7 +35,7 @@ func ListTenants(db *sql.DB) ([]Tenant, error) {
 	for rows.Next() {
 		var t Tenant
 		var en int64
-		if err := rows.Scan(&t.ID, &t.Name, &t.Status, &t.DailyQuotaMicro, &t.TPMLimit, &en, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.Name, &t.Status, &t.DailyQuotaCredits, &t.TPMLimit, &en, &t.CreatedAt); err != nil {
 			return nil, fmt.Errorf("store: 扫租户行: %w", err)
 		}
 		t.SemanticCacheEnable = en == 1
@@ -61,7 +61,7 @@ func CreateTenant(db *sql.DB, name string) (string, error) {
 // UpdateTenantPatch 可更新字段(零值=不动)。
 type UpdateTenantPatch struct {
 	Status              string // active | disabled
-	DailyQuotaMicro     *int64
+	DailyQuotaCredits   *int64
 	TPMLimit            *int64
 	SemanticCacheEnable *bool
 }
@@ -76,9 +76,9 @@ func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 		sets = append(sets, "status = ?")
 		args = append(args, p.Status)
 	}
-	if p.DailyQuotaMicro != nil {
-		sets = append(sets, "daily_quota_micro = ?")
-		args = append(args, *p.DailyQuotaMicro)
+	if p.DailyQuotaCredits != nil {
+		sets = append(sets, "daily_quota_credits = ?")
+		args = append(args, *p.DailyQuotaCredits)
 	}
 	if p.TPMLimit != nil {
 		sets = append(sets, "tpm_limit = ?")
@@ -93,7 +93,9 @@ func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 		args = append(args, v)
 	}
 	if len(sets) == 0 {
-		return false, nil
+		// 空 patch = no-op:自引用赋值保持行值不变,仍以命中行数区分 200/404
+		// (与 auth.UpdateKeyLimits 的 no-op 语义对齐,避免「空 body 对存在租户误报 404」)
+		sets = append(sets, "status = status")
 	}
 	args = append(args, id)
 	res, err := db.Exec(`UPDATE tenants SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
@@ -139,7 +141,7 @@ type UsagePoint struct {
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
 	CacheHits        int64  `json:"cache_hits"` // provider='semantic-cache' 的行数
-	CostMicro        int64  `json:"cost_micro"`
+	CostCredits      int64  `json:"cost_credits"`
 }
 
 // UsageAggregate 按维度与时间范围聚合 usage_logs(管理 API 用)。
@@ -161,7 +163,7 @@ func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) 
 	q := `SELECT ` + expr + ` AS dim, COUNT(*) AS reqs,
 			COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
 			COALESCE(SUM(CASE WHEN provider='semantic-cache' THEN 1 ELSE 0 END),0),
-			COALESCE(SUM(CASE WHEN estimated=0 THEN cost_micro ELSE 0 END),0)
+			COALESCE(SUM(CASE WHEN estimated=0 THEN cost_credits ELSE 0 END),0)
 		FROM usage_logs WHERE created_at >= ? AND created_at <= ?`
 	args := []any{from, to}
 	if tenantID != "" {
@@ -181,7 +183,7 @@ func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) 
 	var out []UsagePoint
 	for rows.Next() {
 		var p UsagePoint
-		if err := rows.Scan(&p.Dim, &p.Requests, &p.PromptTokens, &p.CompletionTokens, &p.CacheHits, &p.CostMicro); err != nil {
+		if err := rows.Scan(&p.Dim, &p.Requests, &p.PromptTokens, &p.CompletionTokens, &p.CacheHits, &p.CostCredits); err != nil {
 			return nil, fmt.Errorf("store: 扫聚合行: %w", err)
 		}
 		out = append(out, p)

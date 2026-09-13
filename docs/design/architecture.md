@@ -38,10 +38,28 @@ key 池状态、限流窗口、apikey 缓存全部进程内内存态,由 mutex �
 ## 中间件链(顺序即契约)
 
 ```
-request_id → recover → access_log → auth → quota → ratelimit → handler(解析→路由→[插件钩子]→语义缓存→failover 循环→转发→计量)
+数据面业务(chat/embeddings):request_id → recover → access_log → auth → quota → ratelimit → handler(解析→路由→[插件钩子]→语义缓存→failover 循环→转发→计量)
+模型发现(/v1/models[/{model}]):request_id → recover → access_log → auth(无 quota/ratelimit/计量/插件)
 ```
 
+模型发现刻意挂在配额/限流之外:只读元数据面零上游成本,且配额耗尽的客户端恰需列模型诊断——诊断链路不得被成本闸阻断。目录与转发拓扑同源(同一快照),热替换同步可见。
+
 实现:标准库 `http.ServeMux`(Go 1.22+ method+pattern)+ 约 30 行 chain 辅助函数,不引第三方路由/中间件库(ADR-0002)。
+
+## 指标序列(/metrics,ADR-0009 零依赖直写)
+
+| 序列 | 类型 | 标签 | 语义 |
+|---|---|---|---|
+| `muniu_requests_total` | counter | model,status | 转发请求数 |
+| `muniu_upstream_total` | counter | provider,class | 上游结果数(按错误分类) |
+| `muniu_request_duration_ms` | histogram | — | 请求总耗时(ms) |
+| `muniu_tokens_total` | counter | direction,provider,model | token 流向:direction ∈ prompt/cached_prompt/completion;与 usage_logs 落账行同口径(含估算行),reasoning 按计价口径计入 output 段 |
+| `muniu_semantic_cache_queries_total` | counter | model,result | 语义缓存判定:hit/miss=实际检索,skip=缓存未参与(租户关/tools/温度/超 8K) |
+| `muniu_first_token_duration_ms` | histogram | — | 流式首 token 延迟(ms),桶 1ms 起步(实测 p50≈1.13ms);仅流式观测 |
+| `muniu_plugin_calls_total` 等 | counter/histogram/gauge | per-plugin | 插件调用/耗时/containment/实例水位(ADR-0011) |
+| `muniu_pipeline_in_flight` / `muniu_metering_buffer_rows` / `muniu_keypool_state` | gauge | — | 管道水位/缓冲行数/key 池状态 |
+
+序列基数受配置界(provider × 别名 × 枚举),禁请求级标签;指标禁用时零开销且行为与启用前逐字节等价。
 
 ## 插件运行时(ADR-0011)
 

@@ -5,7 +5,7 @@
 对标同类开源网关(one-api/new-api/LiteLLM)的能力面,本仓核心数据面(failover 语义、计量精度、流式性能、测试纪律)已领先,差距集中在三处「标配面」,且全部属于「暴露已有能力」而非新造机制:
 
 1. **模型发现缺失**:入站业务端点仅 `POST /v1/chat/completions` 与 `/v1/embeddings`。`GET /v1/models` 是 OpenAI 兼容生态的事实标配——聊天前端、IDE 插件、各类 SDK 靠它完成模型目录发现与连通性探测,缺失即大量客户端无法初始化。
-2. **key 签发粒度落后于自家执行能力**:`api_keys` 表的 `tpm_limit`/`daily_quota_micro` 列已在限流/配额链路真实生效(`Quota.exceeded` 先 key 级后租户级两道闸),但签发入口不暴露,成为「死配置」;`mk-` 查库 key 无过期时间(`mk2-` 平台 key 反而有 `expires_unix`),吊销之外缺少「到期自动失效」这一令牌管理标配语义;已签发 key 的限额调整只能删除重签(被迫换密钥)。
+2. **key 签发粒度落后于自家执行能力**:`api_keys` 表的 `tpm_limit`/`daily_quota_credits` 列已在限流/配额链路真实生效(`Quota.exceeded` 先 key 级后租户级两道闸),但签发入口不暴露,成为「死配置」;`mk-` 查库 key 无过期时间(`mk2-` 平台 key 反而有 `expires_unix`),吊销之外缺少「到期自动失效」这一令牌管理标配语义;已签发 key 的限额调整只能删除重签(被迫换密钥)。
 3. **`/metrics` 缺运维核心序列**:token 流向、语义缓存判定分布、流式首字节延迟均已有数据(usage_logs 字段、缓存判定分支、首帧时刻),但监控面看不到,可观测叙事不完整(Higress/LiteLLM 标配)。
 
 纪律:不扩依赖、不加新机制;商业化运营功能(兑换码/支付/多用户)与重型可观测集成(OTel/Langfuse)明确不做(宪法非目标,见 design「明确不做」)。
@@ -13,7 +13,7 @@
 ## What Changes
 
 - **模型发现**:新增 `GET /v1/models`(别名目录,读拓扑快照,与转发同源、热替换同步)与 `GET /v1/models/{model}`;数据面鉴权必须,但不消耗 RPM/TPM/配额、不落计量行、不接插件挂点;错误信封契约扩展 `not_found`(404)。
-- **key 生命周期**:签发(CLI + admin POST)暴露 `tpm_limit`/`daily_quota_micro`;`api_keys` 增 `expires_at` 可空列(迁移 0006,空=永不过期,现状等价);过期判定收口在 verify 成功后的单点,以当前时钟逐请求比对(验证缓存天然不影响精确性);新增 `PATCH /admin/v1/keys/{id}` 局部更新限额与过期(写后 `Invalidate`);过期与无效/吊销同归 `auth_failed`(401)但 message 可区分。
+- **key 生命周期**:签发(CLI + admin POST)暴露 `tpm_limit`/`daily_quota_credits`(**额度单位 credit 化**:1 credit = 本位币十亿分之一,迁移 0007 完成三列 μ→credit 重命名与 ×1000 换算;异币种报价经 fx_usd_cny_milli 加载期换算——廉价模型逐 token 精确,配额可用自然大数);`api_keys` 增 `expires_at` 可空列(迁移 0006,空=永不过期,现状等价);过期判定收口在 verify 成功后的单点,以当前时钟逐请求比对(验证缓存天然不影响精确性);新增 `PATCH /admin/v1/keys/{id}` 局部更新限额与过期(写后 `Invalidate`);过期与无效/吊销同归 `auth_failed`(401)但 message 可区分。
 - **指标深度**:`/metrics` 补三组序列——`muniu_tokens_total{direction,provider,model}`(计量落账点三向累加)、`muniu_semantic_cache_queries_total{model,result=hit|miss|skip}`(缓存判定分支)、`muniu_first_token_duration_ms`(直方图,仅流式首帧,桶 1ms 起步);指标契约测试同步扩展。
 
 ## Capabilities

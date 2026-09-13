@@ -1,5 +1,5 @@
 // 日配额闸(traffic-governance「限流」):key 级与租户聚合级两道闸,
-// 已耗成本 = SUM(cost_micro WHERE estimated=0 AND created_at ≥ 当日)(metering 对账口径),
+// 已耗成本 = SUM(cost_credits WHERE estimated=0 AND created_at ≥ 当日)(metering 对账口径),
 // 进程内缓存 30s——一致性声明:事后记账模型,存在「同刻并发小幅超限」窗口(README FAQ)。
 // 超限 → 402 quota_exceeded。
 package ratelimit
@@ -21,9 +21,9 @@ import (
 
 // KeyInfoLite 配额判定所需的最小 key/租户信息(中间件从 auth.KeyInfo 转换)。
 type KeyInfoLite struct {
-	ID              string
-	TenantID        string
-	DailyQuotaMicro int64 // 0=不限
+	ID                string
+	TenantID          string
+	DailyQuotaCredits int64 // 0=不限
 }
 
 // Options 配额闸参数;零值取默认(TTL 30s)。
@@ -62,12 +62,12 @@ func NewQuota(db *sql.DB, opts Options, logger *slog.Logger) *Quota {
 // exceeded 判定:先 key 级再租户聚合级,任一超限即拒。额度 0=不限。
 func (q *Quota) exceeded(info *KeyInfoLite, now time.Time) bool {
 	dayStart := now.UTC().Format("2006-01-02T00:00:00Z")
-	if info.DailyQuotaMicro > 0 {
-		if q.cachedSum("k:"+info.ID, info.ID, "", dayStart, now) >= info.DailyQuotaMicro {
+	if info.DailyQuotaCredits > 0 {
+		if q.cachedSum("k:"+info.ID, info.ID, "", dayStart, now) >= info.DailyQuotaCredits {
 			return true
 		}
 	}
-	// 租户聚合第二道闸(额度存 tenants.daily_quota_micro,迁移 0002)
+	// 租户聚合第二道闸(额度存 tenants.daily_quota_credits,迁移 0002)
 	if tq := q.tenantQuota(info.TenantID); tq > 0 {
 		if q.cachedSum("t:"+info.TenantID, "", info.TenantID, dayStart, now) >= tq {
 			return true
@@ -99,10 +99,10 @@ func (q *Quota) cachedSum(scope, keyID, tenantID, dayStart string, now time.Time
 	return sum
 }
 
-// tenantQuota 租户聚合额度(tenants.daily_quota_micro,迁移 0002);查不到按 0(不限)。
+// tenantQuota 租户聚合额度(tenants.daily_quota_credits,迁移 0002);查不到按 0(不限)。
 func (q *Quota) tenantQuota(tenantID string) int64 {
 	var quota int64
-	err := q.db.QueryRow(`SELECT daily_quota_micro FROM tenants WHERE id = ?`, tenantID).Scan(&quota)
+	err := q.db.QueryRow(`SELECT daily_quota_credits FROM tenants WHERE id = ?`, tenantID).Scan(&quota)
 	if err != nil {
 		return 0
 	}
@@ -131,9 +131,9 @@ func (q *Quota) Middleware(logger *slog.Logger) func(http.Handler) http.Handler 
 func keyInfoFrom(ctx context.Context) *KeyInfoLite {
 	if info := auth.KeyFrom(ctx); info != nil {
 		return &KeyInfoLite{
-			ID:              info.ID,
-			TenantID:        info.TenantID,
-			DailyQuotaMicro: info.DailyQuotaMicro,
+			ID:                info.ID,
+			TenantID:          info.TenantID,
+			DailyQuotaCredits: info.DailyQuotaCredits,
 		}
 	}
 	return nil

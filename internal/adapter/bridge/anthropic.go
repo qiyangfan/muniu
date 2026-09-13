@@ -482,3 +482,6 @@ func pointerVal(s *string) string {
 	}
 	return *s
 }
+
+// BridgeKind 桥接标记(adapter.Bridger):proxy 对工具多轮流量做适配性豁免的判定依据。
+func (a *Anthropic) BridgeKind() string { return "anthropic" }

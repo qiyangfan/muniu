@@ -27,22 +27,27 @@
 
 ## 2. key 生命周期
 
-### 2.1 签发粒度:暴露已有列,零新执行逻辑
+### 2.1 签发粒度:credit 额度 + 暴露已有执行链
 
-`tpm_limit`/`daily_quota_micro` 的存储与执行链路都已在位(`KeyInfo` 三限全带,`Quota.exceeded` key 级闸先行),缺口只在签发入口。本变更补「入口暴露」,执行语义零改动——这是消除「死配置」而非新增能力。缺省 0 = 不限,沿用全仓「零值即缺省」惯例,不配新字段时 standalone 零回归。
+`tpm_limit` 与配额闸的执行链路已在位(`KeyInfo` 限额全带,`Quota.exceeded` key 级闸先行),本变更补「入口暴露」并同步完成一次**额度单位重定义**(2026-09-12 用户裁决,推翻初版「暴露 μ 列」方案):
 
-### 2.2 过期:单点判定,时钟函数,不动缓存协议
+- **内部计量基座:μ(1e-6 本币)→ credit(1 credit = **本位币** 1e-9;本位币 = metering.settlement,CNY|USD)`,迁移 0007 三列重命名 + 存量 ×1000 换算。动机:①廉价档($0.003/百万Token)在 1e-9 下逐 token 恰为整数 credit(3);②credit 锚定本位币而非各上游账单币种——否则同一配额池在 CNY/USD 模型下消耗速率随汇率漂移,语义自相矛盾;异币种报价加载期按 fx_usd_cny_milli 一次换算。
+- 精度上界刻意止于 1e-9:市面报价 ≤6 位小数全覆盖再留三档余量;再细一位,int64 按 32MB 入站包络(≈1e7 token × $200/M = 2e18)即逼近溢出,需 128 位中间量——过度设计,明确不做。
+- 价目**表示层不变**:仍是「元/美元主单位十进制字符串」(≤8 位小数),ParsePrice/FormatPrice 恒等往返;控制台价目页零改动。
+- 缺省 0 = 不限,沿用全仓「零值即缺省」惯例;不配新字段时 standalone 零回归(rate=基座定义,无换算旋钮)。
+
+### 2.2 过期:datetime-local 选择器 + 单点判定,不动缓存协议
 
 `api_keys` 增 `expires_at` 可空列(迁移 0006)。判定设计:
 
 - `KeyInfo` 增 `ExpiresAt`;判定收口在 **verify 成功之后、挂 ctx 之前**的单点,以当前时钟比对。查库缓存(10s TTL)命中的是完整 `KeyInfo`,过期判定对缓存命中路径同样逐请求执行——**过期时刻是不可变字段,缓存只影响 DB 变更可见性,不影响时间函数的精确性**,因此无需为此调用 `Invalidate`,缓存协议零改动。
 - 过期 → `auth_failed`(401)。语义上过期与无效/吊销同为「凭据失效」,归同一错误类型(错误类型表零膨胀);但 **message 区分「API key 已过期」**——用户动作是重签,而非找管理员查吊销,可区分性是排障效率。
 - `mk2-` 平台 key 的 `expires_unix` 在 `ParsePlatformKey` 内已判,构造 `KeyInfo` 时 `ExpiresAt` 置零(已验过,不重复判);两型 key 语义统一收口到单点。
-- 格式 RFC3339:管理面人类可读、JSON 惯例;**不强制未来时间**(允许补录与测试构造,格式合法即可)——防呆收益小于灵活性损失,且负面用例仍钉非法格式。
+- **传输格式 RFC3339 UTC,交互形态 datetime-local**:管理 API 存储层收发 RFC3339;控制台签发表单与编辑框用 `datetime-local` 选择器(本地时区,人类可读),前端负责本地 ↔ UTC 转换——运营者永远不需要手写机器时间格式。**不强制未来时间**(允许补录与测试构造,格式合法即可)。
 
 ### 2.3 运行态调整:PATCH 而非 PUT
 
-新增 `PATCH /admin/v1/keys/{id}`,字段 `rpm`/`tpm_limit`/`daily_quota_micro`/`expires_at`(局部更新:省略不动,`expires_at` 显式 null 清除)。选 PATCH:资源含不可再生字段(id/secret),整体 PUT 必然引入「漏带字段即抹掉」的脚枪;限额调整是局部语义,PATCH 面最小。写后 `Invalidate()`——限额是 **DB 可变状态**(与过期不同),必须走既有吊销同款失效协议,下一请求新限额。未知 key 404(`not_found`),非法值 400 整单拒绝。不新增 enabled/启停概念:`status` 列已可禁用且 DELETE 已够,启停进 backlog 等真实需求。
+新增 `PATCH /admin/v1/keys/{id}`,字段 `rpm`/`tpm_limit`/`daily_quota_credits`/`expires_at`(局部更新:省略不动,`expires_at` 显式 null 清除)。选 PATCH:资源含不可再生字段(id/secret),整体 PUT 必然引入「漏带字段即抹掉」的脚枪;限额调整是局部语义,PATCH 面最小。写后 `Invalidate()`——限额是 **DB 可变状态**(与过期不同),必须走既有吊销同款失效协议,下一请求新限额。未知 key 404(`not_found`),非法值 400 整单拒绝。不新增 enabled/启停概念:`status` 列已可禁用且 DELETE 已够,启停进 backlog 等真实需求。
 
 ### 2.4 明确不做(防 scope creep)
 

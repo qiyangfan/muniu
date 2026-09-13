@@ -113,6 +113,7 @@ func New(cfg Config) *Proxy {
 		pools:     cfg.Pools,
 		adapters:  initialAdapters(cfg),
 		caps:      buildCaps(cfg.Capabilities),
+		loadedAt:  time.Now(),
 	})
 	return p
 }
@@ -245,6 +246,10 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	iter := failover.NewIterator(fcs, p.randIntn)
 	var last failover.ErrorClass
+	// 桥接工具多轮显式边界(upstream-egress-batch):多轮中途流量对桥接候选不可服务
+	midLoop := chatToolLoopInflight(req)
+	bridgeSkipped := false
+	otherSkipped := false // 非桥接原因的候选跳过(key 池全冷却等)
 	for {
 		cand, ok := iter.Next()
 		if !ok {
@@ -254,10 +259,24 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			if tw.committed {
 				return
 			}
+			// 全部候选因桥接豁免跳过且无任何真实上游错误/其他跳过:给自解释信封而非泛化文案
+			// (域B 审查:若混有 key 池不可用的静默跳过,真实原因非桥接,应走泛化信封)
+			if bridgeSkipped && last == "" && !otherSkipped {
+				p.writeError(tw, r, protocol.TypeBadRequest, bridgeToolUnsupportedCode,
+					"Anthropic 桥接暂不支持工具多轮对话(role=tool / tool_calls),请改用原生兼容上游或去除工具上下文")
+				return
+			}
 			typ := classToType(last)
 			p.writeError(tw, r, typ, "all_candidates_failed",
 				"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
 			return
+		}
+		// 适配性豁免先于取 key:不计 EMA/冷却,多候选别名换道继续
+		if bridgeExempted(topo.adapters[cand.Provider], midLoop) {
+			bridgeSkipped = true
+			p.logger.Warn("桥接候选对工具多轮流量适配性豁免,跳过候选",
+				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+			continue
 		}
 
 		// 第 9 步:取 key → 执行 → 按 Decide 动作分支 → 结果回写 key 池
@@ -265,6 +284,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		key := pool.Pick(time.Now())
 		if key == nil {
 			// 该 provider 全部 key 冷却/禁用:跳过候选,不计错误类
+			otherSkipped = true
 			p.logger.Warn("provider key 池不可用,跳过候选",
 				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
 			continue

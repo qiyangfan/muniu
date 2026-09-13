@@ -219,6 +219,8 @@ model_routes:
 
 func TestLoad_分时段倍率窗合法(t *testing.T) {
 	cfg, err := Load(writeTemp(t, `
+metering:
+  fx_usd_cny_milli: 7200
 pricing:
   deepseek-chat:
     currency: USD

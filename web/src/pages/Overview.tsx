@@ -5,6 +5,8 @@ import { api, type CacheStats, type UsagePoint } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorAlert } from "../components/ui/alert";
 import { StatCard } from "../components/stat-card";
+import { formatNumber } from "../lib/datetime";
+import { fmtCredits } from "../lib/utils";
 
 export default function Overview() {
   const [points, setPoints] = useState<UsagePoint[]>([]);
@@ -15,25 +17,29 @@ export default function Overview() {
     api
       .usage({ group_by: "day" })
       .then((r) => setPoints(r.points))
-      .catch((e) => setErr(String(e)));
+      .catch((e) => setErr(e instanceof Error ? e.message : "加载失败,请稍后重试"));
     api
       .cacheStats()
       .then(setStats)
       .catch(() => setStats(null));
   }, []);
 
-  if (err) return <ErrorAlert>{err}</ErrorAlert>;
+  if (err) return <ErrorAlert>错误:{err}</ErrorAlert>;
   return (
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-3">
-        <StatCard label="语义缓存条目" value={stats?.enabled ? String(stats.entries) : "未启用"} />
-        <StatCard label="缓存累计命中" value={stats?.enabled ? String(stats.hits) : "—"} />
-        <StatCard label="缓存阈值" value={stats?.enabled ? String(stats.threshold) : "—"} />
+        <StatCard
+          label="语义缓存条目"
+          value={stats?.enabled ? formatNumber(stats.entries) : "未启用"}
+        />
+        <StatCard label="缓存累计命中" value={stats?.enabled ? formatNumber(stats.hits) : "—"} />
+        {/* 相似度阈值是 0~1 小数(如 0.97),非数量,不走千分位 */}
+        <StatCard label="缓存相似度阈值" value={stats?.enabled ? String(stats.threshold) : "—"} />
       </div>
       <Card>
         <CardHeader>
           <CardTitle>按日用量</CardTitle>
-          <CardDescription>请求 / 成本 μ</CardDescription>
+          <CardDescription>请求数与成本;成本 1 credit = 十亿分之一本币</CardDescription>
         </CardHeader>
         <CardContent>
           {/* 图表取色唯一走 token 变量(宪法 Article 3/10,禁字面 hex):
@@ -50,9 +56,14 @@ export default function Overview() {
                 <YAxis
                   stroke="var(--color-border)"
                   tick={{ fill: "var(--color-muted-foreground)" }}
+                  tickFormatter={(v) => fmtCredits(Number(v))}
                 />
                 <Tooltip
                   cursor={{ fill: "var(--color-accent)" }}
+                  formatter={(v, name) =>
+                    // 请求数是次数不是 credit,不得套 credit 缩写;成本(credit)走大数缩写
+                    name === "请求数" ? Number(v).toLocaleString() : fmtCredits(Number(v))
+                  }
                   contentStyle={{
                     backgroundColor: "var(--color-popover)",
                     border: "1px solid var(--color-border)",
@@ -63,7 +74,11 @@ export default function Overview() {
                   itemStyle={{ color: "var(--color-foreground)" }}
                 />
                 <Bar dataKey="requests" name="请求数" fill="var(--color-primary)" />
-                <Bar dataKey="cost_micro" name="成本 μ" fill="var(--color-chart-series-2)" />
+                <Bar
+                  dataKey="cost_credits"
+                  name="成本(credit)"
+                  fill="var(--color-chart-series-2)"
+                />
               </BarChart>
             </ResponsiveContainer>
           </div>

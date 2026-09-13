@@ -50,9 +50,9 @@ func pricingList(d Deps) http.HandlerFunc {
 			inDB[rec.Alias] = true
 			items = append(items, PricingView{
 				Alias: rec.Alias, Source: "db", Currency: rec.Currency,
-				Input:       metering.FormatPrice(rec.InputMicro),
-				CachedInput: metering.FormatPrice(rec.CachedInputMicro),
-				Output:      metering.FormatPrice(rec.OutputMicro),
+				Input:       metering.FormatPrice(rec.InputCredits),
+				CachedInput: metering.FormatPrice(rec.CachedInputCredits),
+				Output:      metering.FormatPrice(rec.OutputCredits),
 				Timezone:    rec.Timezone,
 				TimeWindows: windowsView(rec.Windows),
 				UpdatedAt:   rec.UpdatedAt,
@@ -64,9 +64,9 @@ func pricingList(d Deps) http.HandlerFunc {
 			}
 			items = append(items, PricingView{
 				Alias: alias, Source: "yaml", Currency: entry.Def.Currency,
-				Input:       metering.FormatPrice(entry.Def.InputMicroPerM),
-				CachedInput: metering.FormatPrice(entry.Def.CachedInputMicroPerM),
-				Output:      metering.FormatPrice(entry.Def.OutputMicroPerM),
+				Input:       metering.FormatPrice(entry.Def.InputCreditsPerM),
+				CachedInput: metering.FormatPrice(entry.Def.CachedInputCreditsPerM),
+				Output:      metering.FormatPrice(entry.Def.OutputCreditsPerM),
 				Timezone:    entry.Timezone,
 				TimeWindows: entry.TimeWindows,
 			})
@@ -123,8 +123,8 @@ func pricingPut(d Deps) http.HandlerFunc {
 		}
 		writeJSON(w, 200, map[string]any{"ok": true, "pricing": PricingView{
 			Alias: rec.Alias, Source: "db", Currency: rec.Currency,
-			Input: metering.FormatPrice(rec.InputMicro), CachedInput: metering.FormatPrice(rec.CachedInputMicro),
-			Output: metering.FormatPrice(rec.OutputMicro), Timezone: rec.Timezone,
+			Input: metering.FormatPrice(rec.InputCredits), CachedInput: metering.FormatPrice(rec.CachedInputCredits),
+			Output: metering.FormatPrice(rec.OutputCredits), Timezone: rec.Timezone,
 			TimeWindows: windowsView(rec.Windows), UpdatedAt: rec.UpdatedAt,
 		}})
 	}
@@ -179,18 +179,18 @@ func ParsePricingRecord(alias string, v PricingView, now time.Time) (store.Prici
 	if cur != "CNY" && cur != "USD" {
 		return store.PricingRecord{}, fmt.Errorf("currency 须为 CNY|USD")
 	}
-	inMicro, err := metering.ParsePrice(v.Input)
+	outCredits, err := metering.ParsePrice(v.Input)
 	if err != nil {
-		return store.PricingRecord{}, fmt.Errorf("input 非法(十进制 ≤6 位小数)")
+		return store.PricingRecord{}, fmt.Errorf("input 非法(十进制 ≤9 位小数)")
 	}
-	outMicro, err := metering.ParsePrice(v.Output)
+	outputCredits, err := metering.ParsePrice(v.Output)
 	if err != nil {
-		return store.PricingRecord{}, fmt.Errorf("output 非法(十进制 ≤6 位小数)")
+		return store.PricingRecord{}, fmt.Errorf("output 非法(十进制 ≤9 位小数)")
 	}
-	cachedMicro := int64(0)
+	cachedCredits := int64(0)
 	if v.CachedInput != "" {
-		if cachedMicro, err = metering.ParsePrice(v.CachedInput); err != nil {
-			return store.PricingRecord{}, fmt.Errorf("cached_input 非法(十进制 ≤6 位小数)")
+		if cachedCredits, err = metering.ParsePrice(v.CachedInput); err != nil {
+			return store.PricingRecord{}, fmt.Errorf("cached_input 非法(十进制 ≤9 位小数)")
 		}
 	}
 	tz := v.Timezone
@@ -212,8 +212,8 @@ func ParsePricingRecord(alias string, v PricingView, now time.Time) (store.Prici
 		windows = append(windows, store.PricingWindowRecord{Window: tw.Window, BasisPoints: bp})
 	}
 	return store.PricingRecord{
-		Alias: alias, Currency: cur, InputMicro: inMicro, CachedInputMicro: cachedMicro,
-		OutputMicro: outMicro, Timezone: tz, Windows: windows,
+		Alias: alias, Currency: cur, InputCredits: outCredits, CachedInputCredits: cachedCredits,
+		OutputCredits: outputCredits, Timezone: tz, Windows: windows,
 		UpdatedAt: now.UTC().Format(time.RFC3339),
 	}, nil
 }

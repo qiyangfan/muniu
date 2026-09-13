@@ -48,18 +48,22 @@ func keysMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
 }
 
 const keysUsage = `用法:
-  muniu keys create --tenant default --name kongming [--rpm 120]
+  muniu keys create --tenant default --name kongming [--rpm 120] [--tpm 0] [--daily-quota-credits 0] [--expires-at RFC3339]
   muniu keys list
   muniu keys revoke <prefix>
 `
 
 // keysCreate 签发:明文只打印一次,stderr 同时给出警示。
+// 限额与过期字段暴露存储层既有能力(tpm/日配额列本就生效于限流与配额闸;过期迁移 0006)。
 func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	tenant := fs.String("tenant", "default", "租户名(缺省 default)")
 	name := fs.String("name", "", "key 名称(必填)")
 	rpm := fs.Int64("rpm", 60, "RPM 限额")
+	tpm := fs.Int64("tpm", 0, "TPM 限额(0=不限)")
+	quota := fs.Int64("daily-quota-credits", 0, "日配额 credit(1 credit = 十亿分之一本币;0=不限)")
+	expires := fs.String("expires-at", "", "过期时刻 RFC3339(空=永不过期)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -67,14 +71,27 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "muniu keys create: --name 必填")
 		return 2
 	}
-	plaintext, rec, err := auth.CreateKey(db, *tenant, *name, *rpm)
+	opts := auth.KeyOpts{TPMLimit: *tpm, DailyQuotaCredits: *quota}
+	if *expires != "" {
+		t, err := time.Parse(time.RFC3339, *expires)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "muniu keys create: --expires-at 须为 RFC3339 形态")
+			return 2
+		}
+		opts.ExpiresAt = &t
+	}
+	plaintext, rec, err := auth.CreateKey(db, *tenant, *name, *rpm, opts)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys create: %v\n", err)
 		return 1
 	}
 	_, _ = fmt.Fprintln(stderr, "!! 明文仅此一次展示,请立即保存;库中只存 sha256。")
-	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\n",
-		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit)
+	exp := "永不过期"
+	if rec.ExpiresAt != nil {
+		exp = rec.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nexpires:  %s\n",
+		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, exp)
 	return 0
 }
 

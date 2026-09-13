@@ -33,7 +33,7 @@ func mkRow(id string) UsageRow {
 		ID: id, RequestID: "req-" + id, TenantID: "t1", APIKeyID: "k1",
 		Provider: "deepseek", ModelAlias: "alias-a", UpstreamModel: "up-a",
 		Status: "ok", PromptTokens: 100, CompletionTokens: 200,
-		CostMicro: 8800, Currency: "CNY", LatencyTotalMs: 42,
+		CostCredits: 8800, Currency: "CNY", LatencyTotalMs: 42,
 		CreatedAt: time.Now().UTC(),
 	}
 }
@@ -161,7 +161,7 @@ func TestEstimate_usuage缺失走估算并置位(t *testing.T) {
 	if row.PromptTokens != in || row.CompletionTokens != out {
 		t.Fatalf("估算行字段不符: %+v", row)
 	}
-	if row.CostMicro < 0 {
+	if row.CostCredits < 0 {
 		t.Fatal("成本不得为负")
 	}
 }
@@ -170,14 +170,14 @@ func TestNewRow_计价与价目币种(t *testing.T) {
 	row := NewRow(RowParams{
 		RequestID: "r", Status: "ok",
 		Usage:   protocol.Usage{PromptTokens: 1200, CompletionTokens: 800},
-		Pricing: &Pricing{Currency: "CNY", InputMicroPerM: 2_000_000, OutputMicroPerM: 8_000_000},
+		Pricing: &Pricing{Currency: "CNY", InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000},
 		TotalMs: 5,
 	})
-	if row.CostMicro != 8800 || row.Currency != "CNY" {
-		t.Fatalf("计价不符: %d %s", row.CostMicro, row.Currency)
+	if row.CostCredits != 8800 || row.Currency != "CNY" {
+		t.Fatalf("计价不符: %d %s", row.CostCredits, row.Currency)
 	}
 	noPrice := NewRow(RowParams{RequestID: "r", Status: "error", ErrorClass: "timeout_first", TotalMs: 1})
-	if noPrice.CostMicro != 0 || noPrice.ErrorClass != "timeout_first" {
+	if noPrice.CostCredits != 0 || noPrice.ErrorClass != "timeout_first" {
 		t.Fatalf("无价目行应零成本并带错误类: %+v", noPrice)
 	}
 }

@@ -1,0 +1,19 @@
+{
+  "provider": "responses-inbound",
+  "scenario": "non-stream-object",
+  "source_url": "docs/design/proxy-and-streaming.md「Responses 入站翻译」;docs/design/adr/0012-responses-api-inbound.md",
+  "upstream_raw": {
+    "chat_completion": {
+      "id": "chatcmpl-x", "model": "up-a",
+      "choices": [{"index": 0, "message": {"role": "assistant", "content": "你好"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 10, "completion_tokens": 5}
+    }
+  },
+  "expect": {
+    "response": {
+      "id": "resp_<request_id>", "object": "response", "status": "completed", "model": "alias-a",
+      "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "你好"}]}],
+      "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    }
+  }
+}

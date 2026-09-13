@@ -7,6 +7,7 @@ const (
 	TypeAuthFailed    = "auth_failed"
 	TypeQuotaExceeded = "quota_exceeded"
 	TypeRateLimited   = "rate_limited"
+	TypeNotFound      = "not_found"
 	TypeTimeout       = "timeout"
 	TypeUpstreamError = "upstream_error"
 	TypeInternal      = "internal"
@@ -41,6 +42,7 @@ var statusByType = map[string]int{
 	TypeAuthFailed:    401,
 	TypeQuotaExceeded: 402,
 	TypeRateLimited:   429,
+	TypeNotFound:      404,
 	TypeTimeout:       504,
 	TypeUpstreamError: 502,
 	TypeInternal:      500,

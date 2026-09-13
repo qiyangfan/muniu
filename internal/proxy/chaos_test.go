@@ -170,7 +170,7 @@ func (b *lockedBuffer) String() string {
 func queryAll(t *testing.T, db *sql.DB) []store.UsageRow {
 	t.Helper()
 	rows, err := db.Query(`SELECT request_id, provider, model_alias, upstream_model, stream, status,
-		IFNULL(error_class,''), prompt_tokens, completion_tokens, estimated, cost_micro, currency FROM usage_logs ORDER BY created_at`)
+		IFNULL(error_class,''), prompt_tokens, completion_tokens, estimated, cost_credits, currency FROM usage_logs ORDER BY created_at`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func queryAll(t *testing.T, db *sql.DB) []store.UsageRow {
 		var stream int64
 		if err := rows.Scan(&r.RequestID, &r.Provider, &r.ModelAlias, &r.UpstreamModel, &stream,
 			&r.Status, &r.ErrorClass, &r.PromptTokens, &r.CompletionTokens,
-			&r.Estimated, &r.CostMicro, &r.Currency); err != nil {
+			&r.Estimated, &r.CostCredits, &r.Currency); err != nil {
 			t.Fatal(err)
 		}
 		out = append(out, r)

@@ -7,21 +7,24 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
 )
 
-// topologySnapshot 不可变拓扑:四要素同生共死,替换时整体换新。
+// topologySnapshot 不可变拓扑:五要素同生共死,替换时整体换新。
 // adapter 实例随快照走——热替换失败路径的回滚天然一致,杜绝「旧池+新适配器」
 // 的混合转发状态(buildPool 的注册副作用被快照化吸收)。
+// loadedAt = 快照生成时刻(模型发现 /v1/models 的 created 语义;进程内稳定)。
 type topologySnapshot struct {
 	providers []config.Provider             // 原始定义(池保留的 DeepEqual 基准)
 	routes    map[string][]config.Candidate // priority 升序已排序
 	pools     map[string]*keypool.Pool
 	adapters  map[string]adapter.Adapter // provider → 出站适配器(与池同生命周期)
 	caps      map[governKey]config.ModelCapability
+	loadedAt  time.Time
 }
 
 // TopologyStats 一次替换的池处置统计(可观测/日志)。
@@ -92,6 +95,7 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		pools:     pools,
 		adapters:  adapters,
 		caps:      buildCaps(cfg.Capabilities),
+		loadedAt:  time.Now(),
 	})
 	return stats, nil
 }

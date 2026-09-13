@@ -22,6 +22,9 @@ log:
 metering:
   flush_interval_ms: 500   # usage_logs 异步批量落库间隔
   flush_batch: 256         # 攒满即刷,不必等间隔
+  # 本位币与 credit(gateway-parity):credit = 账单最小刻度,1 credit = 本位币 1e-9
+  settlement: CNY           # 本位币:CNY(缺省)|USD;价目币种 ≠ 本位币时必须配汇率
+  fx_usd_cny_milli: 7200    # 1 USD = 7.200 CNY(毫单位整数);USD 报价加载期一次换算
   # 计量汇(ADR-0007):local(缺省,落本地 SQLite)| ingest(投控制面,失败整批落本地缓冲,恢复续传)
   # sink: ingest
   # ingest_url: "http://control-plane:8080/internal/metering/ingest"
@@ -75,7 +78,7 @@ model_routes:
   # claude-sonnet:
   #   - { provider: anthropic, model: claude-sonnet-4-5, priority: 0 }
 
-# 价目表:每百万 Token 价格,人类可读数值;加载期换算为整数 μ(货币百万分之一)参与运算,
+# 价目表:每百万 Token 价格,人类可读数值;加载期换算为整数 credit(1 credit = 本币十亿分之一)参与运算,
 # 内部零浮点(docs/design/metering.md)。
 # 核对记录(2026-09-09,来源见 HANDOFF 验收记录「牌价核对表」):
 #   - gpt-4o-mini:$0.15 / $0.60(OpenAI 官方定价页)

@@ -34,8 +34,9 @@ CREATE TABLE api_keys (
   status    TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
   rpm_limit        INTEGER NOT NULL DEFAULT 60,
   tpm_limit        INTEGER NOT NULL DEFAULT 0,  -- 0=不限(Phase 3 生效硬闸)
-  daily_quota_micro INTEGER NOT NULL DEFAULT 0, -- 0=不限;μ 单位见 metering
+  daily_quota_credits INTEGER NOT NULL DEFAULT 0, -- 0=不限;credit 单位(1 credit = 本位币 1e-9),迁移 0007 重命名换算
   currency         TEXT NOT NULL DEFAULT 'CNY' CHECK (currency IN ('CNY','USD')),
+  expires_at       TEXT,                        -- 迁移 0006;可空=NULL 永不过期;RFC3339;过期判定在鉴权层逐请求以当前时钟执行
   created_at TEXT NOT NULL,
   revoked_at TEXT
 );
@@ -56,7 +57,7 @@ CREATE TABLE usage_logs (
   reasoning_tokens  INTEGER NOT NULL DEFAULT 0,
   cached_tokens     INTEGER NOT NULL DEFAULT 0,
   estimated   INTEGER NOT NULL DEFAULT 0 CHECK (estimated IN (0,1)),
-  cost_micro  INTEGER NOT NULL DEFAULT 0,
+  cost_credits INTEGER NOT NULL DEFAULT 0, -- credit 单位(1 credit = 本位币 1e-9),迁移 0007 重命名换算
   currency    TEXT NOT NULL DEFAULT 'CNY',
   latency_first_token_ms INTEGER,
   latency_total_ms       INTEGER NOT NULL,

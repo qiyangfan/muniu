@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Moon, Sun } from "lucide-react";
-import { api, getToken, setToken } from "./lib/api";
+import { api, ApiError, getToken, setToken } from "./lib/api";
 import { useTheme } from "./lib/theme";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -38,7 +38,11 @@ function Login({ onOk }: { onOk: () => void }) {
                 onOk();
               } catch (e2) {
                 setToken("");
-                setErr(`token 无效:${(e2 as Error).message}`);
+                setErr(
+                  e2 instanceof ApiError && e2.status === 401
+                    ? "管理员令牌无效或已过期,请重新登录"
+                    : `错误:${e2 instanceof Error ? e2.message : "登录失败,请稍后重试"}`,
+                );
               } finally {
                 setBusy(false);
               }
@@ -48,7 +52,7 @@ function Login({ onOk }: { onOk: () => void }) {
               <Input
                 id="admin-token"
                 type="password"
-                placeholder="粘贴 MUNIU_ADMIN_TOKEN"
+                placeholder="粘贴管理员令牌"
                 value={v}
                 onChange={(e) => setV(e.target.value)}
               />

@@ -90,6 +90,13 @@ func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failov
 
 	UpstreamTotal.Inc(cand.Provider, errorClassOf(m))
 
+	// token 流向序列:与落账行同口径(含估算行;reasoning 计入 output 段)
+	observeTokens(cand.Provider, modelAlias, usage)
+	// 流式首 token 延迟:仅流式产生过首 token 的请求观测(非流式总延迟已有 RequestDuration)
+	if m.firstMs != nil {
+		FirstTokenDuration.Observe(float64(*m.firstMs))
+	}
+
 	// TPM 记账:请求完成后按实际 token 计入滑动窗口(traffic-governance 契约)
 	if p.tpm != nil {
 		if info := auth.KeyFrom(r.Context()); info != nil {

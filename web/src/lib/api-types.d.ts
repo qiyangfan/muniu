@@ -117,6 +117,186 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/responses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** OpenAI Responses API 入站(无状态翻译 v1,ADR-0012;鉴权/配额/限流与 chat 同规) */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 非流式 response 对象 / 流式 SSE 事件集 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description previous_response_id_unsupported / background_unsupported / input_item_unsupported / input_invalid */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 归一化错误信封 */
+                "4XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/responses/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 无状态网关不存储 response,恒 404 */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description not_found 信封(恒定) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 模型发现(别名目录,与转发拓扑同源;鉴权同数据面,不消耗配额/限流、不计量) */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OpenAI list 形态,条目=拓扑快照 model_routes 别名键集(id 升序) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ModelListResponse"];
+                    };
+                };
+                /** @description 未鉴权 */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/models/{model}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 单模型查询(按别名=路由键判定) */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path: {
+                    model: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 单模型对象 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ModelEntry"];
+                    };
+                };
+                /** @description not_found/model_not_found 信封 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/v1/tenants": {
         parameters: {
             query?: never;
@@ -232,7 +412,7 @@ export interface paths {
             };
         };
         put?: never;
-        /** 签发 key(明文仅此一次返回) */
+        /** 签发 key(明文仅此一次返回;限额/过期字段缺省=不限/永不过期) */
         post: {
             parameters: {
                 query?: never;
@@ -240,7 +420,11 @@ export interface paths {
                 path?: never;
                 cookie?: never;
             };
-            requestBody?: never;
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["KeyCreateRequest"];
+                };
+            };
             responses: {
                 /** @description 明文 key 与回执 */
                 200: {
@@ -255,6 +439,60 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** key 运行态限额局部更新(写后鉴权缓存立即失效,下一请求即新限额) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["KeyPatchRequest"];
+                };
+            };
+            responses: {
+                /** @description 更新后的 key 回执 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 非法值(负限额/expires_at 非 RFC3339) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description key 不存在 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/admin/v1/keys/{prefix}": {
@@ -644,8 +882,11 @@ export interface components {
             name?: string;
             /** @enum {string} */
             status?: "active" | "disabled";
-            /** Format: int64 */
-            daily_quota_micro?: number;
+            /**
+             * Format: int64
+             * @description 日配额 credit(1 credit = 本位币十亿分之一);0=不限
+             */
+            daily_quota_credits?: number;
             /** Format: int64 */
             tpm_limit?: number;
             semantic_cache_enabled?: boolean;
@@ -658,6 +899,63 @@ export interface components {
             prefix?: string;
             /** Format: int64 */
             rpm_limit?: number;
+            /**
+             * Format: int64
+             * @description 0=不限
+             */
+            tpm_limit?: number;
+            /**
+             * Format: int64
+             * @description 0=不限
+             */
+            daily_quota_credits?: number;
+            /** @description RFC3339;null=永不过期 */
+            expires_at?: string | null;
+        };
+        KeyCreateRequest: {
+            /** @description 租户名,缺省 default */
+            tenant?: string;
+            name: string;
+            /** Format: int64 */
+            rpm_limit?: number;
+            /**
+             * Format: int64
+             * @description 0=不限
+             */
+            tpm_limit?: number;
+            /**
+             * Format: int64
+             * @description 0=不限
+             */
+            daily_quota_credits?: number;
+            /** @description RFC3339;空=永不过期 */
+            expires_at?: string;
+        };
+        /** @description 局部更新(省略字段不动;expires_at 显式 null 清除过期) */
+        KeyPatchRequest: {
+            /** Format: int64 */
+            rpm_limit?: number;
+            /** Format: int64 */
+            tpm_limit?: number;
+            /**
+             * Format: int64
+             * @description 日配额 credit(1 credit = 本位币十亿分之一);0=不限
+             */
+            daily_quota_credits?: number;
+            expires_at?: string | null;
+        };
+        ModelEntry: {
+            id?: string;
+            /** @enum {string} */
+            object?: "model";
+            /** @description 拓扑快照加载时刻(unix 秒) */
+            created?: number;
+            owned_by?: string;
+        };
+        ModelListResponse: {
+            /** @enum {string} */
+            object?: "list";
+            data?: components["schemas"]["ModelEntry"][];
         };
         UsagePoint: {
             dim?: string;
@@ -670,7 +968,7 @@ export interface components {
             /** Format: int64 */
             cache_hits?: number;
             /** Format: int64 */
-            cost_micro?: number;
+            cost_credits?: number;
         };
         ProviderInfo: {
             name?: string;
@@ -718,7 +1016,7 @@ export interface components {
             readonly source?: "db" | "yaml";
             /** @enum {string} */
             currency: "CNY" | "USD";
-            /** @description 峰时(缺省)价,十进制 ≤6 位小数(元/百万 Token) */
+            /** @description 峰时(缺省)价,十进制 ≤9 位小数(元/百万 Token) */
             input: string;
             /** @description 缓存命中价;空=缺省同 input */
             cached_input?: string;

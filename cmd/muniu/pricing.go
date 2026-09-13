@@ -21,10 +21,15 @@ type staticPricing struct {
 }
 
 // buildPricingTables 合并静态与运行态价目(装配期与管理面刷新共用;调用方包装为目录并原子替换)。
-func buildPricingTables(db *sql.DB, static map[string]staticPricing) (map[string]*metering.PricingTable, error) {
+func buildPricingTables(db *sql.DB, static map[string]staticPricing, settlement string, fxCnyPerUsdMilli int64) (map[string]*metering.PricingTable, error) {
 	tables := make(map[string]*metering.PricingTable, len(static))
 	for alias, sp := range static {
-		tbl, err := metering.NewPricingTable(sp.def, sp.zone, sp.specs)
+		// 本位币结算:异币种报价按汇率一次换算(热路径零变化)
+		def, ok := metering.SettlePrice(sp.def, settlement, fxCnyPerUsdMilli)
+		if !ok {
+			return nil, fmt.Errorf("pricing[%s] 报价币种 %s 与本位币 %s 不同且未配置 fx_usd_cny_milli", alias, sp.def.Currency, settlement)
+		}
+		tbl, err := metering.NewPricingTable(def, sp.zone, sp.specs)
 		if err != nil {
 			return nil, fmt.Errorf("pricing[%s]: %w", alias, err)
 		}
@@ -35,7 +40,7 @@ func buildPricingTables(db *sql.DB, static map[string]staticPricing) (map[string
 		return nil, fmt.Errorf("读取运行态价目: %w", err)
 	}
 	for _, r := range rows {
-		tbl, err := pricingTableFromRecord(r)
+		tbl, err := pricingTableFromRecord(r, settlement, fxCnyPerUsdMilli)
 		if err != nil {
 			return nil, err
 		}
@@ -45,15 +50,21 @@ func buildPricingTables(db *sql.DB, static map[string]staticPricing) (map[string
 }
 
 // pricingTableFromRecord 运行态记录 → 价目表(管理面写入前已过校验,此处失败即数据损坏,拒绝启动/刷新)。
-func pricingTableFromRecord(r store.PricingRecord) (*metering.PricingTable, error) {
+func pricingTableFromRecord(r store.PricingRecord, settlement string, fxCnyPerUsdMilli int64) (*metering.PricingTable, error) {
 	if r.Currency != "CNY" && r.Currency != "USD" {
 		return nil, fmt.Errorf("pricing[%s] currency 非法 %q", r.Alias, r.Currency)
 	}
-	def := metering.Pricing{
-		Currency:             r.Currency,
-		InputMicroPerM:       r.InputMicro,
-		CachedInputMicroPerM: r.CachedInputMicro,
-		OutputMicroPerM:      r.OutputMicro,
+	// 本位币结算:DB 存厂商原报价,构造表时按汇率一次换算(与 static YAML 路径同口径,
+	// 保证配额域 SUM(cost_credits) 单币种自洽——域A 审查确认的收口点)
+	quote := metering.Pricing{
+		Currency:               r.Currency,
+		InputCreditsPerM:       r.InputCredits,
+		CachedInputCreditsPerM: r.CachedInputCredits,
+		OutputCreditsPerM:      r.OutputCredits,
+	}
+	def, ok := metering.SettlePrice(quote, settlement, fxCnyPerUsdMilli)
+	if !ok {
+		return nil, fmt.Errorf("pricing[%s] 报价币种 %s 与本位币 %s 不同且未配置 fx_usd_cny_milli", r.Alias, r.Currency, settlement)
 	}
 	zone := time.UTC
 	if r.Timezone != "" {

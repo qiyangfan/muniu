@@ -18,7 +18,7 @@ SELECT substr(created_at, 1, 10)                AS day,
                 THEN prompt_tokens ELSE 0 END)   AS prompt_tokens,
        SUM(CASE WHEN status = 'ok' AND provider != 'semantic-cache'
                 THEN completion_tokens ELSE 0 END) AS completion_tokens,
-       SUM(CASE WHEN estimated = 0 THEN cost_micro ELSE 0 END) AS cost_micro,
+       SUM(CASE WHEN estimated = 0 THEN cost_credits ELSE 0 END) AS cost_credits,
        SUM(CASE WHEN provider = 'semantic-cache' THEN 1 ELSE 0 END) AS cache_hits,
        SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END)            AS errors
 FROM usage_logs

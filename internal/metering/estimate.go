@@ -88,12 +88,12 @@ func EstimateOutputTokens(text, model string) int64 {
 }
 
 // Pricing 单别名价目(μ/百万Token,经 ParsePrice 换算后的整数形态)。
-// CachedInputMicroPerM=0 表示缓存命中与输入同价(metering「缺省=input」契约)。
+// CachedInputCreditsPerM=0 表示缓存命中与输入同价(metering「缺省=input」契约)。
 type Pricing struct {
-	Currency             string
-	InputMicroPerM       int64
-	CachedInputMicroPerM int64
-	OutputMicroPerM      int64
+	Currency               string
+	InputCreditsPerM       int64
+	CachedInputCreditsPerM int64
+	OutputCreditsPerM      int64
 }
 
 // RowParams 落库行参数(NewRow 消费;字段语义与 usage_logs DDL 一一对应)。
@@ -126,7 +126,7 @@ func NewRow(p RowParams) UsageRow {
 	if p.Pricing != nil {
 		currency = p.Pricing.Currency
 		cost = CostWithCached(p.Usage.PromptTokens, p.Usage.CachedTokens, p.Usage.CompletionTokens,
-			p.Pricing.InputMicroPerM, p.Pricing.CachedInputMicroPerM, p.Pricing.OutputMicroPerM)
+			p.Pricing.InputCreditsPerM, p.Pricing.CachedInputCreditsPerM, p.Pricing.OutputCreditsPerM)
 	}
 	return UsageRow{
 		ID:                  newUsageID(),
@@ -144,7 +144,7 @@ func NewRow(p RowParams) UsageRow {
 		ReasoningTokens:     p.Usage.ReasoningTokens,
 		CachedTokens:        p.Usage.CachedTokens,
 		Estimated:           p.Estimated,
-		CostMicro:           cost,
+		CostCredits:         cost,
 		Currency:            currency,
 		LatencyFirstTokenMs: p.FirstTokenMs,
 		LatencyTotalMs:      p.TotalMs,

@@ -109,7 +109,7 @@ func TestAdmin_租户CRUD全链(t *testing.T) {
 
 	// 更新:禁用 + 配额
 	quota := int64(5000)
-	patch, _ := json.Marshal(map[string]any{"status": "disabled", "daily_quota_micro": quota})
+	patch, _ := json.Marshal(map[string]any{"status": "disabled", "daily_quota_credits": quota})
 	code, body = call(t, h, "PATCH", "/admin/v1/tenants/"+created.ID, "tok", string(patch))
 	if code != 200 {
 		t.Fatalf("更新失败: %d %s", code, body)
@@ -204,7 +204,7 @@ func TestAdmin_缓存统计空态(t *testing.T) {
 // 吊销 key 必须即时清空进程内验证缓存(Deps.Verifier 接线):未清前已缓存的 key 在 TTL 内仍可放行。
 func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 	db := openDB(t)
-	plaintext, rec, err := auth.CreateKey(db, "default", "revoke-pin", 60)
+	plaintext, rec, err := auth.CreateKey(db, "default", "revoke-pin", 60, auth.KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 func TestAdmin_动态改价全流程(t *testing.T) {
 	db := openDB(t)
 	staticDefs := map[string]metering.Pricing{
-		"alias-yaml": {Currency: "USD", InputMicroPerM: 440_000, OutputMicroPerM: 1_320_000},
+		"alias-yaml": {Currency: "USD", InputCreditsPerM: 440_000_000, OutputCreditsPerM: 1_320_000_000},
 	}
 	// 复刻装配层合并:静态兜底 + DB 覆盖 → 目录整体替换
 	rebuild := func() *metering.PricingDirectory {
@@ -270,8 +270,8 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 				wins = append(wins, metering.WindowSpec{StartMin: s, EndMin: e, BasisPoints: w.BasisPoints})
 			}
 			tbl, err := metering.NewPricingTable(metering.Pricing{
-				Currency: r.Currency, InputMicroPerM: r.InputMicro,
-				CachedInputMicroPerM: r.CachedInputMicro, OutputMicroPerM: r.OutputMicro,
+				Currency: r.Currency, InputCreditsPerM: r.InputCredits,
+				CachedInputCreditsPerM: r.CachedInputCredits, OutputCreditsPerM: r.OutputCredits,
 			}, tz, wins)
 			if err != nil {
 				t.Fatal(err)
@@ -298,7 +298,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 	if code != 200 || !strings.Contains(body, `"source":"yaml"`) || !strings.Contains(body, `"input":"0.44"`) {
 		t.Fatalf("GET 应列出 yaml 兜底: %d %s", code, body)
 	}
-	if got := dir.Get("alias-yaml").At(time.Now()); got.InputMicroPerM != 440_000 {
+	if got := dir.Get("alias-yaml").At(time.Now()); got.InputCreditsPerM != 440_000_000 {
 		t.Fatalf("改价前应为静态价: %+v", got)
 	}
 
@@ -314,12 +314,12 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 		t.Fatalf("PUT 后 GET 应显示 db 来源与新价: %d %s", code, body)
 	}
 	// 目录已刷新:PUT 的 input/output 为缺省(峰时)价,窗口按倍率缩放
-	// 窗内(北京 04:00)= 0.22×0.5 = 0.11(110000μ);窗外(北京 12:00)= 缺省 0.22
+	// 窗内(北京 04:00)= 0.22×0.5 = 0.11(110_000_000 credit);窗外(北京 12:00)= 缺省 0.22
 	cst := time.FixedZone("cst", 8*3600)
-	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputMicroPerM != 110_000 {
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputCreditsPerM != 110_000_000 {
 		t.Fatalf("刷新后窗内应 0.22×0.5=0.11: %+v", got)
 	}
-	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 12, 0, 0, 0, cst)); got.InputMicroPerM != 220_000 {
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 12, 0, 0, 0, cst)); got.InputCreditsPerM != 220_000_000 {
 		t.Fatalf("窗外应为 DB 缺省价 0.22: %+v", got)
 	}
 
@@ -329,7 +329,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 	if code != 400 {
 		t.Fatalf("非法 multiplier 应 400: %d", code)
 	}
-	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputMicroPerM != 110_000 {
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputCreditsPerM != 110_000_000 {
 		t.Fatalf("拒绝后目录不应变化(窗内仍 0.11): %+v", got)
 	}
 
@@ -338,7 +338,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("DELETE 应成功: %d", code)
 	}
-	if got := dir.Get("alias-yaml").At(time.Now()); got.InputMicroPerM != 440_000 {
+	if got := dir.Get("alias-yaml").At(time.Now()); got.InputCreditsPerM != 440_000_000 {
 		t.Fatalf("删除后应回落 yaml 静态价: %+v", got)
 	}
 	code, _ = call(t, h, "DELETE", "/admin/v1/pricing/alias-yaml", "t", "")

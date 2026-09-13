@@ -312,7 +312,7 @@ func TestRegress_SSE心跳不可见(t *testing.T) {
 }
 
 // TestRegress_分时段倍率落账 分时段倍率窗必须在计量行真实生效(端到端):
-// 全天半价窗下 cost_micro = 缺省价的一半(usage prompt 7 / completion 9,input 2μ/tok output 8μ/tok
+// 全天半价窗下 cost_credits = 缺省价的一半(usage prompt 7 / completion 9,input 2μ/tok output 8μ/tok
 // → 基准 86μ,半价 43μ),钉住 record() → PricingTable.At 的接线。
 func TestRegress_分时段倍率落账(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
@@ -325,7 +325,7 @@ func TestRegress_分时段倍率落账(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	tbl, err := metering.NewPricingTable(
-		metering.Pricing{Currency: "CNY", InputMicroPerM: 2_000_000, OutputMicroPerM: 8_000_000},
+		metering.Pricing{Currency: "CNY", InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000},
 		time.UTC,
 		[]metering.WindowSpec{{StartMin: 0, EndMin: 1440, BasisPoints: 5000}}, // 全天半价
 	)
@@ -353,8 +353,8 @@ func TestRegress_分时段倍率落账(t *testing.T) {
 		t.Fatalf("应 200: %d", code)
 	}
 	rows := waitRows(t, db, 1)
-	// 基准 86μ = ceil(7×2) + ceil(9×8);半价 43μ = ceil(7×1) + ceil(9×4)
-	if rows[0].CostMicro != 43 {
-		t.Fatalf("半价窗应落账 43μ,实际 %d", rows[0].CostMicro)
+	// 基准 8600 credit = ceil(7×2e8/1e6)+ceil(9×8e8/1e6);半价 4300
+	if rows[0].CostCredits != 43 {
+		t.Fatalf("半价窗应落账 4300 credit(43μ×100),实际 %d", rows[0].CostCredits)
 	}
 }

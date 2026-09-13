@@ -25,7 +25,7 @@
 
 - 非流式:chat completion → `{id, object:"response", status:"completed", model, output[], usage}`。`id` 复用 `resp_` 前缀 + 既有 request_id(追责链路与日志/usage_logs 一致);output[] 按 assistant 文本(message item + content[].output_text)与 tool_calls(function_call items)展开。
 - 流式最小事件集:`response.created`(首帧)→ `response.output_item.added` → `response.output_text.delta` / `response.function_call_arguments.delta`(逐段)→ `response.output_item.done` → `response.completed`(终帧,含 usage)。顺序不变式:created 首帧、completed 终帧、delta 只出现在两者之间——fixture 断言全序列。
-- reasoning:上游 `reasoning_content` 映射为 reasoning 输出项(只读),上游未提供即省略;不做持久化。
+- reasoning:上游 `reasoning_content` 映射为 reasoning 输出项(只读),上游未提供即省略;不做持久化。流式路径 v1 不透出 reasoning(最小事件集无 reasoning 事件类型,已登记限制;R1 类模型的流式 reasoning 对客户端不可见)。
 
 ## 4. 无状态边界
 

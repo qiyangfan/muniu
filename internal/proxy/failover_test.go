@@ -67,7 +67,7 @@ func newFoHarness(t *testing.T, upA *testkit.Upstream, statusB int, bodyB string
 			},
 		},
 		Pricing: mustDir(t, map[string]metering.Pricing{
-			"alias-a": {Currency: "CNY", InputMicroPerM: 2_000_000, OutputMicroPerM: 8_000_000},
+			"alias-a": {Currency: "CNY", InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000},
 		}),
 		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
 		Pipeline: pipeline,
@@ -118,7 +118,7 @@ func waitRows(t *testing.T, db *sql.DB, want int) []store.UsageRow {
 	for {
 		var rows []store.UsageRow
 		q := `SELECT request_id, provider, model_alias, upstream_model, stream, status,
-			IFNULL(error_class,''), prompt_tokens, completion_tokens, estimated, cost_micro, currency
+			IFNULL(error_class,''), prompt_tokens, completion_tokens, estimated, cost_credits, currency
 			FROM usage_logs`
 		rs, err := db.Query(q)
 		if err != nil {
@@ -129,7 +129,7 @@ func waitRows(t *testing.T, db *sql.DB, want int) []store.UsageRow {
 			var stream int64
 			if err := rs.Scan(&r.RequestID, &r.Provider, &r.ModelAlias, &r.UpstreamModel, &stream,
 				&r.Status, &r.ErrorClass, &r.PromptTokens, &r.CompletionTokens,
-				&r.Estimated, &r.CostMicro, &r.Currency); err != nil {
+				&r.Estimated, &r.CostCredits, &r.Currency); err != nil {
 				t.Fatal(err)
 			}
 			r.Stream = stream == 1
@@ -339,7 +339,7 @@ func TestEmbeddings_透传与计量(t *testing.T) {
 		},
 		// 仅 input 价:output=0 → 成本只算输入段(embedding 计价契约)
 		Pricing: mustDir(t, map[string]metering.Pricing{
-			"emb-alias": {Currency: "CNY", InputMicroPerM: 2_000_000},
+			"emb-alias": {Currency: "CNY", InputCreditsPerM: 2_000_000},
 		}),
 		Timeouts: Timeouts{Dial: time.Second, FirstToken: 5 * time.Second, ChunkIdle: 5 * time.Second},
 		Pipeline: pipeline,
@@ -360,8 +360,8 @@ func TestEmbeddings_透传与计量(t *testing.T) {
 		t.Fatalf("embedding 计量不符: %+v", rows[0])
 	}
 	// 仅输入段计价:ceil(9×2)=18μ
-	if rows[0].CostMicro != 18 {
-		t.Fatalf("embedding 成本不符: %d", rows[0].CostMicro)
+	if rows[0].CostCredits != 18 {
+		t.Fatalf("embedding 成本不符: %d", rows[0].CostCredits)
 	}
 }
 

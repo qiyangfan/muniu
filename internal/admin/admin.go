@@ -6,6 +6,7 @@ package admin
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -66,6 +67,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("PATCH /admin/v1/tenants/{id}", patchTenant(d))
 	mux.HandleFunc("GET /admin/v1/keys", listKeys(d))
 	mux.HandleFunc("POST /admin/v1/keys", createKey(d))
+	mux.HandleFunc("PATCH /admin/v1/keys/{id}", patchKey(d))
 	mux.HandleFunc("DELETE /admin/v1/keys/{prefix}", revokeKey(d))
 	mux.HandleFunc("GET /admin/v1/usage", usage(d))
 	mux.HandleFunc("GET /admin/v1/providers", providers(d))
@@ -167,7 +169,7 @@ func patchTenant(d Deps) http.HandlerFunc {
 		id := r.PathValue("id")
 		var req struct {
 			Status              *string `json:"status"`
-			DailyQuotaMicro     *int64  `json:"daily_quota_micro"`
+			DailyQuotaCredits   *int64  `json:"daily_quota_credits"`
 			TPMLimit            *int64  `json:"tpm_limit"`
 			SemanticCacheEnable *bool   `json:"semantic_cache_enabled"`
 		}
@@ -176,14 +178,14 @@ func patchTenant(d Deps) http.HandlerFunc {
 			return
 		}
 		// 负额度会被 quota/tpm 判定解释为「不限」,与收紧意图相反,入口即拒
-		if (req.DailyQuotaMicro != nil && *req.DailyQuotaMicro < 0) ||
+		if (req.DailyQuotaCredits != nil && *req.DailyQuotaCredits < 0) ||
 			(req.TPMLimit != nil && *req.TPMLimit < 0) {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "daily_quota_micro/tpm_limit 不可为负")
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "daily_quota_credits/tpm_limit 不可为负")
 			return
 		}
 		ok, err := store.UpdateTenant(d.DB, id, store.UpdateTenantPatch{
 			Status:              derefStr(req.Status),
-			DailyQuotaMicro:     req.DailyQuotaMicro,
+			DailyQuotaCredits:   req.DailyQuotaCredits,
 			TPMLimit:            req.TPMLimit,
 			SemanticCacheEnable: req.SemanticCacheEnable,
 		})
@@ -222,27 +224,87 @@ func listKeys(d Deps) http.HandlerFunc {
 func createKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Tenant   string `json:"tenant"`
-			Name     string `json:"name"`
-			RPMLimit int64  `json:"rpm_limit"`
+			Tenant            string `json:"tenant"`
+			Name              string `json:"name"`
+			RPMLimit          int64  `json:"rpm_limit"`
+			TPMLimit          int64  `json:"tpm_limit"`
+			DailyQuotaCredits int64  `json:"daily_quota_credits"`
+			ExpiresAt         string `json:"expires_at"` // 可空;RFC3339(空 = 永不过期)
 		}
 		if err := decode(r, &req); err != nil || req.Name == "" {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
 			return
 		}
-		if req.RPMLimit < 0 {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "rpm_limit 不可为负")
-			return
+		opts := auth.KeyOpts{TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits}
+		if req.ExpiresAt != "" {
+			t, err := time.Parse(time.RFC3339, req.ExpiresAt)
+			if err != nil {
+				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 形态")
+				return
+			}
+			opts.ExpiresAt = &t
 		}
-		plaintext, rec, err := auth.CreateKey(d.DB, req.Tenant, req.Name, req.RPMLimit)
+		plaintext, rec, err := auth.CreateKey(d.DB, req.Tenant, req.Name, req.RPMLimit, opts)
 		if err != nil {
 			respondErr(d, w, r, err, "key_create_failed")
 			return
 		}
 		writeJSON(w, 200, map[string]any{
 			"key": plaintext, // 管理面明文仅此一次(与 CLI 同语义)
-			"id":  rec.ID, "prefix": rec.Prefix, "tenant": rec.TenantID, "rpm_limit": rec.RPMLimit,
+			"id":  rec.ID, "prefix": rec.Prefix, "tenant": rec.TenantID,
+			"rpm_limit": rec.RPMLimit, "tpm_limit": rec.TPMLimit,
+			"daily_quota_credits": rec.DailyQuotaCredits, "expires_at": rec.ExpiresAt,
 		})
+	}
+}
+
+// patchKey key 运行态限额局部更新(PATCH 语义:省略字段不动,expires_at 显式 null 清除)。
+// 写后 Invalidate:限额是 DB 可变状态,必须走吊销同款失效协议,下一请求即新限额。
+func patchKey(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			RPMLimit          *int64          `json:"rpm_limit"`
+			TPMLimit          *int64          `json:"tpm_limit"`
+			DailyQuotaCredits *int64          `json:"daily_quota_credits"`
+			ExpiresAt         json.RawMessage `json:"expires_at"` // 缺省=不动;null=清除;"RFC3339"=设定
+		}
+		if err := decode(r, &req); err != nil {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
+			return
+		}
+		patch := auth.LimitsPatch{
+			RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
+		}
+		switch {
+		case len(req.ExpiresAt) == 0: // 字段缺省:不动
+		case string(req.ExpiresAt) == "null":
+			patch.ClearExpires = true
+		default:
+			var s string
+			if err := json.Unmarshal(req.ExpiresAt, &s); err != nil {
+				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 字符串或 null")
+				return
+			}
+			t, perr := time.Parse(time.RFC3339, s)
+			if perr != nil {
+				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 形态")
+				return
+			}
+			patch.ExpiresAt = &t
+		}
+		rec, err := auth.UpdateKeyLimits(d.DB, r.PathValue("id"), patch)
+		if errors.Is(err, store.ErrNotFound) {
+			writeAdminError(w, r, http.StatusNotFound, protocol.TypeNotFound, "key_not_found", "key 不存在")
+			return
+		}
+		if err != nil {
+			respondErr(d, w, r, err, "key_patch_failed")
+			return
+		}
+		if d.Verifier != nil {
+			d.Verifier.Invalidate() // 新限额下一请求即生效,不等缓存 TTL
+		}
+		writeJSON(w, 200, rec)
 	}
 }
 
@@ -377,6 +439,7 @@ func Routes() []string {
 		"PATCH /admin/v1/tenants/{id}",
 		"GET /admin/v1/keys",
 		"POST /admin/v1/keys",
+		"PATCH /admin/v1/keys/{id}",
 		"DELETE /admin/v1/keys/{prefix}",
 		"GET /admin/v1/usage",
 		"GET /admin/v1/providers",

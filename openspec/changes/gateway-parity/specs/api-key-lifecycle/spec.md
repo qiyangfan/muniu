@@ -6,11 +6,11 @@
 
 ### Requirement: 签发粒度完整
 
-key 签发入口(CLI 与 `POST /admin/v1/keys`)必须 (MUST) 支持设定 `tpm_limit`、`daily_quota_micro`、`expires_at`;缺省(0/空)= 不限/永不过期(现状等价)。非零值必须 (MUST) 进入既有执行链真实生效:key 级 TPM 滑动窗口与 key 级日配额闸。
+key 签发入口(CLI 与 `POST /admin/v1/keys`)必须 (MUST) 支持设定 `tpm_limit`、`daily_quota_credits`(抽象额度单位 credit,1 credit = 本位币十亿分之一,大整数自然表达如 820 亿)、`expires_at`;缺省(0/空)= 不限/永不过期(现状等价)。非零值必须 (MUST) 进入既有执行链真实生效:key 级 TPM 滑动窗口与 key 级日配额闸。
 
 #### Scenario: 全字段签发即生效
 
-- **WHEN** 以 `tpm_limit=100`、`daily_quota_micro=N` 签发 key 并以该 key 发起超限请求
+- **WHEN** 以 `tpm_limit=100`、`daily_quota_credits=N` 签发 key 并以该 key 发起超限请求
 - **THEN** TPM 超限返回 429 `rate_limited`,日配额超限返回 402 `quota_exceeded`(key 级闸先于租户级)
 
 #### Scenario: 缺省签发零回归
@@ -39,7 +39,7 @@ key 签发入口(CLI 与 `POST /admin/v1/keys`)必须 (MUST) 支持设定 `tpm_l
 
 ### Requirement: 运行态限额调整
 
-`PATCH /admin/v1/keys/{id}` 必须 (MUST) 支持局部更新 `rpm`/`tpm_limit`/`daily_quota_micro`/`expires_at`:省略字段不动,`expires_at` 显式 null 清除过期;写后必须 (MUST) 立即失效鉴权缓存(下一请求即新限额);未知 key 返回 404 `not_found`,非法值 400 整单拒绝(不落库)。接口必须 (MUST) NOT 暴露 id/secret/tenant 等不可变或归属字段的改写。
+`PATCH /admin/v1/keys/{id}` 必须 (MUST) 支持局部更新 `rpm`/`tpm_limit`/`daily_quota_credits`/`expires_at`:省略字段不动,`expires_at` 显式 null 清除过期;写后必须 (MUST) 立即失效鉴权缓存(下一请求即新限额);未知 key 返回 404 `not_found`,非法值 400 整单拒绝(不落库)。接口必须 (MUST) NOT 暴露 id/secret/tenant 等不可变或归属字段的改写。
 
 #### Scenario: 改额下一请求生效
 
@@ -53,7 +53,7 @@ key 签发入口(CLI 与 `POST /admin/v1/keys`)必须 (MUST) 支持设定 `tpm_l
 
 ### Requirement: 管理面可见性
 
-key 列表(`GET /admin/v1/keys` 与控制台密钥页)必须 (MUST) 展示 `tpm_limit`、`daily_quota_micro`、`expires_at`;控制台签发表单提供对应输入(组件库范式),列表可见当前值。
+key 列表(`GET /admin/v1/keys` 与控制台密钥页)必须 (MUST) 展示 `tpm_limit`、`daily_quota_credits`(抽象额度单位 credit,1 credit = 本位币十亿分之一,大整数自然表达如 820 亿)、`expires_at`;控制台签发表单提供对应输入(组件库范式),列表可见当前值。
 
 #### Scenario: 列表回显
 

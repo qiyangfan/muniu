@@ -61,19 +61,34 @@ func Hash(plaintext string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// KeyRecord 签发结果回执(管理命令打印;明文只在 CreateKey 返回值出现一次)。
+// KeyRecord 签发/列表回执(管理命令与控制台;明文只在 CreateKey 返回值出现一次)。
+// 限额三件套与过期时刻如实透出(零值/空 = 不限/永不过期)。
 type KeyRecord struct {
-	ID       string `json:"id"`
-	TenantID string `json:"tenant_id"`
-	Name     string `json:"name"`
-	Prefix   string `json:"prefix"`
-	RPMLimit int64  `json:"rpm_limit"`
+	ID                string     `json:"id"`
+	TenantID          string     `json:"tenant_id"`
+	Name              string     `json:"name"`
+	Prefix            string     `json:"prefix"`
+	RPMLimit          int64      `json:"rpm_limit"`
+	TPMLimit          int64      `json:"tpm_limit"`
+	DailyQuotaCredits int64      `json:"daily_quota_credits"`
+	ExpiresAt         *time.Time `json:"expires_at"`
+}
+
+// KeyOpts 签发可选项:零值 = 不限/永不过期(现状等价,零回归)。
+type KeyOpts struct {
+	TPMLimit          int64
+	DailyQuotaCredits int64
+	ExpiresAt         *time.Time
 }
 
 // CreateKey 签发并落库;返回明文(仅此一次)与回执。
-func CreateKey(db *sql.DB, tenant, name string, rpm int64) (string, *KeyRecord, error) {
+// 负值限额在入口拒绝(会被执行链解释为「不限」,与收紧意图相反)。
+func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string, *KeyRecord, error) {
 	if tenant == "" {
 		tenant = "default"
+	}
+	if rpm < 0 || opts.TPMLimit < 0 || opts.DailyQuotaCredits < 0 {
+		return "", nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额 不可为负"))
 	}
 	if rpm <= 0 {
 		rpm = 60
@@ -90,14 +105,93 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64) (string, *KeyRecord, 
 	plaintext := Generate()
 	id := uuid.Must(uuid.NewV7()).String()
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status, rpm_limit, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
-		id, tenantID, name, Hash(plaintext), plaintext[:12], "active", rpm, now); err != nil {
+	var expires any
+	if opts.ExpiresAt != nil {
+		expires = opts.ExpiresAt.UTC().Format(time.RFC3339)
+	}
+	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
+		rpm_limit, tpm_limit, daily_quota_credits, expires_at, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		id, tenantID, name, Hash(plaintext), plaintext[:12], "active",
+		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, now); err != nil {
 		return "", nil, fmt.Errorf("auth: 落库 api_key: %w", err)
 	}
 	return plaintext, &KeyRecord{
 		ID: id, TenantID: tenant, Name: name, Prefix: plaintext[:12], RPMLimit: rpm,
+		TPMLimit: opts.TPMLimit, DailyQuotaCredits: opts.DailyQuotaCredits, ExpiresAt: opts.ExpiresAt,
 	}, nil
+}
+
+// LimitsPatch key 运行态限额的局部更新(PATCH 语义:省略字段不动)。
+// ClearExpires 表达「显式 null 清除过期」;ExpiresAt 非 nil 且未 Clear 时为设定新过期。
+type LimitsPatch struct {
+	RPMLimit          *int64
+	TPMLimit          *int64
+	DailyQuotaCredits *int64
+	ExpiresAt         *time.Time
+	ClearExpires      bool
+}
+
+// UpdateKeyLimits 局部更新 key 限额/过期(管理面 PATCH;写后调用方须 Verifier.Invalidate)。
+// 返回 false = key id 不存在;负值限额拒绝(MarkBusiness,管理面出口 400)。
+func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error) {
+	if (p.RPMLimit != nil && *p.RPMLimit < 0) ||
+		(p.TPMLimit != nil && *p.TPMLimit < 0) ||
+		(p.DailyQuotaCredits != nil && *p.DailyQuotaCredits < 0) {
+		return nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额 不可为负"))
+	}
+	sets, args := []string{}, []any{}
+	add := func(col string, v any) { sets = append(sets, col+" = ?"); args = append(args, v) }
+	if p.RPMLimit != nil {
+		add("rpm_limit", *p.RPMLimit)
+	}
+	if p.TPMLimit != nil {
+		add("tpm_limit", *p.TPMLimit)
+	}
+	if p.DailyQuotaCredits != nil {
+		add("daily_quota_credits", *p.DailyQuotaCredits)
+	}
+	if p.ClearExpires {
+		add("expires_at", nil)
+	} else if p.ExpiresAt != nil {
+		add("expires_at", p.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if len(sets) == 0 {
+		// 无字段可更新:仍回读校验 key 存在性(幂等 no-op 也须 404 语义正确)
+		sets = append(sets, "rpm_limit = rpm_limit")
+	}
+	args = append(args, keyID)
+	res, err := db.Exec(`UPDATE api_keys SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("auth: 更新 api_key 限额: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil, store.ErrNotFound
+	}
+	return keyRecordByID(db, keyID)
+}
+
+// keyRecordByID 按 id 读回执(Update 后回传最新行;不存在返回 ErrNotFound)。
+func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
+	var r KeyRecord
+	var exp sql.NullString
+	err := db.QueryRow(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits, expires_at
+		FROM api_keys WHERE id = ?`, keyID).
+		Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits, &exp)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("auth: 读 api_key: %w", err)
+	}
+	if exp.Valid && exp.String != "" {
+		t, perr := time.Parse(time.RFC3339, exp.String)
+		if perr != nil {
+			return nil, fmt.Errorf("auth: api_key %s expires_at 非法: %w", r.Prefix, perr)
+		}
+		r.ExpiresAt = &t
+	}
+	return &r, nil
 }
 
 // RevokeKeyByPrefix 按 prefix 吊销(管理命令入口);返回吊销行数。
@@ -113,9 +207,10 @@ func RevokeKeyByPrefix(db *sql.DB, prefix string) (int64, error) {
 	return n, nil
 }
 
-// ListKeys 列出 key(管理命令读侧;不含 hash 明文)。
+// ListKeys 列出 key(管理命令读侧;不含 hash 明文),按签发时间升序。
 func ListKeys(db *sql.DB) ([]KeyRecord, error) {
-	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit FROM api_keys ORDER BY created_at`)
+	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits, expires_at
+		FROM api_keys ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("auth: 列出 api_key: %w", err)
 	}
@@ -123,8 +218,16 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 	var out []KeyRecord
 	for rows.Next() {
 		var r KeyRecord
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit); err != nil {
+		var exp sql.NullString
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits, &exp); err != nil {
 			return nil, fmt.Errorf("auth: 扫 api_key 行: %w", err)
+		}
+		if exp.Valid && exp.String != "" {
+			t, perr := time.Parse(time.RFC3339, exp.String)
+			if perr != nil {
+				return nil, fmt.Errorf("auth: api_key %s expires_at 非法: %w", r.Prefix, perr)
+			}
+			r.ExpiresAt = &t
 		}
 		out = append(out, r)
 	}
@@ -150,6 +253,7 @@ type Verifier struct {
 	db     *sql.DB
 	opts   Options
 	logger *slog.Logger
+	now    func() time.Time // 时钟源(过期判定;测试注入)
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry // key_hash → 条目
@@ -162,6 +266,9 @@ type Verifier struct {
 	revClient   *http.Client
 }
 
+// errKeyExpired 过期哨兵(Middleware 据此给「已过期」message,与无效/吊销可区分)。
+var errKeyExpired = errors.New("key 已过期")
+
 // cacheEntry 缓存条目:任意字段访问须持 v.mu。
 type cacheEntry struct {
 	info      KeyInfo
@@ -169,14 +276,18 @@ type cacheEntry struct {
 }
 
 // KeyInfo 鉴权成功后挂到 ctx 的 key 信息(不含任何明文/哈希)。
+// ExpiresAt 为查库 key 的过期时刻(零值 = 永不过期/已由平台验签判定);过期判定
+// 收口在 verify 成功后的单点,以当前时钟逐请求执行——缓存命中路径同样精确,
+// 缓存只影响 DB 变更可见性,不影响时间函数(过期时刻是不可变字段)。
 type KeyInfo struct {
-	ID              string
-	TenantID        string
-	Name            string
-	RPMLimit        int64
-	TPMLimit        int64
-	DailyQuotaMicro int64
-	Currency        string
+	ID                string
+	TenantID          string
+	Name              string
+	RPMLimit          int64
+	TPMLimit          int64
+	DailyQuotaCredits int64
+	Currency          string
+	ExpiresAt         time.Time
 }
 
 type ctxKey struct{}
@@ -197,7 +308,8 @@ func NewVerifier(db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
 		opts.RevocationsInterval = 60 * time.Second
 	}
 	v := &Verifier{
-		db: db, opts: opts, logger: logger, cache: map[string]cacheEntry{},
+		db: db, opts: opts, logger: logger, now: time.Now,
+		cache:     map[string]cacheEntry{},
 		revClient: &http.Client{Timeout: 5 * time.Second},
 	}
 	if opts.RevocationsURL != "" {
@@ -288,23 +400,30 @@ func (v *Verifier) revokedContains(keyID string) bool {
 }
 
 // Middleware 返回鉴权中间件:成功 → KeyInfo 挂 ctx;失败 → 401 auth_failed 信封。
+// 过期与无效/吊销同归 auth_failed(错误类型表零膨胀),但 message 可区分——
+// 用户动作不同:过期是重签,吊销是找管理员。
 func (v *Verifier) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info, err := v.verify(r)
 		if err != nil {
 			// 技术细节进日志,对外只给归一化 message(conventions「日志」)
 			v.logger.Warn("鉴权失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
+			msg := "API key 无效或已吊销"
+			if errors.Is(err, errKeyExpired) {
+				msg = "API key 已过期,请重新签发"
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(protocol.StatusForType(protocol.TypeAuthFailed))
 			_ = json.NewEncoder(w).Encode(protocol.NewErrorEnvelope(
-				protocol.TypeAuthFailed, "auth_failed", "API key 无效或已吊销", logging.RequestIDFrom(r.Context())))
+				protocol.TypeAuthFailed, "auth_failed", msg, logging.RequestIDFrom(r.Context())))
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, info)))
 	})
 }
 
-// verify 单次校验:平台 key(mk2-)走离线验真,查库 key(mk-)走缓存/查库。
+// verify 单次校验:平台 key(mk2-)走离线验真,查库 key(mk-)走缓存/查库;
+// 成功后单点过期判定(当前时钟,查库与缓存命中两路径同样精确)。
 func (v *Verifier) verify(r *http.Request) (*KeyInfo, error) {
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
@@ -315,10 +434,20 @@ func (v *Verifier) verify(r *http.Request) (*KeyInfo, error) {
 		return nil, errors.New("鉴权头非 Bearer 形态")
 	}
 	raw := strings.TrimSpace(h[len(prefix):])
+	var info *KeyInfo
+	var err error
 	if strings.HasPrefix(raw, PlatformKeyPrefix) {
-		return v.verifyPlatform(raw)
+		info, err = v.verifyPlatform(raw)
+	} else {
+		info, err = v.verifyLookup(raw)
 	}
-	return v.verifyLookup(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !info.ExpiresAt.IsZero() && v.now().After(info.ExpiresAt) {
+		return nil, errKeyExpired
+	}
+	return info, nil
 }
 
 // verifyPlatform 自校验平台 key(ADR-0006):HMAC 离线验真 + 吊销快照;不进缓存(HMAC µs 级,免吊销滞留)。
@@ -334,11 +463,11 @@ func (v *Verifier) verifyPlatform(raw string) (*KeyInfo, error) {
 		return nil, errors.New("平台 key 已吊销")
 	}
 	return &KeyInfo{
-		ID:              claims.KeyID,
-		TenantID:        claims.TenantID,
-		RPMLimit:        claims.RPMLimit,
-		TPMLimit:        claims.TPMLimit,
-		DailyQuotaMicro: claims.DailyQuotaMicro,
+		ID:                claims.KeyID,
+		TenantID:          claims.TenantID,
+		RPMLimit:          claims.RPMLimit,
+		TPMLimit:          claims.TPMLimit,
+		DailyQuotaCredits: claims.DailyQuotaCredits,
 	}, nil
 }
 
@@ -373,13 +502,16 @@ func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
 		return nil, errors.New("租户已禁用")
 	}
 	info := &KeyInfo{
-		ID:              row.ID,
-		TenantID:        row.TenantID,
-		Name:            row.Name,
-		RPMLimit:        row.RPMLimit,
-		TPMLimit:        row.TPMLimit,
-		DailyQuotaMicro: row.DailyQuotaMicro,
-		Currency:        row.Currency,
+		ID:                row.ID,
+		TenantID:          row.TenantID,
+		Name:              row.Name,
+		RPMLimit:          row.RPMLimit,
+		TPMLimit:          row.TPMLimit,
+		DailyQuotaCredits: row.DailyQuotaCredits,
+		Currency:          row.Currency,
+	}
+	if row.ExpiresAt != nil {
+		info.ExpiresAt = *row.ExpiresAt
 	}
 
 	v.mu.Lock()

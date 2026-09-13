@@ -66,16 +66,17 @@ func (d *PricingDirectory) Aliases() []string {
 	return out
 }
 
-// FormatPrice μ 价目 → 人类可读十进制(≤6 位小数,去尾零);FormatPrice(ParsePrice(x)) 恒等往返。
-func FormatPrice(micro int64) string {
-	neg := micro < 0
+// FormatPrice credit 价目 → 人类可读十进制主单位(≤9 位小数,去尾零);
+// FormatPrice(ParsePrice(x)) 恒等往返。表示层只出现主单位,credit 不外露。
+func FormatPrice(credits int64) string {
+	neg := credits < 0
 	if neg {
-		micro = -micro
+		credits = -credits
 	}
-	intPart, frac := micro/1_000_000, micro%1_000_000
+	intPart, frac := credits/creditPerUnit, credits%creditPerUnit
 	s := strconv.FormatInt(intPart, 10)
 	if frac > 0 {
-		s += "." + strings.TrimRight(fmt.Sprintf("%06d", frac), "0")
+		s += "." + strings.TrimRight(fmt.Sprintf("%09d", frac), "0")
 	}
 	if neg {
 		s = "-" + s

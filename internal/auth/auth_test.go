@@ -64,7 +64,7 @@ func TestHash_确定性(t *testing.T) {
 func newVerifierDB(t *testing.T) (*sql.DB, string, string) {
 	t.Helper()
 	db := openDB(t)
-	plaintext, rec, err := CreateKey(db, "default", "测试key", 60)
+	plaintext, rec, err := CreateKey(db, "default", "测试key", 60, KeyOpts{})
 	if err != nil {
 		t.Fatalf("签发失败: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestCache_过期与容量淘汰(t *testing.T) {
 
 func TestCreateKey_落库记录与明文回显(t *testing.T) {
 	db := openDB(t)
-	plaintext, rec, err := CreateKey(db, "default", "k1", 120)
+	plaintext, rec, err := CreateKey(db, "default", "k1", 120, KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestCreateKey_落库记录与明文回显(t *testing.T) {
 // (租户状态随 GetAPIKeyByHash 的 JOIN 返回,verify 一并判定)。
 func TestVerify_租户禁用拒绝(t *testing.T) {
 	db := openDB(t)
-	plaintext, _, err := CreateKey(db, "default", "tenant-disable", 60)
+	plaintext, _, err := CreateKey(db, "default", "tenant-disable", 60, KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestVerify_租户禁用拒绝(t *testing.T) {
 func TestPlatformKey_验真与负面(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	claims := PlatformClaims{TenantID: "t-1", KeyID: "k-1", ExpiresUnix: time.Now().Add(time.Hour).Unix(),
-		RPMLimit: 60, TPMLimit: 100_000, DailyQuotaMicro: 5_000_000}
+		RPMLimit: 60, TPMLimit: 100_000, DailyQuotaCredits: 5_000_000}
 	key, err := FormatPlatformKey(claims, secret)
 	if err != nil {
 		t.Fatal(err)
@@ -251,7 +251,7 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 		return v.verify(r)
 	}
 	info, err := req(key)
-	if err != nil || info.ID != "k-1" || info.TenantID != "t-1" || info.RPMLimit != 60 || info.DailyQuotaMicro != 5_000_000 {
+	if err != nil || info.ID != "k-1" || info.TenantID != "t-1" || info.RPMLimit != 60 || info.DailyQuotaCredits != 5_000_000 {
 		t.Fatalf("合法平台 key 应通过并携带限额: %+v %v", info, err)
 	}
 	// 篡改

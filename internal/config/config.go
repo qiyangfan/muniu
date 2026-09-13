@@ -138,10 +138,12 @@ type Config struct {
 	Metering struct {
 		FlushIntervalMs int    `yaml:"flush_interval_ms"`
 		FlushBatch      int    `yaml:"flush_batch"`
-		Sink            string `yaml:"sink"`            // local(缺省) | ingest
-		IngestURL       string `yaml:"ingest_url"`      // sink=ingest 必填
-		IngestToken     string `yaml:"ingest_token"`    // 可选 Bearer(支持 ${VAR} 展开)
-		BufferCapacity  int    `yaml:"buffer_capacity"` // ingest 失败的本地缓冲上限(行),缺省 1_000_000
+		Sink            string `yaml:"sink"`             // local(缺省) | ingest
+		IngestURL       string `yaml:"ingest_url"`       // sink=ingest 必填
+		IngestToken     string `yaml:"ingest_token"`     // 可选 Bearer(支持 ${VAR} 展开)
+		BufferCapacity  int    `yaml:"buffer_capacity"`  // ingest 失败的本地缓冲上限(行),缺省 1_000_000
+		Settlement      string `yaml:"settlement"`       // 本位币:CNY(缺省)|USD;credit 锚定本位币(1 credit = 1e-9 本位币)
+		FXUSDCNYMilli   int64  `yaml:"fx_usd_cny_milli"` // 汇率:1 USD = fx/1000 CNY(7.200=7200);仅异币种价目需要
 	} `yaml:"metering"`
 	ControlPlane struct {
 		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点;空 = 不拉取(standalone)
@@ -409,9 +411,27 @@ func (c *Config) validate() error {
 		}
 	}
 
+	// 本位币(settlement):credit 锚定点;异币种价目必须配置汇率,禁止静默混币种
+	settlement := strings.ToUpper(c.Metering.Settlement)
+	if settlement == "" {
+		settlement = "CNY"
+	}
+	if !metering.ValidSettlement(settlement) {
+		add("metering.settlement 非法 %q(允许 CNY|USD)", c.Metering.Settlement)
+	}
+
 	for alias, pr := range c.Pricing {
 		if !legalCurrency[strings.ToUpper(pr.Currency)] {
 			add("pricing[%s] currency 非法 %q(允许 CNY|USD)", alias, pr.Currency)
+		}
+		// 异币种报价必须显式配置汇率(本位币概念见 metering.md「本位币与 credit」);
+		// 省略币种 = 本位币(与 SettlePrice 空 Currency 短路语义一致,域B 审查对齐)
+		quoteCur := strings.ToUpper(pr.Currency)
+		if quoteCur == "" {
+			quoteCur = settlement
+		}
+		if quoteCur != settlement && c.Metering.FXUSDCNYMilli <= 0 {
+			add("pricing[%s] 报价币种 %s ≠ 本位币 %s,须配置 metering.fx_usd_cny_milli(USD→CNY 毫单位)", alias, quoteCur, settlement)
 		}
 		// 分时段倍率窗:直接引用 metering 解析器做 fail-fast(单一事实源,消息聚合一次报全)
 		if pr.Timezone != "" {

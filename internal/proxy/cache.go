@@ -25,42 +25,58 @@ type cachePhase struct {
 }
 
 // lookupPhase 检索阶段:准入判定→嵌入→两级检索。任何失败静默降级为不命中(缓存故障不得影响请求)。
+// 判定分布进 /metrics(hit/miss=实际检索;skip=缓存未参与:租户开关关、tools 请求、
+// 温度不合规、超 8K、嵌入失败等——缓存子系统开启但本请求未检索)。
 func (p *Proxy) lookupCache(r *http.Request, req *protocol.ChatRequest) (*semantic.LookupResult, *cachePhase) {
 	if p.cache == nil {
 		return nil, nil
 	}
+	tenantID := ""
+	if info := auth.KeyFrom(r.Context()); info != nil {
+		tenantID = info.TenantID
+	}
+	return p.lookupCacheFor(tenantID, r, req)
+}
+
+// lookupCacheFor 检索实现(租户显式参数:测试可直达 skip/hit/miss 分支)。
+func (p *Proxy) lookupCacheFor(tenantID string, r *http.Request, req *protocol.ChatRequest) (*semantic.LookupResult, *cachePhase) {
 	defer func() { _ = recover() }() // 缓存路径任何 panic 一律吞掉降级(宁缺勿错的工程化表达)
-	info := auth.KeyFrom(r.Context())
-	if info == nil || !p.cacheTenantEnabled(info.TenantID) {
+	skip := func() (*semantic.LookupResult, *cachePhase) {
+		SemanticCacheQueries.Inc(req.Model, "skip")
 		return nil, nil
+	}
+	if tenantID == "" || !p.cacheTenantEnabled(tenantID) {
+		return skip()
 	}
 	// 带工具的请求不参与缓存:二级语义检索按 messages 向量全局 TopK,无法感知 tools 差异,
 	// 不同工具定义的同义请求会错拿彼此答案(宁缺勿错;键级 tools 指纹拦不住向量检索)
 	if len(req.Tools) > 0 && string(req.Tools) != "null" {
-		return nil, nil
+		return skip()
 	}
 	if !semantic.TemperatureAdmissible(req.Temperature) {
-		return nil, nil
+		return skip()
 	}
 	inputText, err := json.Marshal(req.Messages)
 	if err != nil {
-		return nil, nil
+		return skip()
 	}
 	inputTokens, _ := metering.CountTokens(string(inputText), req.Model)
 	if inputTokens > 8000 {
-		return nil, nil
+		return skip()
 	}
 	// tools 指纹:请求级 tools 已整体排除出缓存,此处恒空串(Fingerprint 形参保留给未来细粒度准入)
 	vec, err := p.cache.EmbedInput(r.Context(), string(inputText))
 	if err != nil {
 		p.logger.Warn("语义缓存嵌入失败,跳过检索", "request_id", loggingRequestID(r.Context()), "error_detail", err.Error())
-		return nil, nil
+		return skip()
 	}
 	fp := semantic.Fingerprint(req.Model, string(inputText), "")
-	res, hit := p.cache.Lookup(r.Context(), info.TenantID, fp, vec)
+	res, hit := p.cache.Lookup(r.Context(), tenantID, fp, vec)
 	if hit {
+		SemanticCacheQueries.Inc(req.Model, "hit")
 		return res, &cachePhase{enabled: true, fp: fp, vec: vec, inputTk: inputTokens}
 	}
+	SemanticCacheQueries.Inc(req.Model, "miss")
 	return nil, &cachePhase{enabled: true, fp: fp, vec: vec, inputTk: inputTokens}
 }
 
@@ -167,6 +183,8 @@ func (p *Proxy) recordCacheHit(r *http.Request, req *protocol.ChatRequest, res *
 		Stream: req.Stream, Status: "ok",
 		Usage: usageOf(res), Currency: "CNY", TotalMs: time.Since(hitStart).Milliseconds(),
 	}))
+	// 命中行同入 token 流向序列(口径=落账行:cached 恒 0,provider=semantic-cache)
+	observeTokens("semantic-cache", req.Model, usageOf(res))
 }
 
 // usageOf 从回放体解析 usage(缺失按 0)。cached_tokens 恒置 0:

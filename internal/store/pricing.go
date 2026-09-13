@@ -1,5 +1,5 @@
 // model_pricing repo(动态改价,metering.md「动态价目」):运行态价目 CRUD。
-// YAML pricing 为静态兜底,本表按别名覆盖;读写均整数 μ,窗口以 JSON 形态持久化。
+// YAML pricing 为静态兜底,本表按别名覆盖;读写均为整数 credit,窗口以 JSON 形态持久化。
 package store
 
 import (
@@ -16,19 +16,19 @@ type PricingWindowRecord struct {
 
 // PricingRecord model_pricing 行(管理面读侧/写侧共用水仓形态)。
 type PricingRecord struct {
-	Alias            string
-	Currency         string
-	InputMicro       int64
-	CachedInputMicro int64 // 0=缺省同 input
-	OutputMicro      int64
-	Timezone         string
-	Windows          []PricingWindowRecord
-	UpdatedAt        string
+	Alias              string
+	Currency           string
+	InputCredits       int64
+	CachedInputCredits int64 // 0=缺省同 input
+	OutputCredits      int64
+	Timezone           string
+	Windows            []PricingWindowRecord
+	UpdatedAt          string
 }
 
 // ListPricing 全部运行态价目(按别名升序)。
 func ListPricing(db *sql.DB) ([]PricingRecord, error) {
-	rows, err := db.Query(`SELECT alias, currency, input_micro, cached_input_micro, output_micro,
+	rows, err := db.Query(`SELECT alias, currency, input_credits, cached_input_credits, output_credits,
 		timezone, time_windows, updated_at FROM model_pricing ORDER BY alias`)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列出价目: %w", err)
@@ -38,8 +38,8 @@ func ListPricing(db *sql.DB) ([]PricingRecord, error) {
 	for rows.Next() {
 		var r PricingRecord
 		var windowsJSON string
-		if err := rows.Scan(&r.Alias, &r.Currency, &r.InputMicro, &r.CachedInputMicro,
-			&r.OutputMicro, &r.Timezone, &windowsJSON, &r.UpdatedAt); err != nil {
+		if err := rows.Scan(&r.Alias, &r.Currency, &r.InputCredits, &r.CachedInputCredits,
+			&r.OutputCredits, &r.Timezone, &windowsJSON, &r.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("store: 扫价目行: %w", err)
 		}
 		if err := json.Unmarshal([]byte(windowsJSON), &r.Windows); err != nil {
@@ -52,12 +52,12 @@ func ListPricing(db *sql.DB) ([]PricingRecord, error) {
 
 // GetPricing 按别名取运行态价目;未配置返回 ErrNotFound。
 func GetPricing(db *sql.DB, alias string) (*PricingRecord, error) {
-	row := db.QueryRow(`SELECT alias, currency, input_micro, cached_input_micro, output_micro,
+	row := db.QueryRow(`SELECT alias, currency, input_credits, cached_input_credits, output_credits,
 		timezone, time_windows, updated_at FROM model_pricing WHERE alias = ?`, alias)
 	var r PricingRecord
 	var windowsJSON string
-	err := row.Scan(&r.Alias, &r.Currency, &r.InputMicro, &r.CachedInputMicro,
-		&r.OutputMicro, &r.Timezone, &windowsJSON, &r.UpdatedAt)
+	err := row.Scan(&r.Alias, &r.Currency, &r.InputCredits, &r.CachedInputCredits,
+		&r.OutputCredits, &r.Timezone, &windowsJSON, &r.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, ErrNotFound
 	}
@@ -80,13 +80,13 @@ func UpsertPricing(db *sql.DB, r PricingRecord) error {
 		r.Timezone = "UTC"
 	}
 	_, err = db.Exec(`INSERT INTO model_pricing
-		(alias, currency, input_micro, cached_input_micro, output_micro, timezone, time_windows, updated_at)
+		(alias, currency, input_credits, cached_input_credits, output_credits, timezone, time_windows, updated_at)
 		VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(alias) DO UPDATE SET
-		  currency=excluded.currency, input_micro=excluded.input_micro,
-		  cached_input_micro=excluded.cached_input_micro, output_micro=excluded.output_micro,
+		  currency=excluded.currency, input_credits=excluded.input_credits,
+		  cached_input_credits=excluded.cached_input_credits, output_credits=excluded.output_credits,
 		  timezone=excluded.timezone, time_windows=excluded.time_windows, updated_at=excluded.updated_at`,
-		r.Alias, r.Currency, r.InputMicro, r.CachedInputMicro, r.OutputMicro,
+		r.Alias, r.Currency, r.InputCredits, r.CachedInputCredits, r.OutputCredits,
 		r.Timezone, string(windowsJSON), r.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("store: 写价目: %w", err)
