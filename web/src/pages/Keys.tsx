@@ -15,9 +15,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../components/ui/alert-dialog";
-import { Table, TBody, TD, TH, THead, TR } from "../components/ui/table";
-import { Skeleton } from "../components/ui/skeleton";
-import { EmptyState } from "../components/empty-state";
+import { Card } from "../components/ui/card";
+import { DataList, type DataCol } from "../components/data-list";
 import { FormRow } from "../components/form-row";
 import { formatDateTime, formatNumber } from "../lib/datetime";
 import { fmtCredits, rfc3339ToLocal } from "../lib/utils";
@@ -33,9 +32,9 @@ function QuickExpires({ onPick }: { onPick: (v: string) => void }) {
     );
   };
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className="flex flex-wrap gap-2">
       {[1, 7, 30].map((d) => (
-        <Button key={d} type="button" variant="outline" size="xs" onClick={() => pick(d)}>
+        <Button key={d} type="button" variant="outline" size="sm" onClick={() => pick(d)}>
           {d} 天后
         </Button>
       ))}
@@ -121,90 +120,162 @@ export default function Keys() {
   const fmtLimit = (n: number | null | undefined) => (!n ? "不限" : formatNumber(n));
   const fmtQuota = (n: number | null | undefined) => (!n ? "不限" : fmtCredits(n));
 
+  // 列定义单源:桌面表格与移动卡片共用;mobile 位做触屏口径(租户截短/按钮档位)
+  const columns: DataCol<KeyRecord>[] = [
+    {
+      key: "prefix",
+      label: "密钥前缀",
+      secondary: true,
+      render: (k, mobile) => (
+        <span className={mobile ? "font-mono text-xs text-muted-foreground" : "font-mono"}>
+          {k.prefix}
+        </span>
+      ),
+    },
+    { key: "name", label: "名称", primary: true, render: (k) => k.name },
+    {
+      key: "tenant",
+      label: "租户",
+      // 租户 id 是 UUID 形态时移动卡片半列放不下,截短显示(title 保留全值);桌面列维持原值
+      render: (k, mobile) => {
+        const v = k.tenant_id ?? "—";
+        return mobile ? <span title={v}>{v.length > 14 ? `${v.slice(0, 12)}…` : v}</span> : v;
+      },
+    },
+    {
+      key: "rpm",
+      label: "RPM",
+      numeric: true,
+      headTitle: "每分钟请求数;不限 = 未设置上限",
+      render: (k) => fmtLimit(k.rpm_limit),
+    },
+    {
+      key: "tpm",
+      label: "TPM",
+      numeric: true,
+      headTitle: "每分钟 Tokens 数;不限 = 未设置上限",
+      render: (k) => fmtLimit(k.tpm_limit),
+    },
+    {
+      key: "quota",
+      label: "日配额(credit)",
+      numeric: true,
+      headTitle: "1 credit = 十亿分之一本币",
+      render: (k) => fmtQuota(k.daily_quota_credits),
+    },
+    { key: "expires", label: "过期", render: (k) => fmtExpires(k.expires_at) },
+    {
+      key: "actions",
+      label: <span className="sr-only">操作</span>,
+      actions: true,
+      render: (k, mobile) => (
+        <>
+          <Button variant="ghost" size={mobile ? "sm" : "xs"} onClick={() => openEdit(k)}>
+            编辑
+          </Button>
+          <Button
+            variant="ghost-destructive"
+            size={mobile ? "sm" : "xs"}
+            onClick={() => {
+              if (k.prefix) setRevokeTarget(k);
+            }}
+          >
+            吊销
+          </Button>
+        </>
+      ),
+    },
+  ];
+
   return (
     <div className="space-y-4">
-      <form
-        className="flex flex-wrap items-end gap-2"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          setBusy(true);
-          try {
-            const r = await api.createKey(tenant, name, rpm, {
-              tpm_limit: tpm,
-              daily_quota_credits: quota,
-              ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
-            });
-            setPlain(r.key);
-            setErr("");
-            setName("");
-            // 新增字段一并复位:残留的过期时刻会静默套到下一把密钥上
-            setExpires("");
-            setTpm(0);
-            setQuota(0);
-            refresh();
-          } catch (e2) {
-            setErr((e2 as Error).message);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      >
-        <FormRow label="租户" htmlFor="key-tenant" className="w-44">
-          <Input
-            id="key-tenant"
-            placeholder="租户"
-            value={tenant}
-            onChange={(e) => setTenant(e.target.value)}
-          />
-        </FormRow>
-        <FormRow label="key 名称" htmlFor="key-name" className="w-56">
-          <Input
-            id="key-name"
-            placeholder="key 名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-        </FormRow>
-        <FormRow label="RPM(每分钟请求数)" htmlFor="key-rpm" className="w-36">
-          <Input
-            id="key-rpm"
-            type="number"
-            value={rpm}
-            onChange={(e) => setRpm(Number(e.target.value))}
-          />
-        </FormRow>
-        <FormRow label="TPM(每分钟 Tokens 数)" htmlFor="key-tpm" className="w-40">
-          <Input
-            id="key-tpm"
-            type="number"
-            value={tpm}
-            onChange={(e) => setTpm(Number(e.target.value))}
-          />
-        </FormRow>
-        <FormRow label="日配额(credit)" htmlFor="key-quota" className="w-36">
-          <Input
-            id="key-quota"
-            type="number"
-            value={quota}
-            onChange={(e) => setQuota(Number(e.target.value))}
-          />
-        </FormRow>
-        <FormRow label="过期时刻(本地时间)" htmlFor="key-expires" className="w-60">
-          <>
+      {/* 签发表单:移动端单列全宽(sm 起两列,lg 三列,xl 六列一行),字段不再定宽挤压 */}
+      <Card className="p-4">
+        <form
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setBusy(true);
+            try {
+              const r = await api.createKey(tenant, name, rpm, {
+                tpm_limit: tpm,
+                daily_quota_credits: quota,
+                ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
+              });
+              setPlain(r.key);
+              setErr("");
+              setName("");
+              // 新增字段一并复位:残留的过期时刻会静默套到下一把密钥上
+              setExpires("");
+              setTpm(0);
+              setQuota(0);
+              refresh();
+            } catch (e2) {
+              setErr((e2 as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          <FormRow label="租户" htmlFor="key-tenant">
             <Input
-              id="key-expires"
-              type="datetime-local"
-              value={expires}
-              onChange={(e) => setExpires(e.target.value)}
+              id="key-tenant"
+              placeholder="租户"
+              value={tenant}
+              onChange={(e) => setTenant(e.target.value)}
             />
-            <QuickExpires onPick={setExpires} />
-          </>
-        </FormRow>
-        <Button type="submit" disabled={busy}>
-          {busy ? "签发中…" : "签发"}
-        </Button>
-      </form>
+          </FormRow>
+          <FormRow label="key 名称" htmlFor="key-name">
+            <Input
+              id="key-name"
+              placeholder="key 名称"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </FormRow>
+          <FormRow label="RPM(每分钟请求数)" htmlFor="key-rpm">
+            <Input
+              id="key-rpm"
+              type="number"
+              value={rpm}
+              onChange={(e) => setRpm(Number(e.target.value))}
+            />
+          </FormRow>
+          <FormRow label="TPM(每分钟 Tokens 数)" htmlFor="key-tpm">
+            <Input
+              id="key-tpm"
+              type="number"
+              value={tpm}
+              onChange={(e) => setTpm(Number(e.target.value))}
+            />
+          </FormRow>
+          <FormRow label="日配额(credit)" htmlFor="key-quota">
+            <Input
+              id="key-quota"
+              type="number"
+              value={quota}
+              onChange={(e) => setQuota(Number(e.target.value))}
+            />
+          </FormRow>
+          <FormRow label="过期时刻(本地时间)" htmlFor="key-expires">
+            <>
+              <Input
+                id="key-expires"
+                type="datetime-local"
+                value={expires}
+                onChange={(e) => setExpires(e.target.value)}
+              />
+              <QuickExpires onPick={setExpires} />
+            </>
+          </FormRow>
+          <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-6">
+            <Button type="submit" disabled={busy} className="w-full sm:w-auto">
+              {busy ? "签发中…" : "签发"}
+            </Button>
+          </div>
+        </form>
+      </Card>
       <p className="text-xs text-muted-foreground">
         RPM/TPM 与日配额填 0 表示不限制;过期时刻留空表示永不过期;1 credit = 十亿分之一本币。
       </p>
@@ -215,64 +286,15 @@ export default function Keys() {
           明文仅此一次: <code className="font-mono">{plain}</code>
         </NoticeBanner>
       )}
-      {!loaded ? (
-        <div className="space-y-2">
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-12 w-full" />
-        </div>
-      ) : (
-        <Table>
-          <THead>
-            <TR>
-              <TH>密钥前缀</TH>
-              <TH>名称</TH>
-              <TH>租户</TH>
-              <TH title="每分钟请求数;不限 = 未设置上限">RPM</TH>
-              <TH title="每分钟 Tokens 数;不限 = 未设置上限">TPM</TH>
-              <TH title="1 credit = 十亿分之一本币">日配额(credit)</TH>
-              <TH>过期</TH>
-              <TH>
-                <span className="sr-only">操作</span>
-              </TH>
-            </TR>
-          </THead>
-          <TBody>
-            {keys.length === 0 ? (
-              <TR>
-                <TD colSpan={8}>
-                  <EmptyState icon={KeyRound}>暂无密钥</EmptyState>
-                </TD>
-              </TR>
-            ) : (
-              keys.map((k) => (
-                <TR key={k.id}>
-                  <TD className="font-mono">{k.prefix}</TD>
-                  <TD>{k.name}</TD>
-                  <TD>{k.tenant_id}</TD>
-                  <TD>{fmtLimit(k.rpm_limit)}</TD>
-                  <TD>{fmtLimit(k.tpm_limit)}</TD>
-                  <TD>{fmtQuota(k.daily_quota_credits)}</TD>
-                  <TD>{fmtExpires(k.expires_at)}</TD>
-                  <TD className="space-x-2 whitespace-nowrap">
-                    <Button variant="ghost" size="xs" onClick={() => openEdit(k)}>
-                      编辑
-                    </Button>
-                    <Button
-                      variant="ghost-destructive"
-                      size="xs"
-                      onClick={() => {
-                        if (k.prefix) setRevokeTarget(k);
-                      }}
-                    >
-                      吊销
-                    </Button>
-                  </TD>
-                </TR>
-              ))
-            )}
-          </TBody>
-        </Table>
-      )}
+      <DataList
+        columns={columns}
+        rows={keys}
+        rowKey={(k) => k.id ?? k.prefix ?? ""}
+        empty="暂无密钥"
+        emptyIcon={KeyRound}
+        loading={!loaded}
+        skeletonRows={2}
+      />
 
       <AlertDialog
         open={editTarget !== null}
@@ -287,7 +309,7 @@ export default function Keys() {
               局部生效:保存后下一请求即用新限额;过期时刻清空 = 永不过期。
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {err && <p className="text-sm text-destructive">{err}</p>}
+          {err && <ErrorAlert>错误:{err}</ErrorAlert>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <FormRow label="RPM(每分钟请求数)" htmlFor="edit-rpm">
               <Input

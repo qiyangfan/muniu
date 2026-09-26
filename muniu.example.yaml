@@ -56,6 +56,9 @@ metering:
 
 # 上游供应商(静态拓扑)。weight 同优先级内加权轮询;priority 小者先被选中,
 # 仅在同优先级候选全部不可用时向更大 priority 降级。
+# 官方端点全家福——OpenAI 兼容各官方家 / 各家 Anthropic 分支(桥接组合)/
+# 聚合与本地平台 / Plan 订阅端点计费红线——见 docs/provider-presets.md;
+# 本节只留代表性样例,中转站一律不预设(兼容基座自填端点 + 白名单放行即可)。
 providers:
   - name: deepseek
     adapter: deepseek                     # 适配器类型:openai=兼容基座;deepseek/moonshot/glm=基座+quirk;anthropic/gemini=桥接(后续阶段)
@@ -73,6 +76,20 @@ providers:
       - env: OPENAI_API_KEY_1
     weight: 30
     priority: 1
+  # 兼容官方家全部 openai 基座零代码,按预设目录抄 base_url 即可(示例 MiniMax):
+  # - name: minimax
+  #   adapter: openai
+  #   base_url: "https://api.minimaxi.com/v1"
+  #   keys:
+  #     - env: MINIMAX_API_KEY_1
+  # anthropic 分支(订阅制 Coding Plan 多挂在此形态)——⚠ 目录 B 节「鉴权头
+  # 形态缺口」未冒烟前勿上生产:
+  # - name: kimi-coding
+  #   adapter: anthropic
+  #   auth: bearer                       # 国内分支声明口径(官方 Anthropic 缺省 x-api-key)
+  #   base_url: "https://api.kimi.com/coding/"
+  #   keys:
+  #     - env: KIMI_CODING_KEY_1
 
 # 模型路由:键 = 对外模型别名(即入站请求的 model 字段),
 # 值 = 有序候选列表,failover 依此降级(语义见 docs/design/traffic-governance.md)

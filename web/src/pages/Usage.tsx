@@ -3,9 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type UsagePoint } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { ErrorAlert } from "../components/ui/alert";
-import { Table, TBody, TD, TH, THead, TR } from "../components/ui/table";
-import { Skeleton } from "../components/ui/skeleton";
-import { EmptyState } from "../components/empty-state";
+import { DataList, type DataCol } from "../components/data-list";
 import { formatDateTime, formatNumber } from "../lib/datetime";
 import { fmtCredits } from "../lib/utils";
 
@@ -87,23 +85,69 @@ export default function Usage() {
     return prefix ? `${prefix}…` : v;
   };
 
+  // 列定义单源:桌面表格与移动卡片共用
+  const columns: DataCol<UsagePoint>[] = [
+    {
+      key: "dim",
+      label: DIM_COL[dim],
+      primary: true,
+      render: (p) => (
+        <span className="font-mono" title={dim === "key" ? p.dim : undefined}>
+          {dimText(p.dim)}
+        </span>
+      ),
+    },
+    { key: "requests", label: "请求", numeric: true, render: (p) => formatNumber(p.requests) },
+    {
+      key: "prompt",
+      label: "输入 Tokens",
+      numeric: true,
+      render: (p) => formatNumber(p.prompt_tokens),
+    },
+    {
+      key: "completion",
+      label: "输出 Tokens",
+      numeric: true,
+      render: (p) => formatNumber(p.completion_tokens),
+    },
+    {
+      key: "cache",
+      label: "缓存命中",
+      numeric: true,
+      render: (p) => formatNumber(p.cache_hits),
+    },
+    {
+      key: "cost",
+      label: "成本(credit)",
+      numeric: true,
+      headTitle: "1 credit = 十亿分之一本币",
+      render: (p) => fmtCredits(p.cost_credits ?? 0),
+    },
+  ];
+
   return (
     <div className="space-y-4">
       {err && <ErrorAlert>加载失败:{err}</ErrorAlert>}
-      <div className="flex flex-wrap items-center gap-2">
-        {DIMS.map((d) => (
-          <Button
-            key={d}
-            size="sm"
-            variant={dim === d ? "default" : "secondary"}
-            aria-pressed={dim === d}
-            onClick={() => setDim(d)}
-          >
-            {DIM_LABELS[d]}
-          </Button>
-        ))}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <span className="text-xs text-muted-foreground">时间范围</span>
+      {/* 筛选分组:移动端两行各占一档、按钮等宽(分段控件手感),sm+ 恢复同行左组+右组 */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="flex gap-1.5" role="group" aria-label="统计维度">
+          {DIMS.map((d) => (
+            <Button
+              key={d}
+              size="sm"
+              variant={dim === d ? "default" : "secondary"}
+              aria-pressed={dim === d}
+              onClick={() => setDim(d)}
+              className="flex-1 sm:flex-none"
+            >
+              {DIM_LABELS[d]}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5 sm:ml-auto" role="group" aria-label="时间范围">
+          <span className="sr-only sm:not-sr-only sm:text-xs sm:text-muted-foreground">
+            时间范围
+          </span>
           {RANGES.map((r) => (
             <Button
               key={r}
@@ -111,6 +155,7 @@ export default function Usage() {
               variant={days === r ? "default" : "secondary"}
               aria-pressed={days === r}
               onClick={() => setDays(r)}
+              className="flex-1 sm:flex-none"
             >
               近 {r} 天
             </Button>
@@ -123,48 +168,14 @@ export default function Usage() {
           ;按日统计以 UTC 零点切分(北京时间早 8 点);成本 1 credit = 十亿分之一本币。
         </p>
       )}
-      {!loaded ? (
-        <div className="space-y-2">
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-12 w-full" />
-          <Skeleton className="h-12 w-full" />
-        </div>
-      ) : (
-        <Table>
-          <THead>
-            <TR>
-              <TH>{DIM_COL[dim]}</TH>
-              <TH>请求</TH>
-              <TH>输入 Tokens</TH>
-              <TH>输出 Tokens</TH>
-              <TH>缓存命中</TH>
-              <TH title="1 credit = 十亿分之一本币">成本(credit)</TH>
-            </TR>
-          </THead>
-          <TBody>
-            {points.length === 0 ? (
-              <TR>
-                <TD colSpan={6}>
-                  <EmptyState>暂无用量数据</EmptyState>
-                </TD>
-              </TR>
-            ) : (
-              points.map((p) => (
-                <TR key={p.dim}>
-                  <TD className="font-mono" title={dim === "key" ? p.dim : undefined}>
-                    {dimText(p.dim)}
-                  </TD>
-                  <TD>{formatNumber(p.requests)}</TD>
-                  <TD>{formatNumber(p.prompt_tokens)}</TD>
-                  <TD>{formatNumber(p.completion_tokens)}</TD>
-                  <TD>{formatNumber(p.cache_hits)}</TD>
-                  <TD>{fmtCredits(p.cost_credits ?? 0)}</TD>
-                </TR>
-              ))
-            )}
-          </TBody>
-        </Table>
-      )}
+      <DataList
+        columns={columns}
+        rows={points}
+        rowKey={(p) => p.dim ?? ""}
+        empty="暂无用量数据"
+        loading={!loaded}
+        skeletonRows={3}
+      />
     </div>
   );
 }

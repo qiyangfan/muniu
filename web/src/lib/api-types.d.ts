@@ -167,6 +167,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Anthropic Messages 入站(ADR-0013;边缘翻译为 chat 后进同一管道,鉴权/配额/限流同规;x-api-key 与 Bearer 双形态) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Anthropic 形态 key;与 Authorization Bearer 二选一 */
+                    "X-Api-Key"?: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 非流式 message 对象 / 流式 message_start→content_block_*→message_delta→message_stop 事件序列 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description content_block_unsupported / 请求不符合 Messages 格式(Anthropic error JSON) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 鉴权/限流错误(成功路径 Anthropic 形态;错误信封形态见设计文档登记) */
+                "4XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/responses/{id}": {
         parameters: {
             query?: never;
@@ -605,6 +656,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/v1/provider-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 官方端点预设目录(内置只读参考数据,复制 YAML 片段即可接入;收录标准见 upstream-adapters「官方端点预设目录」) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 预设条目数组(presets 包装键) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProviderPresetListResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/v1/cache/stats": {
         parameters: {
             query?: never;
@@ -982,6 +1069,32 @@ export interface components {
                 /** @enum {string} */
                 state?: "healthy" | "cooldown" | "disabled" | "unknown";
             }[];
+        };
+        /** @description 单条官方端点预设(adapter/base_url/env 与 config.Provider 同轴,可逐字抄进 YAML) */
+        ProviderPreset: {
+            /** @description 目录内唯一别名,建议直接用作 provider name */
+            alias?: string;
+            display?: string;
+            /** @enum {string} */
+            group?: "domestic" | "global" | "local";
+            /** @description 仅收 adapter.For 已实现集合 */
+            adapter?: string;
+            /**
+             * @description 鉴权形态声明:国内 Anthropic 分支按其官方文档 AUTH_TOKEN(Bearer)口径声明;空=适配器缺省(官方 Anthropic 为 x-api-key)
+             * @enum {string}
+             */
+            auth?: "bearer";
+            base_url?: string;
+            /** @description 建议的 key 环境变量名(约定俗成,非强制) */
+            env?: string;
+            docs?: string;
+            /** @description 典型模型(示意,以官方模型列表为准) */
+            models?: string[];
+            /** @description 接入注意事项,可空 */
+            note?: string;
+        };
+        ProviderPresetListResponse: {
+            presets?: components["schemas"]["ProviderPreset"][];
         };
         CacheStats: {
             enabled?: boolean;

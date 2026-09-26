@@ -27,12 +27,7 @@ type pluginPutRequest struct {
 	Config         map[string]string `json:"config"`           // get_config 键值
 }
 
-// registerPlugins 挂载插件路由(New 消费)。
-func registerPlugins(mux *http.ServeMux, d Deps) {
-	mux.HandleFunc("GET /admin/v1/plugins", pluginsList(d))
-	mux.HandleFunc("PUT /admin/v1/plugins/{name}", pluginPut(d))
-	mux.HandleFunc("PATCH /admin/v1/plugins/{name}", pluginPatch(d))
-}
+// 插件路由经 adminRouteTable 挂载(pluginsList/pluginPut/pluginPatch),不再单独注册。
 
 func pluginsList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

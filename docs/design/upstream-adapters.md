@@ -70,6 +70,16 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 | Anthropic | bridge(已落地) | x-api-key + anthropic-version(2023-06-01) | thinking_delta → reasoning_content(桥接翻译) | input/output/cache_read_input_tokens → prompt/completion/cached_tokens | 事件类型机(message_start/content_block_delta/message_delta/message_stop);官方文档区域屏蔽,按公开契约实现待复核(见 bridge/README) |
 | Gemini | openai 兼容层(egress-batch 裁决,见下节) | Bearer | 兼容层形态待冒烟实证 ⚠ | 兼容层 usage 键名待冒烟 ⚠ | 原生 bridge 方案已裁撤,以「Gemini 接入方向」节为准 |
 
+> 本矩阵只管协议事实。各家官方端点(base_url)、订阅 Plan 端点红线与冒烟路径的
+> 运营清单见 [docs/provider-presets.md](../provider-presets.md)。
+>
+> **Anthropic 桥接鉴权为声明制**(config `providers[].auth`,ADR-0010 同哲学):缺省
+> x-api-key(协议标准,官方 Anthropic/SDK 口径;对其发 Bearer 形态 API key 即 401,
+> Bearer 仅留给 OAuth);`auth: bearer` 改发 `Authorization: Bearer <key>`——国内分支
+> 官方文档普遍以 AUTH_TOKEN(Bearer)演示,目录中的分支预设已按此声明。零自动探测,
+> 分支实际接受头以 `MUNIU_SMOKE_PROVIDER=anthropic`(配 `MUNIU_SMOKE_AUTH=bearer`)
+> 真上游冒烟为准。
+
 ## Conformance 测试集(独立开源资产,目录即契约)
 
 ```

@@ -25,8 +25,7 @@ vet:
 ## lint: golangci-lint 未安装时跳过并提示(安装见 docs/plans/phase-0-bootstrap.md)
 .PHONY: lint
 lint:
-	@command -v golangci-lint >/dev/null 2>&1 || { echo "[lint] golangci-lint 未安装,跳过"; exit 0; }
-	golangci-lint run
+	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; else echo "[lint] golangci-lint 未安装,跳过"; fi
 
 ## test: 竞态检测下的全量测试 + 全局覆盖率门禁(total ≥65%,JaCoCo 同位一票否决;阈值只升不降)
 .PHONY: test

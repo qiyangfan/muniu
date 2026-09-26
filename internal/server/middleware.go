@@ -123,3 +123,16 @@ func tostring(v any) string {
 func loggingRequestID(ctx context.Context) string {
 	return logging.RequestIDFrom(ctx)
 }
+
+// AdaptAnthropicKey Anthropic 入站(/v1/messages)鉴权头适配:Anthropic 协议客户端经
+// x-api-key 携带 key,而数据面 verifier 只认 Authorization Bearer。仅在该路径且缺失
+// Authorization 时补写 Bearer 头,其余请求零改动;必须挂于 verifier.Middleware 之前。
+func AdaptAnthropicKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/messages" &&
+			r.Header.Get("Authorization") == "" && r.Header.Get("X-Api-Key") != "" {
+			r.Header.Set("Authorization", "Bearer "+r.Header.Get("X-Api-Key"))
+		}
+		next.ServeHTTP(w, r)
+	})
+}

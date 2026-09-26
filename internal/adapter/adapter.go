@@ -44,11 +44,30 @@ type EventMeta struct {
 	IsDone     bool `json:"is_done"`     // [DONE] 终止标记
 }
 
+// 鉴权形态声明(ADR-0010 同哲学:形态来自显式声明,零自动探测)。
+// 协议事实:官方 Anthropic Messages API 凭证走 x-api-key(Bearer 保留给 OAuth,
+// 对其发 Bearer 形态 API key 即 401);国内分支官方文档普遍以 AUTH_TOKEN(Bearer)
+// 演示。两者都对,按上游声明选择。
+const (
+	AuthDefault = ""       // 缺省:anthropic=x-api-key;openai 系=Bearer(基座固有)
+	AuthBearer  = "bearer" // anthropic 桥接改发 Authorization: Bearer <key>(国内分支口径)
+)
+
+// Options 适配器构造选项(零值=协议缺省);经 config.Provider.Auth 声明传入。
+type Options struct {
+	Auth string
+}
+
 // For 按适配器类型构造实例(config 的 adapter 字段=类型,provider 实例名可任意取):
 // openai 为兼容基座;deepseek/moonshot/glm = 基座 + 各家 quirk(差异只声明差异,ADR-0003);
-// qwen/doubao 当前与基座无已实证差异;anthropic/gemini 桥接属后续阶段,未实现即报错(fail-fast)。
-func For(adapterType, baseURL, apiKey string) (Adapter, error) {
+// qwen/doubao 当前与基座无已实证差异;anthropic 走桥接工厂(需 blank import bridge)。
+// opts 仅 anthropic 消费(鉴权形态声明),其余类型忽略。
+func For(adapterType, baseURL, apiKey string, opts ...Options) (Adapter, error) {
 	base := NewOpenAI(baseURL, apiKey)
+	var opt Options
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
 	switch adapterType {
 	case "openai", "qwen", "doubao":
 		return base, nil
@@ -59,9 +78,12 @@ func For(adapterType, baseURL, apiKey string) (Adapter, error) {
 	case "glm":
 		return newGLM(base), nil
 	case "anthropic":
+		if opt.Auth != AuthDefault && opt.Auth != AuthBearer {
+			return nil, fmt.Errorf("adapter: 不支持的鉴权形态 %q(允许 空|%s)", opt.Auth, AuthBearer)
+		}
 		// 桥接工厂由 bridge 包 init 注册(避免 adapter↔bridge 循环依赖)
 		if anthropicFactory != nil {
-			return anthropicFactory(baseURL, apiKey), nil
+			return anthropicFactory(baseURL, opt), nil
 		}
 		return nil, fmt.Errorf("adapter: anthropic 桥接未接线(需导入 adapter/bridge)")
 	default:
@@ -70,10 +92,10 @@ func For(adapterType, baseURL, apiKey string) (Adapter, error) {
 }
 
 // anthropicFactory 桥接构造工厂(bridge 包经 SetAnthropicFactory 注册)。
-var anthropicFactory func(baseURL, apiKey string) Adapter
+var anthropicFactory func(baseURL string, opts Options) Adapter
 
 // SetAnthropicFactory 注册桥接工厂(bridge 包 init 调用;应用方需 blank import bridge)。
-func SetAnthropicFactory(f func(baseURL, apiKey string) Adapter) {
+func SetAnthropicFactory(f func(baseURL string, opts Options) Adapter) {
 	anthropicFactory = f
 }
 

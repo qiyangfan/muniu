@@ -107,6 +107,14 @@ func flagConfOf(args []string) string {
 //	                                   → handler(解析→路由→单候选→转发→计量)
 //
 // 顺序即契约(architecture「中间件链」)。返回的 cleanup 在进程退出前排干计量管道。
+// routeEntry 业务路由表条目(单源):注册循环与漂移门禁(assemble 返回的 declared)同源消费。
+// 业务模式曾三处手写(chatMux/root.Handle/routes 清单),失步必然发生——/v1/messages
+// 曾因此 404(2026-09-26);新增入站形态只改本表,不可能再出现「挂了链没注册」的半状态。
+type routeEntry struct {
+	Pattern string
+	Handler http.Handler
+}
+
 func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, func(), error) {
 	// SQLite:运行态(api_keys/usage_logs);迁移随打开执行
 	db, err := store.Open(cfg.Storage.SQLite.Path)
@@ -167,7 +175,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 			}
 			inputs = append(inputs, keypool.KeyInput{ID: kr.Env, Value: v, Weight: kr.Weight})
 		}
-		ad, err := adapter.For(prov.Adapter, prov.BaseURL, first)
+		ad, err := adapter.For(prov.Adapter, prov.BaseURL, first, adapter.Options{Auth: prov.Auth})
 		if err != nil {
 			return nil, nil, fmt.Errorf("provider %s: %w", prov.Name, err)
 		}
@@ -400,25 +408,37 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		Logger: logger,
 		Shared: sharedBackend,
 	}
-	chatMux := http.NewServeMux()
-	chatMux.Handle("POST /v1/chat/completions", chatProxy.Handler())
-	chatMux.Handle("POST /v1/embeddings", chatProxy.HandlerEmbeddings())
-	// Responses 入站(ADR-0012):翻译后进同一管道,鉴权/配额/限流与 chat 同规
-	chatMux.Handle("POST /v1/responses", chatProxy.HandlerResponses())
-	// 无状态边界:不存储 response,恒 404(挂鉴权链,不泄漏给未鉴权方)
-	chatMux.Handle("GET /v1/responses/{id}", chatProxy.HandlerResponsesStateless())
-	chat := server.Chain(chatMux,
+	// 业务路由表(单源):模式在此只写一次,注册循环与漂移门禁(assemble 返回的 declared)
+	// 同源消费——曾三处手写(chatMux/root.Handle/routes 清单)必然失步,/v1/messages 因此 404 过。
+	// 中间件分组:数据面全链(auth+配额+限流)/模型发现(仅鉴权)/探活(轻链);顺序即契约。
+	dataPlaneMW := []server.Middleware{
 		server.RequestID, server.Recover(logger), server.AccessLog(logger),
-		verifier.Middleware, gate.Middleware)
-
-	// 模型发现(gateway-parity):数据面鉴权必须,但刻意不挂配额/限流/计量/插件——
-	// 只读元数据面零上游成本,且配额耗尽的客户端恰需列模型诊断(诊断链路不被成本闸阻断)
-	modelsMux := http.NewServeMux()
-	modelsMux.Handle("GET /v1/models", chatProxy.HandlerModels())
-	modelsMux.Handle("GET /v1/models/{model}", chatProxy.HandlerModels())
-	models := server.Chain(modelsMux,
+		verifier.Middleware, gate.Middleware,
+	}
+	readonlyMW := []server.Middleware{
 		server.RequestID, server.Recover(logger), server.AccessLog(logger),
-		verifier.Middleware)
+		verifier.Middleware,
+	}
+	entries := []routeEntry{
+		{"POST /v1/chat/completions", server.Chain(chatProxy.Handler(), dataPlaneMW...)},
+		{"POST /v1/embeddings", server.Chain(chatProxy.HandlerEmbeddings(), dataPlaneMW...)},
+		// Responses 入站(ADR-0012):翻译后进同一管道,鉴权/配额/限流与 chat 同规
+		{"POST /v1/responses", server.Chain(chatProxy.HandlerResponses(), dataPlaneMW...)},
+		// Anthropic Messages 入站(ADR-0013):同款边缘翻译;鉴权头适配仅挂本路由,先于 verifier
+		{"POST /v1/messages", server.Chain(chatProxy.HandlerMessages(),
+			server.RequestID, server.Recover(logger), server.AccessLog(logger),
+			server.AdaptAnthropicKey, verifier.Middleware, gate.Middleware)},
+		// 无状态边界:不存储 response,恒 404(挂鉴权链,不泄漏给未鉴权方)
+		{"GET /v1/responses/{id}", server.Chain(chatProxy.HandlerResponsesStateless(), dataPlaneMW...)},
+		// 模型发现(gateway-parity):数据面鉴权必须,但刻意不挂配额/限流/计量/插件——
+		// 只读元数据面零上游成本,且配额耗尽的客户端恰需列模型诊断(诊断链路不被成本闸阻断)
+		{"GET /v1/models", server.Chain(chatProxy.HandlerModels(), readonlyMW...)},
+		{"GET /v1/models/{model}", server.Chain(chatProxy.HandlerModels(), readonlyMW...)},
+		{"GET /healthz", server.Chain(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version.Version})
+		}), server.RequestID, server.Recover(logger), server.AccessLog(logger))},
+	}
 
 	// 管理面(T4.1):MUNIU_ADMIN_TOKEN 未配置则整体关闭(含控制台——无后端的空壳页
 	// 不该对外暴露,与告警文案保持一致)
@@ -447,13 +467,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 	}
 	adminHandler := admin.New(adminDeps)
 
-	// 探活路由轻链(不鉴权)
-	healthMux := http.NewServeMux()
-	healthMux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version.Version})
-	})
-	health := server.Chain(healthMux, server.RequestID, server.Recover(logger), server.AccessLog(logger))
+	// 探活已入业务路由表(轻链,不鉴权)。
 
 	// 可观测(ADR-0009):启用且管理 token 已配置时暴露 /metrics(token 门禁,
 	// 恒时比较防时序侧信道;Recover 防仪表函数 panic 裸断连接)。无 token 不挂载。
@@ -485,14 +499,21 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		})
 	}
 
+	// 注册:模式只在路由表写一次;/admin/v1/ 为子树挂载(模式集由 admin.Routes() 单源回报),
+	// /console/ 静态资源不在契约内
 	root := http.NewServeMux()
-	root.Handle("POST /v1/chat/completions", chat)
-	root.Handle("POST /v1/embeddings", chat)
-	root.Handle("POST /v1/responses", chat)
-	root.Handle("GET /v1/responses/{id}", chat)
-	root.Handle("GET /v1/models", models)
-	root.Handle("GET /v1/models/{model}", models)
-	root.Handle("GET /healthz", health)
+	for _, e := range entries {
+		root.Handle(e.Pattern, e.Handler)
+	}
+	declared := make([]string, 0, len(entries)+len(admin.Routes())+1)
+	for _, e := range entries {
+		declared = append(declared, e.Pattern)
+	}
+	if adminHandler != nil {
+		root.Handle("/admin/v1/", adminHandler)
+		root.Handle("GET /console/", web.Handler())
+		declared = append(declared, admin.Routes()...)
+	}
 	if metricsEnabled {
 		metricsHandler := server.Recover(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -507,15 +528,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 			metrics.RenderTo(w)
 		}))
 		root.Handle("GET /metrics", metricsHandler)
-	}
-	routes := []string{"POST /v1/chat/completions", "POST /v1/embeddings", "POST /v1/responses", "GET /v1/responses/{id}", "GET /v1/models", "GET /v1/models/{model}", "GET /healthz"}
-	if adminHandler != nil {
-		root.Handle("/admin/v1/", adminHandler)
-		root.Handle("GET /console/", web.Handler())
-		routes = append(routes, admin.Routes()...)
-	}
-	if metricsEnabled {
-		routes = append(routes, "GET /metrics")
+		declared = append(declared, "GET /metrics")
 	}
 
 	// 控制面价目拉取(ADR-0005 状态同步增量 #1):响应形态与管理 API 一致,覆盖写入后刷新目录。
@@ -602,5 +615,5 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		verifier.Close()
 		_ = pipeline.Close() // 退出前排干计量存量
 	}
-	return root, routes, cleanup, nil
+	return root, declared, cleanup, nil
 }

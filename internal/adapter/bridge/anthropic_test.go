@@ -342,3 +342,44 @@ func extractUsage(t *testing.T, chunk []byte) string {
 	}
 	return string(frame.Usage)
 }
+
+// TestBridge_Prepare_鉴权形态声明 声明制鉴权(config.Provider.Auth → adapter.Options):
+// 缺省=x-api-key(协议标准,官方 Anthropic/SDK 口径);bearer=Authorization Bearer(国内分支口径),
+// 且两形态互斥(声明 bearer 不得残留 x-api-key,反之亦然)。
+func TestBridge_Prepare_鉴权形态声明(t *testing.T) {
+	build := func(t *testing.T, auth string) adapter.Adapter {
+		t.Helper()
+		ad, err := adapter.For("anthropic", "https://api.example.com", "sk-test", adapter.Options{Auth: auth})
+		if err != nil {
+			t.Fatalf("构造桥接(auth=%q): %v", auth, err)
+		}
+		return ad
+	}
+	prepare := func(t *testing.T, ad adapter.Adapter) adapter.Outbound {
+		t.Helper()
+		out, err := ad.Prepare(&protocol.ChatRequest{
+			Model: "m",
+			Raw:   []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}]}`),
+		}, "m", "sk-test")
+		if err != nil {
+			t.Fatalf("Prepare: %v", err)
+		}
+		return *out
+	}
+
+	def := prepare(t, build(t, ""))
+	if def.Header.Get("x-api-key") != "sk-test" || def.Header.Get("Authorization") != "" {
+		t.Fatalf("缺省应 x-api-key 且无 Authorization: %v", def.Header)
+	}
+	bearer := prepare(t, build(t, adapter.AuthBearer))
+	if bearer.Header.Get("Authorization") != "Bearer sk-test" || bearer.Header.Get("x-api-key") != "" {
+		t.Fatalf("bearer 声明应仅发 Authorization: %v", bearer.Header)
+	}
+	if def.Header.Get("anthropic-version") != bearer.Header.Get("anthropic-version") {
+		t.Fatalf("anthropic-version 两形态都必须存在: %v / %v", def.Header, bearer.Header)
+	}
+	// 非法值:config 已拦截,adapter 层 fail-fast 兜底(控制面下发路径绕过 config.Load)
+	if _, err := adapter.For("anthropic", "https://x", "k", adapter.Options{Auth: "x-api-key"}); err == nil {
+		t.Fatal("auth 仅允许 空|bearer,非法值应报错")
+	}
+}

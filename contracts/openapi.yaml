@@ -84,6 +84,29 @@ components:
               id: { type: string }
               weight: { type: integer }
               state: { type: string, enum: [healthy, cooldown, disabled, unknown] }
+    ProviderPreset:
+      type: object
+      description: 单条官方端点预设(adapter/base_url/env 与 config.Provider 同轴,可逐字抄进 YAML)
+      properties:
+        alias: { type: string, description: "目录内唯一别名,建议直接用作 provider name" }
+        display: { type: string }
+        group: { type: string, enum: [domestic, global, local] }
+        adapter: { type: string, description: "仅收 adapter.For 已实现集合" }
+        auth: { type: string, enum: [bearer], description: "鉴权形态声明:国内 Anthropic 分支按其官方文档 AUTH_TOKEN(Bearer)口径声明;空=适配器缺省(官方 Anthropic 为 x-api-key)" }
+        base_url: { type: string }
+        env: { type: string, description: "建议的 key 环境变量名(约定俗成,非强制)" }
+        docs: { type: string }
+        models:
+          type: array
+          description: "典型模型(示意,以官方模型列表为准)"
+          items: { type: string }
+        note: { type: string, description: "接入注意事项,可空" }
+    ProviderPresetListResponse:
+      type: object
+      properties:
+        presets:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderPreset" }
     CacheStats:
       type: object
       properties:
@@ -190,6 +213,15 @@ paths:
         "200": { description: 非流式 response 对象 / 流式 SSE 事件集 }
         "400": { description: previous_response_id_unsupported / background_unsupported / input_item_unsupported / input_invalid }
         "4XX": { description: 归一化错误信封 }
+  /v1/messages:
+    post:
+      summary: Anthropic Messages 入站(ADR-0013;边缘翻译为 chat 后进同一管道,鉴权/配额/限流同规;x-api-key 与 Bearer 双形态)
+      parameters:
+        - { name: X-Api-Key, in: header, required: false, schema: { type: string }, description: "Anthropic 形态 key;与 Authorization Bearer 二选一" }
+      responses:
+        "200": { description: 非流式 message 对象 / 流式 message_start→content_block_*→message_delta→message_stop 事件序列 }
+        "400": { description: content_block_unsupported / 请求不符合 Messages 格式(Anthropic error JSON) }
+        "4XX": { description: 鉴权/限流错误(成功路径 Anthropic 形态;错误信封形态见设计文档登记) }
   /v1/responses/{id}:
     get:
       summary: 无状态网关不存储 response,恒 404
@@ -288,6 +320,15 @@ paths:
       summary: 供应商拓扑与 key 池实时状态(只读)
       responses:
         "200": { description: 供应商数组 }
+  /admin/v1/provider-presets:
+    get:
+      summary: 官方端点预设目录(内置只读参考数据,复制 YAML 片段即可接入;收录标准见 upstream-adapters「官方端点预设目录」)
+      responses:
+        "200":
+          description: 预设条目数组(presets 包装键)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderPresetListResponse" }
   /admin/v1/cache/stats:
     get:
       summary: 语义缓存统计

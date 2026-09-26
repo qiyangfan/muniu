@@ -53,6 +53,34 @@ type Deps struct {
 	Logger *slog.Logger
 }
 
+// adminRouteEntry 管理面路由表条目。
+type adminRouteEntry struct {
+	Pattern string
+	Handler func(Deps) http.HandlerFunc
+}
+
+// adminRouteTable 管理面路由单一事实源:New 据此注册,Routes() 据此回报(漂移门禁消费)。
+// 两处手写必然漂移(同业务面 /v1/messages 曾 404 的教训),模式在这里只写一次。
+var adminRouteTable = []adminRouteEntry{
+	{"GET /admin/v1/tenants", listTenants},
+	{"POST /admin/v1/tenants", createTenant},
+	{"PATCH /admin/v1/tenants/{id}", patchTenant},
+	{"GET /admin/v1/keys", listKeys},
+	{"POST /admin/v1/keys", createKey},
+	{"PATCH /admin/v1/keys/{id}", patchKey},
+	{"DELETE /admin/v1/keys/{prefix}", revokeKey},
+	{"GET /admin/v1/usage", usage},
+	{"GET /admin/v1/providers", providers},
+	{"GET /admin/v1/provider-presets", providerPresets},
+	{"GET /admin/v1/cache/stats", cacheStats},
+	{"GET /admin/v1/pricing", pricingList},
+	{"PUT /admin/v1/pricing/{alias}", pricingPut},
+	{"DELETE /admin/v1/pricing/{alias}", pricingDelete},
+	{"GET /admin/v1/plugins", pluginsList},
+	{"PUT /admin/v1/plugins/{name}", pluginPut},
+	{"PATCH /admin/v1/plugins/{name}", pluginPatch},
+}
+
 // New 构造管理面 handler;token 为空返回 nil(管理面关闭)。
 func New(d Deps) http.Handler {
 	if d.Token == "" {
@@ -62,20 +90,9 @@ func New(d Deps) http.Handler {
 		d.Logger = slog.Default()
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /admin/v1/tenants", listTenants(d))
-	mux.HandleFunc("POST /admin/v1/tenants", createTenant(d))
-	mux.HandleFunc("PATCH /admin/v1/tenants/{id}", patchTenant(d))
-	mux.HandleFunc("GET /admin/v1/keys", listKeys(d))
-	mux.HandleFunc("POST /admin/v1/keys", createKey(d))
-	mux.HandleFunc("PATCH /admin/v1/keys/{id}", patchKey(d))
-	mux.HandleFunc("DELETE /admin/v1/keys/{prefix}", revokeKey(d))
-	mux.HandleFunc("GET /admin/v1/usage", usage(d))
-	mux.HandleFunc("GET /admin/v1/providers", providers(d))
-	mux.HandleFunc("GET /admin/v1/cache/stats", cacheStats(d))
-	mux.HandleFunc("GET /admin/v1/pricing", pricingList(d))
-	mux.HandleFunc("PUT /admin/v1/pricing/{alias}", pricingPut(d))
-	mux.HandleFunc("DELETE /admin/v1/pricing/{alias}", pricingDelete(d))
-	registerPlugins(mux, d)
+	for _, e := range adminRouteTable {
+		mux.Handle(e.Pattern, e.Handler(d))
+	}
 	return authAdmin(d.Token, d.Logger, mux)
 }
 
@@ -431,24 +448,11 @@ func derefStr(s *string) string {
 	return *s
 }
 
-// Routes 管理面注册的路由模式表(漂移门禁与装配层共享;顺序稳定)。
+// Routes 管理面注册的路由模式表(漂移门禁与装配层共享;由 adminRouteTable 派生,顺序稳定)。
 func Routes() []string {
-	return []string{
-		"GET /admin/v1/tenants",
-		"POST /admin/v1/tenants",
-		"PATCH /admin/v1/tenants/{id}",
-		"GET /admin/v1/keys",
-		"POST /admin/v1/keys",
-		"PATCH /admin/v1/keys/{id}",
-		"DELETE /admin/v1/keys/{prefix}",
-		"GET /admin/v1/usage",
-		"GET /admin/v1/providers",
-		"GET /admin/v1/cache/stats",
-		"GET /admin/v1/pricing",
-		"PUT /admin/v1/pricing/{alias}",
-		"DELETE /admin/v1/pricing/{alias}",
-		"GET /admin/v1/plugins",
-		"PUT /admin/v1/plugins/{name}",
-		"PATCH /admin/v1/plugins/{name}",
+	out := make([]string, 0, len(adminRouteTable))
+	for _, e := range adminRouteTable {
+		out = append(out, e.Pattern)
 	}
+	return out
 }

@@ -26,8 +26,9 @@ export default function Overview() {
 
   if (err) return <ErrorAlert>错误:{err}</ErrorAlert>;
   return (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-3">
+    // 页面顶层块间距全站一档 space-y-4(与表格/卡片密度档一致,宪法 Article 2)
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
           label="语义缓存条目"
           value={stats?.enabled ? formatNumber(stats.entries) : "未启用"}
@@ -43,8 +44,9 @@ export default function Overview() {
         </CardHeader>
         <CardContent>
           {/* 图表取色唯一走 token 变量(宪法 Article 3/10,禁字面 hex):
-              recharts 浮层/坐标默认值是字面白与 #666,暗色下成刺眼白块,全部显式覆盖 */}
-          <div className="h-64">
+              recharts 浮层/坐标默认值是字面白与 #666,暗色下成刺眼白块,全部显式覆盖;
+              高度双档:窄屏 h-48 控制竖向占比,sm+ 恢复 h-64 */}
+          <div className="h-48 sm:h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={points}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
@@ -61,8 +63,9 @@ export default function Overview() {
                 <Tooltip
                   cursor={{ fill: "var(--color-accent)" }}
                   formatter={(v, name) =>
-                    // 请求数是次数不是 credit,不得套 credit 缩写;成本(credit)走大数缩写
-                    name === "请求数" ? Number(v).toLocaleString() : fmtCredits(Number(v))
+                    // 请求数是次数不是 credit,不得套 credit 缩写;成本(credit)走大数缩写;
+                    // 千分位走 datetime 单源(锁 zh-CN 分组,禁裸 toLocaleString 漂移 locale)
+                    name === "请求数" ? formatNumber(Number(v)) : fmtCredits(Number(v))
                   }
                   contentStyle={{
                     backgroundColor: "var(--color-popover)",

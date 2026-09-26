@@ -371,7 +371,7 @@ func TestEmbeddings_不支持与未知别名(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, embBody)
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
-	reg.Register("anthropic", bridge.NewAnthropic("https://api.anthropic.com", "k"))
+	reg.Register("anthropic", bridge.NewAnthropic("https://api.anthropic.com", adapter.Options{}))
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "v", Weight: 1}})
 	p := New(Config{
 		Registry: reg,

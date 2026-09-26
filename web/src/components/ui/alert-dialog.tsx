@@ -7,6 +7,9 @@ import { Button, buttonVariants } from "./button";
 // 本地标准件,API 对齐 kongming(Radix AlertDialog:Escape 关闭、点遮罩关闭、
 // role=alertdialog、aria-modal、焦点圈定与还原由 Radix 提供,勿手搓替代);
 // 宽度取宪法确认框档 sm:max-w-md,破坏性确认 Action 传 variant="destructive"。
+// 移动端形态(kongming 尚无 ui 目录,本仓为单源,双仓对齐时以此为准):
+// 窄屏贴底抽屉(bottom sheet,拇指可达 + 避键盘),sm+ 居中弹窗;
+// max-h[dvh]+overflow 防小屏竖向溢出,底部内边距让出 iOS 安全区。
 function AlertDialog({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
   return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
 }
@@ -40,7 +43,7 @@ function AlertDialogContent({
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border bg-background p-6 shadow-lg sm:max-w-md",
+          "fixed inset-x-0 bottom-0 z-50 grid max-h-[85dvh] w-full gap-4 overflow-y-auto rounded-t-2xl border bg-background p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-lg sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-1/2 sm:max-w-md sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:p-6 sm:pb-6",
           className,
         )}
         {...props}

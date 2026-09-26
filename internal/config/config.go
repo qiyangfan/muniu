@@ -51,6 +51,7 @@ type Provider struct {
 	Name     string   `yaml:"name"`
 	Adapter  string   `yaml:"adapter"`
 	BaseURL  string   `yaml:"base_url"`
+	Auth     string   `yaml:"auth"` // 鉴权形态声明:空=适配器缺省(anthropic=x-api-key);bearer=Authorization Bearer(国内分支口径)。仅 anthropic 适配器消费
 	Keys     []KeyRef `yaml:"keys"`
 	Weight   int      `yaml:"weight"`
 	Priority int      `yaml:"priority"`
@@ -385,6 +386,15 @@ func (c *Config) validate() error {
 		}
 		if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			add("providers[%d](%s) base_url 非法: %q", i, p.Name, p.BaseURL)
+		}
+		if p.Auth != "" {
+			// 声明制鉴权形态:仅 anthropic 桥接消费(其余适配器鉴权固有,声明即配置错误);
+			// 值域与 adapter.AuthBearer 同值(字面量跨包重复,行为由两端测试各自钉死)
+			if p.Adapter != "anthropic" {
+				add("providers[%d](%s) auth 仅 anthropic 适配器支持(其余形态鉴权固有)", i, p.Name)
+			} else if p.Auth != "bearer" {
+				add("providers[%d](%s) auth 非法 %q(允许 bearer)", i, p.Name, p.Auth)
+			}
 		}
 		if len(p.Keys) == 0 {
 			add("providers[%d](%s) keys 不能为空", i, p.Name)

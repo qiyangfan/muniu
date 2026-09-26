@@ -41,7 +41,8 @@ func smokeEnv(t *testing.T) (adapter.Adapter, string) {
 	if provider == "" {
 		provider = "openai"
 	}
-	ad, err := adapter.For(provider, base, key)
+	// MUNIU_SMOKE_AUTH 鉴权形态声明(空=缺省;bearer=国内 Anthropic 分支口径),透传 config.Provider.Auth
+	ad, err := adapter.For(provider, base, key, adapter.Options{Auth: os.Getenv("MUNIU_SMOKE_AUTH")})
 	if err != nil {
 		t.Fatalf("构造适配器: %v", err)
 	}
@@ -141,8 +142,27 @@ func truncateSmk(b []byte) string {
 }
 
 // 按供应商入口:make smoke PROVIDER=deepseek → -run TestSmoke_deepseek(共用 TestSmoke_Env)。
+// PROVIDER 只选测试入口,适配器形态由 MUNIU_SMOKE_PROVIDER 决定(缺省 openai);
+// 各家官方端点与模型示例见 docs/provider-presets.md。
 func TestSmoke_deepseek(t *testing.T) { TestSmoke_Env(t) }
 func TestSmoke_moonshot(t *testing.T) { TestSmoke_Env(t) }
 func TestSmoke_glm(t *testing.T)      { TestSmoke_Env(t) }
 func TestSmoke_ollama(t *testing.T)   { TestSmoke_Env(t) }
 func TestSmoke_openai(t *testing.T)   { TestSmoke_Env(t) }
+
+// 预设目录各家的冒烟入口(端点抄 docs/provider-presets.md 表 A/C)。
+func TestSmoke_qwen(t *testing.T)        { TestSmoke_Env(t) }
+func TestSmoke_doubao(t *testing.T)      { TestSmoke_Env(t) }
+func TestSmoke_byteplus(t *testing.T)    { TestSmoke_Env(t) }
+func TestSmoke_minimax(t *testing.T)     { TestSmoke_Env(t) }
+func TestSmoke_stepfun(t *testing.T)     { TestSmoke_Env(t) }
+func TestSmoke_qianfan(t *testing.T)     { TestSmoke_Env(t) }
+func TestSmoke_hunyuan(t *testing.T)     { TestSmoke_Env(t) }
+func TestSmoke_mimo(t *testing.T)        { TestSmoke_Env(t) }
+func TestSmoke_longcat(t *testing.T)     { TestSmoke_Env(t) }
+func TestSmoke_xai(t *testing.T)         { TestSmoke_Env(t) }
+func TestSmoke_gemini(t *testing.T)      { TestSmoke_Env(t) }
+func TestSmoke_siliconflow(t *testing.T) { TestSmoke_Env(t) }
+func TestSmoke_modelscope(t *testing.T)  { TestSmoke_Env(t) }
+func TestSmoke_openrouter(t *testing.T)  { TestSmoke_Env(t) }
+func TestSmoke_nvidia(t *testing.T)      { TestSmoke_Env(t) }

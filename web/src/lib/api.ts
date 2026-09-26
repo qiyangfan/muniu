@@ -5,6 +5,7 @@ export type Tenant = components["schemas"]["Tenant"];
 export type KeyRecord = components["schemas"]["KeyRecord"];
 export type UsagePoint = components["schemas"]["UsagePoint"];
 export type ProviderInfo = components["schemas"]["ProviderInfo"];
+export type ProviderPreset = components["schemas"]["ProviderPreset"];
 export type CacheStats = components["schemas"]["CacheStats"];
 export type PricingEntry = components["schemas"]["PricingView"];
 export type PricingWindow = components["schemas"]["PricingWindow"];
@@ -127,6 +128,7 @@ export const api = {
     return call<{ points: UsagePoint[] }>("GET", `/admin/v1/usage?${qs}`);
   },
   providers: () => call<{ providers: ProviderInfo[] }>("GET", "/admin/v1/providers"),
+  providerPresets: () => call<{ presets: ProviderPreset[] }>("GET", "/admin/v1/provider-presets"),
   cacheStats: () => call<CacheStats>("GET", "/admin/v1/cache/stats"),
   listPricing: () => call<{ pricing: PricingEntry[] }>("GET", "/admin/v1/pricing"),
   putPricing: (alias: string, body: PricingEntry) =>

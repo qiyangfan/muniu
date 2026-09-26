@@ -5,7 +5,13 @@ import { Plus, X } from "lucide-react";
 import { api, type PricingEntry } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { Select } from "../components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { Badge } from "../components/ui/badge";
 import { Card } from "../components/ui/card";
 import { ErrorAlert } from "../components/ui/alert";
@@ -19,8 +25,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../components/ui/alert-dialog";
-import { Table, TBody, TD, TH, THead, TR } from "../components/ui/table";
-import { EmptyState } from "../components/empty-state";
+import { DataList, type DataCol } from "../components/data-list";
 import { FormRow } from "../components/form-row";
 import { formatDateTime } from "../lib/datetime";
 
@@ -152,6 +157,104 @@ export default function Pricing() {
     ? TIMEZONES
     : [{ value: tzValue, label: tzValue }, ...TIMEZONES];
 
+  // 列定义单源:桌面表格与移动卡片共用
+  const columns: DataCol<PricingEntry>[] = [
+    {
+      key: "alias",
+      label: "别名",
+      primary: true,
+      render: (p) => <span className="font-mono break-all">{p.alias}</span>,
+    },
+    {
+      key: "source",
+      label: "来源",
+      secondary: true,
+      render: (p) => (
+        <Badge variant={p.source === "db" ? "success" : "secondary"}>
+          {p.source === "db" ? "运行态" : "静态配置价"}
+        </Badge>
+      ),
+    },
+    { key: "currency", label: "币种", render: (p) => p.currency },
+    {
+      key: "input",
+      label: "输入价",
+      numeric: true,
+      headTitle: "单价:本币 / 百万 Tokens",
+      cellClassName: "font-mono",
+      valueClassName: "font-mono",
+      render: (p) => p.input,
+    },
+    {
+      key: "cached",
+      label: "缓存命中价",
+      numeric: true,
+      headTitle: "单价:本币 / 百万 Tokens",
+      cellClassName: "font-mono",
+      valueClassName: "font-mono",
+      render: (p) => p.cached_input || <span className="text-muted-foreground">=输入</span>,
+    },
+    {
+      key: "output",
+      label: "输出价",
+      numeric: true,
+      headTitle: "单价:本币 / 百万 Tokens",
+      cellClassName: "font-mono",
+      valueClassName: "font-mono",
+      render: (p) => p.output,
+    },
+    {
+      key: "windows",
+      label: "时段窗",
+      full: true,
+      cellClassName: "font-mono text-xs",
+      valueClassName: "font-mono text-xs",
+      render: (p) =>
+        (p.time_windows ?? []).length === 0 ? (
+          <span className="text-muted-foreground">—</span>
+        ) : (
+          (p.time_windows ?? []).map((w, i) => (
+            <div key={`${w.window}-${i}`}>
+              {w.window} ×{w.multiplier}
+            </div>
+          ))
+        ),
+    },
+    {
+      key: "updated",
+      label: "更新时间",
+      full: true,
+      cellClassName: "text-xs text-muted-foreground",
+      valueClassName: "text-xs text-muted-foreground",
+      render: (p) => formatDateTime(p.updated_at),
+    },
+    {
+      key: "actions",
+      label: <span className="sr-only">操作</span>,
+      actions: true,
+      render: (p, mobile) => (
+        <>
+          <Button
+            variant="ghost"
+            size={mobile ? "sm" : "xs"}
+            onClick={() => p.alias && startEdit({ ...p, alias: p.alias })}
+          >
+            编辑
+          </Button>
+          {p.source === "db" && (
+            <Button
+              variant="ghost-destructive"
+              size={mobile ? "sm" : "xs"}
+              onClick={() => p.alias && setRemoveTarget(p.alias)}
+            >
+              撤销覆盖
+            </Button>
+          )}
+        </>
+      ),
+    },
+  ];
+
   if (editing !== null) {
     return (
       <div className="space-y-4">
@@ -174,16 +277,18 @@ export default function Pricing() {
                 onChange={(e) => setEditing(e.target.value)}
               />
             </FormRow>
-            <FormRow label="币种" htmlFor="pricing-currency" className="w-40">
+            <FormRow label="币种" htmlFor="pricing-currency" className="w-full sm:w-40">
               <Select
-                id="pricing-currency"
                 value={form.currency}
-                onChange={(e) =>
-                  setForm({ ...form, currency: e.target.value as PricingEntry["currency"] })
-                }
+                onValueChange={(v) => setForm({ ...form, currency: v as PricingEntry["currency"] })}
               >
-                <option value="CNY">CNY</option>
-                <option value="USD">USD</option>
+                <SelectTrigger id="pricing-currency" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="CNY">CNY</SelectItem>
+                  <SelectItem value="USD">USD</SelectItem>
+                </SelectContent>
               </Select>
             </FormRow>
             {/* 单价单位 = 该行币种 / 百万 Tokens(后端 ParsePrice 契约),随币种切换 */}
@@ -191,7 +296,7 @@ export default function Pricing() {
               <FormRow
                 label={`输入价(${unit}/百万 Tokens)`}
                 htmlFor="pricing-input"
-                className="w-52"
+                className="w-full sm:w-52"
               >
                 <Input
                   id="pricing-input"
@@ -204,7 +309,7 @@ export default function Pricing() {
               <FormRow
                 label={`缓存命中价(${unit}/百万 Tokens;空=同输入价)`}
                 htmlFor="pricing-cached-input"
-                className="w-52"
+                className="w-full sm:w-52"
               >
                 <Input
                   id="pricing-cached-input"
@@ -218,7 +323,7 @@ export default function Pricing() {
               <FormRow
                 label={`输出价(${unit}/百万 Tokens)`}
                 htmlFor="pricing-output"
-                className="w-52"
+                className="w-full sm:w-52"
               >
                 <Input
                   id="pricing-output"
@@ -228,17 +333,18 @@ export default function Pricing() {
                   required
                 />
               </FormRow>
-              <FormRow label="时段统计时区" htmlFor="pricing-timezone" className="w-56">
-                <Select
-                  id="pricing-timezone"
-                  value={form.timezone ?? "UTC"}
-                  onChange={(e) => setForm({ ...form, timezone: e.target.value })}
-                >
-                  {tzOptions.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
+              <FormRow label="时段统计时区" htmlFor="pricing-timezone" className="w-full sm:w-64">
+                <Select value={tzValue} onValueChange={(v) => setForm({ ...form, timezone: v })}>
+                  <SelectTrigger id="pricing-timezone" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {tzOptions.map((t) => (
+                      <SelectItem key={t.value} value={t.value}>
+                        {t.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
                 </Select>
               </FormRow>
             </div>
@@ -246,11 +352,14 @@ export default function Pricing() {
             <FormRow label="时段窗(按上述时区判定)">
               <div className="space-y-2">
                 {winRows.map((row, i) => (
-                  <div key={i} className="flex flex-wrap items-center gap-2">
+                  /* 移动端两列网格(开始|结束 / 倍率|删除),sm+ 恢复单行内联 */
+                  <div
+                    key={i}
+                    className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap sm:items-center"
+                  >
                     <Input
                       type="time"
                       aria-label="开始时刻"
-                      className="w-32"
                       value={row.start}
                       onChange={(e) =>
                         setWinRows(
@@ -258,11 +367,10 @@ export default function Pricing() {
                         )
                       }
                     />
-                    <span className="text-xs text-muted-foreground">至</span>
+                    <span className="hidden text-xs text-muted-foreground sm:inline">至</span>
                     <Input
                       type="time"
                       aria-label="结束时刻"
-                      className="w-32"
                       value={row.end}
                       onChange={(e) =>
                         setWinRows(
@@ -277,7 +385,6 @@ export default function Pricing() {
                       max="10"
                       aria-label="计价倍率"
                       placeholder="0.5"
-                      className="w-28"
                       value={row.mult}
                       onChange={(e) =>
                         setWinRows(
@@ -290,6 +397,7 @@ export default function Pricing() {
                       variant="ghost-destructive"
                       size="icon-sm"
                       aria-label="删除该时段"
+                      className="justify-self-start sm:justify-self-auto"
                       onClick={() => setWinRows(winRows.filter((_, j) => j !== i))}
                     >
                       <X className="size-4" aria-hidden />
@@ -313,12 +421,18 @@ export default function Pricing() {
                 </p>
               </div>
             </FormRow>
-            <div className="flex gap-2 justify-end">
-              <Button type="button" variant="outline" onClick={() => setEditing(null)}>
+            {/* 移动端主操作在上(flex-col-reverse),按钮整行可点 */}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full sm:w-auto"
+                onClick={() => setEditing(null)}
+              >
                 取消
               </Button>
-              <Button type="submit" disabled={busy}>
-                保存并生效
+              <Button type="submit" disabled={busy} className="w-full sm:w-auto">
+                {busy ? "保存中…" : "保存并生效"}
               </Button>
             </div>
           </form>
@@ -330,86 +444,12 @@ export default function Pricing() {
   return (
     <div className="space-y-4">
       {err && <ErrorAlert>错误:{err}</ErrorAlert>}
-      <div className="flex justify-end">
-        <Button onClick={startNew}>新增价目</Button>
+      <div className="flex sm:justify-end">
+        <Button onClick={startNew} className="w-full sm:w-auto">
+          新增价目
+        </Button>
       </div>
-      <Table>
-        <THead>
-          <TR>
-            <TH>别名</TH>
-            <TH>来源</TH>
-            <TH>币种</TH>
-            <TH title="单价:本币 / 百万 Tokens">输入价</TH>
-            <TH title="单价:本币 / 百万 Tokens">缓存命中价</TH>
-            <TH title="单价:本币 / 百万 Tokens">输出价</TH>
-            <TH>时段窗</TH>
-            <TH>更新时间</TH>
-            <TH>
-              <span className="sr-only">操作</span>
-            </TH>
-          </TR>
-        </THead>
-        <TBody>
-          {entries.length === 0 ? (
-            <TR>
-              <TD colSpan={9}>
-                <EmptyState>暂无价目</EmptyState>
-              </TD>
-            </TR>
-          ) : (
-            entries.map((p) => (
-              <TR key={p.alias}>
-                <TD className="font-mono">{p.alias}</TD>
-                <TD>
-                  <Badge variant={p.source === "db" ? "success" : "secondary"}>
-                    {p.source === "db" ? "运行态" : "静态配置价"}
-                  </Badge>
-                </TD>
-                <TD>{p.currency}</TD>
-                <TD className="font-mono" title="单价:本币 / 百万 Tokens">
-                  {p.input}
-                </TD>
-                <TD className="font-mono" title="单价:本币 / 百万 Tokens">
-                  {p.cached_input || <span className="text-muted-foreground">=输入</span>}
-                </TD>
-                <TD className="font-mono" title="单价:本币 / 百万 Tokens">
-                  {p.output}
-                </TD>
-                <TD className="font-mono text-xs">
-                  {(p.time_windows ?? []).length === 0 ? (
-                    <span className="text-muted-foreground">—</span>
-                  ) : (
-                    (p.time_windows ?? []).map((w, i) => (
-                      <div key={`${w.window}-${i}`}>
-                        {w.window} ×{w.multiplier}
-                      </div>
-                    ))
-                  )}
-                </TD>
-                <TD className="text-xs text-muted-foreground">{formatDateTime(p.updated_at)}</TD>
-                <TD>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => p.alias && startEdit({ ...p, alias: p.alias })}
-                  >
-                    编辑
-                  </Button>
-                  {p.source === "db" && (
-                    <Button
-                      variant="ghost-destructive"
-                      size="xs"
-                      onClick={() => p.alias && setRemoveTarget(p.alias)}
-                    >
-                      撤销覆盖
-                    </Button>
-                  )}
-                </TD>
-              </TR>
-            ))
-          )}
-        </TBody>
-      </Table>
+      <DataList columns={columns} rows={entries} rowKey={(p) => p.alias ?? ""} empty="暂无价目" />
 
       <AlertDialog
         open={removeTarget !== null}

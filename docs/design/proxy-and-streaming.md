@@ -107,3 +107,48 @@ data: [DONE]
 ### 与既有子系统的交互
 
 翻译产物与「手工构造的等价 chat 请求」逐字节同构 ⇒ 治理/插件/限流/failover/计量行为等价(钉子测试锁死);语义缓存键取翻译后规范请求 ⇒ **跨协议缓存命中**(等价 chat 先写、Responses 命中)。工具多轮流量经 anthropic 出站受桥接边界契约约束(显式 400/豁免,不静默)。
+
+## Anthropic 入站翻译(ADR-0013,契约;测试钉死本表)
+
+`POST /v1/messages` 与 Responses 入站同款**边缘翻译**架构:入站请求在管道入口前一次性翻译为规范 chat 请求,复用既有管道(治理/缓存/插件/限流/failover/计量零改动)。Anthropic 协议客户端(Claude Code 等)由此直连 muniu,出站侧经 OpenAI 兼容家或各家 Anthropic 分支端点(docs/provider-presets.md 表 B)任意换道。
+
+### 鉴权头适配
+
+数据面 verifier 只认 `Authorization: Bearer`;Anthropic 客户端以 `x-api-key` 或 `Authorization` 携带 key。装配层 `server.AdaptAnthropicKey` 仅对 `/v1/messages` 且缺失 Authorization 时把 x-api-key 补写为 Bearer(先于 verifier),其余请求零改动。
+
+### 请求映射表
+
+| Anthropic 入站 | 规范 chat | 约束 |
+|---|---|---|
+| `model` | `model`(别名) | 必填,路由解析与 chat 同规 |
+| `max_tokens` | `max_tokens` | Anthropic 必填;缺失时省略(不伪造缺省值) |
+| `system`(string \| text 块数组) | system 消息(置于最前) | 多块换行合并;非 text 块 400 |
+| `messages[].content`(string) | 同 role 消息 | 快捷形态 |
+| text 块 | 文本按序换行合并 | |
+| thinking 块 | **丢弃** | 请求侧签名回传语义不成立,见丢弃清单 |
+| tool_use 块 | assistant `tool_calls`(id/name 直映,input → arguments JSON 字符串) | 混合文本块时拆为 assistant(text)+assistant(tool_calls) 两条 |
+| tool_result 块 | role=tool 消息(tool_use_id → tool_call_id) | content 字符串或 text 块数组;多条各自一条 |
+| `tools[]`(name/description/input_schema) | chat tools(input_schema → parameters) | |
+| `tool_choice` | tool_choice | auto/none 直通;any→required;具名 tool→function 嵌套 |
+| `temperature` / `top_p` / `stream` | 同名透传 | |
+| `stop_sequences` | `stop` | |
+| `top_k` / `metadata` | 忽略(白名单,不转发) | chat 形态无对应语义,静默丢弃 |
+
+### 显式拒绝与丢弃清单(400,Anthropic error JSON)
+
+- `content_block_unsupported`:v1 仅支持 text/tool_use/tool_result 块(image/document 等多模态拒绝)
+- `input_invalid`:model 缺失、messages 空、角色非法或结构非法
+- 丢弃(不拒绝):thinking 块(签名回传语义不成立)、top_k、metadata
+- 错误形态:翻译期失败以 Anthropic error JSON(`{"type":"error","error":{type,message}}`)返回;**管道内错误(鉴权 401/限流 429/上游错误)信封形态与 chat 同构**(v1 登记:SDK 侧读 error.message 可读,形态统一待出现真实消费者再议)
+
+### 响应与流式事件映射
+
+- 非流式:chat.completion → `{id:"msg_"+request_id, type:"message", role:"assistant", model, content[], stop_reason, stop_sequence:null, usage}`。content[]:reasoning_content → `{type:"thinking"}`(**无签名的展示形态**);文本 → `{type:"text"}`;tool_calls → `{type:"tool_use", id/name, input=arguments 解析}`。stop_reason 映射:stop→end_turn、length→max_tokens、tool_calls→tool_use、其余 null。usage:prompt→input_tokens、completion→output_tokens、cached→cache_read_input_tokens(reasoning 为 completion 子集不另立)。
+- 流式(顺序不变式:message_start 首帧、message_stop 终帧、content_block_* 仅出现于两者之间;块切换先 content_block_stop;块索引按发出顺序递增):
+  `message_start` → [`content_block_start` → `content_block_delta`(text_delta \| thinking_delta \| input_json_delta)* → `content_block_stop`]* → `message_delta`(stop_reason + usage)→ `message_stop`。
+  **已知偏差(登记)**:`message_start.usage.input_tokens` 恒 0(上游 usage 流尾才知),真实用量在 `message_delta.usage` 补全;SSE 用 data-only 帧(事件 type 在 JSON 内,无 `event:` 行,SDK 兼容)。
+- 流中失败(上游 mid_stream_fail 或无 [DONE] 收尾):发 `error` 事件后终止——诚实失败,不伪造 message_stop;管道在流开始前失败的信封 body 改写为 Anthropic error JSON(状态码不变)。
+
+### 与既有子系统的交互
+
+翻译产物与「手工构造的等价 chat 请求」逐字节同构 ⇒ 治理/插件/限流/failover/计量行为等价(钉子测试锁死);语义缓存键取翻译后规范请求 ⇒ 跨协议缓存命中。经 anthropic 出站候选择发往各家 Anthropic 分支端点时,受「桥接工具多轮显式边界」约束(豁免/显式信封,不静默);Anthropic 入站的工具多轮请求侧翻译完整(tool_result ↔ role=tool),不受该边界限制——该边界只约束 chat 入站形态经 anthropic 出站的往返。

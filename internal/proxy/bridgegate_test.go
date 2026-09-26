@@ -52,7 +52,7 @@ func TestBridgeGate_多候选豁免换道(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
 	reg := adapter.NewRegistry()
 	reg.Register("openai-p", adapter.NewOpenAI(up.URL(), ""))
-	reg.Register("anthropic-p", bridge.NewAnthropic("http://127.0.0.1:1", ""))
+	reg.Register("anthropic-p", bridge.NewAnthropic("http://127.0.0.1:1", adapter.Options{}))
 	p := New(Config{
 		Registry: reg,
 		Routes: map[string][]config.Candidate{
@@ -87,7 +87,7 @@ func TestBridgeGate_独占别名明确信封(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody) // 占位:不应被调用
 	_ = up
 	reg := adapter.NewRegistry()
-	reg.Register("anthropic-p", bridge.NewAnthropic("http://127.0.0.1:1", ""))
+	reg.Register("anthropic-p", bridge.NewAnthropic("http://127.0.0.1:1", adapter.Options{}))
 	p := New(Config{
 		Registry: reg,
 		Routes: map[string][]config.Candidate{
@@ -125,7 +125,7 @@ func TestBridgeGate_独占别名明确信封(t *testing.T) {
 // 豁免不计 EMA/冷却:桥接独占别名连续豁免后,key 池健康度零变化。
 func TestBridgeGate_豁免无健康度副作用(t *testing.T) {
 	reg := adapter.NewRegistry()
-	ad := bridge.NewAnthropic("http://127.0.0.1:1", "")
+	ad := bridge.NewAnthropic("http://127.0.0.1:1", adapter.Options{})
 	reg.Register("anthropic-p", ad)
 	pool := keypool.NewPool([]keypool.KeyInput{{ID: "K2", Value: "k", Weight: 1}})
 	p := New(Config{
@@ -162,7 +162,7 @@ func TestBridgeGate_首轮tools声明放行(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	reg := adapter.NewRegistry()
-	reg.Register("anthropic-p", bridge.NewAnthropic(srv.URL, ""))
+	reg.Register("anthropic-p", bridge.NewAnthropic(srv.URL, adapter.Options{}))
 	p := New(Config{
 		Registry: reg,
 		Routes: map[string][]config.Candidate{

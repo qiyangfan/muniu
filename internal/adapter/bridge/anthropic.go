@@ -19,8 +19,8 @@ var _ adapter.Adapter = (*Anthropic)(nil)
 
 // init 向 adapter 注册桥接工厂(应用方 blank import 本包即完成接线)。
 func init() {
-	adapter.SetAnthropicFactory(func(baseURL, apiKey string) adapter.Adapter {
-		return NewAnthropic(baseURL, apiKey)
+	adapter.SetAnthropicFactory(func(baseURL string, opts adapter.Options) adapter.Adapter {
+		return NewAnthropic(baseURL, opts)
 	})
 }
 
@@ -30,11 +30,12 @@ const anthropicVersion = "2023-06-01"
 // Anthropic 桥接实例(基址绑定;key 由 keypool 每请求提供)。
 type Anthropic struct {
 	baseURL string
+	bearer  bool // true=凭证走 Authorization: Bearer(国内分支官方文档口径);缺省 x-api-key(协议标准)
 }
 
-// NewAnthropic 构造桥接。
-func NewAnthropic(baseURL, apiKey string) *Anthropic {
-	return &Anthropic{baseURL: strings.TrimRight(baseURL, "/")}
+// NewAnthropic 构造桥接。opts.Auth=adapter.AuthBearer 时按声明切换鉴权头。
+func NewAnthropic(baseURL string, opts adapter.Options) *Anthropic {
+	return &Anthropic{baseURL: strings.TrimRight(baseURL, "/"), bearer: opts.Auth == adapter.AuthBearer}
 }
 
 // Prepare OpenAI Chat 请求 → Anthropic /v1/messages 请求。
@@ -47,7 +48,13 @@ func (a *Anthropic) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey stri
 	}
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
-	h.Set("x-api-key", apiKey)
+	if a.bearer {
+		// 国内分支声明口径:与其官方文档 AUTH_TOKEN(Bearer)形态一致
+		h.Set("Authorization", "Bearer "+apiKey)
+	} else {
+		// 协议标准形态(官方 Anthropic 与官方 SDK 缺省)
+		h.Set("x-api-key", apiKey)
+	}
 	h.Set("anthropic-version", anthropicVersion)
 	return &adapter.Outbound{
 		URL:    a.baseURL + "/v1/messages",

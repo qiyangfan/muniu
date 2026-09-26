@@ -2,7 +2,8 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover:底部标签栏经 env(safe-area-inset-bottom) 让出 iOS Home 指示条 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>muniu 控制台</title>
     <script>
       // 防 FOUC:首帧前按「localStorage 手动值 → 系统偏好 → 亮色」挂 .dark,

@@ -75,13 +75,19 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
 
 集群**数据面**形态(无状态副本 + 控制面同步)不属于本清单,按 ADR-0005 演进;涉及跨仓契约的 P1 前置 ADR:0006(自校验 key 与状态同步)、0007(可插拔计量汇)、0008(集群限流语义)。
 
-## 前端宪法(隆中聚合层单源)
+## 前端宪法(隆中聚合层单源;2026-09-26 owner 裁决:Radix 标准件路线)
 
 `web/` 控制台统一遵循聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10);本节为执行摘要,冲突时以宪法为准。
+> 2026-09-26 owner 裁决补记:控制台组件体系收敛为「Radix 无头库承担交互语义 + 本地标准件承担
+> 视觉配方」;antd 一度被引入后经裁决剥离(antd 不入本仓,除非未来出现其真正擅长的密集 CRUD
+> 需求面,且届时必须三仓一起迁)。
 
 - 元原则:**用组件不用手搓;用默认不胡乱覆盖;用 token 不用魔法值。**
-- muniu 是「本地标准件」仓:无 Radix 大依赖也能干活,但 `web/src/components/ui/` 的组件名、
-  props API、变体名必须与 kongming/jinguan 对齐(组件注释「本地标准件,API 对齐 kongming」);
+- **交互语义必须来自成熟库,禁止无库手搓交互件;视觉与组合走标准件**(owner 2026-09-26 裁决
+  沉淀):select 已采用 Radix 组合式(焦点圈定/键盘导航/portal/aria 语义由 Radix 承担,
+  配方对齐 kongming 同位文件),后续新增交互件同理优先 Radix 原语 + 本地配方。
+- muniu 是「本地标准件」仓:`web/src/components/ui/` 的组件名、props API、变体名必须与
+  kongming/jinguan 对齐(组件注释「本地标准件,API 对齐 kongming」);
   ui/ 标准件的**语义级改动**应先发生在 kongming,再手工对齐本仓(双仓逐字节一致规则不适用本仓)。
 - 色彩:只引用 index.css @theme 语义 token(词汇表三仓同名),禁 `#hex`/字面色板;图表第二
   系列走 `--color-chart-series-2`。暗色是一级公民(`.dark` 覆盖同名变量整仓翻转):
@@ -91,11 +97,17 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
   破坏性操作必须 AlertDialog 确认(禁 window.confirm);≥2 处同类 UI 必须抽公共组件;
   间距只用 Tailwind 刻度(Article 1/2/4)。
 - 页面骨架只用标准件:FormRow / Table / ErrorAlert / NoticeBanner / EmptyState / Skeleton /
-  StatCard,禁每页手搓;错误走 ErrorAlert(role=alert),禁静默空白(Article 6/7)。
-- 响应式:窄屏顶栏 flex-wrap 两行折行,表格滚动由 ui/Table 自带,统计网格带 `md:` 折降;
-  多屏验收 = 375/768/1280 三档不横向溢出(Article 9)。
+  StatCard / DataList(一套列定义驱动桌面表格 ↔ 移动实体卡片),禁每页手搓;
+  错误走 ErrorAlert(role=alert),禁静默空白(Article 6/7)。
+- 响应式(2026-09-26 owner 插话升格:**移动端按原生范式重设计,不做「桌面缩小」**):
+  窄屏 = 底部图标+短标签栏主导航(粘性顶栏只留品牌+主操作,页签切换回顶,安全区
+  `viewport-fit=cover`+`env(safe-area-inset-bottom)`)+ 数据表格转实体卡片 + 表单单列全宽;
+  md+ 恢复顶栏导航与表格;统计网格/图表高度带 `sm:` 折降。多屏验收 = 375/768/1280 三档 ×
+  亮暗,移动端按移动范式逐页走查,桌面确认无移动范式泄漏(Article 9)。
 - **web 依赖白名单**(对齐铁律 3 的白名单制):react 系 / vite 系 / tailwind v4 / lucide-react /
   recharts / clsx / tailwind-merge / class-variance-authority / radix-ui / openapi-typescript;
   之外的任何 `pnpm add` 先记 HANDOFF 开放项。
-- 收尾门禁:`pnpm typecheck && pnpm lint` + `pnpm exec vite build --outDir /tmp/dist-check`
-  (禁直接写 web/dist,那是 Go embed 的发布产物)+ 宪法 Article 8 自检 grep + 亮暗两态走查。
+- 收尾门禁:`pnpm typecheck && pnpm lint && pnpm lint:css && pnpm format:check` +
+  `pnpm exec vite build --outDir /tmp/dist-check`(禁直接写 web/dist,那是 Go embed 的发布产物)
+  + 裸元素自检 grep(business 代码禁裸 button/input/select/textarea)+ 亮暗两态 ×
+  375/768/1280 走查。
