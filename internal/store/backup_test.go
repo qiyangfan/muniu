@@ -21,7 +21,7 @@ func seedRows(t *testing.T, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db,
 		"INSERT INTO tenants (id, name, status, created_at)"+
-		" VALUES ('t1', 'test-tenant', 'active', '2026-09-30T00:00:00Z')")
+			" VALUES ('t1', 'test-tenant', 'active', '2026-09-30T00:00:00Z')")
 	mustExec(t, db,
 		"INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, created_at)"+
 			" VALUES ('k1', 't1', 'kongming', 'hash1', 'mk-AAAAAAAA', '2026-09-30T00:00:00Z')")
