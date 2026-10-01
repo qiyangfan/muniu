@@ -72,6 +72,17 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 本地无供应商 key 时,任何 OpenAI 兼容端点(如 [ollama](https://ollama.com))都可直接当上游:
 `adapter: openai` + `base_url: "http://127.0.0.1:11434/v1"`。
 
+### 备份与恢复(openspec `state-backup`)
+
+```bash
+./bin/muniu backup                      # 在线一致快照(运行中可执行,不阻塞读写)
+./bin/muniu restore data/backups/muniu-backup-<时刻> --force   # 离线恢复(实例须先停)
+```
+
+快照 = `data/backups/muniu-backup-<UTC 时刻>/{muniu.db, manifest.json}`;manifest 记录
+muniu 版本、迁移版本、key/usage 行数与 sha256(恢复侧校验 + 月末对账锚点)。恢复目标
+缺省为配置的 `storage.sqlite.path`(`--target` 可改);目标被运行中实例持锁时拒绝(不热切换)。
+
 ## 双形态(ADR-0005)
 
 muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:

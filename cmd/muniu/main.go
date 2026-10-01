@@ -39,9 +39,12 @@ import (
 )
 
 func main() {
-	// keys 管理子命令与网关服务分流(同一配置定位与存储)
+	// keys/backup 管理子命令与网关服务分流(同一配置定位与存储)
 	if ka, ok := keysSubArgs(os.Args); ok {
 		os.Exit(runKeys(flagConfOf(os.Args), ka))
+	}
+	if ba, ok := backupSubArgs(os.Args); ok {
+		os.Exit(runBackup(flagConfOf(os.Args), ba))
 	}
 
 	cfgPath := flag.String("c", "", "配置文件路径(缺省依 MUNIU_CONFIG > ./muniu.yaml)")
