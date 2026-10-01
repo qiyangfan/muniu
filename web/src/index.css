@@ -29,8 +29,14 @@
   --color-success-foreground: #fff;
   --color-warning: #b07d2e;
   --color-warning-foreground: #fff;
-  --color-border: #e2e2de;
-  --color-input: #e2e2de;
+  --color-border: #e2e2de; /* 分隔线/卡片描边:hairline,刻意低对比 */
+
+  /* 控件边界独立取值,不得等于 --color-border(宪法 Article 3):对宣纸灰白 3.47、对白卡 3.72 */
+  --color-input: #7c8781;
+
+  /* 控件底/轨道填充是第三个语义(宪法 Article 3):不得跟随 --color-input,
+     否则描边一提亮填充就跟着变深。值 = 拆分前 --color-input 的原值,观感逐字节不变 */
+  --color-input-fill: #e2e2de;
   --color-ring: #2f6f4f;
   --color-chart-series-2: #a8c5b5; /* 图表第二系列(原 Overview 字面 hex 收编) */
 }
@@ -76,7 +82,8 @@
   --color-warning: #d1a04a;
   --color-warning-foreground: #231a05;
   --color-border: #2b302a;
-  --color-input: #2b302a;
+  --color-input: #6b7a6f; /* 控件线:对松烟夜 4.06、对卡面 3.69,与亮色同一口径 */
+  --color-input-fill: #2b302a; /* 控件底/轨道填充,与控件线解耦(宪法 Article 3) */
   --color-ring: #63a984;
   --color-chart-series-2: #7fae94; /* 淡竹青提亮 */
 }
