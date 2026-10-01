@@ -14,11 +14,25 @@ import (
 
 	"github.com/goccy/go-yaml"
 
+	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/metering"
 )
 
-// 适配器形态枚举(upstream-adapters「适配器分类学」;bridge 两家 Phase 2+ 落地)。
-var adapterNames = map[string]bool{"openai": true, "deepseek": true, "moonshot": true, "glm": true, "qwen": true, "doubao": true, "anthropic": true, "gemini": true}
+// 适配器值域单源 = adapter.Types()(即 adapter.For 可实现集合,见 ADR-0003 与
+// adapter-taxonomy spec)。config 不再手抄清单:历史上手抄的 gemini token 无实现,
+// 配置能过校验却装配失败。报错文案的取值列表由同一来源渲染,提示与实际不会分叉。
+var (
+	adapterNames  = supportedAdapters(adapter.Types())
+	adapterDomain = strings.Join(adapter.Types(), "|")
+)
+
+func supportedAdapters(types []string) map[string]bool {
+	m := make(map[string]bool, len(types))
+	for _, t := range types {
+		m[t] = true
+	}
+	return m
+}
 
 // logLevel / logFormat / currency 枚举。
 var (
@@ -382,7 +396,7 @@ func (c *Config) validate() error {
 		}
 		seen[p.Name] = true
 		if !adapterNames[p.Adapter] {
-			add("providers[%d](%s) adapter 非法 %q(允许 openai|deepseek|moonshot|glm|qwen|doubao|anthropic|gemini)", i, p.Name, p.Adapter)
+			add("providers[%d](%s) adapter 非法 %q(允许 %s)", i, p.Name, p.Adapter, adapterDomain)
 		}
 		if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			add("providers[%d](%s) base_url 非法: %q", i, p.Name, p.BaseURL)

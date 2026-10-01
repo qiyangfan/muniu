@@ -1,7 +1,7 @@
 # traffic-governance Specification
 
 ## Purpose
-TBD - created by archiving change cluster-ratelimit-shared-view. Update Purpose after archive.
+key 级 RPM/TPM/日配额的计数执行契约:计数后端可插拔(缺省进程内 `inmem`,cluster 形态可选 `redis` 共享视图),且后端选择不得改变限额判定语义;redis 不可用时按降级纪律退回进程内计数并持续告警,既不 fail-open 也不阻塞热路径(ADR-0008)。
 
 ## Requirements
 

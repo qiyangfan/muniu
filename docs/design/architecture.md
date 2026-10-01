@@ -79,8 +79,8 @@ cmd/muniu/            装配:配置→store→adapter 注册表→keypool→限�
 cmd/tokenctl/         Phase 0:学习用 CLI(价目换算/粗估)
 internal/
   protocol/           入站/出站共享 DTO:Chat 请求响应、SSE 帧、usage、错误信封(零内部依赖)
-  config/             YAML 加载、${VAR} 环境展开、启动期校验(依赖 protocol)
-  adapter/            适配器:openai.go(基座)+ quirks/ + bridge/{anthropic,gemini}.go(依赖 protocol)
+  config/             YAML 加载、${VAR} 环境展开、启动期校验(依赖 protocol;adapter 值域取 adapter.Types())
+  adapter/            适配器:openai.go(基座)+ quirks/ + bridge/anthropic.go(依赖 protocol)
   keypool/            key 选择/冷却/健康度(依赖 config 的拓扑)
   failover/           候选迭代器与错误分类→动作判定(纯函数,零 IO,依赖 protocol)
   ratelimit/          RPM 令牌桶 + TPM 滑动窗口 + 配额判定

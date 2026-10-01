@@ -11,11 +11,12 @@ internal/adapter/
 ├── quirks/           per-provider quirk patch:只声明「与基座的差异」,不整家居覆写
 │   ├── deepseek.go  moonshot.go  glm.go  qwen.go  doubao.go
 └── bridge/
-    ├── anthropic.go  Messages API ↔ OpenAI 形态全翻译
-    └── gemini.go     generateContent ↔ OpenAI 形态全翻译
+    └── anthropic.go  Messages API ↔ OpenAI 形态全翻译
 ```
 
-三分法理由:国产五家(DeepSeek/Moonshot/GLM/Qwen/Doubao)主打 OpenAI 兼容端点,差异集中在**少数字段与流式形态**——用 quirk patch 表达差异,基座保持单一实现;Anthropic/Gemini 是真异构协议,值得整家桥接。**禁止为「OpenAI 兼容家」复制整套适配器**(one-api 式 per-provider 全量实现 = 维护灾难)。
+三分法理由:国产五家(DeepSeek/Moonshot/GLM/Qwen/Doubao)主打 OpenAI 兼容端点,差异集中在**少数字段与流式形态**——用 quirk patch 表达差异,基座保持单一实现;Anthropic 是真异构协议,值得整家桥接。**禁止为「OpenAI 兼容家」复制整套适配器**(one-api 式 per-provider 全量实现 = 维护灾难)。
+
+配置面 `providers[].adapter` 的值域单源是 `adapter.Types()`(= `adapter.For` 可实现集合),`internal/config` 不再手抄清单:历史上手抄过的 `gemini` token 无对应实现,配置能过校验却装配失败,已由 `retire-gemini-adapter-token` 退役。
 
 ## Adapter 接口(草案,实现时可微调签名;方法集为契约)
 
@@ -35,7 +36,7 @@ type Adapter interface {
 
 ## 归一化:统一 Usage 形态(计量与 conformance 的对齐基准)
 
-| 统一字段 | OpenAI | Anthropic(桥接) | Gemini(桥接) | DeepSeek(quirk) | 备注置 |
+| 统一字段 | OpenAI | Anthropic(桥接) | Gemini 原生(未接入,备查) | DeepSeek(quirk) | 备注置 |
 |---|---|---|---|---|---|
 | prompt_tokens | usage.prompt_tokens | usage.input_tokens | usageMetadata.promptTokenCount | prompt_tokens | — |
 | completion_tokens | usage.completion_tokens | usage.output_tokens | usageMetadata.candidatesTokenCount | completion_tokens | — |
@@ -46,7 +47,7 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 
 ## 字段改写白名单(客户端可见行为)
 
-默认**零改写**:基座与 quirk 对流式事件只读不写(读侧归一仅供计量)。桥接型(anthropic/gemini)是唯一改写者——它们必须把异构事件翻译为 OpenAI 形态(该翻译矩阵另立 `bridge/README.md`,随 Phase 2 编写并配 fixture)。此白名单的意义:兼容型供应商的客户端体验与直连**逐字节一致**,网关透明性可被 conformance 断言。
+默认**零改写**:基座与 quirk 对流式事件只读不写(读侧归一仅供计量)。桥接型(当前仅 anthropic)是唯一改写者——它们必须把异构事件翻译为 OpenAI 形态(该翻译矩阵另立 `bridge/README.md`,随 Phase 2 编写并配 fixture)。此白名单的意义:兼容型供应商的客户端体验与直连**逐字节一致**,网关透明性可被 conformance 断言。
 
 ## 请求参数治理(ADR-0010,请求侧;与上方响应侧白名单正交)
 
@@ -112,4 +113,6 @@ Anthropic 桥接的响应侧 `tool_use → tool_calls` 翻译完整;**请求侧�
 
 ## Gemini 接入方向(upstream-egress-batch 裁决)
 
-走 Gemini 官方 **OpenAI 兼容端点**(openai 基座 + quirk 覆写实测偏差),**不新建原生 adapter**;接入前先真上游冒烟记录偏差清单,quirk 只覆盖实测项(零内置隐式知识,与 ADR-0010 同哲学);fixture 从冒烟实录脱敏装配。上面的矩阵行「Gemini bridge」为旧计划形态,以本节为准。美元报价经本位币结算链处理(metering.md「本位币与 credit」:`metering.settlement` + `fx_usd_cny_milli`)。
+走 Gemini 官方 **OpenAI 兼容端点**(openai 基座 + quirk 覆写实测偏差),**不新建原生 adapter**;接入前先真上游冒烟记录偏差清单,quirk 只覆盖实测项(零内置隐式知识,与 ADR-0010 同哲学);fixture 从冒烟实录脱敏装配。美元报价经本位币结算链处理(metering.md「本位币与 credit」:`metering.settlement` + `fx_usd_cny_milli`)。
+
+配置面落地口径(2026-09-30,openspec change `retire-gemini-adapter-token`):`adapter` 字段**不接受** `gemini`,值域单源为 `adapter.Types()`;Gemini 接入写 `adapter: openai` + 兼容层 base_url,预设目录已按此收录(alias `gemini`)。上方 Usage 表的「Gemini 原生」列仅为原生协议备查,不代表已接入能力。

@@ -61,7 +61,8 @@ metering:
 # 本节只留代表性样例,中转站一律不预设(兼容基座自填端点 + 白名单放行即可)。
 providers:
   - name: deepseek
-    adapter: deepseek                     # 适配器类型:openai=兼容基座;deepseek/moonshot/glm=基座+quirk;anthropic/gemini=桥接(后续阶段)
+    adapter: deepseek                     # 适配器类型(值域单源=adapter.Types()):openai=兼容基座;deepseek/moonshot/glm/qwen/doubao=基座+quirk;anthropic=桥接
+                                          # 官方端点全目录见 GET /admin/v1/provider-presets 与 docs/provider-presets.md;Gemini 走 adapter: openai + 官方兼容层
     base_url: "https://api.deepseek.com/v1"
     keys:
       - env: DEEPSEEK_API_KEY_1           # 只写环境变量名,绝不写明文

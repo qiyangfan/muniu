@@ -9,16 +9,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/presets"
 )
 
-// implementedAdapters adapter.For 已实现集合(与 internal/adapter/adapter.go For 分支同轴;
-// 比 config 白名单更严:白名单里的 gemini 无实现,配置后会启动失败,目录不得收录)。
-var implementedAdapters = map[string]bool{
-	"openai": true, "qwen": true, "doubao": true,
-	"deepseek": true, "moonshot": true, "glm": true, "anthropic": true,
-}
+// implementedAdapters 值域单源 adapter.Types()(= adapter.For 可实现集合)。
+// 预设目录只收可实现形态;此处不再第三处手抄清单,漂移由 config 校验测试与本断言各自钉死。
+var implementedAdapters = func() map[string]bool {
+	m := make(map[string]bool, len(adapter.Types()))
+	for _, t := range adapter.Types() {
+		m[t] = true
+	}
+	return m
+}()
 
 var validGroups = map[string]bool{
 	presets.GroupDomestic: true, presets.GroupGlobal: true, presets.GroupLocal: true,

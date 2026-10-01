@@ -2,7 +2,9 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
-## 当前状态(2026-09-26,工作区批次清零入库:预设代码面+Anthropic 入站+控制台移动端/风格统一;活动 change 零个,历史批次见验收记录 25-31)
+## 当前状态(2026-09-30,状态备份/恢复落地:openspec `2026-09-30-state-backup-restore` 12/12 任务,make check 全绿+活实例冒烟,待归档;其余承 2026-09-26 批次,历史批次见验收记录 25-32)
+
+- **适配器值域单源(2026-09-30,openspec `2026-09-30-retire-gemini-adapter-token` 已归档)**:`internal/config` 手抄的适配器清单退役——`gemini` 无 `adapter.For` 分支却挂在白名单与非法取值报错里,配置能过校验、直到装配期(`cmd/muniu/main.go:181`)才炸。值域单源改由新增 `adapter.Types()`(=For 可实现集合)提供,校验值域与报错文案同源渲染;`internal/presets` 测试里的第三份手抄清单同步取消。Gemini 接入方向不变(官方 OpenAI 兼容端点 + `adapter: openai`,预设目录 alias `gemini` 已收录),原生桥接按 upstream-egress-batch 裁决裁撤:ADR-0003 加更正注记、`upstream-adapters.md` 包树/改写白名单/Usage 表口径同步、phase-4 T4.8 撤销登记、ROADMAP Backlog 标撤。顺带清偿 `traffic-governance` 归档遗留的 TBD Purpose。
 
 - **控制台移动端全面重设计(2026-09-26,owner 插话即指令:「移动端不是桌面缩小,需全面重设计」)**:①导航=底部图标+短标签栏(主色高亮+aria-current,安全区 `viewport-fit=cover`+`env(safe-area-inset-bottom)`)+粘性顶栏(移动端只留品牌+主题+退出)+切页回顶;②新业务标准件 `web/src/components/data-list.tsx`——一套 DataCol 列定义单源驱动 sm+ ui/Table(原契约不变)与窄屏实体卡片(标题行+右侧徽章/ID、两列字段网格、full 独占行、整行等宽操作),密钥/用量/价目/预设目录四页换装;③表单单列全宽(签发 Card 化 grid 1→2→3→6 列、价目时段窗窄屏两列网格)、AlertDialog 窄屏贴底抽屉(kongming 尚无 ui 目录,本仓单源,双仓对齐时以此为准);④Overview 统计卡 sm 折降+图表 h-48/64 双档。门禁:web 四件套+vite build(/tmp)+Article 8 自检 grep 全绿;走查 scratch 实例(假上游+SQLite 种子)375/768/1280 × 亮暗 20 帧,三 visual-judge 终裁 20/20(验收记录 30)。AGENTS.md Article 9 执行摘要口径同步升格;顺手修:切页滚动残留回顶、密钥卡片租户 UUID 三行折行(截短+title 全值)。
 
@@ -76,6 +78,11 @@
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **登记不阻塞** |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**32. 状态备份与恢复(2026-09-30,openspec `2026-09-30-state-backup-restore` 12/12)**
+- 判据:快照在线一致(VACUUM INTO,纯 SQL 零新依赖)+ 完整性自检 + manifest 行数/哈希 + 恢复四道闸(sha256→自校验→持锁探测→force)+ 失败原子性 + make check 全绿 + 活实例冒烟。
+- 证据:`internal/store/backup.go`(Snapshot/Restore/probeLocked;fcntl 写锁探测经子进程实验实证:SQLite 连接持有期 db 与 -shm 均持 POSIX 锁,空闲亦然、退出即释)+ `cmd/muniu/backup.go`(backup/restore 子命令,--output/--target/--force 任意混排——flag 包遇位置参数即停的坑以显式分区修复,混排钉子测试);测试 store 12 + cmd 4 用例(roundtrip/WAL 未合并/坏档删档/拒覆盖/manifest 与 sha256 篡改拒收/子进程持锁拒恢复/陈旧 -wal 三件套整体换名/无连接不误报;restore flag 任意混排钉子)`go test` 全绿;`make check` exit 0(vet+web 四件套+20 包 race,coverage 67.9% ≥ 65%);冒烟:对运行中 :8787 实例(1 key/3 usage)备份成功且 manifest 与基线一致,`restore --force` 拒覆盖活库(占用闸生效),`--target /tmp` 恢复后 integrity ok 行数一致;README 快速开始 + data-and-config「状态备份与恢复」节同步。**代码评审迭代循环(2026-09-30,1 轮)**:修复 1 真缺陷——Restore 覆盖场景只换名主库、崩溃残留旧 -wal 帧被叠加到新库(复现用例先红:恢复后 usage 4≠3、uX 行复活),改为三件套整体换名+回滚保全,回归转绿;实证排除 2 疑点(fcntl 只读 fd 探测在 macOS 必 EBADF、备份目录无 sidecar 残留)。
+- 搁置:integrity_check 失败路径为防御性代码(VACUUM INTO 产物不可注入坏档),以只读库触发失败路径覆盖删档语义,坏档 fixture 直灌不可达——登记待冒烟复查,不阻塞。
 
 **30. 控制台移动端全面重设计(2026-09-26,owner 插话即授权)**
 - 改动:App.tsx(底部标签栏/粘性顶栏/切页回顶/min-h-dvh)、`components/data-list.tsx`(新)、ui/alert-dialog.tsx(贴底抽屉+max-h 85dvh+安全区)、Keys/Usage/Pricing/Providers 四页 DataList 化+表单响应式、Overview 图表统计卡折降、index.html viewport-fit=cover;零依赖新增。
@@ -166,3 +173,4 @@
 29. **官方预设目录代码面 + Anthropic Messages 入站(2026-09-26)**:①`internal/presets` 内置 27 条一手官方端点(12 国内/6 国际/3 本地,含六家 Anthropic 分支),`GET /admin/v1/provider-presets` + 控制台目录区(分组筛选/复制 YAML/文档外链);契约测试把整目录渲染 YAML 走真实 `config.Load` 钉死 schema 漂移;端点经官方文档+cc-switch 逐家交叉核对(豆包 /api/compatible、千问 /apps/anthropic 以 cc-switch 裁决修正)。②ADR-0013:`POST /v1/messages` 入站(翻译器/流式编码器/handler + `server.AdaptAnthropicKey` x-api-key→Bearer),工具多轮请求侧完整;路由进漂移门禁,openapi.yaml/api-types 同步。③鉴权声明制:`providers[].auth`(空=缺省 x-api-key|`bearer`=Authorization,仅 anthropic 适配器可声明,零自动探测;六家分支按官方 AUTH_TOKEN 口径声明 bearer,实际接受头首次真 key 冒烟实证)。④路由门禁收口:`routeEntry`/`adminRouteTable` 表驱动单源,注册与漂移门禁同源消费。⑤Gemini generateContent 入站不立项(零消费者+大陆不可达)。终验:`make check` 全绿(coverage 68.5%)。
 30. **控制台移动端重设计走查(2026-09-26)**:scratch 实例(假上游+SQLite 种子)375/768/1280 × 亮暗 20 帧,三 visual-judge 终裁 **20/20 通过**;门禁:web 四件套 + `vite build --outDir /tmp/dist-check` + 裸元素自检 grep 全绿。
 31. **控制台风格统一审计整改 + 评审循环(2026-09-26)**:审计=四维单源核验+跨页一致性扫描;整改=numeric 列/节奏一档/卡头收编/按钮档位/宪法落盘(详见当前状态同日条目)。评审循环(独立子代理复核)3+1 缺陷全修:卡题 h2 语义回归、裸 toLocaleString 归 datetime 单源、宪法 Article 2 任意值三类白名单、注释与代码矛盾。证据:web 四件套+vite build 三轮全绿;`make check` 全绿(coverage 68.5%,提交前终跑);远端调和 HEAD..origin/main 零分叉后推送。
+32b. **适配器值域单源(2026-09-30,`retire-gemini-adapter-token` 已归档)**:判据=测试先行红→绿 + `make check` 全绿 + 加载期拒启实录 + openspec 全绿。证据:①红=`internal/config/config_test.go: undefined: adapter.Types`(实现前原始报错);②绿=`internal/adapter/types_test.go`(Types 每个值可被 For 构造 / 排序且无重复)+ `config_test.go`(报错值域与 Types 逐项相等、`adapter: gemini` 加载期拒),包覆盖 adapter 77.3% / config 79.5% / presets 100%;③`make check` 全绿,coverage gate PASS 68.2%;④实跑 `go build -o bin/muniu ./cmd/muniu && ./bin/muniu -c <adapter: gemini 配置>` 退出码 1,stderr 原文 `providers[0](deepseek) adapter 非法 "gemini"(允许 anthropic|deepseek|doubao|glm|moonshot|openai|qwen)`;⑤归档后 `openspec validate --all --strict` 15/15(新 capability `adapter-taxonomy`,Purpose 由 delta 正文带入非占位)。未做:带日期叙述件(`docs/articles/03`、`design-consistency-check-2026-09-10`)按「历史快照不回改」纪律保留原表述。

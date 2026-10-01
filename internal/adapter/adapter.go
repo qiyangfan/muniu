@@ -58,6 +58,13 @@ type Options struct {
 	Auth string
 }
 
+// Types 返回 For 可构造的适配器类型集合(排序稳定),即配置面 providers[].adapter 的值域单源:
+// internal/config 的校验值域与非法取值报错均由本函数渲染,不再手抄清单(ADR-0003 执法面)。
+// 新增 For 分支必须同步入列——types_test.go 断言每个列出的值都能被 For 真实构造。
+func Types() []string {
+	return []string{"anthropic", "deepseek", "doubao", "glm", "moonshot", "openai", "qwen"}
+}
+
 // For 按适配器类型构造实例(config 的 adapter 字段=类型,provider 实例名可任意取):
 // openai 为兼容基座;deepseek/moonshot/glm = 基座 + 各家 quirk(差异只声明差异,ADR-0003);
 // qwen/doubao 当前与基座无已实证差异;anthropic 走桥接工厂(需 blank import bridge)。

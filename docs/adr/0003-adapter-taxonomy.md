@@ -1,6 +1,6 @@
 # ADR-0003:适配器三分法——OpenAI 兼容基座 + quirk patch + 协议桥接
 
-- 状态:已接受(2026-09-08)
+- 状态:已接受(2026-09-08);2026-09-30 更正——桥接入驻方仅 Anthropic(下文「仅 Anthropic 与 Gemini 入驻」为初稿设想),Gemini 经官方 OpenAI 兼容端点接入;三分法形态枚举与本决策结论不变。依据:`docs/design/upstream-adapters.md`「Gemini 接入方向」(upstream-egress-batch 裁决)与 openspec change `retire-gemini-adapter-token`。
 
 ## 决策
 

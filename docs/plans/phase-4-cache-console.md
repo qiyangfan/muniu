@@ -15,7 +15,7 @@
 - [x] **T4.5 语义缓存(测试先行)**:`internal/semantic`:指纹归一化、准入白名单(semantic-cache 契约;tenant 开关默认关)、嵌入调用(经 T4.3 通道,租户自备 embedding 模型配置)、索引(T4.4 结论)、阈值 0.97、TTL 24h + LRU 容量、命中回放(非流式直接返回;流式命中按 chunk 拼包回放,`finish_reason=stop`);迁移 0003 `semantic_cache` 表(id/tenant_id/fingerprint/model_alias/embedding BLOB/response BLOB/hits/created_at/expires_at);命中行记 `usage_logs`(`provider='semantic-cache'`,cost 0)。测试:准入拒绝各条件、阈值边界、TTL 过期、命中计量。
 - [x] **T4.6 控制台 web/**:`pnpm create vite` React+TS → Tailwind v4 → shadcn init(**基础交互组件一律 shadcn,禁手搓;色值经 `@theme` token;图标 lucide;图表色板从 token 派生**——沿 kongming 前端铁律);页面:总览(用量/成本/命中率图表)、密钥管理、用量明细(筛选+分页)、供应商健康(key 池三态);登录 = 输入 admin token 存 sessionStorage;`pnpm build` 产物经 `//go:embed web/dist` 嵌入二进制,`/console/*` 路由服务静态资源(**单二进制自带控制台**)。`web/` 有自己的 `pnpm typecheck && pnpm lint` 并纳入 `make check`(存在 pnpm 时执行,否则跳过并提示)。
 - [x] **T4.7 e2e 冒烟**:管理 API curl 全路径实录;控制台四页截图(Playwright 有则脚本化,无则手动)进 HANDOFF。
-- [ ] **T4.8 Gemini 桥接(可选,主线闸门通过后)**:`bridge/gemini.go` + fixture ≥2;不阻塞发版。
+- [!] **T4.8 Gemini 桥接(撤销,2026-09-30)**:原生 `bridge/gemini.go` 已由 upstream-egress-batch 裁撤(Gemini 走官方 OpenAI 兼容端点 `adapter: openai`),配置值域同步移除 `gemini` token,见 openspec change `retire-gemini-adapter-token`;此项不再作为待办保留。
 - [x] **T4.9 文档与发版**:README 增控制台截图与语义缓存说明(含「缓存的是相似问题的一次参考答案」声明);HANDOFF;`v0.3.0` 待用户指令。
 
 ## 设计指针

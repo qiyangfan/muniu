@@ -25,7 +25,7 @@ type Preset struct {
 	Alias   string   `json:"alias"`          // 目录内唯一别名,建议直接用作 provider name
 	Display string   `json:"display"`        // 展示名(中文)
 	Group   string   `json:"group"`          // domestic|global|local
-	Adapter string   `json:"adapter"`        // 适配器类型;仅收 adapter.For 已实现集合(config 白名单里的 gemini 未实现,不收)
+	Adapter string   `json:"adapter"`        // 适配器类型;仅收 adapter.Types()(= adapter.For 可实现集合)
 	Auth    string   `json:"auth,omitempty"` // 鉴权形态声明(透传 config.Provider.Auth):bearer=Authorization Bearer(国内分支口径);空=适配器缺省
 	BaseURL string   `json:"base_url"`
 	Env     string   `json:"env"`    // 建议的 key 环境变量名(约定俗成,非强制);本地运行时 = 任意非空占位

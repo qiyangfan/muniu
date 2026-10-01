@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/solvela/muniu/internal/adapter"
 )
 
 // writeTemp 辅助:写临时配置文件并返回路径。
@@ -383,5 +385,32 @@ model_routes:
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("错误信息缺 %q: %v", want, err)
 		}
+	}
+}
+
+// TestLoad_适配器值域单源 config 不得手抄适配器清单:合法取值必须来自 adapter.Types(),
+// 无实现的形态(如历史的 gemini token)在加载期即拒,而不是拖到装配期才炸。
+func TestLoad_适配器值域单源(t *testing.T) {
+	wantDomain := strings.Join(adapter.Types(), "|")
+
+	p := writeTemp(t, `
+providers:
+  - name: g
+    adapter: gemini
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    keys:
+      - env: GEMINI_API_KEY
+    weight: 10
+`)
+	_, err := Load(p)
+	if err == nil {
+		t.Fatal(`adapter: gemini 无 For 实现,必须在配置加载期被拒`)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "providers[0](g)") {
+		t.Fatalf("错误必须定位到具体条目: %v", err)
+	}
+	if !strings.Contains(msg, `允许 `+wantDomain) {
+		t.Fatalf("错误提示列举的值域必须与 adapter.Types() 一致(应为 %q): %v", wantDomain, msg)
 	}
 }
