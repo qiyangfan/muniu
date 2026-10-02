@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type CacheStats, type UsagePoint } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
-import { ErrorAlert } from "../components/ui/alert";
+import { ErrorAlert } from "../components/error-alert";
 import { EmptyState } from "../components/empty-state";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/stat-card";
@@ -29,7 +29,7 @@ export default function Overview() {
       .catch(() => setStats(null));
   }, []);
 
-  if (err) return <ErrorAlert>错误:{err}</ErrorAlert>;
+  if (err) return <ErrorAlert text={`错误:${err}`} />;
   return (
     // 页面顶层块间距全站一档 space-y-4(与表格/卡片密度档一致,宪法 Article 2)
     <div className="space-y-4">

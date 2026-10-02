@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 /* 色值经 @theme token(前端宪法 Article 3/10:组件只许引用 token 类,禁 #hex/字面色板)。
    词汇表与 kongming/jinguan 同名,值 = 木牛品牌色的语义化(松木青主色,原 brand/danger/muted 收编)。

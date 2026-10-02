@@ -2,22 +2,26 @@ import * as React from "react";
 
 import { cn } from "../../lib/utils";
 
-// 本地标准件,API 对齐 kongming(kongming 名为 TableHeader/TableRow/TableHead/TableCell);
-// 密档配方:行 border-t、TH/TD p-3。三页表格同构「卡片底 + 圆角 + 横向滚动」,
-// 按宪法 Article 2 收编进容器默认,业务侧不再逐页包裹。
+// 本地标准件,API/配方逐类对齐 kongming(2026-10-02 视觉收敛:组件名统一为
+// TableHeader/TableRow/TableHead/TableCell,行 border-b、TD p-2 / TH h-10 px-2 密度档同双仓);
+// 「卡片底 + 圆角」容器归属 DataList(业务层桌面形态),不在本件配方内。
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
-    <div data-slot="table-container" className="relative w-full overflow-x-auto rounded-xl bg-card">
-      <table data-slot="table" className={cn("w-full text-sm", className)} {...props} />
+    <div data-slot="table-container" className="relative w-full overflow-x-auto">
+      <table
+        data-slot="table"
+        className={cn("w-full caption-bottom text-sm", className)}
+        {...props}
+      />
     </div>
   );
 }
 
-function THead({ className, ...props }: React.ComponentProps<"thead">) {
-  return <thead data-slot="table-head" className={cn("[&_tr]:border-t-0", className)} {...props} />;
+function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
+  return <thead data-slot="table-header" className={cn("[&_tr]:border-b", className)} {...props} />;
 }
 
-function TBody({ className, ...props }: React.ComponentProps<"tbody">) {
+function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
   return (
     <tbody
       data-slot="table-body"
@@ -27,22 +31,22 @@ function TBody({ className, ...props }: React.ComponentProps<"tbody">) {
   );
 }
 
-function TR({ className, ...props }: React.ComponentProps<"tr">) {
+function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
   return (
-    <tr
-      data-slot="table-row"
-      className={cn("border-t border-border transition-colors hover:bg-muted/50", className)}
+    <tfoot
+      data-slot="table-footer"
+      className={cn("border-t bg-muted/50 font-medium [&>tr]:last:border-b-0", className)}
       {...props}
     />
   );
 }
 
-function TH({ className, ...props }: React.ComponentProps<"th">) {
+function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
   return (
-    <th
-      data-slot="table-head-cell"
+    <tr
+      data-slot="table-row"
       className={cn(
-        "p-3 text-left align-middle font-normal whitespace-nowrap text-muted-foreground",
+        "border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted",
         className,
       )}
       {...props}
@@ -50,14 +54,40 @@ function TH({ className, ...props }: React.ComponentProps<"th">) {
   );
 }
 
-function TD({ className, ...props }: React.ComponentProps<"td">) {
+function TableHead({ className, ...props }: React.ComponentProps<"th">) {
   return (
-    <td
-      data-slot="table-cell"
-      className={cn("p-3 align-middle whitespace-nowrap", className)}
+    <th
+      data-slot="table-head"
+      className={cn(
+        "h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        className,
+      )}
       {...props}
     />
   );
 }
 
-export { Table, THead, TBody, TR, TH, TD };
+function TableCell({ className, ...props }: React.ComponentProps<"td">) {
+  return (
+    <td
+      data-slot="table-cell"
+      className={cn(
+        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+function TableCaption({ className, ...props }: React.ComponentProps<"caption">) {
+  return (
+    <caption
+      data-slot="table-caption"
+      className={cn("mt-4 text-sm text-muted-foreground", className)}
+      {...props}
+    />
+  );
+}
+
+export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption };

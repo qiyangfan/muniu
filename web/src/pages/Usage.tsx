@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { api, type UsagePoint } from "../lib/api";
 import { Button } from "../components/ui/button";
-import { ErrorAlert } from "../components/ui/alert";
+import { ErrorAlert } from "../components/error-alert";
 import { DataList, type DataCol } from "../components/data-list";
 import { formatDateTime, formatNumber } from "../lib/datetime";
 import { fmtCredits } from "../lib/utils";
@@ -127,7 +127,7 @@ export default function Usage() {
 
   return (
     <div className="space-y-4">
-      {err && <ErrorAlert>加载失败:{err}</ErrorAlert>}
+      {err && <ErrorAlert text={`加载失败:${err}`} />}
       {/* 筛选分组:移动端两行各占一档、按钮等宽(分段控件手感),sm+ 恢复同行左组+右组 */}
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <div className="flex gap-1.5" role="group" aria-label="统计维度">

@@ -2,14 +2,19 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-02,三仓标准件视觉全面收敛——owner 插话裁决;后续承下节)
+
+- **三仓标准件视觉收敛(2026-10-02,owner 插话「视觉效果、UI 规范对齐,不各自为政」即指令;muniu 全面收敛+密度档废止经 AskUserQuestion 终态确认)**:ui/ 十件按 kongming 最新配方逐类手工翻译——card 密度收敛(rounded-2xl+shadow-xl+p-6+卡题 text-lg,原「密档刻意区分勿混改」登记废止)+CardTitle 多态 as(h2/h3/h4 默认 h3);button(+Slot/asChild、触控热区、暗色变体)、input(size prop+日期族 block 修复,三仓单源)、textarea(暗色变体)、select(Trigger 字阶+Icon 命名+动画类)、skeleton(bg-accent)、badge(kongming 全集对齐,destructive 改实底;success/warning 软底变体收编入 kongming 单源)、alert-dialog(窄屏贴底抽屉=三仓单源,kongming 已同款收编)、table(导出名对齐 TableHeader/TableBody/TableRow/TableHead/TableCell,卡片底容器移交 DataList 桌面形态);`ui/alert.tsx` 拆分 error-alert(text 单参 API,9 处 children 用法迁移)+notice-banner(本仓特有件);新增 status-badge(Providers 状态表/Pricing 来源三元拼 Badge 收编);empty-state/stat-card 对齐;tw-animate-css 入仓(Article 4 增补)。调用点:登录卡 as="h2" 删 text-xl 密档补偿、Providers 两处原生 h2 回归 CardTitle as="h2"、Overview 默认 h3。门禁:typecheck/lint/lint:css/format/test 6/6/build 全绿;独立子代理复审 1 P2(.gitkeep 误删,已恢复)+2 P3(宪法字阶/table 注释,均已改)全处置;登录页 375/1280 浏览器实测(heading level 2+卡面配方)过;认证后页走查随后续批次例行。改动落工作区未提交(等 owner 指令)。
+- **开放项新增:form-row help prop 差异**——kongming form-row 带 help(FieldLabel+ui/label+tooltip 链),本仓现无消费方未引入死链;API 补齐待有真实需求时一并落(ui/label/field-label/tooltip 三件随需翻译)。
+
 ## 当前状态(2026-10-02,跨仓配对验收记录新增;其余承 2026-09-30 批次)
 
 - **跨仓配对验收(2026-10-02,与锦官 `recover-pending-usage-settlement` / `fix-api-key-binding-identifiers` 互引)**:锦官侧两件已实施并归档,真机联调实录(独立 muniu 实例 :8788,sink=ingest 指锦官,假上游)——`muniu keys create` 后 `keys list` 的**记录 ID**(01a0fa5d-abba-…)绑定锦官用户、明文凭据 mk-PL3boi… 鉴权请求:锦官 200 接收(可靠落库,欠费留存 0.002 元分毫不差)、名单含 key;Mock 充值 0.01 元后锦官后台恢复器自动补扣(余额 800 万 credit 账实相符、投影 accepted、名单 v3→v4 收敛),再等一轮 attempts 稳定=**缓冲已结束、无重投**;账本恰两笔分录(pay:+10000000/usage:-2000000)。契约零变更(UsageRow/IngestResult 形态不变,锦官 openapi 深度相等实证);本仓两件同名 change 的回归测试与归档任务仍在本仓队列,由本仓会话按锦官实录补齐。
 
-## 当前状态(2026-10-02,两提案实施:`fix-api-key-binding-identifiers` 7/7 已归档;`recover-pending-usage-settlement` 4/5,归档阻塞于锦官侧收口;历史批次见验收记录 33)
+## 当前状态(2026-10-02,两提案实施并归档:`fix-api-key-binding-identifiers` 7/7 已归档;`recover-pending-usage-settlement` 5/5 已归档(2026-10-02 `openspec archive`,主规格 `data-plane-metering-sink` +1 Requirement,specs strict 15/15);历史批次见验收记录 33)
 
 - **Key ID 绑定标识修复(2026-10-02,openspec `fix-api-key-binding-identifiers` 已归档)**:签发响应契约如实声明(openapi `KeyCreateResponse` 8 字段+双向契约回归测试)+web 侧 Key ID 列(截短+title,复制取完整原值,缺 ID 显式禁用)与签发横幅复制入口;跨仓活实例验收:UUID 与自定义 ID 签发→锦官绑定→归账逐字一致。引入 vitest 组件测试(devDeps,白名单登记见开放项)。
-- **待结算计量恢复(2026-10-02,openspec `recover-pending-usage-settlement` 4/5)**:传输边界测试落地(2xx 含 skipped_insufficient 不重试/前缀已收 5xx 整批原 ID 续传去重)+跨仓联调全链实证(欠费→Mock 充值→恢复器补扣恰一笔→同 ID 重放零新扣账→吊销 5s 收敛 401);**2.3 归档阻塞**:锦官同名 change 为其工作树未提交 WIP,待其自身验收归档后本仓同步主规格收口。
+- **待结算计量恢复(2026-10-02,openspec `recover-pending-usage-settlement` 5/5 已归档)**:传输边界测试落地(2xx 含 skipped_insufficient 不重试/前缀已收 5xx 整批原 ID 续传去重)+跨仓联调全链实证(欠费→Mock 充值→恢复器补扣恰一笔→同 ID 重放零新扣账→吊销 5s 收敛 401);2.3 收口:锦官侧同名 change 验收归档后,本仓 `openspec archive recover-pending-usage-settlement` 已执行,主规格同事务 sync(+1 Requirement「接收确认与财务结算分离」),归档位 `archive/2026-10-02-recover-pending-usage-settlement`,归档后 specs strict 15/15。
 
 - **适配器值域单源(2026-09-30,openspec `2026-09-30-retire-gemini-adapter-token` 已归档)**:`internal/config` 手抄的适配器清单退役——`gemini` 无 `adapter.For` 分支却挂在白名单与非法取值报错里,配置能过校验、直到装配期(`cmd/muniu/main.go:181`)才炸。值域单源改由新增 `adapter.Types()`(=For 可实现集合)提供,校验值域与报错文案同源渲染;`internal/presets` 测试里的第三份手抄清单同步取消。Gemini 接入方向不变(官方 OpenAI 兼容端点 + `adapter: openai`,预设目录 alias `gemini` 已收录),原生桥接按 upstream-egress-batch 裁决裁撤:ADR-0003 加更正注记、`upstream-adapters.md` 包树/改写白名单/Usage 表口径同步、phase-4 T4.8 撤销登记、ROADMAP Backlog 标撤。顺带清偿 `traffic-governance` 归档遗留的 TBD Purpose。
 
@@ -54,8 +59,9 @@
 【2026-10-02 实施后状态】：
 
 1. 【已完成·已归档】fix-api-key-binding-identifiers 7/7(make check 全绿+跨仓验收,验收记录 33)。
-2. 【进行中·外部阻塞】recover-pending-usage-settlement 4/5——木牛侧实现/测试/联调全过,2.3 的主规格同步与归档待锦官同名 change(其仓内未提交 WIP)完成自身验收后执行;锦官收口当轮直接 `openspec archive` 即可。
-3. 跨仓联合修改/外部依赖事项单源:聚合目录 [`../HANDOFF.md`](../HANDOFF.md)(锦官两 change 收口、kongming input 同步、ingest 形态控制台读数口径)。
+2. 【已完成·已归档】recover-pending-usage-settlement 5/5——木牛侧实现/测试/联调全过;锦官收口后本仓 `openspec archive` 已执行(主规格 sync +1 Requirement),归档位 `archive/2026-10-02-recover-pending-usage-settlement`。
+3. 跨仓联合修改/外部依赖事项单源:聚合目录 [`../HANDOFF.md`](../HANDOFF.md)(CardTitle 语义联合修改、kongming ui/input 日期族同步、ingest 形态控制台读数口径、push 后 CI 实跑)。
+4. 【跨仓·待 kongming 落地】CardTitle 标题语义对齐:kongming change `2026-10-02-card-title-heading-semantics`(as 默认 h3)实施归档后,经 `scripts/sync-frontend-standard.sh` 同步本仓 `ui/card.tsx`,并按聚合层登记清单改三处调用点(App 登录卡 as="h2" 并删密档覆写与注释、Providers 两处原生 h2 回归 `<CardTitle as="h2">`、Overview 默认 h3)。
 
 以下是此前交付与条件事项，保持原记录：
 
@@ -86,13 +92,13 @@
 | 2026-09-11 | reconcile.sql 口径修正(每尝试一行→DISTINCT) | 旧口径 ≤1% 判据不可达 | 已按「每尝试一行」实现修正 SQL | 已解决(口径随上项一并写入 metering.md) |
 | 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
 | 2026-09-12 | B 档四项(Responses 入站/images/Gemini 出站/桥接工具往返)用户点名升格 | backlog 升格规则要求用户点名后先 ADR 再排期;四项价值/成本不等,不应捆绑同判 | 架构师独立裁决分层:桥接工具边界=缺陷级先行;Gemini=成本被低估的轻形态;Responses=战略项先 ADR;images/audio=新计量维度零消费者 | **①②③ 立项,④ 不立项**:ADR-0012 + openspec `upstream-egress-batch`/`responses-api-inbound` 已立(validate 通过);桥接边界方案升级为「候选适配性豁免跳过 + 独占时明确信封 + EMA 豁免」(比单纯 fail-fast 更符合换道哲学,详见 egress-batch design) |
-| 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属 | 修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③④非本批因果链,下一批次处置 |
+| 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属;修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③④非本批因果链,下一批次处置 |
 | 2026-09-13 | upstream-egress-batch Gemini 三项(冒烟/quirk/价目)待外部 GEMINI_API_KEY,无限期挂起污染活动清单 | 继续 etc 等待 / 归档并登记搁置 / 立即放弃 | **用户裁决:无限搁置**——①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者;纯新增零沉没成本 | change 归档(anthropic-bridge delta 合入主 specs;gemini-egress delta 随裁决移除,不把未打算满足的 MUST 合入主 specs);设计论述留档 design.md,未来解锁按原设计「轻形态+冒烟先行」重新立项 |
-| 2026-09-26 | 控制台 ui/CardTitle 基线渲染为 div(kongming 同源),无标题语义;卡题进不了读屏标题大纲(Providers 两处已用原生 h2 承载 CardTitle 配方临时兜住,Overview/Login 仍是 div) | 控制台可访问性缺口,ui/ 标准件语义缺陷是系统性的 | CardTitle 增多态 heading(如 as)支持;属 ui/ 语义级改动,按宪法 Article 5 须 kongming 先行,本仓随后对齐 | 待裁决(kongming 先行通道) |
+| 2026-09-26 | 控制台 ui/CardTitle 基线渲染为 div(kongming 同源),无标题语义;卡题进不了读屏标题大纲(Providers 两处已用原生 h2 承载 CardTitle 配方临时兜住,Overview/Login 仍是 div) | 控制台可访问性缺口,ui/ 标准件语义缺陷是系统性的 | CardTitle 增多态 heading(如 as)支持;属 ui/ 语义级改动,按宪法 Article 5 须 kongming 先行,本仓随后对齐 | **关闭(2026-10-02 批次三)**:kongming change 已先行,本仓 card.tsx 多态 as 已落地,登录卡 as="h2"、Providers 两处原生 h2 回归 `<CardTitle as="h2">`、Overview 默认 h3,门禁全绿 |
 | 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;待冒烟仅确认最优形态(不阻塞) |
-| 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | 按「确需引入→先记开放项」落地,owner 可裁决保留或移除 |
-| 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | 本仓已修;kongming 双仓对齐时以此为准同步 |
-| 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **登记不阻塞** |
+| 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | | **已终裁(2026-10-02 owner 追认)**:三 devDeps 正式保留,开放项销案;宪法 Article 4 注明测试工具属 devDeps 不占白名单口径 |
+| 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | | 本仓已修;**kongming 已于 2026-10-02 批次三合入并流向 jinguan(三仓单源),销案** |
+| 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
 

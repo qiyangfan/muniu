@@ -15,7 +15,7 @@ import { cn } from "./lib/utils";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
-import { ErrorAlert } from "./components/ui/alert";
+import { ErrorAlert } from "./components/error-alert";
 import { FormRow } from "./components/form-row";
 import Overview from "./pages/Overview";
 import Keys from "./pages/Keys";
@@ -32,8 +32,9 @@ function Login({ onOk }: { onOk: () => void }) {
     <div className="min-h-dvh grid place-items-center bg-background px-4">
       <Card className="w-full max-w-96">
         <CardHeader>
-          {/* 登录页标题为页面级,压过 CardTitle 密档默认(宪法 Article 7:页标题 ≥ 卡片标题) */}
-          <CardTitle className="text-xl">木牛控制台</CardTitle>
+          {/* 登录卡题即页内最高级,升页面级 h2(CardTitle 标题语义,kongming 对齐);
+              原 text-xl 密档补偿随视觉收敛废止 */}
+          <CardTitle as="h2">木牛控制台</CardTitle>
         </CardHeader>
         <CardContent>
           <form
@@ -67,7 +68,7 @@ function Login({ onOk }: { onOk: () => void }) {
                 onChange={(e) => setV(e.target.value)}
               />
             </FormRow>
-            {err && <ErrorAlert>{err}</ErrorAlert>}
+            {err && <ErrorAlert text={err} />}
             <Button type="submit" className="w-full" disabled={busy}>
               {busy ? "校验中…" : "登录"}
             </Button>

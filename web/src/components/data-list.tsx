@@ -3,7 +3,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { cn } from "../lib/utils";
 import { Card } from "./ui/card";
-import { Table, TBody, TD, TH, THead, TR } from "./ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { EmptyState } from "./empty-state";
 import { Skeleton } from "./ui/skeleton";
 
@@ -97,41 +97,43 @@ export function DataList<T>({
 
   return (
     <div className={className}>
-      {/* 桌面:ui/Table 契约(卡片底+圆角+横向滚动) */}
+      {/* 桌面:ui/Table 契约(卡片底+圆角+横向滚动;容器收编于本件,业务侧不再逐页包裹) */}
       <div className="hidden sm:block">
-        <Table className={tableClassName}>
-          <THead>
-            <TR>
-              {columns.map((c) => (
-                <TH
-                  key={c.key}
-                  title={c.headTitle}
-                  className={c.numeric ? "text-right" : undefined}
-                >
-                  {c.label}
-                </TH>
-              ))}
-            </TR>
-          </THead>
-          <TBody>
-            {rows.map((row) => (
-              <TR key={rowKey(row)}>
+        <Card className="overflow-hidden">
+          <Table className={tableClassName}>
+            <TableHeader>
+              <TableRow>
                 {columns.map((c) => (
-                  <TD
+                  <TableHead
                     key={c.key}
-                    className={cn(c.cellClassName, c.numeric && "text-right tabular-nums")}
+                    title={c.headTitle}
+                    className={c.numeric ? "text-right" : undefined}
                   >
-                    {c.actions ? (
-                      <div className="flex gap-1.5">{c.render(row, false)}</div>
-                    ) : (
-                      c.render(row, false)
-                    )}
-                  </TD>
+                    {c.label}
+                  </TableHead>
                 ))}
-              </TR>
-            ))}
-          </TBody>
-        </Table>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((row) => (
+                <TableRow key={rowKey(row)}>
+                  {columns.map((c) => (
+                    <TableCell
+                      key={c.key}
+                      className={cn(c.cellClassName, c.numeric && "text-right tabular-nums")}
+                    >
+                      {c.actions ? (
+                        <div className="flex gap-1.5">{c.render(row, false)}</div>
+                      ) : (
+                        c.render(row, false)
+                      )}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
       </div>
       {/* 移动:实体卡片堆叠;呼吸节奏统一 12px 档(卡间/字段行距/操作分隔),拥挤即返工此处 */}
       <div className="space-y-3 sm:hidden">

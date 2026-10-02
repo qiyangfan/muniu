@@ -12,9 +12,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { Badge } from "../components/ui/badge";
+import { StatusBadge } from "../components/status-badge";
 import { Card } from "../components/ui/card";
-import { ErrorAlert } from "../components/ui/alert";
+import { ErrorAlert } from "../components/error-alert";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -170,9 +170,13 @@ export default function Pricing() {
       label: "来源",
       secondary: true,
       render: (p) => (
-        <Badge variant={p.source === "db" ? "success" : "secondary"}>
-          {p.source === "db" ? "运行态" : "静态配置价"}
-        </Badge>
+        /* 「非 db 一律 secondary」语义:显式 fallback 保持行为等价(StatusBadge 立约) */
+        <StatusBadge
+          meta={{ db: { label: "运行态", variant: "success" } }}
+          value={p.source}
+          fallbackLabel="静态配置价"
+          fallbackVariant="secondary"
+        />
       ),
     },
     { key: "currency", label: "币种", render: (p) => p.currency },
@@ -258,7 +262,7 @@ export default function Pricing() {
   if (editing !== null) {
     return (
       <div className="space-y-4">
-        {err && <ErrorAlert>错误:{err}</ErrorAlert>}
+        {err && <ErrorAlert text={`错误:${err}`} />}
         <Card>
           <form
             className="grid gap-4 p-4 text-sm"
@@ -443,7 +447,7 @@ export default function Pricing() {
 
   return (
     <div className="space-y-4">
-      {err && <ErrorAlert>错误:{err}</ErrorAlert>}
+      {err && <ErrorAlert text={`错误:${err}`} />}
       <div className="flex sm:justify-end">
         <Button onClick={startNew} className="w-full sm:w-auto">
           新增价目

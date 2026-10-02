@@ -1,9 +1,9 @@
 // 供应商页:已接入拓扑健康(只读)+ 官方端点预设目录(复制 YAML 片段填入 muniu.yaml 即可接入)。
 import { useEffect, useState } from "react";
-import type { VariantProps } from "class-variance-authority";
 import { api, type ProviderInfo, type ProviderPreset } from "../lib/api";
-import { Badge, badgeVariants } from "../components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { StatusBadge, type StatusMeta } from "../components/status-badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import {
   Select,
   SelectContent,
@@ -11,26 +11,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { ErrorAlert } from "../components/ui/alert";
+import { ErrorAlert } from "../components/error-alert";
 import { CopyButton } from "../components/copy-button";
 import { DataList, type DataCol } from "../components/data-list";
 import { EmptyState } from "../components/empty-state";
 import { Skeleton } from "../components/ui/skeleton";
 
-// 字面色表收编为 Badge 语义变体(宪法 Article 3)
-const STATE_VARIANT: Record<string, VariantProps<typeof badgeVariants>["variant"]> = {
-  healthy: "success",
-  cooldown: "warning",
-  disabled: "destructive",
-  unknown: "secondary",
-};
-
-// key 池状态 → 中文;键与 STATE_VARIANT 一一对应
-const STATE_LABELS: Record<string, string> = {
-  healthy: "正常",
-  cooldown: "冷却中",
-  disabled: "已停用",
-  unknown: "未知",
+// key 池状态 → 状态徽章映射(宪法 Article 6:状态渲染统一走 StatusBadge,禁三元拼 Badge)
+const STATE_META: StatusMeta = {
+  healthy: { label: "正常", variant: "success" },
+  cooldown: { label: "冷却中", variant: "warning" },
+  disabled: { label: "已停用", variant: "destructive" },
+  unknown: { label: "未知", variant: "secondary" },
 };
 
 // 适配器 → 展示名;与 config 白名单/adapter.For 已实现集合同轴(azure/ollama 并非可配置适配器)
@@ -160,21 +152,20 @@ function PresetCatalog() {
   ];
 
   if (err) {
-    return <ErrorAlert>预设目录加载失败:{err}</ErrorAlert>;
+    return <ErrorAlert text={`预设目录加载失败:${err}`} />;
   }
   if (!loaded) {
     return <Skeleton className="h-48" />;
   }
   const shown = presets.filter((p) => group === "all" || p.group === group);
   return (
-    // 卡头走 CardHeader/CardDescription/CardContent 标准件(与 Overview 同构);卡题用原生
-    // h2 承载 CardTitle 视觉配方,语义取舍见 h2 处注释
+    // 卡头走 CardHeader/CardDescription/CardContent 标准件(与 Overview 同构)
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          {/* 卡题用原生 h2 承载 CardTitle 视觉配方:CardTitle 基线是 div(kongming 同源)无标题
-              语义,标题可达性优先;标准件补 heading 语义属 ui/ 语义级改动,须 kongming 先行 */}
-          <h2 className="text-base font-semibold">官方端点预设目录</h2>
+          {/* 卡题即本页最高级标题:CardTitle as="h2" 渲染真实标题元素
+              (kongming 标题语义对齐;此前原生 h2 手搓配方的过渡方案随 ui/ 收敛废止) */}
+          <CardTitle as="h2">官方端点预设目录</CardTitle>
           <div className="ml-auto w-full sm:w-40">
             <Select value={group} onValueChange={setGroup}>
               <SelectTrigger aria-label="按分组筛选预设" className="w-full">
@@ -232,11 +223,11 @@ export default function Providers() {
     // 页面顶层块间距全站一档 space-y-4(与表格/卡片密度档一致,宪法 Article 2)
     <div className="space-y-4">
       <section className="space-y-3">
-        {/* 区块标题(非卡题):多卡区域的组标签;字阶与卡题同档,层级语义为
-            「区块 ≥ 卡片标题」(宪法 Article 7),故不经 CardTitle 标准件 */}
-        <h2 className="text-base font-semibold">已接入供应商</h2>
+        {/* 区块标题(非卡题):多卡区域的组标签,层级语义「区块 ≥ 卡片标题」(宪法 Article 7);
+            经 CardTitle as="h2" 复用标题配方,不再原生 h2 手搓 */}
+        <CardTitle as="h2">已接入供应商</CardTitle>
         {err ? (
-          <ErrorAlert>加载失败:{err}</ErrorAlert>
+          <ErrorAlert text={`加载失败:${err}`} />
         ) : !loaded ? (
           <div className="grid gap-4 md:grid-cols-2">
             <Skeleton className="h-28" />
@@ -260,9 +251,11 @@ export default function Providers() {
                   {(p.keys ?? []).map((k) => (
                     <span key={k.id} className="flex items-center gap-1.5 text-xs">
                       <span className="font-mono">{k.id}</span>
-                      <Badge variant={STATE_VARIANT[k.state ?? "unknown"]}>
-                        {STATE_LABELS[k.state ?? "unknown"]}
-                      </Badge>
+                      <StatusBadge
+                        meta={STATE_META}
+                        value={k.state ?? "unknown"}
+                        fallbackVariant="secondary"
+                      />
                     </span>
                   ))}
                 </div>

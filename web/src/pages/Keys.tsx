@@ -4,7 +4,8 @@ import { KeyRound } from "lucide-react";
 import { api, type KeyRecord } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
-import { ErrorAlert, NoticeBanner } from "../components/ui/alert";
+import { ErrorAlert } from "../components/error-alert";
+import { NoticeBanner } from "../components/notice-banner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -322,7 +323,7 @@ export default function Keys() {
         RPM/TPM 与日配额填 0 表示不限制;过期时刻留空表示永不过期;1 credit = 十亿分之一本币。
       </p>
       {/* 错误必须独立于明文区展示:混用会让操作者把错误串当 key 复制走 */}
-      {err && <ErrorAlert>错误:{err}</ErrorAlert>}
+      {err && <ErrorAlert text={`错误:${err}`} />}
       {issued && (
         <NoticeBanner>
           <div className="space-y-1.5">
@@ -363,7 +364,7 @@ export default function Keys() {
               局部生效:保存后下一请求即用新限额;过期时刻清空 = 永不过期。
             </AlertDialogDescription>
           </AlertDialogHeader>
-          {err && <ErrorAlert>错误:{err}</ErrorAlert>}
+          {err && <ErrorAlert text={`错误:${err}`} />}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <FormRow label="RPM(每分钟请求数)" htmlFor="edit-rpm">
               <Input

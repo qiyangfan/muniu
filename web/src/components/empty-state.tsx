@@ -3,7 +3,12 @@ import type { LucideIcon } from "lucide-react";
 
 import { cn } from "../lib/utils";
 
-// 本地标准件,API 对齐 kongming(空态约定形态):居中 text-sm text-muted-foreground,禁静默空白/裸 tbody。
+/**
+ * 空态(全站单源,宪法 Article 6):居中 text-sm text-muted-foreground,py-12 呼吸档,
+ * icon 可选;禁静默空白/页面内手搓「暂无」样式。三仓同构(muniu/jinguan 对齐本件)。
+ * 表格内配合 TableCell 使用:<TableCell colSpan={N} className="p-0"><EmptyState>…</EmptyState></TableCell>;
+ * 独立容器(卡片/弹窗列表)内直接作块级元素使用。
+ */
 export function EmptyState({
   icon: Icon,
   children,

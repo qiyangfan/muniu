@@ -104,9 +104,10 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
   `viewport-fit=cover`+`env(safe-area-inset-bottom)`)+ 数据表格转实体卡片 + 表单单列全宽;
   md+ 恢复顶栏导航与表格;统计网格/图表高度带 `sm:` 折降。多屏验收 = 375/768/1280 三档 ×
   亮暗,移动端按移动范式逐页走查,桌面确认无移动范式泄漏(Article 9)。
-- **web 依赖白名单**(对齐铁律 3 的白名单制):react 系 / vite 系 / tailwind v4 / lucide-react /
-  recharts / clsx / tailwind-merge / class-variance-authority / radix-ui / openapi-typescript;
-  之外的任何 `pnpm add` 先记 HANDOFF 开放项。
+- **web 依赖白名单**(对齐铁律 3 的白名单制):react 系 / vite 系 / tailwind v4 / tw-animate-css /
+  lucide-react / recharts / clsx / tailwind-merge / class-variance-authority / radix-ui /
+  openapi-typescript;之外的任何 `pnpm add` 先记 HANDOFF 开放项。
+  (2026-10-02 增补 tw-animate-css:随三仓标准件视觉收敛入仓,聚合层宪法 Article 4 同步。)
 - 收尾门禁:`pnpm typecheck && pnpm lint && pnpm lint:css && pnpm format:check` +
   `pnpm exec vite build --outDir /tmp/dist-check`(禁直接写 web/dist,那是 Go embed 的发布产物)
   + 裸元素自检 grep(business 代码禁裸 button/input/select/textarea)+ 亮暗两态 ×
