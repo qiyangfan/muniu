@@ -4,7 +4,13 @@
 
 ## 当前状态(2026-10-02,三仓标准件视觉全面收敛——owner 插话裁决;后续承下节)
 
-- **三仓标准件视觉收敛(2026-10-02,owner 插话「视觉效果、UI 规范对齐,不各自为政」即指令;muniu 全面收敛+密度档废止经 AskUserQuestion 终态确认)**:ui/ 十件按 kongming 最新配方逐类手工翻译——card 密度收敛(rounded-2xl+shadow-xl+p-6+卡题 text-lg,原「密档刻意区分勿混改」登记废止)+CardTitle 多态 as(h2/h3/h4 默认 h3);button(+Slot/asChild、触控热区、暗色变体)、input(size prop+日期族 block 修复,三仓单源)、textarea(暗色变体)、select(Trigger 字阶+Icon 命名+动画类)、skeleton(bg-accent)、badge(kongming 全集对齐,destructive 改实底;success/warning 软底变体收编入 kongming 单源)、alert-dialog(窄屏贴底抽屉=三仓单源,kongming 已同款收编)、table(导出名对齐 TableHeader/TableBody/TableRow/TableHead/TableCell,卡片底容器移交 DataList 桌面形态);`ui/alert.tsx` 拆分 error-alert(text 单参 API,9 处 children 用法迁移)+notice-banner(本仓特有件);新增 status-badge(Providers 状态表/Pricing 来源三元拼 Badge 收编);empty-state/stat-card 对齐;tw-animate-css 入仓(Article 4 增补)。调用点:登录卡 as="h2" 删 text-xl 密档补偿、Providers 两处原生 h2 回归 CardTitle as="h2"、Overview 默认 h3。门禁:typecheck/lint/lint:css/format/test 6/6/build 全绿;独立子代理复审 1 P2(.gitkeep 误删,已恢复)+2 P3(宪法字阶/table 注释,均已改)全处置;登录页 375/1280 浏览器实测(heading level 2+卡面配方)过;认证后页走查随后续批次例行。已提交并推送(eb59e7a 归档移动+7de59ff 本批,owner 授权,ls-remote 核对一致)。
+- **三仓标准件视觉收敛(2026-10-02,owner 插话「视觉效果、UI 规范对齐,不各自为政」即指令;muniu 全面收敛+密度档废止经 AskUserQuestion 终态确认)**:ui/ 十件按 kongming 最新配方逐类手工翻译——card 密度收敛(rounded-2xl+shadow-xl+p-6+卡题 text-lg,原「密档刻意区分勿混改」登记废止)+CardTitle 多态 as(h2/h3/h4 默认 h3);button(+Slot/asChild、触控热区、暗色变体)、input(size prop+日期族 block 修复,三仓单源)、textarea(暗色变体)、select(Trigger 字阶+Icon 命名+动画类)、skeleton(bg-accent)、badge(kongming 全集对齐,destructive 改实底;success/warning 软底变体收编入 kongming 单源)、alert-dialog(窄屏贴底抽屉=三仓单源,kongming 已同款收编)、table(导出名对齐 TableHeader/TableBody/TableRow/TableHead/TableCell,卡片底容器移交 DataList 桌面形态);`ui/alert.tsx` 拆分 error-alert(text 单参 API,9 处 children 用法迁移)+notice-banner(本仓特有件);新增 status-badge(Providers 状态表/Pricing 来源三元拼 Badge 收编);empty-state/stat-card 对齐;tw-animate-css 入仓(Article 4 增补)。调用点:登录卡 as="h2" 删 text-xl 密档补偿、Providers 两处原生 h2 回归 CardTitle as="h2"、Overview 默认 h3。门禁:typecheck/lint/lint:css/format/test 6/6/build 全绿;独立子代理复审 1 P2(.gitkeep 误删,已恢复)+2 P3(宪法字阶/table 注释,均已改)全处置;登录页 375/1280 浏览器实测(heading level 2+卡面配方)过。已提交并推送(eb59e7a 归档移动+7de59ff 本批,owner 授权,ls-remote 核对一致)。
+- **认证后页面实机走查(2026-10-02,scratch 网关 8790 假上游+临时 SQLite,补批次三走查义务)**:
+  五页 375+1280×亮暗全过——Overview(StatCard border+rounded-lg 新配方、图表卡 rounded-2xl+shadow-xl、
+  h3 卡题、EmptyState)、密钥(签发卡+DataList 移动卡+吊销 AlertDialog 窄屏贴底抽屉:安全区+圆角顶+
+  destructive 实底)、供应商(两处 CardTitle as=h2、success 软底 StatusBadge、桌面表格入 Card)、
+  价目(StatusBadge fallback=静态配置价 secondary、tabular-nums 右对齐、表格入 Card);
+  登录卡题 h2 大纲过。走查栈已拆除(临时配置/库清理)。
 - **开放项新增:form-row help prop 差异**——kongming form-row 带 help(FieldLabel+ui/label+tooltip 链),本仓现无消费方未引入死链;API 补齐待有真实需求时一并落(ui/label/field-label/tooltip 三件随需翻译)。
 
 ## 当前状态(2026-10-02,跨仓配对验收记录新增;其余承 2026-09-30 批次)
