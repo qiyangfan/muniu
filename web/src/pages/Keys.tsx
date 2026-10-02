@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from "../components/ui/alert-dialog";
 import { Card } from "../components/ui/card";
+import { CopyButton } from "../components/copy-button";
 import { DataList, type DataCol } from "../components/data-list";
 import { FormRow } from "../components/form-row";
 import { formatDateTime, formatNumber } from "../lib/datetime";
@@ -44,7 +45,10 @@ function QuickExpires({ onPick }: { onPick: (v: string) => void }) {
 
 export default function Keys() {
   const [keys, setKeys] = useState<KeyRecord[]>([]);
-  const [plain, setPlain] = useState("");
+  // 签发结果:明文一次性展示 + Key ID 复制入口。ID 与明文分开承载——锦官绑定填 Key ID,
+  // 明文只用于请求鉴权,两者不可互换(openspec fix-api-key-binding-identifiers);
+  // 契约 KeyCreateResponse 将 key/id 声明为必返,两值恒在
+  const [issued, setIssued] = useState<{ key: string; id: string } | null>(null);
   const [err, setErr] = useState("");
   const [name, setName] = useState("");
   const [tenant, setTenant] = useState("default");
@@ -132,14 +136,50 @@ export default function Keys() {
         </span>
       ),
     },
+    {
+      // Key ID 是用量归账/锦官绑定的连接值,与明文(prefix 的来源)和前缀严格区分。
+      // 长 ID(UUID 形态)桌面与移动统一截短显示 + title 全值,复制永远取完整原值
+      //(design:长 ID 用既有截断/提示组件显示;全值渲染会把表格 min-content 撑爆出横向滚动)
+      key: "id",
+      label: "Key ID",
+      headTitle: "用量归账与锦官绑定使用的真实 ID(不是明文密钥/前缀)",
+      render: (k, mobile) =>
+        k.id ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span className={mobile ? "font-mono text-xs" : "font-mono"} title={k.id}>
+              {k.id.length > 18 ? `${k.id.slice(0, 16)}…` : k.id}
+            </span>
+            <CopyButton
+              value={k.id}
+              label="复制 ID"
+              size={mobile ? "sm" : "xs"}
+              variant="ghost"
+              aria-label={`复制 ${k.name ?? k.prefix ?? ""} 的 Key ID`}
+            />
+          </span>
+        ) : (
+          // 兼容条目缺 ID:明确示不可用并禁用复制,不以 prefix/序号充当 ID
+          <span className="inline-flex items-center gap-1.5">
+            <span className="text-muted-foreground">ID 不可用</span>
+            <CopyButton
+              value=""
+              label="复制 ID"
+              disabled
+              size={mobile ? "sm" : "xs"}
+              variant="ghost"
+              aria-label={`复制 ${k.name ?? k.prefix ?? ""} 的 Key ID`}
+            />
+          </span>
+        ),
+    },
     { key: "name", label: "名称", primary: true, render: (k) => k.name },
     {
       key: "tenant",
       label: "租户",
-      // 租户 id 是 UUID 形态时移动卡片半列放不下,截短显示(title 保留全值);桌面列维持原值
-      render: (k, mobile) => {
+      // 租户 id 的 UUID 形态与 Key ID 同款截短(title 保留全值),防表格 min-content 溢出
+      render: (k) => {
         const v = k.tenant_id ?? "—";
-        return mobile ? <span title={v}>{v.length > 14 ? `${v.slice(0, 12)}…` : v}</span> : v;
+        return <span title={v}>{v.length > 18 ? `${v.slice(0, 16)}…` : v}</span>;
       },
     },
     {
@@ -189,10 +229,11 @@ export default function Keys() {
 
   return (
     <div className="space-y-4">
-      {/* 签发表单:移动端单列全宽(sm 起两列,lg 三列,xl 六列一行),字段不再定宽挤压 */}
+      {/* 签发表单:移动端单列全宽,sm 起两列、lg 三列、xl 四列——datetime 控件与快捷按钮
+          需要约 270px 宽度,六列形态(每列 ~165px)会裁切控件与折乱按钮(走查实测返工) */}
       <Card className="p-4">
         <form
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
           onSubmit={async (e) => {
             e.preventDefault();
             setBusy(true);
@@ -202,7 +243,7 @@ export default function Keys() {
                 daily_quota_credits: quota,
                 ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
               });
-              setPlain(r.key);
+              setIssued({ key: r.key, id: r.id });
               setErr("");
               setName("");
               // 新增字段一并复位:残留的过期时刻会静默套到下一把密钥上
@@ -269,7 +310,8 @@ export default function Keys() {
               <QuickExpires onPick={setExpires} />
             </>
           </FormRow>
-          <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-6">
+          {/* xl 占两列补齐第二行(配额/过期/签发同排),不留网格空洞 */}
+          <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-2">
             <Button type="submit" disabled={busy} className="w-full sm:w-auto">
               {busy ? "签发中…" : "签发"}
             </Button>
@@ -281,9 +323,21 @@ export default function Keys() {
       </p>
       {/* 错误必须独立于明文区展示:混用会让操作者把错误串当 key 复制走 */}
       {err && <ErrorAlert>错误:{err}</ErrorAlert>}
-      {plain && (
+      {issued && (
         <NoticeBanner>
-          明文仅此一次: <code className="font-mono">{plain}</code>
+          <div className="space-y-1.5">
+            <div>
+              明文仅此一次: <code className="break-all font-mono">{issued.key}</code>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span>
+                Key ID: <code className="break-all font-mono">{issued.id}</code>
+              </span>
+              <CopyButton value={issued.id} label="复制 Key ID" size="xs" variant="outline" />
+            </div>
+            {/* 锦官绑定入口提示:绑定填 Key ID,明文只用于请求鉴权 */}
+            <p className="text-xs">锦官绑定填写 Key ID(不是明文密钥);明文仅用于调用方请求鉴权。</p>
+          </div>
         </NoticeBanner>
       )}
       <DataList

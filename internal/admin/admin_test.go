@@ -4,16 +4,19 @@ package admin_test
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	"github.com/solvela/muniu/internal/admin"
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
@@ -517,4 +520,119 @@ func TestAdmin_Plugins_资源参数钳制(t *testing.T) {
 	if _, ok := reg.SHA256("x"); ok {
 		t.Fatal("被拒参数不得留下注册记录")
 	}
+}
+
+// TestAdmin_签发响应与OpenAPI契约一致(openspec fix-api-key-binding-identifiers):
+// handler 实际输出的字段集合 ≡ contracts/openapi.yaml KeyCreateResponse 声明的属性集合,
+// 双向钉死——运行时加字段不改契约、或契约声明运行时没有的字段,都在此处先红。
+// 语义锚点:id 是用量归账/锦官绑定的连接值,不得与 secret(key)/prefix 混同;
+// 创建响应的租户字段沿用既有名 tenant(值为租户名;列表 KeyRecord.tenant_id 为租户 UUID,
+// 同指所属租户但值域不同——契约不重命名,描述如实区分)。
+func TestAdmin_签发响应与OpenAPI契约一致(t *testing.T) {
+	db := openDB(t)
+	h := newAdmin(t, db, "tok", nil)
+	code, body := call(t, h, "POST", "/admin/v1/keys", "tok", `{"tenant":"default","name":"contract","rpm_limit":60}`)
+	if code != 200 {
+		t.Fatalf("签发失败: %d %s", code, body)
+	}
+	var resp map[string]any
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		t.Fatalf("签发响应非法 JSON: %v", err)
+	}
+	if len(resp) == 0 {
+		t.Fatal("签发响应为空")
+	}
+	actual := make(map[string]bool, len(resp))
+	for k := range resp {
+		actual[k] = true
+	}
+
+	// 语义锚点:三值互不相同,id 非空、明文带 mk- 前缀、租户字段名为 tenant
+	if id, _ := resp["id"].(string); id == "" || id == resp["key"] || id == resp["prefix"] {
+		t.Fatalf("id 必须是非空且区别于 secret/prefix 的独立值: %q", resp["id"])
+	}
+	if key, _ := resp["key"].(string); !strings.HasPrefix(key, "mk-") {
+		t.Fatalf("明文形态不符: %q", resp["key"])
+	}
+	if _, hasTenant := resp["tenant"]; !hasTenant {
+		t.Fatalf("创建响应租户字段必须保持既有名 tenant(不重命名): %v", actual)
+	}
+	if _, renamed := resp["tenant_id"]; renamed {
+		t.Fatalf("创建响应不得出现 tenant_id(契约不做同义改名): %v", actual)
+	}
+
+	// 契约侧:解析 openapi.yaml 的 KeyCreateResponse 属性集合
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "openapi.yaml"))
+	if err != nil {
+		t.Fatalf("读取 openapi.yaml: %v", err)
+	}
+	var doc struct {
+		Components struct {
+			Schemas map[string]struct {
+				Required   []string       `yaml:"required"`
+				Properties map[string]any `yaml:"properties"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("openapi.yaml 非法: %v", err)
+	}
+	schema, ok := doc.Components.Schemas["KeyCreateResponse"]
+	if !ok {
+		t.Fatal("openapi.yaml 缺 KeyCreateResponse schema(签发响应契约未声明)")
+	}
+	if len(schema.Properties) == 0 {
+		t.Fatal("KeyCreateResponse 未声明任何属性,疑似解析失败")
+	}
+	declared := make(map[string]bool, len(schema.Properties))
+	for k := range schema.Properties {
+		declared[k] = true
+	}
+	// required 面:handler 无条件输出全部 8 键,契约必须同等声明「属性全集即 required 全集」;
+	// 漏声明会把必返字段洗成可选,生成类型随之退化为 undefined(门禁与「双向钉死」声称对齐)
+	if len(schema.Required) != len(schema.Properties) {
+		t.Fatalf("KeyCreateResponse 的 required(%d 项)必须覆盖全部属性(%d 项): %v",
+			len(schema.Required), len(schema.Properties), schema.Required)
+	}
+	for _, k := range schema.Required {
+		if !declared[k] {
+			t.Fatalf("required 引用了未声明属性: %q", k)
+		}
+	}
+	// expires_at 可空语义:handler 侧 *time.Time(nil→null),契约必须 nullable(漏声明会误伤 null 消费方)
+	if exp, ok := schema.Properties["expires_at"].(map[string]any); ok {
+		if nullable, _ := exp["nullable"].(bool); !nullable {
+			t.Fatal("expires_at 必须声明 nullable:true(运行时永不过期返回 null)")
+		}
+	} else {
+		t.Fatal("expires_at 属性形态异常,无法校验 nullable")
+	}
+
+	var missing, extra []string
+	for k := range declared {
+		if !actual[k] {
+			missing = append(missing, k)
+		}
+	}
+	for k := range actual {
+		if !declared[k] {
+			extra = append(extra, k)
+		}
+	}
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Fatalf("签发响应与契约漂移:\n  契约声明而运行时未返回: %v\n  运行时返回而契约未声明: %v\n(修复:同步 contracts/openapi.yaml 与 admin.createKey)",
+			sortedQuote(missing), sortedQuote(extra))
+	}
+}
+
+// sortedQuote 稳定排序输出(契约漂移断言的可读差异列表)。
+func sortedQuote(list []string) string {
+	out := make([]string, 0, len(list))
+	out = append(out, list...)
+	sort.Strings(out)
+	quoted := make([]string, 0, len(out))
+	for _, v := range out {
+		quoted = append(quoted, fmt.Sprintf("%q", v))
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }

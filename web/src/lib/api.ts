@@ -3,6 +3,7 @@ import type { components, paths } from "./api-types";
 
 export type Tenant = components["schemas"]["Tenant"];
 export type KeyRecord = components["schemas"]["KeyRecord"];
+export type KeyCreateResponse = components["schemas"]["KeyCreateResponse"];
 export type UsagePoint = components["schemas"]["UsagePoint"];
 export type ProviderInfo = components["schemas"]["ProviderInfo"];
 export type ProviderPreset = components["schemas"]["ProviderPreset"];
@@ -101,7 +102,7 @@ export const api = {
     rpm_limit: number,
     opts?: { tpm_limit?: number; daily_quota_credits?: number; expires_at?: string },
   ) =>
-    call<{ key: string; prefix: string }>("POST", "/admin/v1/keys", {
+    call<KeyCreateResponse>("POST", "/admin/v1/keys", {
       tenant,
       name,
       rpm_limit,

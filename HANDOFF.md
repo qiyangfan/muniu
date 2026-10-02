@@ -2,7 +2,14 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
-## 当前状态(2026-09-30,状态备份/恢复落地:openspec `2026-09-30-state-backup-restore` 12/12 任务,make check 全绿+活实例冒烟,待归档;其余承 2026-09-26 批次,历史批次见验收记录 25-32)
+## 当前状态(2026-10-02,跨仓配对验收记录新增;其余承 2026-09-30 批次)
+
+- **跨仓配对验收(2026-10-02,与锦官 `recover-pending-usage-settlement` / `fix-api-key-binding-identifiers` 互引)**:锦官侧两件已实施并归档,真机联调实录(独立 muniu 实例 :8788,sink=ingest 指锦官,假上游)——`muniu keys create` 后 `keys list` 的**记录 ID**(01a0fa5d-abba-…)绑定锦官用户、明文凭据 mk-PL3boi… 鉴权请求:锦官 200 接收(可靠落库,欠费留存 0.002 元分毫不差)、名单含 key;Mock 充值 0.01 元后锦官后台恢复器自动补扣(余额 800 万 credit 账实相符、投影 accepted、名单 v3→v4 收敛),再等一轮 attempts 稳定=**缓冲已结束、无重投**;账本恰两笔分录(pay:+10000000/usage:-2000000)。契约零变更(UsageRow/IngestResult 形态不变,锦官 openapi 深度相等实证);本仓两件同名 change 的回归测试与归档任务仍在本仓队列,由本仓会话按锦官实录补齐。
+
+## 当前状态(2026-10-02,两提案实施:`fix-api-key-binding-identifiers` 7/7 已归档;`recover-pending-usage-settlement` 4/5,归档阻塞于锦官侧收口;历史批次见验收记录 33)
+
+- **Key ID 绑定标识修复(2026-10-02,openspec `fix-api-key-binding-identifiers` 已归档)**:签发响应契约如实声明(openapi `KeyCreateResponse` 8 字段+双向契约回归测试)+web 侧 Key ID 列(截短+title,复制取完整原值,缺 ID 显式禁用)与签发横幅复制入口;跨仓活实例验收:UUID 与自定义 ID 签发→锦官绑定→归账逐字一致。引入 vitest 组件测试(devDeps,白名单登记见开放项)。
+- **待结算计量恢复(2026-10-02,openspec `recover-pending-usage-settlement` 4/5)**:传输边界测试落地(2xx 含 skipped_insufficient 不重试/前缀已收 5xx 整批原 ID 续传去重)+跨仓联调全链实证(欠费→Mock 充值→恢复器补扣恰一笔→同 ID 重放零新扣账→吊销 5s 收敛 401);**2.3 归档阻塞**:锦官同名 change 为其工作树未提交 WIP,待其自身验收归档后本仓同步主规格收口。
 
 - **适配器值域单源(2026-09-30,openspec `2026-09-30-retire-gemini-adapter-token` 已归档)**:`internal/config` 手抄的适配器清单退役——`gemini` 无 `adapter.For` 分支却挂在白名单与非法取值报错里,配置能过校验、直到装配期(`cmd/muniu/main.go:181`)才炸。值域单源改由新增 `adapter.Types()`(=For 可实现集合)提供,校验值域与报错文案同源渲染;`internal/presets` 测试里的第三份手抄清单同步取消。Gemini 接入方向不变(官方 OpenAI 兼容端点 + `adapter: openai`,预设目录 alias `gemini` 已收录),原生桥接按 upstream-egress-batch 裁决裁撤:ADR-0003 加更正注记、`upstream-adapters.md` 包树/改写白名单/Usage 表口径同步、phase-4 T4.8 撤销登记、ROADMAP Backlog 标撤。顺带清偿 `traffic-governance` 归档遗留的 TBD Purpose。
 
@@ -44,6 +51,14 @@
 
 ## 下一步(严格按序)
 
+【2026-10-02 实施后状态】：
+
+1. 【已完成·已归档】fix-api-key-binding-identifiers 7/7(make check 全绿+跨仓验收,验收记录 33)。
+2. 【进行中·外部阻塞】recover-pending-usage-settlement 4/5——木牛侧实现/测试/联调全过,2.3 的主规格同步与归档待锦官同名 change(其仓内未提交 WIP)完成自身验收后执行;锦官收口当轮直接 `openspec archive` 即可。
+3. 跨仓联合修改/外部依赖事项单源:聚合目录 [`../HANDOFF.md`](../HANDOFF.md)(锦官两 change 收口、kongming input 同步、ingest 形态控制台读数口径)。
+
+以下是此前交付与条件事项，保持原记录：
+
 1. 【用户·已完成 2026-09-12】GitHub 建仓 + tag + push(实际建仓 qiyangfan/muniu 私有——gh 登录账号与旧计划 solvela 不符,以实际为准;v0.3.0 已发布,见验收记录 21)。
 2. 【执行会话·已完成 2026-09-12】README 补 CI badge(指向 actions/workflows/ci.yml;仓库私有,badge 公网渲染待仓库公开后自然生效)。
 3. 【执行会话】T5.2 接线已完成(2026-09-11,验收记录 19;kongming 侧 ADR-007 已落盘并更新状态)。剩余 T5.3:灰度一周(2026-09-12 判据修订,验收记录 22)→ 全量 → kongming ADR-007 转「已接受」。
@@ -75,6 +90,8 @@
 | 2026-09-13 | upstream-egress-batch Gemini 三项(冒烟/quirk/价目)待外部 GEMINI_API_KEY,无限期挂起污染活动清单 | 继续 etc 等待 / 归档并登记搁置 / 立即放弃 | **用户裁决:无限搁置**——①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者;纯新增零沉没成本 | change 归档(anthropic-bridge delta 合入主 specs;gemini-egress delta 随裁决移除,不把未打算满足的 MUST 合入主 specs);设计论述留档 design.md,未来解锁按原设计「轻形态+冒烟先行」重新立项 |
 | 2026-09-26 | 控制台 ui/CardTitle 基线渲染为 div(kongming 同源),无标题语义;卡题进不了读屏标题大纲(Providers 两处已用原生 h2 承载 CardTitle 配方临时兜住,Overview/Login 仍是 div) | 控制台可访问性缺口,ui/ 标准件语义缺陷是系统性的 | CardTitle 增多态 heading(如 as)支持;属 ui/ 语义级改动,按宪法 Article 5 须 kongming 先行,本仓随后对齐 | 待裁决(kongming 先行通道) |
 | 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;待冒烟仅确认最优形态(不阻塞) |
+| 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | 按「确需引入→先记开放项」落地,owner 可裁决保留或移除 |
+| 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | 本仓已修;kongming 双仓对齐时以此为准同步 |
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **登记不阻塞** |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
@@ -174,3 +191,8 @@
 30. **控制台移动端重设计走查(2026-09-26)**:scratch 实例(假上游+SQLite 种子)375/768/1280 × 亮暗 20 帧,三 visual-judge 终裁 **20/20 通过**;门禁:web 四件套 + `vite build --outDir /tmp/dist-check` + 裸元素自检 grep 全绿。
 31. **控制台风格统一审计整改 + 评审循环(2026-09-26)**:审计=四维单源核验+跨页一致性扫描;整改=numeric 列/节奏一档/卡头收编/按钮档位/宪法落盘(详见当前状态同日条目)。评审循环(独立子代理复核)3+1 缺陷全修:卡题 h2 语义回归、裸 toLocaleString 归 datetime 单源、宪法 Article 2 任意值三类白名单、注释与代码矛盾。证据:web 四件套+vite build 三轮全绿;`make check` 全绿(coverage 68.5%,提交前终跑);远端调和 HEAD..origin/main 零分叉后推送。
 32b. **适配器值域单源(2026-09-30,`retire-gemini-adapter-token` 已归档)**:判据=测试先行红→绿 + `make check` 全绿 + 加载期拒启实录 + openspec 全绿。证据:①红=`internal/config/config_test.go: undefined: adapter.Types`(实现前原始报错);②绿=`internal/adapter/types_test.go`(Types 每个值可被 For 构造 / 排序且无重复)+ `config_test.go`(报错值域与 Types 逐项相等、`adapter: gemini` 加载期拒),包覆盖 adapter 77.3% / config 79.5% / presets 100%;③`make check` 全绿,coverage gate PASS 68.2%;④实跑 `go build -o bin/muniu ./cmd/muniu && ./bin/muniu -c <adapter: gemini 配置>` 退出码 1,stderr 原文 `providers[0](deepseek) adapter 非法 "gemini"(允许 anthropic|deepseek|doubao|glm|moonshot|openai|qwen)`;⑤归档后 `openspec validate --all --strict` 15/15(新 capability `adapter-taxonomy`,Purpose 由 delta 正文带入非占位)。未做:带日期叙述件(`docs/articles/03`、`design-consistency-check-2026-09-10`)按「历史快照不回改」纪律保留原表述。
+
+**33. Key ID 绑定标识修复 + 待结算计量恢复(2026-10-02,fix-api-key-binding-identifiers 7/7 已归档 + recover-pending-usage-settlement 4/5)**
+- 判据:契约回归先立(openapi KeyCreateResponse ≡ handler 输出,双向)+组件测试+make check 全绿+跨仓活实例验收。
+- 证据:①`internal/admin/admin_test.go` TestAdmin_签发响应与OpenAPI契约一致(字段集双向+id/secret/prefix 三值互异+tenant 不重命名);②`web/src/components/copy-button.tsx` 共享复制组件(Providers 收编同源)+Keys Key ID 列/签发横幅+vitest 6 例(`pnpm test` 进 Makefile/CI 门禁);③`internal/metering/ingest_test.go` 2 例(2xx 待结算不制造重试;前缀已收 5xx 整批按原用量 ID 续传、同 ID 恰计费一次);④跨仓实录:木牛(18787,假上游+ingest 汇)×锦官(8091,PG 5433,dev jar)——UUID key `01a0fa4b-…` 与自定义 ID key `platform-key-1` 绑定→请求→归账 keyId 逐字一致;欠费两行(skipped_insufficient)→Mock 支付 96000→恢复器轮「结算=2 仍欠费=0」→账本恰每 usageId 一笔 -48000、余额自洽→同 ID 同计费事实重放 `replayed=1` 零新扣账(不同事实 409 拒绝)→锦官吊销 platform-key-2 后木牛 5s 拉取收敛 401、对照 key 200;⑤`make check` exit=0(20 包 race,coverage 68.4%);`openspec validate --all --strict` 16/16(归档后);⑥独立子代理两轮审查:一轮 1 高(.gitkeep 被构建清空→恢复)+3 低全处置(act 告警登记为已知噪音);二轮 3 低全修——契约 tenant 描述改如实值域声明(create=租户名/list=UUID,勿混用)、契约门禁补 required 全集+expires_at nullable 断言、ingest 续传断言改有序子序列容忍批切分(消假红窗口)。
+- 走查返工(owner 三次插话):签发表单列梯 6→4 列(165px/列挤爆 datetime)、Key ID/租户桌面截短+title(表格 min-content 1393→1104,1280 零滚动)、ui/input 日期族 flex→block(日历指示器右贴边,像素级验证);总览图表空数据态(禁静默空白,文案仅用户事实不露实现细节)。踩坑:vite build 会清掉 dist/.gitkeep(每次走查构建后必须恢复);锦官 jar 增量重打包可能产损坏产物(logback 类缺失致 Tomcat 线程静默死亡、请求挂起),须 clean package。

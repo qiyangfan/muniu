@@ -482,7 +482,9 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": components["schemas"]["KeyCreateResponse"];
+                    };
                 };
             };
         };
@@ -1017,6 +1019,31 @@ export interface components {
             daily_quota_credits?: number;
             /** @description RFC3339;空=永不过期 */
             expires_at?: string;
+        };
+        /** @description 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。 */
+        KeyCreateResponse: {
+            /** @description 明文密钥(mk- 前缀),仅此一次返回 */
+            key: string;
+            /** @description Key ID(本地签发为 UUID;平台接入可为任意合法字符串) */
+            id: string;
+            /** @description 明文前 12 字符,仅辨认用 */
+            prefix: string;
+            /** @description 租户名(按名解析落库);列表回执 KeyRecord.tenant_id 为租户 UUID——同指所属租户,值域不同,勿混用 */
+            tenant: string;
+            /** Format: int64 */
+            rpm_limit: number;
+            /**
+             * Format: int64
+             * @description 0=不限
+             */
+            tpm_limit: number;
+            /**
+             * Format: int64
+             * @description 0=不限
+             */
+            daily_quota_credits: number;
+            /** @description RFC3339;null=永不过期 */
+            expires_at: string | null;
         };
         /** @description 局部更新(省略字段不动;expires_at 显式 null 清除过期) */
         KeyPatchRequest: {

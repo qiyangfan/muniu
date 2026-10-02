@@ -46,11 +46,12 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
-      - name: typecheck + lint + format
+      - name: typecheck + lint + test + format
         working-directory: web
         run: |
           pnpm install --frozen-lockfile
           pnpm typecheck
           pnpm lint
           pnpm lint:css
+          pnpm test
           pnpm format:check

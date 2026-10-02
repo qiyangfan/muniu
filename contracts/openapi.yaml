@@ -37,6 +37,19 @@ components:
         tpm_limit: { type: integer, format: int64, description: "0=不限" }
         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
         expires_at: { type: string, description: "RFC3339;空=永不过期" }
+    KeyCreateResponse:
+      type: object
+      description: 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。
+      required: [key, id, prefix, tenant, rpm_limit, tpm_limit, daily_quota_credits, expires_at]
+      properties:
+        key: { type: string, description: "明文密钥(mk- 前缀),仅此一次返回" }
+        id: { type: string, description: "Key ID(本地签发为 UUID;平台接入可为任意合法字符串)" }
+        prefix: { type: string, description: "明文前 12 字符,仅辨认用" }
+        tenant: { type: string, description: "租户名(按名解析落库);列表回执 KeyRecord.tenant_id 为租户 UUID——同指所属租户,值域不同,勿混用" }
+        rpm_limit: { type: integer, format: int64 }
+        tpm_limit: { type: integer, format: int64, description: "0=不限" }
+        daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
+        expires_at: { type: string, nullable: true, description: "RFC3339;null=永不过期" }
     KeyPatchRequest:
       type: object
       description: 局部更新(省略字段不动;expires_at 显式 null 清除过期)
@@ -283,7 +296,11 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/KeyCreateRequest" }
       responses:
-        "200": { description: 明文 key 与回执 }
+        "200":
+          description: 明文 key 与回执
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KeyCreateResponse" }
   /admin/v1/keys/{id}:
     patch:
       summary: key 运行态限额局部更新(写后鉴权缓存立即失效,下一请求即新限额)

@@ -1,10 +1,8 @@
 // 供应商页:已接入拓扑健康(只读)+ 官方端点预设目录(复制 YAML 片段填入 muniu.yaml 即可接入)。
 import { useEffect, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
-import { Check, Copy } from "lucide-react";
 import { api, type ProviderInfo, type ProviderPreset } from "../lib/api";
 import { Badge, badgeVariants } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader } from "../components/ui/card";
 import {
   Select,
@@ -14,6 +12,7 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { ErrorAlert } from "../components/ui/alert";
+import { CopyButton } from "../components/copy-button";
 import { DataList, type DataCol } from "../components/data-list";
 import { EmptyState } from "../components/empty-state";
 import { Skeleton } from "../components/ui/skeleton";
@@ -69,30 +68,6 @@ const presetYAML = (p: ProviderPreset): string =>
     `      - env: ${p.env}   # 密钥明文只放环境变量`,
   ].join("\n");
 
-// 剪贴板写入:clipboard API 仅安全上下文可用,经 LAN IP 访问控制台时回退 execCommand
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.setAttribute("readonly", "");
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try {
-      ok = document.execCommand("copy");
-    } catch {
-      ok = false;
-    }
-    ta.remove();
-    return ok;
-  }
-}
-
 // ---------- 官方端点预设目录 ----------
 
 function PresetCatalog() {
@@ -100,8 +75,6 @@ function PresetCatalog() {
   const [err, setErr] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [group, setGroup] = useState("all"); // 分组筛选(all|domestic|global|local)
-  const [copied, setCopied] = useState<string | null>(null); // 刚复制成功的 alias(按钮反馈)
-  const [copyErr, setCopyErr] = useState("");
 
   useEffect(() => {
     api
@@ -113,18 +86,6 @@ function PresetCatalog() {
       .catch((e) => setErr(e.message))
       .finally(() => setLoaded(true));
   }, []);
-
-  const copy = async (p: ProviderPreset) => {
-    setCopyErr("");
-    const alias = p.alias ?? "";
-    if (await copyText(presetYAML(p))) {
-      setCopied(alias);
-      // 短暂反馈后复原;闭包比对防止乱序定时器误清后一次复制
-      window.setTimeout(() => setCopied((cur) => (cur === alias ? null : cur)), 2000);
-    } else {
-      setCopyErr("复制失败,请手动复制表格中的端点信息");
-    }
-  };
 
   // 列定义单源:桌面表格与移动预设卡片共用;厂商列同格承载 display+alias
   const presetColumns: DataCol<ProviderPreset>[] = [
@@ -186,22 +147,14 @@ function PresetCatalog() {
       label: <span className="sr-only">操作</span>,
       actions: true,
       render: (p, mobile) => (
-        <Button
+        <CopyButton
+          value={presetYAML(p)}
+          label="复制 YAML"
           size={mobile ? "sm" : "xs"}
           variant="outline"
-          onClick={() => copy(p)}
+          failHint="复制失败,请手动复制表格中的端点信息"
           aria-label={`复制 ${p.display} 的 YAML 片段`}
-        >
-          {copied === p.alias ? (
-            <>
-              <Check className="size-3.5" aria-hidden /> 已复制
-            </>
-          ) : (
-            <>
-              <Copy className="size-3.5" aria-hidden /> 复制 YAML
-            </>
-          )}
-        </Button>
+        />
       ),
     },
   ];
@@ -245,7 +198,6 @@ function PresetCatalog() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {copyErr && <ErrorAlert>{copyErr}</ErrorAlert>}
         {/* 列定义单源:桌面表格(min-w 横向滚动)+ 移动端预设卡片堆叠 */}
         <DataList
           tableClassName="min-w-[1000px]"

@@ -2,15 +2,15 @@ GO ?= go
 BIN := bin
 PKG := github.com/solvela/muniu
 
-## check: 全量质量门禁(vet + lint + web typecheck/lint/format + race test/覆盖率)——任何交付前必须全绿
+## check: 全量质量门禁(vet + lint + web typecheck/lint/test/format + race test/覆盖率)——任何交付前必须全绿
 .PHONY: check
 check: vet lint web-check test
 
-## web-check: 控制台类型检查与 lint(pnpm 存在时执行,否则跳过)
+## web-check: 控制台类型检查/lint/组件测试(pnpm 存在时执行,否则跳过)
 .PHONY: web-check
 web-check:
 	@command -v pnpm >/dev/null 2>&1 || { echo "[web-check] pnpm 未安装,跳过控制台门禁"; exit 0; }
-	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm format:check
+	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm test && pnpm format:check
 
 ## web-build: 构建控制台产物到 web/dist(嵌入二进制)
 .PHONY: web-build
