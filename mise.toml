@@ -2,4 +2,4 @@
 # CI 不走 mise(actions/setup-go + golangci-lint-action),版本语义与此处保持一致。
 [tools]
 go = "1.27"
-"aqua:golangci/golangci-lint" = "2.13"
+"aqua:golangci/golangci-lint" = "2.14"
