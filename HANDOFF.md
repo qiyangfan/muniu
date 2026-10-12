@@ -6,7 +6,7 @@
 
 - **backlog 升格触发权移交(owner「作为求职项目,值得做你裁决,不等点名」)**:①旗舰项 `anthropic-bridge-tool-roundtrip` 已走完整 openspec 周期并归档——chat×anthropic 工具多轮请求侧翻译(tool_calls→tool_use 块/role=tool→合并 tool_result/配对校验/纯文本 wire 逐字节不变)+tool_choice none 映射+声明翻正;豁免机制降级防御性保留(testkit 假桥接钉住);真异构两家自此均整家实现,登记缺口清零。②`top_k` 双向保真(gemini 入站 topK→canonical top_k、出站反向,与 top_p 同缝,消 qwen 系静默丢参)。③DELETE 代理改判不做(零需求);预设双目录分工维持(文档头已明示纪律,非欠账)。
 - **dashscope 真上游冒烟**(anthropic 分支,bearer):工具全轮经翻译路径收敛——声明→`tool_calls`(真实 `toolu_*` id,usage 151/19)→tool_result 回传→终答(「北京今天天气晴朗…」,cached_tokens 64=上游真实 prompt cache 命中);`tool_choice:"none"` 被上游接受(纯文本作答零工具调用),映射定稿保留。资源纪律:临时 key 随 /tmp 实例清理;**data/muniu.db 为本批冒烟自产(mtime 确认)已删**,bench.db 留档未动。
-- **门禁**:`make check` exit=0(coverage gate PASS 71.4%);`openspec validate --all` 18/18。本批未提交(等 owner 指令);push 仍待 workflow scope。
+- **门禁**:`make check` exit=0(coverage gate PASS 71.4%);`openspec validate --all` 18/18。本批与盘点批已提交推送(74e9d7b/f6f7a89/6491073),CI 实跑双 job 全绿(check 5m17s 含 lint 2.14 与 20 包 race + web-check 42s,run 38261580099)——workflow scope 授权后闭环。
 
 ## 当前状态(2026-10-12,盘点落地批:漂移清偿+admin 校验收紧;T5.3/T5.6 基座中断待裁决)
 
@@ -145,7 +145,7 @@
 **38. 代码审查迭代循环收口 + 提交推送(2026-10-12,owner 指令「归档,写好 handoff,提交所有代码,push,注意 ci 情况」)**
 - 评审:69 文件三轮收敛,6 真实缺陷根修+回归测试(详见当前状态同日节与对话收口报告);`make check` exit=0(vet+lint 0 issues+20 包 race,coverage gate PASS 71.0%);`openspec validate --all` 18/18;gofmt 全仓干净。
 - 提交切分:①工具链(mise.toml+ci.yml,golangci-lint 2.14 独立可回退);②主交付(三 change 实现/测试/fixture/归档/ADR/文档/HANDOFF)。
-- push:本地提交就绪,首推被远端拒收(凭证缺 workflow scope,涉及 ci.yml 的提交);待授权重推,CI 实跑顺延。
+- push:owner 授权 workflow scope 后全批推送成功(f7f6407..6491073,六笔);CI 实跑 **全绿**(run 38261580099:check+web-check 双 job,lint 2.14 首次线上实跑过)。
 
 **37. 三 change 归档 + 三组真上游冒烟(2026-10-12,owner 裁决授权;dashscope 单 key 承载)**
 - 归档:`fix-responses-input-forms` / `protocol-native-passthrough` / `gemini-native-protocol` 三 change 全部实施完毕后经 `openspec archive` 归档(archive/2026-10-12-*),主 specs 同步:responses-inbound 请求翻译契约(+3 场景)与无状态边界改写、anthropic-bridge 两 requirement 声明式缺口化、新建 protocol-native-passthrough(7 requirements)/gemini-inbound(5)/gemini-native-outbound(5)、adapter-taxonomy 值域示例翻转;`openspec validate --all` 18/18。
