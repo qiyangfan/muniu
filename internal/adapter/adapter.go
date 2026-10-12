@@ -135,8 +135,8 @@ type NativePreparer interface {
 
 // NativeFetcher 直通 GET 代理能力(responses 有状态查询:亲和已知时由 proxy 调用)。
 type NativeFetcher interface {
-	// PrepareNativeFetch 状态查询出站:GET <原生端点>/{id},无请求体,鉴权按既有声明。
-	PrepareNativeFetch(respID, apiKey string) (*Outbound, error)
+	// PrepareNativeFetch 状态 lane 读删出站:verb(GET|DELETE) <原生端点>/{id},无请求体,鉴权按既有声明。
+	PrepareNativeFetch(verb, respID, apiKey string) (*Outbound, error)
 }
 
 // ToolRoundtripCompleter 工具多轮翻译完整性声明(gemini-native-protocol 决策 4,声明式缺口):

@@ -5,6 +5,7 @@ package adapter_test
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -94,7 +95,7 @@ func TestOpenAI_NativeStreamEvent_responses(t *testing.T) {
 
 // TestOpenAI_PrepareNativeFetch GET 代理出站:URL = <base>/responses/{id},无请求体,Bearer。
 func TestOpenAI_PrepareNativeFetch(t *testing.T) {
-	out, err := newBase(t).PrepareNativeFetch("resp_abc", "sk-1")
+	out, err := newBase(t).PrepareNativeFetch(http.MethodGet, "resp_abc", "sk-1")
 	if err != nil {
 		t.Fatal(err)
 	}

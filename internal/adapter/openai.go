@@ -235,8 +235,9 @@ func (o *OpenAI) NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, erro
 	}, nil
 }
 
-// PrepareNativeFetch 状态查询 GET 代理出站:<base>/responses/{id},无请求体,Bearer。
-func (o *OpenAI) PrepareNativeFetch(respID, apiKey string) (*Outbound, error) {
+// PrepareNativeFetch 状态 lane 读删代理出站:<base>/responses/{id},无请求体,Bearer。
+// verb 为 HTTP 动词字面量(GET|DELETE),经 http.NewRequest 透传,非 GET/DELETE 由调用方拒绝。
+func (o *OpenAI) PrepareNativeFetch(verb, respID, apiKey string) (*Outbound, error) {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+apiKey)
 	return &Outbound{

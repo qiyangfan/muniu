@@ -88,6 +88,10 @@ func (p *Proxy) HandlerResponses() http.Handler {
 func (p *Proxy) HandlerResponsesStateless() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		respID := r.PathValue("id")
+		if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+			p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "状态 lane 仅支持 GET/DELETE")
+			return
+		}
 		provider, ok := p.affinity.Get(respID)
 		if !ok {
 			w.Header().Set("Content-Type", "application/json")
@@ -114,14 +118,14 @@ func (p *Proxy) HandlerResponsesStateless() http.Handler {
 			p.writeError(w, r, protocol.TypeRateLimited, "all_candidates_failed", "上游供应商暂时不可用(key 池不可用)")
 			return
 		}
-		out, err := fetcher.PrepareNativeFetch(respID, key.Value)
+		out, err := fetcher.PrepareNativeFetch(r.Method, respID, key.Value)
 		if err != nil {
 			p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
 			return
 		}
 		opCtx, cancel := context.WithTimeout(r.Context(), p.timeouts.FirstToken)
 		defer cancel()
-		upReq, err := http.NewRequestWithContext(opCtx, http.MethodGet, out.URL, nil)
+		upReq, err := http.NewRequestWithContext(opCtx, r.Method, out.URL, nil)
 		if err != nil {
 			p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
 			return

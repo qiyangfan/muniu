@@ -246,6 +246,14 @@ paths:
         "400": { description: content_part_unsupported / stream_form_unsupported / input_invalid(Gemini error 信封) }
         "4XX": { description: 鉴权/限流错误(信封为 Gemini error 形态,SDK error.message 可读) }
   /v1/responses/{id}:
+    delete:
+      summary: "亲和已知代理转发删除上游状态(ADR-0014 粘性路由)/ 未知恒 404 自解释"
+      parameters:
+        - { name: Authorization, in: header, required: true, schema: { type: string } }
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: 上游删除结果原样透传 }
+        "404": { description: response_not_found(无亲和记录) }
     get:
       summary: 亲和已知代理转发(ADR-0014 粘性路由)/ 未知恒 404 自解释
       parameters:

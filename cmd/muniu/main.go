@@ -21,6 +21,7 @@ import (
 	"github.com/solvela/muniu/internal/adapter"
 	_ "github.com/solvela/muniu/internal/adapter/bridge" // 接线 anthropic 桥接工厂
 	"github.com/solvela/muniu/internal/admin"
+	"github.com/solvela/muniu/internal/alerting"
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
@@ -58,7 +59,12 @@ func main() {
 	logger := logging.New(cfg.Log.Level, cfg.Log.Format)
 	slog.SetDefault(logger)
 
-	handler, _, cleanup, err := assemble(cfg, logger)
+	cfgResolved, lerr := config.Locate(*cfgPath)
+	if lerr != nil {
+		fmt.Fprintf(os.Stderr, "muniu: %v\n", lerr)
+		os.Exit(1)
+	}
+	handler, _, cleanup, err := assemble(cfg, cfgResolved, logger)
 	if err != nil {
 		logger.Error("装配失败", "error_detail", err.Error())
 		os.Exit(1)
@@ -118,17 +124,27 @@ type routeEntry struct {
 	Handler http.Handler
 }
 
-func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, func(), error) {
+func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Handler, []string, func(), error) {
 	// SQLite:运行态(api_keys/usage_logs);迁移随打开执行
 	db, err := store.Open(cfg.Storage.SQLite.Path)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("打开存储: %w", err)
 	}
+	// 告警通知器(webhook-alerting):未配置 webhook_url 为 nil,各接入点 Emit 零开销
+	alerts := alerting.New(alerting.Options{
+		WebhookURL:  cfg.Alerts.WebhookURL,
+		DedupWindow: time.Duration(cfg.Alerts.DedupWindowSec) * time.Second,
+		Logger:      logger,
+	})
 	// 刷盘参数接线(缺省值已在 config.validate 兜底):配置-行为不可漂移。
 	// sink=ingest:远端汇 + 本地缓冲(投递失败整批落缓冲,恢复按序续传——ADR-0007)
 	meteringOpts := metering.Options{
 		Interval: time.Duration(cfg.Metering.FlushIntervalMs) * time.Millisecond,
 		Batch:    cfg.Metering.FlushBatch,
+		OnSinkDown: func(sink string, rows int) {
+			alerts.Emit("metering_sink_down", "critical",
+				fmt.Sprintf("计量远端汇 %s 投递失败,%d 行落本地缓冲", sink, rows))
+		},
 	}
 	if cfg.Metering.Sink == "ingest" {
 		bufferCap := cfg.Metering.BufferCapacity
@@ -346,6 +362,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		Capabilities:     cfg.Models,
 		StrictGovernance: cfg.StrictGovernance,
 		Plugins:          pluginReg,
+		Alerts:           alerts,
 		Logger:           logger,
 	})
 
@@ -391,6 +408,33 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 			}
 		}()
 	}
+
+	// SIGHUP 配置热加载(sighup-config-reload;运维手势 → 既有原子热替换机器):
+	// 重读配置文件,校验失败保持旧态告警;成功则拓扑/池/适配器/能力目录经
+	// ReplaceTopology 原子热替换(provider 未变时池运行态无损,与控制面拉取同一入口)。
+	// 范围登记:auth/metrics/管理面/静态价目兜底不热更(价目运营态走管理面,兜底重启生效)。
+	sighup := make(chan os.Signal, 1)
+	signal.Notify(sighup, syscall.SIGHUP)
+	go func() {
+		for range sighup {
+			newCfg, lerr := config.Load(cfgPath)
+			if lerr != nil {
+				logger.Warn("SIGHUP 重载失败,保持当前配置", "error_detail", lerr.Error())
+				continue
+			}
+			stats, rerr := chatProxy.ReplaceTopology(proxy.Config{
+				Providers:    append([]config.Provider(nil), newCfg.Providers...),
+				Routes:       newCfg.ModelRoutes,
+				Capabilities: newCfg.Models,
+			}, buildPool)
+			if rerr != nil {
+				logger.Warn("SIGHUP 拓扑替换被拒绝,保持当前快照", "error_detail", rerr.Error())
+				continue
+			}
+			logger.Info("SIGHUP 配置已热加载", "reused", stats.Reused,
+				"created", stats.Created, "removed", stats.Removed)
+		}
+	}()
 
 	// 业务路由全链:顺序即契约 request_id → recover → access_log → auth → quota → ratelimit
 	platformSecrets := make([][]byte, 0, len(cfg.Auth.PlatformKeySecrets))
@@ -439,6 +483,7 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 			server.AdaptGeminiKey, verifier.Middleware, gate.Middleware)},
 		// 无状态边界:不存储 response,恒 404(挂鉴权链,不泄漏给未鉴权方)
 		{"GET /v1/responses/{id}", server.Chain(chatProxy.HandlerResponsesStateless(), dataPlaneMW...)},
+		{"DELETE /v1/responses/{id}", server.Chain(chatProxy.HandlerResponsesStateless(), dataPlaneMW...)},
 		// 模型发现(gateway-parity):数据面鉴权必须,但刻意不挂配额/限流/计量/插件——
 		// 只读元数据面零上游成本,且配额耗尽的客户端恰需列模型诊断(诊断链路不被成本闸阻断)
 		{"GET /v1/models", server.Chain(chatProxy.HandlerModels(), readonlyMW...)},

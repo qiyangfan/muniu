@@ -243,3 +243,80 @@ func TestStickyE2E_有状态链式全链(t *testing.T) {
 		t.Fatalf("GET 代理应命中上游存储: %d %s", getResp.StatusCode, getResp.Body)
 	}
 }
+
+// TestStickyE2E_DELETE代理 状态 lane 删除动词(responses-state-delete-proxy):
+// 亲和已知 → DELETE 按动词代理转发(上游存储真被删);亲和未知 → 恒 404 不触达上游;GET 零回归。
+func TestStickyE2E_DELETE代理(t *testing.T) {
+	up := testkit.StartResponsesUpstream(t)
+	reg := adapter.NewRegistry()
+	reg.Register("ra", adapter.NewOpenAI(up.URL(), ""))
+	p := New(Config{
+		Registry:  reg,
+		Providers: []config.Provider{{Name: "ra", Adapter: "openai", NativeResponses: true}},
+		Routes: map[string][]config.Candidate{
+			"alias-r": {{Provider: "ra", Model: "m-a", Priority: 0}},
+		},
+		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
+		Pools:    map[string]*keypool.Pool{"ra": keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "k", Weight: 1}})},
+		RandIntn: func(n int) int { return 0 },
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	mux := http.NewServeMux()
+	mux.Handle("POST /v1/responses", p.HandlerResponses())
+	mux.Handle("GET /v1/responses/{id}", p.HandlerResponsesStateless())
+	mux.Handle("DELETE /v1/responses/{id}", p.HandlerResponsesStateless())
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	resp, body := postPath(t, ts.URL, "/v1/responses", `{"model":"alias-r","stream":false,"input":"你好"}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("创建应 200: %d %s", resp.StatusCode, body)
+	}
+	// DELETE 已知 id:按动词代理转发,上游存储真被删
+	delResp, err := httpVerb(t, http.MethodDelete, ts.URL+"/v1/responses/resp_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delResp.StatusCode != 200 || !strings.Contains(delResp.Body, `"deleted":true`) {
+		t.Fatalf("DELETE 代理应原样返回: %d %s", delResp.StatusCode, delResp.Body)
+	}
+	if _, ok := up.Stored("resp_1"); ok {
+		t.Fatal("上游存储应真被删除")
+	}
+	// DELETE 未知 id:恒 404 自解释,不触达上游
+	before := up.RequestCount()
+	miss, err := httpVerb(t, http.MethodDelete, ts.URL+"/v1/responses/resp_never")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if miss.StatusCode != 404 || !strings.Contains(miss.Body, "response_not_found") {
+		t.Fatalf("未知 id 应恒 404: %d %s", miss.StatusCode, miss.Body)
+	}
+	if up.RequestCount() != before {
+		t.Fatal("亲和未知不得触达上游")
+	}
+	// GET 零回归:重建后 GET 照常
+	postPath(t, ts.URL, "/v1/responses", `{"model":"alias-r","stream":false,"input":"再来"}`)
+	getResp, err := httpGet(t, ts.URL+"/v1/responses/resp_2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if getResp.StatusCode != 200 || !strings.Contains(getResp.Body, `"input":"再来"`) {
+		t.Fatalf("GET 应零回归: %d %s", getResp.StatusCode, getResp.Body)
+	}
+}
+
+func httpVerb(t *testing.T, verb, url string) (*httpGetResult, error) {
+	t.Helper()
+	req, err := http.NewRequest(verb, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return &httpGetResult{StatusCode: resp.StatusCode, Body: string(b)}, nil
+}

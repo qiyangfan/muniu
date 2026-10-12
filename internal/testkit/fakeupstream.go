@@ -250,9 +250,24 @@ func StartResponsesUpstream(tb testing.TB) *responsesUpstream {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"` + id + `","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已收到"}]}],"usage":{"input_tokens":13,"output_tokens":1}}`))
 	})
-	mux.HandleFunc("GET /responses/{id}", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/responses/{id}", func(w http.ResponseWriter, r *http.Request) {
 		base.record(r)
 		id := r.PathValue("id")
+		if r.Method == http.MethodDelete {
+			// 状态 lane 删除动词:删除存储,回 OpenAI 删除契约形态(存在性校验交调用方)
+			u.mu.Lock()
+			_, ok := u.stored[id]
+			delete(u.stored, id)
+			u.mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":{"message":"No response found with id ` + id + `."}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":"` + id + `","deleted":true}`))
+			return
+		}
 		u.mu.Lock()
 		body, ok := u.stored[id]
 		u.mu.Unlock()
