@@ -6,7 +6,7 @@
 
 - **三 change 交付(验收记录 34-37)**:`fix-responses-input-forms`(4/4)/`protocol-native-passthrough`(20/20,ADR-0014)/`gemini-native-protocol`(12/12,ADR-0015)全部实施并归档,主 specs 同步(`openspec validate --all` 18/18);dashscope 单 key 三组真上游冒烟全过(anthropic 分支直通+工具多轮/responses 快捷形态/gemini 双实例全链),临时 key 与实例已清理。
 - **代码审查迭代循环(同日,三轮收敛+增量一轮)**:69 文件未提交变更全量评审,确认 6 真实缺陷全部根修(gemini 工具 id 转义/原生流式双存入库/attempt 快照一致性/responses status 保真/gemini 并行工具测序 StreamSequencer/失格请求治理统一出口),4 项观察裁决落地(gitignore/gemini writer 死代码/reasoning summary[]/native_responses 校验扩桥接族),回归测试 7 个;3 项登记不改(模型名不 escape 与基座同缝/GET 代理无计量行/gemini 真实 wire 待验证,见开放项)。
-- **门禁**:`make check` exit=0(coverage 71.0%),gofmt 全仓干净;本批经 owner 指令提交推送(工具链独立一笔,主交付一笔,哈希见 git log)。
+- **门禁**:`make check` exit=0(coverage 71.0%),gofmt 全仓干净;本批经 owner 指令提交(两笔:453b187 工具链 + 45d6b85 主交付,工作区归零);**push 受阻**:git 凭证(gh OAuth token)缺 `workflow` scope,改 `.github/workflows/ci.yml` 的提交被远端拒收(refusing to allow an OAuth App to create or update workflow),待 owner `gh auth refresh -h github.com -s workflow` 授权后重推。
 
 ## 当前状态(2026-10-02,三仓标准件视觉全面收敛——owner 插话裁决;后续承下节)
 
@@ -73,7 +73,7 @@
 1. 【已完成·已归档】fix-api-key-binding-identifiers 7/7(make check 全绿+跨仓验收,验收记录 33)。
 2. 【已完成·已归档】recover-pending-usage-settlement 5/5——木牛侧实现/测试/联调全过;锦官收口后本仓 `openspec archive` 已执行(主规格 sync +1 Requirement),归档位 `archive/2026-10-02-recover-pending-usage-settlement`。
 3. 【已销案 2026-10-12】原引用的聚合单源 `../HANDOFF.md` 在 longzhong/ 下不存在(指针失联);所辖四项经核查均已完成(CardTitle as 已落地、kongming input 日期族已合流销案)或无 muniu 侧动作(ingest 读数归锦官、push 后 CI 实跑归下条)。**裁决:不重建聚合状态文件**——跨仓状态聚合无维护归属,重建即再腐化;若未来需要,由 owner 立维护规则后另立。跨仓事项一律以各仓 HANDOFF + change 文件为单源。
-4. 【已完成 2026-10-12】git 提交/推送(owner 指令):工具链与主交付两笔;push 后 CI 实跑结果补记于验收记录 38。
+4. 【阻塞·待 owner 授权】push:本地两笔就绪(453b187+45d6b85+HANDOFF 如实回写),`gh auth refresh -h github.com -s workflow` 授权后 `git push origin main` 即完成;push 后 CI 实跑结果补记于验收记录 38。
 
 以下是此前交付与条件事项，保持原记录：
 
@@ -118,7 +118,7 @@
 **38. 代码审查迭代循环收口 + 提交推送(2026-10-12,owner 指令「归档,写好 handoff,提交所有代码,push,注意 ci 情况」)**
 - 评审:69 文件三轮收敛,6 真实缺陷根修+回归测试(详见当前状态同日节与对话收口报告);`make check` exit=0(vet+lint 0 issues+20 包 race,coverage gate PASS 71.0%);`openspec validate --all` 18/18;gofmt 全仓干净。
 - 提交切分:①工具链(mise.toml+ci.yml,golangci-lint 2.14 独立可回退);②主交付(三 change 实现/测试/fixture/归档/ADR/文档/HANDOFF)。
-- push:origin/main(哈希见 git log);CI 实跑:【待补记】。
+- push:本地提交就绪,首推被远端拒收(凭证缺 workflow scope,涉及 ci.yml 的提交);待授权重推,CI 实跑顺延。
 
 **37. 三 change 归档 + 三组真上游冒烟(2026-10-12,owner 裁决授权;dashscope 单 key 承载)**
 - 归档:`fix-responses-input-forms` / `protocol-native-passthrough` / `gemini-native-protocol` 三 change 全部实施完毕后经 `openspec archive` 归档(archive/2026-10-12-*),主 specs 同步:responses-inbound 请求翻译契约(+3 场景)与无状态边界改写、anthropic-bridge 两 requirement 声明式缺口化、新建 protocol-native-passthrough(7 requirements)/gemini-inbound(5)/gemini-native-outbound(5)、adapter-taxonomy 值域示例翻转;`openspec validate --all` 18/18。
