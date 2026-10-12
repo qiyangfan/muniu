@@ -131,7 +131,7 @@ func TestTiktoken_离线词表与前缀映射(t *testing.T) {
 }
 
 func TestEstimate_请求输入与输出增量(t *testing.T) {
-	in := EstimateInputTokens([]map[string]any{
+	in := estimateInputTokens([]map[string]any{
 		{"role": "user", "content": "你好,请介绍一下木牛网关"},
 	}, "deepseek-chat")
 	if in <= 0 {
@@ -146,7 +146,7 @@ func TestEstimate_请求输入与输出增量(t *testing.T) {
 
 func TestEstimate_usuage缺失走估算并置位(t *testing.T) {
 	// 计量语义:上游 usage 缺失 → 本地估算,estimated=true
-	in := EstimateInputTokens([]map[string]any{{"role": "user", "content": "hi"}}, "m")
+	in := estimateInputTokens([]map[string]any{{"role": "user", "content": "hi"}}, "m")
 	out := EstimateOutputTokens("hello", "m")
 	row := NewRow(RowParams{
 		RequestID: "req-1", TenantID: "t1", APIKeyID: "k1",

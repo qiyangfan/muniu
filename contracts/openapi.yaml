@@ -36,7 +36,7 @@ components:
         rpm_limit: { type: integer, format: int64 }
         tpm_limit: { type: integer, format: int64, description: "0=不限" }
         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
-        expires_at: { type: string, description: "RFC3339;空=永不过期" }
+        expires_at: { type: string, description: "RFC3339;空=永不过期;不得早于当前时刻(创建期拒绝;立即失效经 PATCH)" }
     KeyCreateResponse:
       type: object
       description: 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。

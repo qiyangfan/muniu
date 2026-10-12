@@ -71,8 +71,9 @@ func CountTokens(text, model string) (int64, error) {
 	return int64(len(enc.Encode(text, nil, nil))), nil
 }
 
-// EstimateInputTokens 入站 messages 序列化后计数(计价口径的近似,契约明确)。
-func EstimateInputTokens(messages []map[string]any, model string) int64 {
+// estimateInputTokens 入站 messages 序列化后计数(计价口径的近似;包内测试消费,
+// 生产估算路径走 proxy 层对已序列化文本的 CountTokens,勿再导出第二入口)。
+func estimateInputTokens(messages []map[string]any, model string) int64 {
 	b, err := json.Marshal(messages)
 	if err != nil {
 		return 0

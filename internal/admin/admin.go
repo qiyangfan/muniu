@@ -259,6 +259,13 @@ func createKey(d Deps) http.HandlerFunc {
 				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 形态")
 				return
 			}
+			// 创建期拒过去时刻:不存在「签发即死」的合法诉求,静默接受只会产出
+			// 一个看起来正常、实际已过期的 key;立即失效语义归 PATCH(运维工具)
+			if t.Before(time.Now()) {
+				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
+					"expires_at 不可早于当前时刻(立即失效请经 PATCH 置过去时刻)")
+				return
+			}
 			opts.ExpiresAt = &t
 		}
 		plaintext, rec, err := auth.CreateKey(d.DB, req.Tenant, req.Name, req.RPMLimit, opts)

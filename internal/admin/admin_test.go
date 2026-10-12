@@ -636,3 +636,35 @@ func sortedQuote(list []string) string {
 	}
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
+
+// TestAdmin_签发过期时刻校验 创建拒过去时刻(「签发即死」无合法诉求,静默接受会产出
+// 看似正常实则已过期的 key);PATCH 置过去时刻 = 立即失效的运维语义,允许。
+func TestAdmin_签发过期时刻校验(t *testing.T) {
+	db := openDB(t)
+	h := newAdmin(t, db, "tok", nil)
+
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	code, body := call(t, h, "POST", "/admin/v1/keys", "tok",
+		`{"tenant":"default","name":"dead-on-arrival","expires_at":"`+past+`"}`)
+	if code != 400 || !strings.Contains(body, "expires_at") {
+		t.Fatalf("创建过去时刻应 400: %d %s", code, body)
+	}
+
+	// 对照:未来时刻正常签发
+	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	code, body = call(t, h, "POST", "/admin/v1/keys", "tok",
+		`{"tenant":"default","name":"living","expires_at":"`+future+`"}`)
+	if code != 200 {
+		t.Fatalf("未来时刻应签发成功: %d %s", code, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal([]byte(body), &created)
+
+	code, _ = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok",
+		`{"expires_at":"`+past+`"}`)
+	if code != 200 {
+		t.Fatalf("PATCH 置过去时刻(立即失效)应允许: %d", code)
+	}
+}
