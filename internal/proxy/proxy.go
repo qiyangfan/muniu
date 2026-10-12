@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
+	"github.com/solvela/muniu/internal/alerting"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/failover"
 	"github.com/solvela/muniu/internal/keypool"
@@ -52,6 +53,7 @@ type Config struct {
 	Capabilities     []config.ModelCapability // 模型能力目录(ADR-0010);空 = 全部零干预透传
 	StrictGovernance bool                     // true = 命中能力约束即 400(缺省宽松放行+留痕)
 	Plugins          *plugin.Registry         // WASM 插件注册表(ADR-0011);nil = 插件禁用,主路径零开销
+	Alerts           *alerting.Notifier       // 告警通知器(webhook-alerting);nil = 关闭,Emit 零开销
 	RandIntn         func(int) int            // 候选起点随机源;nil 用全局随机(测试可注入)
 	Logger           *slog.Logger
 }
@@ -68,6 +70,7 @@ type Proxy struct {
 	tenantSw  func(string) bool
 	strictGov bool
 	plugins   *plugin.Registry
+	alerts    *alerting.Notifier
 	randIntn  func(int) int
 	logger    *slog.Logger
 	client    *http.Client
@@ -103,6 +106,7 @@ func New(cfg Config) *Proxy {
 		cache:     cfg.Cache,
 		tenantSw:  cfg.TenantSwitch,
 		plugins:   cfg.Plugins,
+		alerts:    cfg.Alerts,
 		strictGov: cfg.StrictGovernance,
 		randIntn:  randIntn,
 		logger:    logger,
@@ -302,6 +306,8 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			typ := classToType(last)
+			p.alerts.Emit("all_candidates_failed", "critical",
+				"别名 "+req.Model+" 全部候选失败(最后错误: "+string(last)+")")
 			p.writeError(tw, r, typ, "all_candidates_failed",
 				"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
 			return
@@ -334,6 +340,8 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		if key == nil {
 			// 该 provider 全部 key 冷却/禁用:跳过候选,不计错误类
 			otherSkipped = true
+			p.alerts.Emit("keypool_exhausted:"+cand.Provider, "warning",
+				"provider "+cand.Provider+" key 池不可用(全部冷却/禁用)")
 			p.logger.Warn("provider key 池不可用,跳过候选",
 				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
 			continue

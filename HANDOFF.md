@@ -2,6 +2,12 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-12,需求方框架重判批:DELETE 代理/SIGHUP 热加载/告警 webhook 三件落地)
+
+- **裁决框架修正(owner 点破「零消费方」自证拖延;completeness IS the product 重申)**:按作品集完整度重判 backlog——落地三件(状态 lane 删动词/SIGHUP 运维手势/告警主动通知,均完整 openspec 周期+归档,validate 20/20);拒绝三件各附真实理由:gRPC 入站(瓦解「零重依赖 stdlib 单二进制」主打论点,关键词留 skills 行)、SSO(ADR-0005 边界,OIDC 学习主场在锦官)、images 端点(多模态输入已四路全链,生成端点拖价目 schema 迁移不值对价);key 级模型白名单=值得做,下一批(配 kongming 灰度治理故事单独成批)。
+- **三件摘要**:①`responses-state-delete-proxy`——DELETE /v1/responses/{id} 亲和代理(NativeFetcher 扩动词,上游存储真被删 e2e);②`sighup-config-reload`——SIGHUP→重读配置→ReplaceTopology 热替换(失败保持旧态,cmd 集成测试自发自捕信号;auth/metrics/管理面/静态价目兜底不热更已登记);③`webhook-alerting`——internal/alerting(去重窗口+退避重试+失败隔离,nil 零开销)+三接入点(候选全失败/key 池不可用/计量汇降级)+`alerts.webhook_url` 配置面;顺带修 deliver 末次判定下标错位。
+- **门禁**:`make check` exit=0(coverage gate PASS 71.4%);`openspec validate --all` 20/20;gofmt 干净。已提交推送(哈希见 git log)。
+
 ## 当前状态(2026-10-12,backlog 升格裁决批:anthropic 工具往返旗舰项落地+top_k 双向保真)
 
 - **backlog 升格触发权移交(owner「作为求职项目,值得做你裁决,不等点名」)**:①旗舰项 `anthropic-bridge-tool-roundtrip` 已走完整 openspec 周期并归档——chat×anthropic 工具多轮请求侧翻译(tool_calls→tool_use 块/role=tool→合并 tool_result/配对校验/纯文本 wire 逐字节不变)+tool_choice none 映射+声明翻正;豁免机制降级防御性保留(testkit 假桥接钉住);真异构两家自此均整家实现,登记缺口清零。②`top_k` 双向保真(gemini 入站 topK→canonical top_k、出站反向,与 top_p 同缝,消 qwen 系静默丢参)。③DELETE 代理改判不做(零需求);预设双目录分工维持(文档头已明示纪律,非欠账)。
@@ -130,6 +136,12 @@
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**41. 需求方框架重判批(2026-10-12,owner 点破零消费方自证拖延;三 openspec change 归档)**
+- 判据:各自失败测试先行 + 既有全量零改动回放 + make check 全绿 + validate --all。
+- ①DELETE 代理:`TestStickyE2E_DELETE代理`(按动词代理转发、上游存储真被删、未知 404 不触达、GET 零回归);openapi+routeEntry 同步。②SIGHUP:`TestSIGHUP_热加载与保持旧态`(进程内自发信号,合法新配置→新 provider 出站,非法→保持旧态继续服务);config.Locate 导出消路径双写。③告警:alerting 单测五组(去重/退避放弃/payload/失败隔离/nil 零开销)+`TestAlerting_候选全失败通知`+配置面校验测试;接入点=候选耗尽/key 池不可用/sink 落缓冲回调(metering.Options.OnSinkDown,不反向依赖)。
+- 顺带修复:alerting.deliver 末次尝试下标错位(追加首零后末位=len(backoff),原条件致只试 2 次即放弃)。
+- 门禁:`make check` exit=0(coverage gate PASS 71.4%);`openspec validate --all` 20/20。
 
 **40. anthropic 桥接工具往返 + backlog 升格批(2026-10-12,openspec `anthropic-bridge-tool-roundtrip` 已归档)**
 - 判据:失败测试先行(五子测先红)+ 纯文本 wire 逐字节金串守门 + 既有全量零改动回放 + 真上游冒烟 + make check 全绿。

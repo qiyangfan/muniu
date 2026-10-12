@@ -26,6 +26,8 @@ type Options struct {
 	Batch    int           // 攒满即刷阈值
 	Remote   Sink          // 远端汇;nil = 纯本地
 	Buffer   BufferStore   // 本地缓冲(Remote 非 nil 时必须)
+	// OnSinkDown 远端汇投递失败落缓冲时的告警回调(webhook-alerting;可空)。
+	OnSinkDown func(sink string, rows int)
 }
 
 // Pipeline 计量异步落库管道(进程内单例,由装配层持有)。
@@ -157,6 +159,9 @@ func (p *Pipeline) writeOut(batch []UsageRow) {
 	if err := p.remote.Write(batch); err != nil {
 		p.logger.Error("计量远端投递失败,整批落本地缓冲",
 			"sink", p.remote.Name(), "rows", len(batch), "error_detail", err.Error())
+		if p.opts.OnSinkDown != nil {
+			p.opts.OnSinkDown(p.remote.Name(), len(batch))
+		}
 		p.saveBuffered(batch)
 		return
 	}

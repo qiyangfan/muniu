@@ -142,6 +142,13 @@ pricing:
     input: 0.15        # $0.15 / 百万输入 Token
     output: 0.60       # $0.60 / 百万输出 Token
 
+# 告警通知(webhook-alerting;默认关闭):运营关键事件(key 池不可用/候选全失败/
+# 计量汇降级)经 webhook POST JSON 主动通知;去重窗口内同事件键静默,退避重试后
+# 放弃绝不干扰请求路径。接收端:任意收 JSON POST 的端点(企业微信/飞书机器人桥接等)。
+# alerts:
+#   webhook_url: "https://hooks.example.com/muniu"
+#   dedup_window_sec: 300
+
 # 语义缓存(默认关闭;开启需租户级开关 PATCH /admin/v1/tenants/{id}):
 # 同义问题命中缓存省上游,宁缺勿错(docs/design/semantic-cache.md)。
 # embedding_model 必须已在 model_routes 定义,否则启动校验失败。

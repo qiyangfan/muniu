@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/adapter/bridge"
+	"github.com/solvela/muniu/internal/alerting"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/protocol"
@@ -223,5 +225,42 @@ func TestBridgeGate_首轮tools声明放行(t *testing.T) {
 	postChat(t, ts.URL, toolsBody)
 	if !called {
 		t.Fatal("首轮 tools 声明应照常出站(不被豁免)")
+	}
+}
+
+// TestAlerting_候选全失败通知 webhook-alerting 接入钉子:独占别名候选耗尽 →
+// webhook 收到 all_candidates_failed 事件;告警子系统故障不影响请求本身。
+func TestAlerting_候选全失败通知(t *testing.T) {
+	var hits atomic.Int64
+	hook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError) // webhook 故障:请求必须照常
+	}))
+	t.Cleanup(hook.Close)
+	reg := adapter.NewRegistry()
+	reg.Register("dead-p", adapter.NewOpenAI("http://127.0.0.1:1", ""))
+	p := New(Config{
+		Registry: reg,
+		Alerts:   alerting.New(alerting.Options{WebhookURL: hook.URL, Backoff: []time.Duration{time.Millisecond}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}),
+		Routes: map[string][]config.Candidate{
+			"alias-a": {{Provider: "dead-p", Model: "m", Priority: 0}},
+		},
+		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
+		Pools:    map[string]*keypool.Pool{"dead-p": keypool.NewPool([]keypool.KeyInput{{ID: "K", Value: "k", Weight: 1}})},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	ts := httptest.NewServer(p.Handler())
+	t.Cleanup(ts.Close)
+
+	resp, body := postChat(t, ts.URL, `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode == 0 || body == "" {
+		t.Fatal("请求必须有响应")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && hits.Load() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if hits.Load() == 0 {
+		t.Fatal("候选全失败应触发告警通知")
 	}
 }
