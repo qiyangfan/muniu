@@ -10,10 +10,12 @@
 |---|---|---|
 | `Authorization: Bearer <key>` | `x-api-key: <key>` + `anthropic-version: 2023-06-01` | 鉴权头重写 |
 | `messages[role=system/developer]` | 顶层 `system`(多条 `\n\n` 拼接) | system 提升 |
-| `messages[user/assistant]` | `messages`(content 折叠为文本) | 连续同角色合并为 `\n\n` 连接(Anthropic 要求交替) |
+| `messages[user/assistant]` | `messages`(纯文本 content 折叠为字符串;工具上下文为块数组) | 连续同角色合并(纯文本 `\n\n` 连接、工具上下文块级合并;Anthropic 要求交替) |
+| `assistant.tool_calls` | `content[].{type:"tool_use",id,name,input}`(input=arguments 对象) | 工具多轮请求侧翻译(anthropic-bridge-tool-roundtrip);空/非法实参落 `{}` |
+| `messages[role=tool]` | user 消息 `content[].{type:"tool_result",tool_use_id,content}` | 连续多条 tool 消息合并进同一条 user(交替约束);tool_call_id 无配对报错归 bad_request |
 | `max_tokens` | `max_tokens` | Anthropic 必填;OpenAI 缺省时填 4096 |
 | `tools[type=function]` | `tools[{name,description,input_schema}]` | parameters 即 input_schema;字段形态非法时显式报错(归 bad_request),静默丢弃会让上游在无工具状态下作答 |
-| `tool_choice`:`auto`/`required`/`{type:function,function:{name}}` | `{type:auto}`/`{type:any}`/`{type:tool,name}` | `"none"` 无精确对应物,不映射(登记限制) |
+| `tool_choice`:`auto`/`required`/`{type:function,function:{name}}`/`"none"` | `{type:auto}`/`{type:any}`/`{type:tool,name}`/`{type:none}` | none 形态经真上游冒烟实证后映射(证据见验收记录;上游不接受则回退登记) |
 | `top_p` | `top_p` | 原样透传 |
 | `stop` | (未映射,登记限制) | Phase 3 范围外 |
 | `stream` | `stream` | SSE |
@@ -50,9 +52,8 @@
 
 ## 已知限制(Phase 3 范围)
 
-- `stop` 参数未映射(stop_sequences);`tool_choice:"none"` 无精确对应物不映射;图片等多模态 content 丢弃仅保留 text;
-- **工具对话往返未翻译**:`role:"tool"` 消息与 assistant 消息的 `tool_calls`(OpenAI 请求侧形态)不进 Anthropic 请求——
-  多轮工具对话经桥接不支持,assistant 工具消息折叠为空 content(会被上游拒绝)。流式/非流式的**响应侧** tool_use 翻译不受此限;
+- `stop` 参数未映射(stop_sequences);图片等多模态 content 丢弃仅保留 text;
+- **工具对话往返已完整翻译**(anthropic-bridge-tool-roundtrip):`assistant.tool_calls`→`tool_use` 块、`role:"tool"`→合并 user 消息的 `tool_result` 块、tool_call_id 配对校验;流式/非流式的响应侧 tool_use 翻译本就完整;
 - thinking token 数无独立字段,计入 output_tokens(reasoning_tokens 记 0,矩阵已登记);
 - 流式 message_delta 翻译帧的 `prompt_tokens` 恒为 0(prompt 分帧在 message_start,事件级无状态无法回填;计量侧不受影响);
 - Anthropic 文档区域屏蔽:翻译矩阵按公开稳定契约实现,待可访问后逐条复核。

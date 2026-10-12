@@ -2,6 +2,18 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-12,backlog 升格裁决批:anthropic 工具往返旗舰项落地+top_k 双向保真)
+
+- **backlog 升格触发权移交(owner「作为求职项目,值得做你裁决,不等点名」)**:①旗舰项 `anthropic-bridge-tool-roundtrip` 已走完整 openspec 周期并归档——chat×anthropic 工具多轮请求侧翻译(tool_calls→tool_use 块/role=tool→合并 tool_result/配对校验/纯文本 wire 逐字节不变)+tool_choice none 映射+声明翻正;豁免机制降级防御性保留(testkit 假桥接钉住);真异构两家自此均整家实现,登记缺口清零。②`top_k` 双向保真(gemini 入站 topK→canonical top_k、出站反向,与 top_p 同缝,消 qwen 系静默丢参)。③DELETE 代理改判不做(零需求);预设双目录分工维持(文档头已明示纪律,非欠账)。
+- **dashscope 真上游冒烟**(anthropic 分支,bearer):工具全轮经翻译路径收敛——声明→`tool_calls`(真实 `toolu_*` id,usage 151/19)→tool_result 回传→终答(「北京今天天气晴朗…」,cached_tokens 64=上游真实 prompt cache 命中);`tool_choice:"none"` 被上游接受(纯文本作答零工具调用),映射定稿保留。资源纪律:临时 key 随 /tmp 实例清理;**data/muniu.db 为本批冒烟自产(mtime 确认)已删**,bench.db 留档未动。
+- **门禁**:`make check` exit=0(coverage gate PASS 71.4%);`openspec validate --all` 18/18。本批未提交(等 owner 指令);push 仍待 workflow scope。
+
+## 当前状态(2026-10-12,盘点落地批:漂移清偿+admin 校验收紧;T5.3/T5.6 基座中断待裁决)
+
+- **全量盘点(owner 问「还有未实现/未裁决」)**:开放决策项表无悬空裁决;待裁决仅 push(凭证 workflow scope);**T5.3 灰度与 T5.6 观察期基座已中断**——podman 机器约 6 天前重建,muniu 容器与 muniu-data 卷均不存在,灰度周(09-11~09-18)usage_logs 无载体,kongming .env 仍指 127.0.0.1:8787 而实例未常驻;如何处置(重启常驻重新起算 / 调整发版判据基线)待 owner。
+- **本批落地**:①ROADMAP Backlog 三处漂移清偿(Anthropic Messages 入站与 Redis 限流划线已落地;Gemini 桥接行按 ADR-0015 转正改写;工具往返待办收窄为 chat×anthropic);②admin 签发拒过去时刻 `expires_at`(400,PATCH 置过去=立即失效运维语义允许,契约描述同步,回归测试三断言);③`metering.EstimateInputTokens` 死导出 unexport(仅测试消费);④历史悬浮遗留三项裁决关闭(理由见开放项表)。
+- **门禁**:`make check` exit=0(coverage gate PASS 71.3%);`openspec validate --all` 18/18。push 仍待 workflow scope 授权(本地多笔就绪)。
+
 ## 当前状态(2026-10-12,三 change 交付+评审循环收口;本批提交推送)
 
 - **三 change 交付(验收记录 34-37)**:`fix-responses-input-forms`(4/4)/`protocol-native-passthrough`(20/20,ADR-0014)/`gemini-native-protocol`(12/12,ADR-0015)全部实施并归档,主 specs 同步(`openspec validate --all` 18/18);dashscope 单 key 三组真上游冒烟全过(anthropic 分支直通+工具多轮/responses 快捷形态/gemini 双实例全链),临时 key 与实例已清理。
@@ -74,6 +86,8 @@
 2. 【已完成·已归档】recover-pending-usage-settlement 5/5——木牛侧实现/测试/联调全过;锦官收口后本仓 `openspec archive` 已执行(主规格 sync +1 Requirement),归档位 `archive/2026-10-02-recover-pending-usage-settlement`。
 3. 【已销案 2026-10-12】原引用的聚合单源 `../HANDOFF.md` 在 longzhong/ 下不存在(指针失联);所辖四项经核查均已完成(CardTitle as 已落地、kongming input 日期族已合流销案)或无 muniu 侧动作(ingest 读数归锦官、push 后 CI 实跑归下条)。**裁决:不重建聚合状态文件**——跨仓状态聚合无维护归属,重建即再腐化;若未来需要,由 owner 立维护规则后另立。跨仓事项一律以各仓 HANDOFF + change 文件为单源。
 4. 【阻塞·待 owner 授权】push:本地两笔就绪(453b187+45d6b85+HANDOFF 如实回写),`gh auth refresh -h github.com -s workflow` 授权后 `git push origin main` 即完成;push 后 CI 实跑结果补记于验收记录 38。
+5. 【owner 裁决】T5.3/T5.6 基座中断处置:重启 dev 常驻并重新起算观察期,或按个人项目低流量前提调整发版判据基线(验收记录 22 先例);kongming 侧 ADR-007 转「已接受」与专用 key 限额回填为跨仓运营动作,随处置一并。
+6. 【外部条件】GEMINI_API_KEY 到位后按 docs/gemini-e2e-runbook.md 复核真实多工具调用 wire 形态(开放项 2026-10-12);MiniMax 域名双源待真 key 归一。
 
 以下是此前交付与条件事项，保持原记录：
 
@@ -109,11 +123,24 @@
 | 2026-09-26 | 控制台 ui/CardTitle 基线渲染为 div(kongming 同源),无标题语义;卡题进不了读屏标题大纲(Providers 两处已用原生 h2 承载 CardTitle 配方临时兜住,Overview/Login 仍是 div) | 控制台可访问性缺口,ui/ 标准件语义缺陷是系统性的 | CardTitle 增多态 heading(如 as)支持;属 ui/ 语义级改动,按宪法 Article 5 须 kongming 先行,本仓随后对齐 | **关闭(2026-10-02 批次三)**:kongming change 已先行,本仓 card.tsx 多态 as 已落地,登录卡 as="h2"、Providers 两处原生 h2 回归 `<CardTitle as="h2">`、Overview 默认 h3,门禁全绿 |
 | 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;**【关闭 2026-10-12】**dashscope anthropic 分支(/apps/anthropic)真 key 冒烟:声明 bearer 直连成功,文本与工具多轮全链过(验收记录 37);其余分支首次接入时按同配方实证即可 |
 | 2026-10-12 | gemini 真实上游多工具调用 wire 形态未实证(语料为合成,无 GEMINI_API_KEY) | 并行 functionCall 跨帧测序修复按公开契约落地,真实分帧形态未复核 | 真 key 或 owner 提供真实样例后按 docs/gemini-e2e-runbook.md 冒烟复核 | 待验证 |
+| 2026-10-12 | 历史悬浮遗留三项(验收记录 27 起挂账):openapi 缺 GET /metrics 行;Responses 非流式双缓冲 2×64MB;流式 writer 写侧 data: 前缀硬编码带空格 | 均为低危登记项,长期悬浮无结论 | 逐项裁决 | **关闭(2026-10-12)**:①/metrics 不入 openapi——Prometheus 标准路径,消费方是抓取器非 API 客户端,文本契约入 YAML 徒增噪音;②双缓冲不修——同构直通架构固有成本(raw+canonical 双形态并存),32MB 入站上界封顶,单二进制定位下流式翻译重构不成比例;③写侧不修——writer 只解析自家 wireOf/appendSSE 产物(恒带空格),第三方 SSE 变体在 readEvent 读侧已兼容,无可达路径 |
+| 2026-10-12 | T5.3 灰度/T5.6 观察期基座中断:podman 机器重建后 muniu 容器与 muniu-data 卷缺失,灰度周 usage_logs 无载体;kongming .env 指向的实例未常驻 | 灰度判据(无 5xx/无挂起/月末账单核对)不可验证;v1.0.0 两周观察期事实上不成立 | 重启常驻+重新起算,或按个人项目低流量前提调整发版判据基线(验收记录 22 先例) | 待 owner |
 | 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | | **已终裁(2026-10-02 owner 追认)**:三 devDeps 正式保留,开放项销案;宪法 Article 4 注明测试工具属 devDeps 不占白名单口径 |
 | 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | | 本仓已修;**kongming 已于 2026-10-02 批次三合入并流向 jinguan(三仓单源),销案** |
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**40. anthropic 桥接工具往返 + backlog 升格批(2026-10-12,openspec `anthropic-bridge-tool-roundtrip` 已归档)**
+- 判据:失败测试先行(五子测先红)+ 纯文本 wire 逐字节金串守门 + 既有全量零改动回放 + 真上游冒烟 + make check 全绿。
+- 证据:①翻译=`TestBridge_Prepare_工具多轮往返`(工具全轮块形态/连续 tool 合并/未配对拒绝/纯文本金串);②声明翻正=`ToolRoundtripComplete→true`,豁免机制经 `testkit.NewFakeIncompleteBridge` 钉住(换道跳过/独占信封/无健康度副作用三语义迁移替身);③翻正出站=`TestBridgeGate_anthropic翻正后工具多轮出站`(出站 wire=tool_use/tool_result 块,响应侧 tool_calls 翻译);④spec=anthropic-bridge delta(ADDED 工具多轮请求侧翻译 5 场景 + MODIFIED 豁免重划 4 场景),archive 后 validate 18/18;⑤冒烟=dashscope /apps/anthropic 三轮实录(见当前状态同日节);⑥文档=bridge/README 矩阵与限制段、upstream-adapters 矩阵行、proxy-and-streaming 桥接边界节与 Messages 入站节收口。
+- 门禁:`make check` exit=0(coverage gate PASS 71.4%)。
+
+**39. 全量盘点落地批(2026-10-12,owner「所有值得做的都落地,值得做你来裁决」授权)**
+- 盘点:开放决策项/验收记录遗留/ROADMAP Backlog/设计文档登记限制逐条对码核验——开放项无悬空裁决;upstream-adapters 矩阵已是 ADR-0015 后形态(无漂移);新发现仅 ROADMAP Backlog 三处漂移。
+- 落地:①`TestAdmin_签发过期时刻校验`(创建过去时刻 400/未来时刻签发成功/PATCH 置过去允许)+ openapi 契约描述同步;②`estimateInputTokens` unexport(pipeline_test 两处调用点同步);③ROADMAP 漂移清偿(两条划线 + Gemini 行 ADR-0015 改写 + 工具往返收窄注记);④悬浮遗留三项裁决关闭(开放项表)。
+- T5.3/T5.6:podman 重建致容器与 muniu-data 卷缺失、灰度数据无载体——如实登记,处置权交 owner,不伪造收口。
+- 门禁:`make check` exit=0(coverage gate PASS 71.3%);`openspec validate --all` 18/18;gofmt 全仓干净。改动未提交(等 owner 指令)。
 
 **38. 代码审查迭代循环收口 + 提交推送(2026-10-12,owner 指令「归档,写好 handoff,提交所有代码,push,注意 ci 情况」)**
 - 评审:69 文件三轮收敛,6 真实缺陷根修+回归测试(详见当前状态同日节与对话收口报告);`make check` exit=0(vet+lint 0 issues+20 包 race,coverage gate PASS 71.0%);`openspec validate --all` 18/18;gofmt 全仓干净。

@@ -383,3 +383,148 @@ func TestBridge_Prepare_鉴权形态声明(t *testing.T) {
 		t.Fatal("auth 仅允许 空|bearer,非法值应报错")
 	}
 }
+
+// TestBridge_Prepare_工具多轮往返 请求侧翻译完整化(anthropic-bridge-tool-roundtrip):
+// assistant.tool_calls→tool_use 块(input 对象)/role=tool→user tool_result 块/连续 tool
+// 合并单 user/未配对 id 报错/纯文本 wire 逐字节不变(字符串 content 守门)。
+func TestBridge_Prepare_工具多轮往返(t *testing.T) {
+	ad := newBridge(t)
+
+	t.Run("工具全轮块形态", func(t *testing.T) {
+		req, err := protocol.ParseChatRequest([]byte(`{
+			"model":"alias","max_tokens":512,
+			"messages":[
+				{"role":"user","content":"北京天气如何"},
+				{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"北京\"}"}}]},
+				{"role":"tool","tool_call_id":"call_1","content":"晴 25°C"}
+			],
+			"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]
+		}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := ad.Prepare(req, "claude-sonnet-4-5", "k")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(out.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) != 3 {
+			t.Fatalf("消息数不符: %+v", body.Messages)
+		}
+		var blocks []struct {
+			Type      string          `json:"type"`
+			Text      string          `json:"text,omitempty"`
+			ID        string          `json:"id,omitempty"`
+			Name      string          `json:"name,omitempty"`
+			Input     json.RawMessage `json:"input,omitempty"`
+			ToolUseID string          `json:"tool_use_id,omitempty"`
+			Content   string          `json:"content,omitempty"`
+		}
+		// assistant:content null + tool_calls → 仅 tool_use 块(input 对象形态)
+		if err := json.Unmarshal(body.Messages[1].Content, &blocks); err != nil {
+			t.Fatalf("assistant 应为块数组: %s", body.Messages[1].Content)
+		}
+		if body.Messages[1].Role != "assistant" || len(blocks) != 1 ||
+			blocks[0].Type != "tool_use" || blocks[0].ID != "call_1" || blocks[0].Name != "get_weather" ||
+			string(blocks[0].Input) != `{"city":"北京"}` {
+			t.Fatalf("tool_use 块不符: %+v", blocks)
+		}
+		// tool 结果:合并进单条 user 的 tool_result 块
+		blocks = nil
+		if err := json.Unmarshal(body.Messages[2].Content, &blocks); err != nil {
+			t.Fatalf("tool 结果应为块数组: %s", body.Messages[2].Content)
+		}
+		if body.Messages[2].Role != "user" || len(blocks) != 1 ||
+			blocks[0].Type != "tool_result" || blocks[0].ToolUseID != "call_1" || blocks[0].Content != "晴 25°C" {
+			t.Fatalf("tool_result 块不符: %+v", blocks)
+		}
+		// 交替:user → assistant → user
+		if body.Messages[0].Role != "user" {
+			t.Fatalf("角色序列不符: %+v", body.Messages)
+		}
+	})
+
+	t.Run("连续tool消息合并单user", func(t *testing.T) {
+		req, err := protocol.ParseChatRequest([]byte(`{
+			"model":"alias","max_tokens":64,
+			"messages":[
+				{"role":"user","content":"查两地"},
+				{"role":"assistant","content":null,"tool_calls":[
+					{"id":"call_a","type":"function","function":{"name":"w","arguments":"{}"}},
+					{"id":"call_b","type":"function","function":{"name":"w","arguments":"{}"}}
+				]},
+				{"role":"tool","tool_call_id":"call_a","content":"A"},
+				{"role":"tool","tool_call_id":"call_b","content":"B"},
+				{"role":"user","content":"谢谢"}
+			]
+		}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := ad.Prepare(req, "m", "k")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.Unmarshal(out.Body, &body)
+		// user / assistant(tool_use×2) / user(tool_result×2+text 合并) 三条,交替无断裂
+		if len(body.Messages) != 3 {
+			t.Fatalf("应合并为 3 条消息: %+v", body.Messages)
+		}
+		if !strings.Contains(string(body.Messages[2].Content), `"tool_use_id":"call_a"`) ||
+			!strings.Contains(string(body.Messages[2].Content), `"tool_use_id":"call_b"`) {
+			t.Fatalf("两个 tool_result 应在同一 user 消息: %s", body.Messages[2].Content)
+		}
+	})
+
+	t.Run("未配对tool_call_id拒绝", func(t *testing.T) {
+		req, err := protocol.ParseChatRequest([]byte(`{
+			"model":"alias","max_tokens":64,
+			"messages":[
+				{"role":"user","content":"hi"},
+				{"role":"tool","tool_call_id":"call_ghost","content":"x"}
+			]
+		}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ad.Prepare(req, "m", "k"); err == nil {
+			t.Fatal("未配对 tool_call_id 应报错")
+		}
+	})
+
+	t.Run("纯文本wire逐字节不变", func(t *testing.T) {
+		req, err := protocol.ParseChatRequest([]byte(`{
+			"model":"alias","max_tokens":64,"temperature":0.3,
+			"messages":[
+				{"role":"system","content":"sys"},
+				{"role":"user","content":"你好"},
+				{"role":"user","content":"再来"}
+			]
+		}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := ad.Prepare(req, "m", "k")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"max_tokens":64,"messages":[{"role":"user","content":"你好\n\n再来"}],"model":"m","system":"sys","temperature":0.3}`
+		if string(out.Body) != want {
+			t.Fatalf("纯文本 wire 应逐字节不变:\n got=%s\nwant=%s", out.Body, want)
+		}
+	})
+}

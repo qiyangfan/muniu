@@ -74,14 +74,64 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 		maxTokens = *in.MaxTokens
 	}
 
-	var systemParts []string
-	type aMsg struct {
-		Role    string          `json:"role"`
-		Content json.RawMessage `json:"content"`
+	// 块级内部形态:aBlock 单结构分族承载 text/tool_use/tool_result(omitempty 分族序列化)。
+	// 发射期:全 text 块 → content 字符串(多块 \n\n 连接,既有合并语义逐字节保持);
+	// 含非 text 块 → content 块数组(工具上下文形态)。
+	type aBlock struct {
+		Type      string          `json:"type"`
+		Text      string          `json:"text,omitempty"`
+		ID        string          `json:"id,omitempty"`
+		Name      string          `json:"name,omitempty"`
+		Input     json.RawMessage `json:"input,omitempty"`
+		ToolUseID string          `json:"tool_use_id,omitempty"`
+		Content   string          `json:"content,omitempty"`
 	}
-	var msgs []aMsg
-	prevRole := ""
-	for i, m := range in.Messages {
+	type msgAcc struct {
+		Role   string
+		Blocks []aBlock
+	}
+	// Raw 信封解析(Message 结构不携带 tool_calls/tool_call_id——与 gemini 适配器同缝)
+	var env struct {
+		Messages []struct {
+			Role      string          `json:"role"`
+			Content   json.RawMessage `json:"content"`
+			ToolCalls []struct {
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+			ToolCallID string `json:"tool_call_id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(in.Raw, &env); err != nil {
+		return nil, fmt.Errorf("canonical 消息解析失败: %w", err)
+	}
+
+	var systemParts []string
+	var msgs []msgAcc
+	seenToolUse := map[string]bool{}
+	// 追加一条消息(与尾消息同角色则块级合并,满足 Anthropic 交替角色约束)
+	appendMsg := func(role string, blocks []aBlock) {
+		if len(msgs) > 0 && msgs[len(msgs)-1].Role == role {
+			msgs[len(msgs)-1].Blocks = append(msgs[len(msgs)-1].Blocks, blocks...)
+			return
+		}
+		msgs = append(msgs, msgAcc{Role: role, Blocks: blocks})
+	}
+	// role=tool 的 pending 缓冲:tool_result 必须并入单条 user 消息,防连续 user 断裂交替
+	var pendingResults []aBlock
+	flushResults := func() {
+		if len(pendingResults) == 0 {
+			return
+		}
+		appendMsg("user", pendingResults)
+		pendingResults = nil
+	}
+
+	for i := range env.Messages {
+		m := &env.Messages[i]
 		text, err := contentText(m.Content)
 		if err != nil {
 			return nil, fmt.Errorf("messages[%d]: %w", i, err)
@@ -91,28 +141,69 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 			if text != "" {
 				systemParts = append(systemParts, text)
 			}
-			continue
-		case "user", "assistant":
+		case "tool":
+			// tool_use_id 必须回指本对话已见的 assistant.tool_calls:未配对属结构性非法
+			if m.ToolCallID == "" || !seenToolUse[m.ToolCallID] {
+				return nil, fmt.Errorf("messages[%d]: role=tool 的 tool_call_id %q 找不到配对的 assistant.tool_calls", i, m.ToolCallID)
+			}
+			pendingResults = append(pendingResults, aBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: text})
+		case "user":
+			flushResults()
+			var blocks []aBlock
+			if text != "" {
+				blocks = append(blocks, aBlock{Type: "text", Text: text})
+			}
+			appendMsg("user", blocks)
+		case "assistant":
+			flushResults()
+			var blocks []aBlock
+			if text != "" {
+				blocks = append(blocks, aBlock{Type: "text", Text: text})
+			}
+			for _, tc := range m.ToolCalls {
+				input := json.RawMessage(tc.Function.Arguments)
+				if len(input) == 0 || string(input) == "null" {
+					input = json.RawMessage("{}")
+				}
+				blocks = append(blocks, aBlock{Type: "tool_use", ID: tc.ID, Name: tc.Function.Name, Input: input})
+				seenToolUse[tc.ID] = true
+			}
+			appendMsg("assistant", blocks)
 		default:
-			continue // tool 等角色不在桥接范围,丢弃(见 bridge/README 限制)
+			continue // 未知角色不在桥接范围,丢弃(既有纪律)
 		}
-		if len(msgs) > 0 && msgs[len(msgs)-1].Role == m.Role {
-			// 连续同角色:合并(Anthropic 要求交替)
-			prev := msgs[len(msgs)-1]
-			merged, _ := json.Marshal(textOf(prev.Content) + "\n\n" + text)
-			msgs[len(msgs)-1] = aMsg{Role: m.Role, Content: merged}
-			continue
+	}
+	flushResults()
+
+	type wireMsg struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	wireMsgs := make([]wireMsg, 0, len(msgs))
+	for _, m := range msgs {
+		texts := make([]string, 0, len(m.Blocks))
+		hasNonText := false
+		for _, b := range m.Blocks {
+			if b.Type == "text" {
+				texts = append(texts, b.Text)
+			} else {
+				hasNonText = true
+			}
 		}
-		prevRole = m.Role
-		_ = prevRole
-		raw, _ := json.Marshal(text)
-		msgs = append(msgs, aMsg{Role: m.Role, Content: raw})
+		var content json.RawMessage
+		if hasNonText {
+			content, _ = json.Marshal(m.Blocks)
+		} else {
+			// 全 text(含空块列表):字符串发射,纯文本 wire 与既有行为逐字节一致
+			content, _ = json.Marshal(strings.Join(texts, "\n\n"))
+		}
+		wireMsgs = append(wireMsgs, wireMsg{Role: m.Role, Content: content})
 	}
 
 	out := map[string]json.RawMessage{
 		"model":      json.RawMessage(mustJSON(upstreamModel)),
 		"max_tokens": json.RawMessage(mustJSON(maxTokens)),
-		"messages":   json.RawMessage(mustJSON(msgs)),
+		"messages":   json.RawMessage(mustJSON(wireMsgs)),
 	}
 	if in.Stream {
 		out["stream"] = json.RawMessage("true")
@@ -163,7 +254,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 	if raw, ok := fields["top_p"]; ok {
 		out["top_p"] = raw
 	}
-	// tool_choice:OpenAI 枚举/具名形态 → Anthropic 形态;"none" 无精确对应物,登记限制不映射
+	// tool_choice:OpenAI 枚举/具名形态 → Anthropic 形态(含 none,冒烟实证)
 	if raw, ok := fields["tool_choice"]; ok {
 		var tc struct {
 			Type     string `json:"type"`
@@ -174,6 +265,9 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 		switch {
 		case json.Unmarshal(raw, &tc) == nil && tc.Type == "auto":
 			out["tool_choice"] = json.RawMessage(`{"type":"auto"}`)
+		case json.Unmarshal(raw, &tc) == nil && tc.Type == "none":
+			// Anthropic none 形态(禁用工具强制纯文本作答);真上游冒烟实证接受
+			out["tool_choice"] = json.RawMessage(`{"type":"none"}`)
 		case json.Unmarshal(raw, &tc) == nil && tc.Type == "required":
 			out["tool_choice"] = json.RawMessage(`{"type":"any"}`)
 		case json.Unmarshal(raw, &tc) == nil && tc.Type == "function" && tc.Function.Name != "":
@@ -459,12 +553,6 @@ func contentText(raw json.RawMessage) (string, error) {
 	return "", fmt.Errorf("无法识别的 content 形态")
 }
 
-// textOf 已存消息 content 的文本(合并用)。
-func textOf(raw json.RawMessage) string {
-	s, _ := contentText(raw)
-	return s
-}
-
 // chunkBytes 为空内容返回 nil(调用方跳过写出)。
 func chunkBytes(payload string) []byte {
 	if payload == "" {
@@ -493,9 +581,9 @@ func pointerVal(s *string) string {
 // BridgeKind 桥接标记(adapter.Bridger):proxy 对工具多轮流量做适配性豁免的判定依据。
 func (a *Anthropic) BridgeKind() string { return "anthropic" }
 
-// ToolRoundtripComplete 声明式缺口如实声明(声明式缺口,gemini-native-protocol 决策 4):
-// 工具多轮请求侧翻译未实现(role=tool / assistant.tool_calls)——现状豁免行为逐字节不变。
-func (a *Anthropic) ToolRoundtripComplete() bool { return false }
+// ToolRoundtripComplete 声明翻正(anthropic-bridge-tool-roundtrip):工具多轮请求侧翻译
+// 完整(tool_calls→tool_use 块/role=tool→合并 tool_result/配对校验),不再落入豁免语义。
+func (a *Anthropic) ToolRoundtripComplete() bool { return true }
 
 // ---- 同构直通能力(adapter.NativePreparer;protocol-native-passthrough) ----
 

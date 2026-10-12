@@ -32,7 +32,7 @@
 | bad_request_400 | 参数被上游拒 | **不换道**直接返回(参数问题换家也会拒;桥接翻译缺陷另行走 adapter 修复) | 断言 |
 | mid_stream_fail | 流中断/帧间超时/解析崩 | —(定义上已过首 token) | 断言 |
 | context_canceled | 客户端断连 | 静默退出,不换道不计失败 | 静默退出,计量已发生部分 |
-| **候选适配性豁免(桥接工具限制)** | 请求含 role=tool / assistant.tool_calls 且候选为桥接型(BridgeKind 标记) | **跳过候选,不计 key EMA/冷却**(适配性不匹配≠上游故障);候选取 key 之前生效 | —(检测在候选循环,先于 attempt) |
+| **候选适配性豁免(桥接工具限制;防御性保留)** | 请求含 role=tool / assistant.tool_calls 且候选为**未声明工具翻译完整的桥接型**(Bridger ∧ ToolRoundtripComplete=false) | **跳过候选,不计 key EMA/冷却**(适配性不匹配≠上游故障);候选取 key 之前生效 | —(检测在候选循环,先于 attempt;anthropic 桥接已声明完整不再触发,机制经测试替身钉住) |
 
 候选耗尽仍失败 → 最终错误信封 `code=all_candidates_failed`;候选列表耗尽的 429/401 类错误在信封 `message` 中如实说明「已尝试全部候选」。**全部候选因桥接豁免跳过且无任何真实上游错误** → 最终信封 `code=bridge_tool_roundtrip_unsupported`(400,自解释文案;upstream-egress-batch 契约)。非流式请求没有「已过首 token」态(首字节前全部可重放)。
 
@@ -157,7 +157,7 @@ data: [DONE]
 
 ### 与既有子系统的交互
 
-翻译产物与「手工构造的等价 chat 请求」逐字节同构 ⇒ 治理/插件/限流/failover/计量行为等价(钉子测试锁死);语义缓存键取翻译后规范请求 ⇒ 跨协议缓存命中。经 anthropic 出站候选择发往各家 Anthropic 分支端点时,受「桥接工具多轮显式边界」约束(豁免/显式信封,不静默);Anthropic 入站的工具多轮请求侧翻译完整(tool_result ↔ role=tool),不受该边界限制——该边界只约束 chat 入站形态经 anthropic 出站的往返。
+翻译产物与「手工构造的等价 chat 请求」逐字节同构 ⇒ 治理/插件/限流/failover/计量行为等价(钉子测试锁死);语义缓存键取翻译后规范请求 ⇒ 跨协议缓存命中。**chat 入站 × anthropic 出站的工具多轮已完整翻译**(anthropic-bridge-tool-roundtrip:tool_calls→tool_use 块、role=tool→合并 tool_result、配对校验;纯文本 wire 逐字节不变),真异构两家(anthropic/gemini)均整家实现;豁免机制降级为「未声明完整的桥接型」的防御性语义(测试替身钉住);Anthropic Messages 入站不受任何影响(直通零翻译)。
 
 ## 同构直通(ADR-0014,契约;组合测试冻结本节)
 
@@ -214,7 +214,7 @@ data: [DONE]
 | `systemInstruction`(字符串/parts 块) | system 消息 | |
 | `tools[].functionDeclarations` | chat tools(parameters 直映) | |
 | `toolConfig.functionCallingConfig.mode` | tool_choice:AUTO→auto / ANY→required / ANY+单元素名单→具名 / **NONE→none** | 非法 mode 400;多元素名单静默丢弃(登记) |
-| `generationConfig` temperature/topP/maxOutputTokens/stopSequences | 同义映射 | `safetySettings`/`topK`/`candidateCount`/`seed` 静默丢弃(登记) |
+| `generationConfig` temperature/topP/topK/maxOutputTokens/stopSequences | 同义映射(topK→canonical `top_k`,与 top_p 同缝) | `safetySettings`/`candidateCount`/`seed` 静默丢弃(登记;canonical chat 无承载字段) |
 
 ### 响应与流式映射
 
