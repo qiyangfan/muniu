@@ -477,3 +477,42 @@ model_routes:
 		t.Fatalf("gemini 声明应拒绝: %v", err)
 	}
 }
+
+// TestLoad_alerts配置面 webhook-alerting:URL 形态校验与窗口非负。
+func TestLoad_alerts配置面(t *testing.T) {
+	write := func(alerts string) string {
+		return writeTemp(t, `
+providers:
+  - name: a
+    adapter: openai
+    weight: 1
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+model_routes:
+  alias-a:
+    - { provider: a, model: up-a, priority: 0 }
+`+alerts)
+	}
+	cfg, err := Load(write(`
+alerts:
+  webhook_url: "https://hooks.example.com/muniu"
+  dedup_window_sec: 60
+`))
+	if err != nil || cfg.Alerts.WebhookURL != "https://hooks.example.com/muniu" || cfg.Alerts.DedupWindowSec != 60 {
+		t.Fatalf("合法 alerts 应通过: %v %+v", err, cfg.Alerts)
+	}
+	if _, err := Load(write(`
+alerts:
+  webhook_url: "ftp://nope"
+`)); err == nil || !strings.Contains(err.Error(), "webhook_url") {
+		t.Fatalf("非 http(s) 应拒绝: %v", err)
+	}
+	if _, err := Load(write(`
+alerts:
+  webhook_url: "https://ok.example.com/x"
+  dedup_window_sec: -1
+`)); err == nil || !strings.Contains(err.Error(), "dedup_window_sec") {
+		t.Fatalf("负窗口应拒绝: %v", err)
+	}
+}

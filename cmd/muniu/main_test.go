@@ -92,7 +92,7 @@ pricing:
 	}
 	_ = kdb.Close()
 
-	handler, _, cleanup, err := assemble(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler, _, cleanup, err := assemble(cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("装配失败: %v", err)
 	}
@@ -355,7 +355,7 @@ pricing:
 		t.Fatal(err)
 	}
 
-	handler, _, cleanup, err := assemble(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler, _, cleanup, err := assemble(cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("装配失败: %v", err)
 	}

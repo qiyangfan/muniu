@@ -168,6 +168,10 @@ type Config struct {
 		Settlement      string `yaml:"settlement"`       // 本位币:CNY(缺省)|USD;credit 锚定本位币(1 credit = 1e-9 本位币)
 		FXUSDCNYMilli   int64  `yaml:"fx_usd_cny_milli"` // 汇率:1 USD = fx/1000 CNY(7.200=7200);仅异币种价目需要
 	} `yaml:"metering"`
+	Alerts struct {
+		WebhookURL     string `yaml:"webhook_url"`      // 告警 webhook 端点;空 = 告警关闭(零开销)
+		DedupWindowSec int    `yaml:"dedup_window_sec"` // 同事件键静默窗口,缺省 300s
+	} `yaml:"alerts"`
 	ControlPlane struct {
 		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点;空 = 不拉取(standalone)
 		TopologyURL     string `yaml:"topology_url"`      // 控制面拓扑端点(3.2);空 = 文件源(现状等价)
@@ -215,7 +219,7 @@ var varPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // Load 定位(-c > MUNIU_CONFIG > ./muniu.yaml)→ 展开 → 解析 → 校验。
 // 任何一步失败立即返回 error;校验错误一次性列全(data-and-config「配置加载」)。
 func Load(pathFlag string) (*Config, error) {
-	path, err := locate(pathFlag)
+	path, err := Locate(pathFlag)
 	if err != nil {
 		return nil, err
 	}
@@ -237,8 +241,9 @@ func Load(pathFlag string) (*Config, error) {
 	return &cfg, nil
 }
 
-// locate 配置文件定位:显式参数 > 环境变量 > 工作目录默认名。
-func locate(pathFlag string) (string, error) {
+// Locate 配置文件定位:显式参数 > 环境变量 > 工作目录默认名(导出:SIGHUP 热加载
+// 与启动须走同一解析链,消路径双写)。
+func Locate(pathFlag string) (string, error) {
 	if pathFlag != "" {
 		return pathFlag, nil
 	}
@@ -339,6 +344,14 @@ func (c *Config) validate() error {
 	}
 	if c.Auth.RevocationsIntervalSec < 0 {
 		add("auth.revocations_interval_sec 不可为负")
+	}
+	if c.Alerts.WebhookURL != "" {
+		if u, err := url.Parse(c.Alerts.WebhookURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			add("alerts.webhook_url 非法: %q(须为 http(s) 端点)", c.Alerts.WebhookURL)
+		}
+	}
+	if c.Alerts.DedupWindowSec < 0 {
+		add("alerts.dedup_window_sec 不可为负")
 	}
 	if c.ControlPlane.PollIntervalSec < 0 {
 		add("control_plane.poll_interval_sec 不可为负")
