@@ -257,3 +257,46 @@ func TestMessagesStreamEncoder_空内容流(t *testing.T) {
 		t.Fatalf("终事件应为 message_stop: %s", last)
 	}
 }
+
+// TestTranslateMessages_原始体保留与失格标记 直通双形态(protocol-native-passthrough):
+// 翻译失格(image 等)降级为失格标记而非 error,原始体逐字节保留;可翻译扩展字段
+// (thinking 回传/cache_control/stop_sequences/top_k/metadata)翻译成功且原始体零丢失。
+func TestTranslateMessages_原始体保留与失格标记(t *testing.T) {
+	// 失格:image 块 → Ineligible(含机器码),原始体逐字节保留,路由信息仍可得
+	raw := []byte(`{"model":"claude-x","max_tokens":64,"stream":true,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGk="}}]}]}`)
+	res := TranslateMessagesRequestEx(raw)
+	if res.Chat != nil || res.Ineligible == nil {
+		t.Fatalf("image 块应失格而非成功/无标记: %+v", res)
+	}
+	var ue *MessagesUnsupportedError
+	if !errors.As(res.Ineligible, &ue) || ue.Code != CodeContentBlockUnsupported {
+		t.Fatalf("失格机器码不符: %v", res.Ineligible)
+	}
+	if string(res.Raw) != string(raw) {
+		t.Fatalf("原始体必须逐字节保留: %s", res.Raw)
+	}
+	if res.Proto != InboundMessages || res.Model != "claude-x" || !res.Stream {
+		t.Fatalf("失格请求的路由信息不符: %+v", res)
+	}
+
+	// 可翻译扩展字段:翻译成功 + 原始体逐字节保留(直通保真的协议层前提)
+	raw2 := []byte(`{"model":"m","max_tokens":32,"top_k":3,"metadata":{"user_id":"u"},"stop_sequences":["END"],` +
+		`"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]},` +
+		`{"role":"assistant","content":[{"type":"thinking","thinking":"...","signature":"sig"}]},` +
+		`{"role":"user","content":"再想"}]}`)
+	res2 := TranslateMessagesRequestEx(raw2)
+	if res2.Ineligible != nil || res2.Chat == nil {
+		t.Fatalf("扩展字段应翻译成功: %+v", res2)
+	}
+	if string(res2.Raw) != string(raw2) {
+		t.Fatalf("可翻译请求的原始体也必须逐字节保留: %s", res2.Raw)
+	}
+	if res2.Model != "m" || res2.Stream {
+		t.Fatalf("路由信息不符: %+v", res2)
+	}
+
+	// 结构性非法仍是 Fatal(恒 400,与现状一致)
+	if r := TranslateMessagesRequestEx([]byte(`{"model":"","messages":[]}`)); r.Fatal == nil || r.Ineligible != nil {
+		t.Fatalf("结构性非法应为 Fatal: %+v", r)
+	}
+}

@@ -38,13 +38,21 @@ func chatToolLoopInflight(req *protocol.ChatRequest) bool {
 	return false
 }
 
-// bridgeExempted 桥接候选适配性豁免判定:多轮中途流量 × 桥接型适配器。
+// bridgeExempted 桥接候选适配性豁免判定:多轮中途流量 × 桥接型 × 翻译缺口。
+// (protocol-native-passthrough 收窄:直通路径不进入本判定——调用方以 !path.native 门控;
+// gemini-native-protocol 升级:声明式缺口——ToolRoundtripComplete()=true 的桥接型
+// (gemini,翻译完整)不豁免,anthropic 桥接维持现状豁免行为逐字节不变。)
 // 豁免发生在取 key 之前——不消耗冷却/EMA(适配性不匹配不是上游故障,
 // 与 adapter_missing 早退、strict 治理拒绝同一裁决口径)。
 func bridgeExempted(ad adapter.Adapter, midLoop bool) bool {
 	if !midLoop {
 		return false
 	}
-	_, ok := ad.(adapter.Bridger)
-	return ok
+	if _, ok := ad.(adapter.Bridger); !ok {
+		return false
+	}
+	if tc, ok := ad.(adapter.ToolRoundtripCompleter); ok && tc.ToolRoundtripComplete() {
+		return false
+	}
+	return true
 }

@@ -202,3 +202,23 @@ func TestErrorEnvelope_序列化(t *testing.T) {
 		t.Fatal("message 不得裸露在顶层(conventions 信封格式)")
 	}
 }
+
+// TestRewriteModelInPlace_原位手术 直通保真原语:仅 model 值字节变化,
+// 键序/空白/未知字段逐字节保留(RewriteModel 的 map 往返会重排键序,不适用直通)。
+func TestRewriteModelInPlace_原位手术(t *testing.T) {
+	raw := []byte(`{"zoo":1 ,"model":"alias-a","messages":[{"role":"user","content":"你好"}],"stream":true,  "top_k":  3}`)
+	out, err := RewriteModelInPlace(raw, "up-model-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"zoo":1 ,"model":"up-model-x","messages":[{"role":"user","content":"你好"}],"stream":true,  "top_k":  3}`
+	if string(out) != want {
+		t.Fatalf("原位手术破坏了非 model 字节:\n got=%s\nwant=%s", out, want)
+	}
+	if _, err := RewriteModelInPlace([]byte(`{"messages":[]}`), "m"); err == nil {
+		t.Fatal("缺 model 字段应报错")
+	}
+	if _, err := RewriteModelInPlace([]byte(`[]`), "m"); err == nil {
+		t.Fatal("顶层非对象应报错")
+	}
+}

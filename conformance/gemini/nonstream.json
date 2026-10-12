@@ -1,0 +1,24 @@
+{
+  "provider": "gemini",
+  "scenario": "nonstream",
+  "source_url": "https://ai.google.dev/api/generate-content#response",
+  "note": "⚠ 合成语料:非流式 GenerateContentResponse(text 部件 + usageMetadata 含 cachedContentTokenCount/thoughtsTokenCount)。",
+  "inbound": {"model": "alias-a", "messages": [{"role": "user", "content": "hi"}]},
+  "upstream_raw": {
+    "status": 200,
+    "body": {
+      "candidates": [
+        {
+          "content": {"parts": [{"text": "今天晴天"}], "role": "model"},
+          "finishReason": "STOP",
+          "index": 0
+        }
+      ],
+      "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 5, "cachedContentTokenCount": 3, "thoughtsTokenCount": 2, "totalTokenCount": 23},
+      "modelVersion": "gemini-x"
+    }
+  },
+  "expect": {
+    "usage": {"prompt_tokens": 13, "completion_tokens": 5, "cached_tokens": 3, "reasoning_tokens": 2}
+  }
+}

@@ -30,15 +30,39 @@ type respPart struct {
 
 // respItem input[] 项:仅 message/function_call/function_call_output 三类。
 type respItem struct {
-	Type    string     `json:"type"`
-	Role    string     `json:"role"`
-	Content []respPart `json:"content"`
+	Type string `json:"type"`
+	Role string `json:"role"`
+	// content 二态:字符串快捷形态(官方规范与部件数组等价)或部件数组,
+	// 解析期折叠(partsToText 消费点对两形态无感);数字/null/对象非法。
+	Content json.RawMessage `json:"content"`
 	// function_call
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
 	// function_call_output
 	Output string `json:"output"`
+}
+
+// contentParts content 二态解析:字符串→单 text 部件(折叠),数组→现行 parts 路径,
+// 其余形态(数字/null/对象)拒绝。仅 message 条目消费;空数组维持现行空文本语义。
+func (it *respItem) contentParts() ([]respPart, error) {
+	raw := it.Content
+	switch {
+	case len(raw) > 0 && raw[0] == '"':
+		var s string
+		if json.Unmarshal(raw, &s) != nil {
+			return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+		}
+		return []respPart{{Type: "input_text", Text: s}}, nil
+	case len(raw) > 0 && raw[0] == '[':
+		var parts []respPart
+		if json.Unmarshal(raw, &parts) != nil {
+			return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+		}
+		return parts, nil
+	default:
+		return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+	}
 }
 
 // respTool Responses 顶层 function 工具(name 在顶层,chat 需移入 function)。
@@ -63,21 +87,23 @@ type responsesRequest struct {
 	Background         *bool           `json:"background"`
 }
 
-// TranslateResponsesRequest Responses 请求 → 规范 chat 请求(映射表见设计文档,fixture 钉死)。
+// translateResponsesRequest Responses 请求 → 规范 chat 请求(映射表见设计文档,fixture 钉死)。
 // 返回的 ChatRequest.Raw 即 canonical chat JSON 字节——治理/缓存/计量与等价 chat 请求同构。
-func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
+// previous_response_id 仅提取不拒绝:其拒绝语义属翻译路径(legacy wrapper),原生 lane 走有状态粘性路由。
+func translateResponsesRequest(body []byte) (*ChatRequest, string, error) {
 	var rr responsesRequest
 	if err := json.Unmarshal(body, &rr); err != nil {
-		return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+		return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
 	}
+	prevID := ""
 	if rr.PreviousResponseID != nil {
-		return nil, &ResponsesUnsupportedError{Code: CodePreviousResponseIDUnsupported}
+		prevID = *rr.PreviousResponseID
 	}
 	if rr.Background != nil && *rr.Background {
-		return nil, &ResponsesUnsupportedError{Code: CodeBackgroundUnsupported}
+		return nil, "", &ResponsesUnsupportedError{Code: CodeBackgroundUnsupported}
 	}
 	if rr.Model == "" || len(rr.Input) == 0 {
-		return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+		return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
 	}
 
 	var b strings.Builder
@@ -94,14 +120,27 @@ func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
 	case '[':
 		var items []respItem
 		if err := json.Unmarshal(rr.Input, &items); err != nil {
-			return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+			return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
 		}
 		for _, it := range items {
-			switch it.Type {
+			typ := it.Type
+			if typ == "" {
+				// 官方缺省语义:携带 role 的条目即 message(官方 SDK 缺省产物);
+				// 无 type 无 role 不做猜测(function_call 家族恒带 type)。
+				if it.Role == "" {
+					return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
+				}
+				typ = "message"
+			}
+			switch typ {
 			case "message":
-				text, err := partsToText(it.Content)
+				parts, err := it.contentParts()
 				if err != nil {
-					return nil, err
+					return nil, "", err
+				}
+				text, err := partsToText(parts)
+				if err != nil {
+					return nil, "", err
 				}
 				role := it.Role
 				if role == "" {
@@ -117,11 +156,11 @@ func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
 			case "function_call_output":
 				msgs = append(msgs, `{"role":"tool","tool_call_id":`+string(mustJSON(it.CallID))+`,"content":`+string(mustJSON(it.Output))+`}`)
 			default:
-				return nil, &ResponsesUnsupportedError{Code: CodeInputItemUnsupported}
+				return nil, "", &ResponsesUnsupportedError{Code: CodeInputItemUnsupported}
 			}
 		}
 	default:
-		return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+		return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
 	}
 
 	b.WriteString(`,"messages":[` + strings.Join(msgs, ",") + `]`)
@@ -141,7 +180,7 @@ func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
 		out := make([]map[string]any, 0, len(rr.Tools))
 		for _, tl := range rr.Tools {
 			if tl.Type != "function" {
-				return nil, &ResponsesUnsupportedError{Code: CodeInputItemUnsupported}
+				return nil, "", &ResponsesUnsupportedError{Code: CodeInputItemUnsupported}
 			}
 			fn := map[string]any{"name": tl.Name}
 			if tl.Description != "" {
@@ -158,7 +197,7 @@ func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
 	if len(rr.ToolChoice) > 0 && string(rr.ToolChoice) != "null" {
 		var tc any
 		if json.Unmarshal(rr.ToolChoice, &tc) != nil {
-			return nil, &ResponsesUnsupportedError{Code: CodeInputInvalid}
+			return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
 		}
 		if m, isM := tc.(map[string]any); isM {
 			// Responses 具名形态 {"type":"function","name":x} → chat 的 {"type":"function","function":{"name":x}}
@@ -170,7 +209,7 @@ func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
 				}
 				tc = map[string]any{"type": "function", "function": fn}
 			} else if m["function"] == nil {
-				return nil, &ResponsesUnsupportedError{Code: CodeInputItemUnsupported}
+				return nil, "", &ResponsesUnsupportedError{Code: CodeInputItemUnsupported}
 			}
 		}
 		tj, _ := json.Marshal(tc)
@@ -179,7 +218,11 @@ func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
 	b.WriteString(`}`)
 
 	// canonical JSON 经既有解析器回填 typed 字段(单源,避免两套解析)
-	return ParseChatRequest([]byte(b.String()))
+	req, err := ParseChatRequest([]byte(b.String()))
+	if err != nil {
+		return nil, "", err
+	}
+	return req, prevID, nil
 }
 
 // partsToText content parts → 文本(input_text/output_text;其余类型显式拒绝)。
@@ -472,4 +515,102 @@ func (e *ResponsesStreamEncoder) Failed(message string) []byte {
 	return e.event(map[string]any{"type": "response.failed", "response": map[string]any{
 		"id": e.id, "object": "response", "status": "failed", "error": map[string]any{"message": message},
 	}})
+}
+
+// ChatFromResponsesObject Responses 对象 → canonical chat 响应(受限逆映射:
+// 直通双存的 canonical 侧,protocol-native-passthrough;非对外翻译契约面)。
+// 支持 message(output_text)/reasoning/function_call 与 usage;其余 item 类型宁缺勿错
+// (canonical 缺失仅降级为跨协议不可命中,同构回放不受影响)。
+// finish_reason 按对象 status 保真(completed→stop / incomplete→length;缺省防御性 stop):
+// 伪造 stop 会让未完成响应经缓存准入流入跨协议回放。
+func ChatFromResponsesObject(body []byte) ([]byte, error) {
+	var resp struct {
+		Output []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+			// reasoning 摘要:官方形态为 summary[](summary_text 部件);顶层 text 兼容
+			// 简化实现(语料登记的合成形态)。两处按序拼接,皆空 = canonical 无 reasoning。
+			Summary []struct {
+				Text string `json:"text"`
+			} `json:"summary"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"output"`
+		Usage  *responsesUsage `json:"usage"`
+		Status string          `json:"status"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	finish := "stop"
+	if resp.Status == "incomplete" {
+		finish = "length"
+	}
+	content := ""
+	var reasoning strings.Builder
+	type toolCall struct {
+		Index    int    `json:"index"`
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}
+	var calls []toolCall
+	for _, it := range resp.Output {
+		switch it.Type {
+		case "message":
+			for _, c := range it.Content {
+				if c.Type == "output_text" {
+					content += c.Text
+				}
+			}
+		case "reasoning":
+			reasoning.WriteString(it.Text)
+			for _, sm := range it.Summary {
+				reasoning.WriteString(sm.Text)
+			}
+		case "function_call":
+			calls = append(calls, toolCall{
+				Index: len(calls), ID: it.CallID, Type: "function",
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{Name: it.Name, Arguments: it.Arguments},
+			})
+		}
+	}
+	msg := map[string]any{"role": "assistant", "content": content}
+	if reasoning.Len() > 0 {
+		msg["reasoning_content"] = reasoning.String()
+	}
+	if len(calls) > 0 {
+		msg["tool_calls"] = calls
+	}
+	out := map[string]any{
+		"object":  "chat.completion",
+		"choices": []any{map[string]any{"index": 0, "message": msg, "finish_reason": finish}},
+	}
+	if resp.Usage != nil {
+		u := Usage{
+			PromptTokens:     resp.Usage.InputTokens,
+			CompletionTokens: resp.Usage.OutputTokens,
+		}
+		if d := resp.Usage.InputTokensDetails; d != nil {
+			u.CachedTokens = d["cached_tokens"]
+		}
+		if d := resp.Usage.OutputTokensDetails; d != nil {
+			u.ReasoningTokens = d["reasoning_tokens"]
+		}
+		if u != (Usage{}) {
+			out["usage"] = u
+		}
+	}
+	return json.Marshal(out)
 }

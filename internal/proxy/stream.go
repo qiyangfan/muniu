@@ -94,6 +94,13 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter
 		}
 	}()
 
+	// 每流测序优先(adapter.StreamSequencer;gemini 等无序号 wire 需要跨帧工具调用计数),
+	// 未实现者维持无状态 StreamEvent 既有行为。
+	streamEvent := ad.StreamEvent
+	if sq, ok := ad.(adapter.StreamSequencer); ok {
+		streamEvent = sq.NewStreamSequencer()
+	}
+
 	var (
 		pending  []byte // 开闸前缓冲的完整事件(半帧绝不进入)
 		gateOpen bool   // 是否已过首 token(已向客户端开闸输出)
@@ -148,6 +155,24 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter
 					}
 					return true, failover.ClassContextCanceled
 				}
+				// 无终止标记协议(gemini 等,StreamCloseDone):干净关流即正常收尾(等价 IsDone)。
+				// 未实现者维持「断流=mid_stream_fail」既有契约,行为逐字节不变。
+				if errors.Is(res.err, io.EOF) && gateOpen {
+					if scd, ok := ad.(adapter.StreamCloseDone); ok && scd.StreamCloseIsDone() {
+						m.markFirstToken()
+						if len(m.usageFrames) == 0 {
+							m.est = true
+						}
+						if fz, ok := w.(streamFinalizer); ok {
+							fz.finishClean() // 翻译 wrapper 合成协议终态(如 Gemini 终帧/message_delta+stop)
+						} else {
+							// 裸 chat writer:补 [DONE] 干净收尾(上游无终止标记,契约由网关兑现)
+							_, _ = w.Write([]byte("data: [DONE]\n\n"))
+							flush(w)
+						}
+						return true, ""
+					}
+				}
 				if !gateOpen {
 					if firstTokFired.Load() {
 						m.status, m.class = "error", failover.ClassTimeoutFirst
@@ -163,7 +188,7 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter
 				return true, failover.ClassMidStreamFail
 			}
 
-			passthrough, meta, perr := ad.StreamEvent([]byte(res.payload))
+			passthrough, meta, perr := streamEvent([]byte(res.payload))
 			if perr != nil {
 				opCancel()
 				p.logger.Warn("上游 SSE 帧解析失败", "request_id", loggingRequestID(r.Context()), "error_detail", perr.Error())
@@ -287,6 +312,11 @@ func (p *Proxy) writeStreamAbort(w http.ResponseWriter, r *http.Request, code st
 	_, _ = w.Write([]byte("data: " + string(b) + "\n\ndata: [DONE]\n\n"))
 	flush(w)
 }
+
+// streamFinalizer 无终止标记协议的干净收尾钩子(协议 wrapper 实现):
+// 上游干净关流(无 [DONE])时由 attemptStream 调用,wrapper 合成协议终态
+// (Gemini 终帧 / Anthropic message_delta+message_stop);裸 chat writer 无此钩子。
+type streamFinalizer interface{ finishClean() }
 
 // flush 尽力冲刷(httptest 与 net/http 的 ResponseWriter 均实现 Flusher)。
 func flush(w http.ResponseWriter) {

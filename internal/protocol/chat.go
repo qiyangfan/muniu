@@ -5,6 +5,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -166,4 +167,58 @@ func itoa(i int) string {
 		i /= 10
 	}
 	return string(b[pos:])
+}
+
+// RewriteModelInPlace 顶层 model 字段的原位字节手术(同构直通保真原语):
+// 仅替换该字段的值字节,其余字节(键序/空白/转义风格/未知字段)逐字节保留——
+// RewriteModel 的 map 往返会重排键序,对直通 wire 是改写,不适用。
+// 顶层非对象或缺 model 字段报错(直通前提即原生协议,无 model 属非法入站)。
+func RewriteModelInPlace(body []byte, upstreamModel string) ([]byte, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	tok, err := dec.Token()
+	if err != nil || (func() bool { d, ok := tok.(json.Delim); return !ok || d != '{' })() {
+		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 顶层须为 JSON 对象"))
+	}
+	vs, ve := -1, -1
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, errors.Join(ErrInvalidRequest, err)
+		}
+		key, _ := keyTok.(string)
+		offBefore := dec.InputOffset()
+		valTok, err := dec.Token()
+		if err != nil {
+			return nil, errors.Join(ErrInvalidRequest, err)
+		}
+		offAfter := dec.InputOffset()
+		if key == "model" {
+			if _, isStr := valTok.(string); !isStr {
+				return nil, errors.Join(ErrInvalidRequest, errors.New("model: 须为字符串"))
+			}
+			vs, ve = int(offBefore), int(offAfter)
+		}
+	}
+	if _, err := dec.Token(); err != nil { // 收尾 '}'
+		return nil, errors.Join(ErrInvalidRequest, err)
+	}
+	if vs < 0 {
+		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 原始体缺 model 字段"))
+	}
+	// 值起点 = 跳过 key 后的空白、冒号与空白;终点 = Token 读毕位置(值最后一字节之后)
+	for vs < ve && (body[vs] == ' ' || body[vs] == '\t' || body[vs] == '\n' || body[vs] == '\r') {
+		vs++
+	}
+	if vs < ve && body[vs] == ':' {
+		vs++
+	}
+	for vs < ve && (body[vs] == ' ' || body[vs] == '\t' || body[vs] == '\n' || body[vs] == '\r') {
+		vs++
+	}
+	newVal, _ := json.Marshal(upstreamModel)
+	out := make([]byte, 0, len(body)-(ve-vs)+len(newVal))
+	out = append(out, body[:vs]...)
+	out = append(out, newVal...)
+	out = append(out, body[ve:]...)
+	return out, nil
 }

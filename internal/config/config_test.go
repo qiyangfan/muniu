@@ -389,22 +389,23 @@ model_routes:
 }
 
 // TestLoad_适配器值域单源 config 不得手抄适配器清单:合法取值必须来自 adapter.Types(),
-// 无实现的形态(如历史的 gemini token)在加载期即拒,而不是拖到装配期才炸。
+// 无实现的形态(如 cohere——文档中出现但 For 无构造分支)在加载期即拒,而不是拖到装配期才炸。
+// gemini 曾因无实现被退役(gemini-native-protocol 已以真实实现回归值域,装配测试见 adapter 包)。
 func TestLoad_适配器值域单源(t *testing.T) {
 	wantDomain := strings.Join(adapter.Types(), "|")
 
 	p := writeTemp(t, `
 providers:
   - name: g
-    adapter: gemini
-    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    adapter: cohere
+    base_url: "https://api.cohere.com/compatibility/v1"
     keys:
-      - env: GEMINI_API_KEY
+      - env: COHERE_API_KEY
     weight: 10
 `)
 	_, err := Load(p)
 	if err == nil {
-		t.Fatal(`adapter: gemini 无 For 实现,必须在配置加载期被拒`)
+		t.Fatal(`adapter: cohere 无 For 实现,必须在配置加载期被拒`)
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, "providers[0](g)") {
@@ -412,5 +413,67 @@ providers:
 	}
 	if !strings.Contains(msg, `允许 `+wantDomain) {
 		t.Fatalf("错误提示列举的值域必须与 adapter.Types() 一致(应为 %q): %v", wantDomain, msg)
+	}
+}
+
+// TestLoad_native_responses声明 配置声明面(protocol-native-passthrough):
+// openai 系声明生效;anthropic 适配器声明即配置错误(其直通由适配器类型本身声明)。
+func TestLoad_native_responses声明(t *testing.T) {
+	p := writeTemp(t, `
+providers:
+  - name: a
+    adapter: openai
+    weight: 1
+    native_responses: true
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("openai 系声明应通过: %v", err)
+	}
+	if !cfg.Providers[0].NativeResponses {
+		t.Fatal("声明应入 schema")
+	}
+
+	p2 := writeTemp(t, `
+providers:
+  - name: b
+    adapter: anthropic
+    weight: 1
+    native_responses: true
+    base_url: "https://api.b.com/v1"
+    keys:
+      - env: K2
+model_routes:
+  alias-b:
+    - { provider: b, model: upstream-b, priority: 0 }
+`)
+	_, err = Load(p2)
+	if err == nil || !strings.Contains(err.Error(), "native_responses") {
+		t.Fatalf("anthropic 声明应拒绝: %v", err)
+	}
+
+	// gemini 桥接翻译型(无原生直通 lane)同样拒绝:静默 no-op 会伪装成「已生效」
+	p3 := writeTemp(t, `
+providers:
+  - name: g
+    adapter: gemini
+    weight: 1
+    native_responses: true
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    keys:
+      - env: K3
+model_routes:
+  alias-g:
+    - { provider: g, model: gemini-x, priority: 0 }
+`)
+	_, err = Load(p3)
+	if err == nil || !strings.Contains(err.Error(), "native_responses") {
+		t.Fatalf("gemini 声明应拒绝: %v", err)
 	}
 }

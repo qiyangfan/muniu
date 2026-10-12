@@ -20,6 +20,9 @@ var (
 	// SemanticCacheQueries 语义缓存判定计数 {model,result}(result ∈ hit|miss|skip:
 	// 实际检索命中=hit/未命中=miss/缓存未参与(租户开关关、tools 请求、温度不合规等)=skip)。
 	SemanticCacheQueries = metrics.NewCounterVec("muniu_semantic_cache_queries_total", "语义缓存判定数", "model", "result")
+	// StickyRequestsTotal 有状态粘性请求数 {result}(原生 responses lane:
+	// hit=亲和命中;lost=亲和未知/失效自解释降级;unsupported=别名无原生 lane)
+	StickyRequestsTotal = metrics.NewCounterVec("muniu_sticky_requests_total", "有状态粘性请求数", "result")
 	// FirstTokenDuration 流式首 token 延迟直方图(ms);桶 1ms 起步——压测实测流式首字节
 	// p50≈1.13ms,DefBuckets(5ms 起)会把最感兴趣区间吞进第一个桶。仅流式请求观测。
 	FirstTokenDuration = metrics.NewHistogram("muniu_first_token_duration_ms", "流式首 token 延迟(ms)", []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000})

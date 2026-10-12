@@ -12,29 +12,45 @@ import (
 
 // CacheRow semantic_cache 行(读侧形态)。
 type CacheRow struct {
-	ID          string
-	TenantID    string
-	Fingerprint string
-	ModelAlias  string
-	Embedding   []byte
-	Response    []byte
-	Hits        int64
-	CreatedAt   time.Time
-	ExpiresAt   time.Time
+	ID             string
+	TenantID       string
+	Fingerprint    string
+	ModelAlias     string
+	Embedding      []byte
+	Response       []byte // canonical chat 形态(跨协议命中)
+	NativeResponse []byte // 直通原始响应体(nil = 翻译路径条目)
+	NativeProto    string // 入站协议标签(messages|responses;空 = 翻译路径条目)
+	NativeForm     string // 表单标记(stream|nonstream)
+	Hits           int64
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
 }
 
-// UpsertCacheRow 写入/覆盖缓存条目(同 tenant+fingerprint 覆盖)。
+// cacheCols SELECT 列清单单源(行查询共用)。
+const cacheCols = `id, tenant_id, fingerprint, model_alias, embedding, response,
+		native_response, native_proto, native_form, hits, created_at, expires_at`
+
+// UpsertCacheRow 写入/覆盖缓存条目(同 tenant+fingerprint 覆盖;翻译路径条目)。
 func UpsertCacheRow(db *sql.DB, tenantID, fingerprint, modelAlias string, embedding, response []byte, ttl time.Duration) error {
+	return UpsertCacheRowNative(db, tenantID, fingerprint, modelAlias, embedding, response, nil, "", "", ttl)
+}
+
+// UpsertCacheRowNative 写入/覆盖缓存条目(直通双存形态:canonical + 原生体/标签/表单)。
+func UpsertCacheRowNative(db *sql.DB, tenantID, fingerprint, modelAlias string, embedding, response, nativeResponse []byte, nativeProto, nativeForm string, ttl time.Duration) error {
 	// 本表时间列用 RFC3339Nano:短 TTL 测试与亚秒边界需要亚秒精度
 	now := time.Now().UTC()
 	_, err := db.Exec(`INSERT INTO semantic_cache
-		(id, tenant_id, fingerprint, model_alias, embedding, response, hits, created_at, expires_at)
-		VALUES (?,?,?,?,?,?,0,?,?)
+		(id, tenant_id, fingerprint, model_alias, embedding, response,
+		 native_response, native_proto, native_form, hits, created_at, expires_at)
+		VALUES (?,?,?,?,?,?,?,?,?,0,?,?)
 		ON CONFLICT(tenant_id, fingerprint) DO UPDATE SET
 		  embedding=excluded.embedding, response=excluded.response,
+		  native_response=excluded.native_response, native_proto=excluded.native_proto,
+		  native_form=excluded.native_form,
 		  hits=0, created_at=excluded.created_at, expires_at=excluded.expires_at`,
 		uuid.Must(uuid.NewV7()).String(), tenantID, fingerprint, modelAlias,
-		embedding, response, now.Format(time.RFC3339Nano),
+		embedding, response, nativeResponse, nativeProto, nativeForm,
+		now.Format(time.RFC3339Nano),
 		now.Add(ttl).Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("store: 写语义缓存: %w", err)
@@ -44,7 +60,7 @@ func UpsertCacheRow(db *sql.DB, tenantID, fingerprint, modelAlias string, embedd
 
 // GetCacheByFingerprint 按(租户,指纹)精确查;过期行视为不存在。
 func GetCacheByFingerprint(db *sql.DB, tenantID, fingerprint string, now time.Time) (*CacheRow, error) {
-	row := db.QueryRow(`SELECT id, tenant_id, fingerprint, model_alias, embedding, response, hits, created_at, expires_at
+	row := db.QueryRow(`SELECT `+cacheCols+`
 		FROM semantic_cache
 		WHERE tenant_id = ? AND fingerprint = ? AND expires_at > ?`,
 		tenantID, fingerprint, now.UTC().Format(time.RFC3339Nano))
@@ -53,7 +69,7 @@ func GetCacheByFingerprint(db *sql.DB, tenantID, fingerprint string, now time.Ti
 
 // GetCacheByID 按 id 查(向量 TopK 命中回取)。
 func GetCacheByID(db *sql.DB, id string, now time.Time) (*CacheRow, error) {
-	row := db.QueryRow(`SELECT id, tenant_id, fingerprint, model_alias, embedding, response, hits, created_at, expires_at
+	row := db.QueryRow(`SELECT `+cacheCols+`
 		FROM semantic_cache WHERE id = ? AND expires_at > ?`, id, now.UTC().Format(time.RFC3339Nano))
 	return scanCacheInto(row)
 }
@@ -83,7 +99,7 @@ func DeleteExpiredCache(db *sql.DB, now time.Time) (int64, error) {
 
 // LoadCacheRows 启动加载全部未过期条目(索引内存态重启重建)。
 func LoadCacheRows(db *sql.DB) ([]CacheRow, error) {
-	rows, err := db.Query(`SELECT id, tenant_id, fingerprint, model_alias, embedding, response, hits, created_at, expires_at
+	rows, err := db.Query(`SELECT `+cacheCols+`
 		FROM semantic_cache WHERE expires_at > ? ORDER BY created_at`, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("store: 加载语义缓存: %w", err)
@@ -104,7 +120,8 @@ func LoadCacheRows(db *sql.DB) ([]CacheRow, error) {
 func scanCacheInto(scanner interface{ Scan(...any) error }) (*CacheRow, error) {
 	var r CacheRow
 	var created, expires string
-	err := scanner.Scan(&r.ID, &r.TenantID, &r.Fingerprint, &r.ModelAlias, &r.Embedding, &r.Response, &r.Hits, &created, &expires)
+	err := scanner.Scan(&r.ID, &r.TenantID, &r.Fingerprint, &r.ModelAlias, &r.Embedding, &r.Response,
+		&r.NativeResponse, &r.NativeProto, &r.NativeForm, &r.Hits, &created, &expires)
 	if err != nil {
 		return nil, err
 	}

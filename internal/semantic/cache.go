@@ -153,7 +153,7 @@ func (c *Cache) Lookup(ctx context.Context, tenantID, fingerprint string, vec []
 	return nil, false
 }
 
-// hit 命中收尾:hits+1、LRU 提升、返回回放体。
+// hit 命中收尾:hits+1、LRU 提升、返回回放体(含直通双存侧,回放路径由 proxy 按协议/表单择优)。
 func (c *Cache) hit(row *store.CacheRow) (*LookupResult, bool) {
 	_ = store.TouchCacheHits(c.db, row.ID)
 	c.mu.Lock()
@@ -162,27 +162,43 @@ func (c *Cache) hit(row *store.CacheRow) (*LookupResult, bool) {
 		c.lru.MoveToFront(e)
 	}
 	c.mu.Unlock()
-	return &LookupResult{Response: row.Response, Hits: row.Hits + 1}, true
+	return &LookupResult{
+		Response:       row.Response,
+		NativeResponse: row.NativeResponse,
+		NativeProto:    row.NativeProto,
+		NativeForm:     row.NativeForm,
+		Hits:           row.Hits + 1,
+	}, true
 }
 
 // LookupResult 命中回放体。
 type LookupResult struct {
-	Response []byte // 存储的 OpenAI 响应 JSON(非流式直返/流式拼包回放)
-	Hits     int64
+	Response       []byte // 存储的 canonical chat 响应 JSON(非流式直返/流式拼包回放)
+	NativeResponse []byte // 直通原始响应体(protocol-native-passthrough 双存;nil = 翻译路径条目)
+	NativeProto    string // 入站协议标签(messages|responses)
+	NativeForm     string // 表单标记(stream|nonstream)
+	Hits           int64
 }
 
 // Store 写入缓存条目:vec 为调用方在检索阶段已计算的查询向量(一次嵌入两用,免重复调用)。
 // 写入 = DB upsert + 索引 + LRU(容量淘汰最久未使用)。
 func (c *Cache) Store(_ context.Context, tenantID, fingerprint, modelAlias string, vec []float32, response []byte) error {
-	return c.put(tenantID, fingerprint, modelAlias, vec, response)
+	return c.put(tenantID, fingerprint, modelAlias, vec, response, nil, "", "")
+}
+
+// StoreNative 直通双存写入:canonical(跨协议命中)+ 原生体/协议标签/表单标记(同构恒等回放)。
+func (c *Cache) StoreNative(_ context.Context, tenantID, fingerprint, modelAlias string, vec []float32,
+	canonical, native []byte, proto, form string) error {
+	return c.put(tenantID, fingerprint, modelAlias, vec, canonical, native, proto, form)
 }
 
 // put 落库+索引+LRU(容量淘汰最久未使用)。
-func (c *Cache) put(tenantID, fingerprint, modelAlias string, vec []float32, response []byte) error {
+func (c *Cache) put(tenantID, fingerprint, modelAlias string, vec []float32, response, native []byte, proto, form string) error {
 	if len(vec) != c.opts.Dim {
 		return fmt.Errorf("semantic: 嵌入维度不符: %d ≠ %d", len(vec), c.opts.Dim)
 	}
-	if err := store.UpsertCacheRow(c.db, tenantID, fingerprint, modelAlias, encodeVec(vec), response, c.opts.TTL); err != nil {
+	if err := store.UpsertCacheRowNative(c.db, tenantID, fingerprint, modelAlias, encodeVec(vec),
+		response, native, proto, form, c.opts.TTL); err != nil {
 		return err
 	}
 	// 覆盖写:先移除旧条目再入

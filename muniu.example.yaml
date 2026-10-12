@@ -91,6 +91,22 @@ providers:
   #   base_url: "https://api.kimi.com/coding/"
   #   keys:
   #     - env: KIMI_CODING_KEY_1
+  # Gemini 原生出站(ADR-0015,真异构桥接型、工具多轮翻译完整):
+  # - name: gemini-native
+  #   adapter: gemini
+  #   base_url: "https://generativelanguage.googleapis.com/v1beta"
+  #   keys:
+  #     - env: GEMINI_API_KEY
+  # responses 原生端点声明(声明制直通,protocol-native-passthrough):
+  # true = /v1/responses 入站对该 provider 原生直通(仅 model 改写+鉴权注入)。
+  # 「OpenAI 兼容」≠「responses 端点可用」——未实证该端点的厂商勿声明
+  # (百炼 responses 多轮回放有服务端缺口,实证前勿开,见 docs/provider-presets.md):
+  # - name: openai-official
+  #   adapter: openai
+  #   native_responses: true
+  #   base_url: "https://api.openai.com/v1"
+  #   keys:
+  #     - env: OPENAI_API_KEY_1
 
 # 模型路由:键 = 对外模型别名(即入站请求的 model 字段),
 # 值 = 有序候选列表,failover 依此降级(语义见 docs/design/traffic-governance.md)

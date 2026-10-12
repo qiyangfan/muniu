@@ -69,6 +69,9 @@ type Provider struct {
 	Keys     []KeyRef `yaml:"keys"`
 	Weight   int      `yaml:"weight"`
 	Priority int      `yaml:"priority"`
+	// NativeResponses responses 原生端点声明(声明制直通门控,protocol-native-passthrough):
+	// 缺省 false=responses 入站对该 provider 走既有 chat 翻译兜底。「OpenAI 兼容」≠「responses 端点可用」。
+	NativeResponses bool `yaml:"native_responses"`
 }
 
 // KeyRef 环境变量引用名——绝不存明文(data-and-config「分工边界」);weight 参与 key 池 WRR。
@@ -409,6 +412,12 @@ func (c *Config) validate() error {
 			} else if p.Auth != "bearer" {
 				add("providers[%d](%s) auth 非法 %q(允许 bearer)", i, p.Name, p.Auth)
 			}
+		}
+		if p.NativeResponses && (p.Adapter == "anthropic" || p.Adapter == "gemini") {
+			// 声明制直通:native_responses 是 openai 系 responses 端点的声明。
+			// 桥接族声明即配置错误:anthropic 走 messages 直通(适配器类型即声明),
+			// gemini 为桥接翻译型(无原生直通 lane)——静默 no-op 会让误声明看起来「已生效」
+			add("providers[%d](%s) native_responses 仅 openai 系适配器可声明(anthropic/gemini 为桥接型)", i, p.Name)
 		}
 		if len(p.Keys) == 0 {
 			add("providers[%d](%s) keys 不能为空", i, p.Name)

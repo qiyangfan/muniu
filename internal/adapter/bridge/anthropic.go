@@ -492,3 +492,44 @@ func pointerVal(s *string) string {
 
 // BridgeKind 桥接标记(adapter.Bridger):proxy 对工具多轮流量做适配性豁免的判定依据。
 func (a *Anthropic) BridgeKind() string { return "anthropic" }
+
+// ToolRoundtripComplete 声明式缺口如实声明(声明式缺口,gemini-native-protocol 决策 4):
+// 工具多轮请求侧翻译未实现(role=tool / assistant.tool_calls)——现状豁免行为逐字节不变。
+func (a *Anthropic) ToolRoundtripComplete() bool { return false }
+
+// ---- 同构直通能力(adapter.NativePreparer;protocol-native-passthrough) ----
+
+// NativeProto 桥接原生协议 = Anthropic Messages(messages 入站 × anthropic 候选直通)。
+func (a *Anthropic) NativeProto() protocol.InboundProtocol { return protocol.InboundMessages }
+
+// PrepareNative Anthropic Messages 原始体直通出站:URL/鉴权头/版本头按既有声明,
+// body 仅 model 字段原位手术(RewriteModelInPlace),其余逐字节保留——零翻译零字段丢失。
+func (a *Anthropic) PrepareNative(in *protocol.NativeRequest, upstreamModel, apiKey string) (*adapter.Outbound, error) {
+	if in.Proto != protocol.InboundMessages {
+		return nil, fmt.Errorf("bridge: anthropic 直通仅服务 messages 入站,得到 %q", in.Proto)
+	}
+	body, err := protocol.RewriteModelInPlace(in.Raw, upstreamModel)
+	if err != nil {
+		return nil, fmt.Errorf("bridge: 直通 model 改写: %w", err)
+	}
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	if a.bearer {
+		h.Set("Authorization", "Bearer "+apiKey)
+	} else {
+		h.Set("x-api-key", apiKey)
+	}
+	h.Set("anthropic-version", anthropicVersion)
+	return &adapter.Outbound{URL: a.baseURL + "/v1/messages", Header: h, Body: body}, nil
+}
+
+// NativeStreamEvent meta-only 读侧:复用既有事件机的 meta 与翻译字节(翻译字节仅作
+// 内部计量/拼包消费,客户端恒收上游原字节——passthrough 由 proxy 执行,此处不改写 wire)。
+func (a *Anthropic) NativeStreamEvent(data []byte) ([]byte, adapter.EventMeta, error) {
+	return a.StreamEvent(data)
+}
+
+// NormalizeNativeUsage 与翻译路径同缝复用(anthropic 形态与统一形态双兼容)。
+func (a *Anthropic) NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, error) {
+	return a.NormalizeUsage(raw)
+}

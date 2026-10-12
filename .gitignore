@@ -1,6 +1,8 @@
 # Go 构建产物
 /bin/
 /dist/
+# 根目录二进制(go build -o muniu 直出的临时实例产物;make build 走 /bin/)
+/muniu
 *.exe
 *.test
 *.out

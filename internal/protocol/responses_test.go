@@ -54,6 +54,56 @@ func TestTranslateResponsesRequest_合法映射(t *testing.T) {
 	}
 }
 
+// TestTranslateResponsesRequest_官方快捷形态 官方规范内合法形态放行与缺省判定边界
+// (fix-responses-input-forms;kongming e2e 实证的两处误拒:省略 type、字符串 content)。
+// 对拍断言快捷与显式形态 canonical 逐字节一致——缓存指纹/计量同构的漂移探测器。
+func TestTranslateResponsesRequest_官方快捷形态(t *testing.T) {
+	shortcut := `{"model":"alias-a","input":[{"role":"user","content":"你好"}],"stream":false}`
+	typed := `{"model":"alias-a","input":[{"type":"message","role":"user","content":"你好"}],"stream":false}`
+	parts := `{"model":"alias-a","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"你好"}]}],"stream":false}`
+	for _, body := range []string{shortcut, typed} {
+		req, err := TranslateResponsesRequest([]byte(body))
+		if err != nil {
+			t.Fatalf("官方快捷形态应放行(%s): %v", body, err)
+		}
+		if !strings.Contains(string(req.Raw), `"content":"你好"`) {
+			t.Fatalf("字符串 content 应折叠为文本消息: %s", req.Raw)
+		}
+	}
+	// 对拍:快捷/显式 type/部件数组三形态 canonical 逐字节一致
+	reqS, errS := TranslateResponsesRequest([]byte(shortcut))
+	reqT, errT := TranslateResponsesRequest([]byte(typed))
+	reqP, errP := TranslateResponsesRequest([]byte(parts))
+	if errS != nil || errT != nil || errP != nil {
+		t.Fatalf("三形态均应翻译成功: %v %v %v", errS, errT, errP)
+	}
+	if string(reqS.Raw) != string(reqT.Raw) || string(reqS.Raw) != string(reqP.Raw) {
+		t.Fatalf("同语义三形态 canonical 应逐字节一致:\n快捷: %s\n显式: %s\n部件: %s", reqS.Raw, reqT.Raw, reqP.Raw)
+	}
+
+	// 缺省判定不越界与非法 content 维持拒绝
+	rejects := []struct {
+		name string
+		body string
+		code string
+	}{
+		{"省略type且无role", `{"model":"alias-a","input":[{}]}`, CodeInputInvalid},
+		{"content数字", `{"model":"alias-a","input":[{"role":"user","content":123}]}`, CodeInputInvalid},
+		{"content null", `{"model":"alias-a","input":[{"role":"user","content":null}]}`, CodeInputInvalid},
+		{"content对象", `{"model":"alias-a","input":[{"role":"user","content":{}}]}`, CodeInputInvalid},
+		{"未知item类型维持", `{"model":"alias-a","input":[{"type":"input_image","image_url":"x"}]}`, CodeInputItemUnsupported},
+	}
+	for _, c := range rejects {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := TranslateResponsesRequest([]byte(c.body))
+			var re *ResponsesUnsupportedError
+			if !errors.As(err, &re) || re.Code != c.code {
+				t.Fatalf("应拒绝且 code=%s: %v", c.code, err)
+			}
+		})
+	}
+}
+
 func TestTranslateResponsesRequest_危险字段与非法输入(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -347,5 +397,99 @@ func TestResponsesStreamEncoder_并行工具项(t *testing.T) {
 	u := completed["usage"].(map[string]any)
 	if u["output_tokens"].(float64) != 9 {
 		t.Fatalf("completed.usage 不符: %v", u)
+	}
+}
+
+// TestTranslateResponsesRequest_原始体保留与状态提取 直通双形态(protocol-native-passthrough):
+// 失格(input_image 等)降级为失格标记而非 error;previous_response_id 改为提取供粘性路由
+// 判定(翻译路径拒绝语义由 legacy wrapper 维持);原始体逐字节保留。
+func TestTranslateResponsesRequest_原始体保留与状态提取(t *testing.T) {
+	raw := []byte(`{"model":"gpt-x","stream":true,"previous_response_id":"resp_1",` +
+		`"input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,xx"}]}]}`)
+	res := TranslateResponsesRequestEx(raw)
+	if res.Chat != nil || res.Ineligible == nil {
+		t.Fatalf("input_image 部件应失格: %+v", res)
+	}
+	var ue *ResponsesUnsupportedError
+	if !errors.As(res.Ineligible, &ue) || ue.Code != CodeInputItemUnsupported {
+		t.Fatalf("失格机器码不符: %v", res.Ineligible)
+	}
+	if string(res.Raw) != string(raw) {
+		t.Fatalf("原始体必须逐字节保留: %s", res.Raw)
+	}
+	if res.Proto != InboundResponses || res.Model != "gpt-x" || !res.Stream || res.PrevID != "resp_1" {
+		t.Fatalf("失格请求的路由/状态信息不符: %+v", res)
+	}
+
+	// 状态请求(previous_response_id)在 Ex 不再拒绝:canonical 照算,拒绝判定移交路径决策
+	rawPrev := []byte(`{"model":"m","previous_response_id":"resp_9","input":"你好"}`)
+	resPrev := TranslateResponsesRequestEx(rawPrev)
+	if resPrev.Fatal != nil || resPrev.Ineligible != nil || resPrev.Chat == nil {
+		t.Fatalf("状态请求应翻译成功(Ex): %+v", resPrev)
+	}
+	if resPrev.PrevID != "resp_9" {
+		t.Fatalf("PrevID 应提取: %+v", resPrev)
+	}
+	if !strings.Contains(string(resPrev.Raw), `"previous_response_id":"resp_9"`) {
+		t.Fatalf("原始体必须逐字节保留: %s", resPrev.Raw)
+	}
+
+	// legacy wrapper(翻译路径契约)维持拒绝清单零改动
+	if _, err := TranslateResponsesRequest(raw); err == nil {
+		t.Fatal("legacy: 失格应报错")
+	}
+	_, err := TranslateResponsesRequest(rawPrev)
+	var le *ResponsesUnsupportedError
+	if !errors.As(err, &le) || le.Code != CodePreviousResponseIDUnsupported {
+		t.Fatalf("legacy: previous_response_id 应维持拒绝: %v", err)
+	}
+	if _, err := TranslateResponsesRequest([]byte(`{"model":"m","background":true,"input":"x"}`)); err == nil {
+		t.Fatal("legacy: background 应维持拒绝")
+	}
+}
+
+// TestChatFromResponsesObject_reasoning摘要 canonical 侧 reasoning 双形态兼容:
+// 官方 summary[]（summary_text）与简化实现的顶层 text 皆入 reasoning_content。
+func TestChatFromResponsesObject_reasoning摘要(t *testing.T) {
+	out, err := ChatFromResponsesObject([]byte(
+		`{"id":"resp_1","status":"completed","output":[` +
+			`{"type":"reasoning","summary":[{"type":"summary_text","text":"先查"}]},` +
+			`{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"reasoning_content":"先查"`) {
+		t.Fatalf("官方 summary[] 应入 reasoning_content: %s", out)
+	}
+	out2, err := ChatFromResponsesObject([]byte(
+		`{"id":"resp_1","status":"completed","output":[` +
+			`{"type":"reasoning","text":"再想"},` +
+			`{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out2), `"reasoning_content":"再想"`) {
+		t.Fatalf("顶层 text 简化形态应兼容: %s", out2)
+	}
+}
+
+// TestChatFromResponsesObject_status保真 canonical 侧 finish_reason 按对象 status 保真:
+// incomplete 不得伪造 stop(伪造会让未完成响应经缓存准入流入跨协议回放)。
+func TestChatFromResponsesObject_status保真(t *testing.T) {
+	completed, err := ChatFromResponsesObject([]byte(
+		`{"id":"resp_1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":3,"output_tokens":2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(completed), `"finish_reason":"stop"`) {
+		t.Fatalf("completed 应映射 stop: %s", completed)
+	}
+	incomplete, err := ChatFromResponsesObject([]byte(
+		`{"id":"resp_1","status":"incomplete","output":[{"type":"message","content":[{"type":"output_text","text":"截断"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(incomplete), `"finish_reason":"length"`) {
+		t.Fatalf("incomplete 应映射 length: %s", incomplete)
 	}
 }

@@ -62,12 +62,13 @@ type Options struct {
 // internal/config 的校验值域与非法取值报错均由本函数渲染,不再手抄清单(ADR-0003 执法面)。
 // 新增 For 分支必须同步入列——types_test.go 断言每个列出的值都能被 For 真实构造。
 func Types() []string {
-	return []string{"anthropic", "deepseek", "doubao", "glm", "moonshot", "openai", "qwen"}
+	return []string{"anthropic", "deepseek", "doubao", "gemini", "glm", "moonshot", "openai", "qwen"}
 }
 
 // For 按适配器类型构造实例(config 的 adapter 字段=类型,provider 实例名可任意取):
 // openai 为兼容基座;deepseek/moonshot/glm = 基座 + 各家 quirk(差异只声明差异,ADR-0003);
-// qwen/doubao 当前与基座无已实证差异;anthropic 走桥接工厂(需 blank import bridge)。
+// qwen/doubao 当前与基座无已实证差异;anthropic 走桥接工厂(需 blank import bridge);
+// gemini 为原生整家实现(gemini-native-protocol)。
 // opts 仅 anthropic 消费(鉴权形态声明),其余类型忽略。
 func For(adapterType, baseURL, apiKey string, opts ...Options) (Adapter, error) {
 	base := NewOpenAI(baseURL, apiKey)
@@ -84,6 +85,8 @@ func For(adapterType, baseURL, apiKey string, opts ...Options) (Adapter, error) 
 		return newMoonshot(base), nil
 	case "glm":
 		return newGLM(base), nil
+	case "gemini":
+		return NewGemini(baseURL), nil
 	case "anthropic":
 		if opt.Auth != AuthDefault && opt.Auth != AuthBearer {
 			return nil, fmt.Errorf("adapter: 不支持的鉴权形态 %q(允许 空|%s)", opt.Auth, AuthBearer)
@@ -110,6 +113,53 @@ func SetAnthropicFactory(f func(baseURL string, opts Options) Adapter) {
 // proxy 经类型断言探测;不支持的适配器 → 入站请求归 bad_request。
 type EmbeddingPreparer interface {
 	PrepareEmbeddings(in *protocol.EmbeddingRequest, upstreamModel, apiKey string) (*Outbound, error)
+}
+
+// NativePreparer 同构直通出站能力(可选能力接口,与 EmbeddingPreparer 同款,proxy 类型断言探测)。
+// 实现者声明「具备原生协议出站通道」:messages × anthropic 桥接、responses × openai 基座
+// (后者由 provider 配置 native_responses 声明另行门控,声明制见 protocol-native-passthrough)。
+// 契约:出站 body 仅 model 字段原位手术(RewriteModelInPlace),其余逐字节原样——
+// 直通不属「字段改写白名单」约束域(零改写,upstream-adapters 注记)。
+type NativePreparer interface {
+	// NativeProto 本适配器原生直通的入站协议(协议身份自述;判定 = 能力 ∧ 身份匹配:
+	// 桥接=messages,基座=responses;同名能力不得跨协议误判)。
+	NativeProto() protocol.InboundProtocol
+	// PrepareNative 原始体直通出站:URL/鉴权头注入按适配器既有声明。
+	PrepareNative(in *protocol.NativeRequest, upstreamModel, apiKey string) (*Outbound, error)
+	// NativeStreamEvent 直通流事件 meta-only 读侧:返回内部统一 chunk(计量/缓存拼包
+	// 与翻译路径同缝消费,可为 nil)+ EventMeta;客户端恒收上游原字节,本方法不改写 wire。
+	NativeStreamEvent(data []byte) (internal []byte, meta EventMeta, err error)
+	// NormalizeNativeUsage 直通响应的原生 usage → 统一 Usage(计量口径与翻译路径一致)。
+	NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, error)
+}
+
+// NativeFetcher 直通 GET 代理能力(responses 有状态查询:亲和已知时由 proxy 调用)。
+type NativeFetcher interface {
+	// PrepareNativeFetch 状态查询出站:GET <原生端点>/{id},无请求体,鉴权按既有声明。
+	PrepareNativeFetch(respID, apiKey string) (*Outbound, error)
+}
+
+// ToolRoundtripCompleter 工具多轮翻译完整性声明(gemini-native-protocol 决策 4,声明式缺口):
+// 桥接型适配器如实声明工具多轮「请求侧」翻译是否完整。豁免判定 = Bridger ∧ 未声明完整——
+// anthropic 桥接声明 false(现状豁免行为逐字节不变),gemini 声明 true(工具多轮正常出站
+// 不豁免)。未实现本接口的桥接型按「不完整」处理(保守语义)。
+type ToolRoundtripCompleter interface {
+	ToolRoundtripComplete() bool
+}
+
+// StreamCloseDone 无流终止标记协议声明:干净关流即正常收尾(等价 IsDone)。
+// Gemini alt=sse 无 [DONE];未实现者维持「断流=mid_stream_fail」既有契约。
+type StreamCloseDone interface {
+	StreamCloseIsDone() bool
+}
+
+// StreamSequencer 每流事件测序能力(可选,与 StreamCloseDone 同族):wire 本身不携带
+// 工具调用序号的协议(Gemini 并行 functionCall 无 index 字段),跨帧并行调用必须按流
+// 计数才能合成正确的 tool_calls index/id——无状态 StreamEvent 对同帧多调用只能帧内计数。
+// 实现者返回每流事件函数(单请求单实例,非并发安全);proxy 管道优先消费,
+// 未实现者维持无状态 StreamEvent 既有行为。
+type StreamSequencer interface {
+	NewStreamSequencer() func(data []byte) (passthrough []byte, meta EventMeta, err error)
 }
 
 // Registry provider 名 → Adapter 实例的进程内注册表(装配期构建,运行期只读)。

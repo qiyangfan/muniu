@@ -78,6 +78,8 @@ data: [DONE]
 | `instructions` | system 消息(置于最前) | 与 input 显式 system 并存时 instructions 在前 |
 | `input`(string) | 单条 user 消息(content=原文字符串) | 快捷形态 |
 | `input[]` type=message | 同 role 消息 | content parts 仅接受 input_text/output_text(文本按序拼接);其余类型 400 `input_item_unsupported` |
+| `input[]` message content=字符串 | 同 role 消息(content=原文字符串,折叠为单 text 部件) | 官方规范快捷形态,与部件数组等价;canonical 逐字节同构(对拍钉死) |
+| `input[]` type 省略+携带 role | 缺省判定为 message(官方 SDK 缺省产物即该形态) | 缺省仅此一例;无 type 无 role 400 `input_invalid`,function_call 家族恒带 type 不猜测 |
 | `input[]` type=function_call | assistant 消息带 tool_calls(call_id/name/arguments 直映) | |
 | `input[]` type=function_call_output | role=tool 消息(tool_call_id=call_id,content=output) | |
 | `tools[]` type=function | chat tools(name/description/parameters 从顶层移入 function) | |
@@ -107,6 +109,10 @@ data: [DONE]
 ### 与既有子系统的交互
 
 翻译产物与「手工构造的等价 chat 请求」逐字节同构 ⇒ 治理/插件/限流/failover/计量行为等价(钉子测试锁死);语义缓存键取翻译后规范请求 ⇒ **跨协议缓存命中**(等价 chat 先写、Responses 命中)。工具多轮流量经 anthropic 出站受桥接边界契约约束(显式 400/豁免,不静默)。
+
+### 知识注记:百炼 responses 原生端点多轮回放缺口(2026-10-11 实证,防误判 muniu 入站)
+
+百炼(dashscope)`/api/v2/services/agents` 系 responses 原生端点对多轮工具回放存在**服务端缺口**:请求携带 role=tool 历史条目(官方 SDK 标准回放形态)时返回 400 校验错(同轮四路径对照实证,非 muniu 翻译层问题)。排查期间的 kongming 侧绕行(手工构造显式部件数组形态)在修复后**无须回滚**——显式形态对 OpenAI 官方/百炼/muniu 三方兼容面最宽,仍是正确写法。若客户端经 muniu 走百炼 responses 出现多轮 400,先核对该上游缺口再怀疑网关翻译。
 
 ## Anthropic 入站翻译(ADR-0013,契约;测试钉死本表)
 
@@ -152,3 +158,70 @@ data: [DONE]
 ### 与既有子系统的交互
 
 翻译产物与「手工构造的等价 chat 请求」逐字节同构 ⇒ 治理/插件/限流/failover/计量行为等价(钉子测试锁死);语义缓存键取翻译后规范请求 ⇒ 跨协议缓存命中。经 anthropic 出站候选择发往各家 Anthropic 分支端点时,受「桥接工具多轮显式边界」约束(豁免/显式信封,不静默);Anthropic 入站的工具多轮请求侧翻译完整(tool_result ↔ role=tool),不受该边界限制——该边界只约束 chat 入站形态经 anthropic 出站的往返。
+
+## 同构直通(ADR-0014,契约;组合测试冻结本节)
+
+入站协议与候选适配器原生协议一致时,该次尝试走**直通**:出站 wire = 客户端原始请求体(仅 model 字段原位手术),响应/流式/错误信封原样透传。翻译只属于跨协议对——协议平等,chat 非特权 wire 形态。
+
+### 路径判定表(每 attempt;判定点唯一)
+
+| 入站 | 候选 | 路径 | 声明来源 |
+|---|---|---|---|
+| chat | 任意 | 翻译(基座透传) | —(无直通增益) |
+| messages | anthropic 适配器 | **直通** | 适配器类型即声明(`NativeProto` 协议身份自述) |
+| messages | 其他适配器 | 翻译 | 协议身份不符 |
+| responses | `native_responses: true` | **直通** | provider 显式声明(零自动探测) |
+| responses | 未声明 | 翻译兜底 | 「OpenAI 兼容」≠「responses 端点可用」 |
+
+回落信号(该 attempt 放弃直通改翻译,不计失败不动 key 健康度):①治理对该候选实际干预(直通 attempt 以**原始体**评估治理——翻译器静默丢弃的参数不在 canonical,治理对 wire 的裁决权必须覆盖它们);②插件改写 canonical(原始体过期)。
+
+### 保真不变式与错误信封分域
+
+- 直通出站除 model 值字节外**逐字节**等于客户端原始体(`RewriteModelInPlace` 原位手术,禁 map 往返重排键序);响应状态/头/体(流式逐帧)原样透传。
+- **错误信封按路径分域**:直通=上游信封原样到达(不换道类,含流内失败帧诚实透传后终止,不合成任何非上游形态);翻译=既有归一信封。两套契约并存,禁顺手统一。
+- writer 模式位(直通=恒等写/翻译=反向映射)仅首字节提交前可切换;已提交绝不换道/二次写出/混用形态(`tw.committed` 既有不变式)。
+
+### 惰性拒绝(失格标记)
+
+翻译失格(image 等)不再一律边缘 400:别名含直通候选 → 放行直通(多模态原生支持);换道落翻译候选 → 出站前升格既有 400 信封(`content_block_unsupported`/`input_item_unsupported`,文案不变);无直通候选别名 → 维持现状即时 400(逐字节一致)。失格请求跳过语义缓存检索与入库、不影响 key 健康度。
+
+### 语义缓存双存
+
+直通成功入库为双存:canonical chat 形态(跨协议命中,既有等价性不变)+ 原生响应体+协议标签+表单标记(stream|nonstream)。同构命中且表单兼容 → 原生恒等回放(零翻译);表单不兼容/跨协议 → canonical 反向映射;canonical 衍生失败仅降级为跨协议不可命中。
+
+### 有状态粘性路由(原生 responses lane)
+
+- `previous_response_id` 仅由原生 lane 服务:别名无原生候选 → 400 `previous_response_id_unsupported`(翻译路径维持既有拒绝);亲和未知 → 400 `response_affinity_lost` 自解释(禁盲发);亲和命中 → 候选域收缩至亲和 provider(域内 key/候选 failover 照常,跨 provider 不换道——服务端状态定向单上游的显式语义)。
+- 亲和表:id→provider,进程内 TTL(24h)+LRU(4096);成功响应 id 回写;集群共享后端按 ADR-0008 复用(未配共享=实例内粘性,登记)。指标 `muniu_sticky_requests_total{result=hit|lost|unsupported}`。
+- `GET /v1/responses/{id}`:亲和已知 → 代理转发亲和 provider 原样返回;未知 → 恒 404 `response_not_found`(与既有语义一致)。DELETE 代理登记 backlog;重启丢失 → 自解释降级(提示改发全量 input)。
+- 状态请求旁路语义缓存(检索与入库皆零,限流计量照常)。
+
+## Gemini 入站翻译(ADR-0015,契约;conformance/gemini 语料钉死本表)
+
+`POST /v1beta/models/{model}:generateContent`(及 `:streamGenerateContent?alt=sse`)与 Responses/Messages 入站同款**边缘翻译**:模型别名取自 URL 路径(Gemini wire 无 model 字段;流式语义在端点本身,canonical 注入 `stream:true`)。鉴权适配 `server.AdaptGeminiKey`(x-goog-api-key 头 / ?key= 参数 → Bearer;?key= 读后剥离)。
+
+### 请求映射表
+
+| Gemini 入站 | 规范 chat | 约束 |
+|---|---|---|
+| 路径 `{model}` | `model`(别名) | 别名不存在与 chat `model_not_found` 同规(信封 Gemini 形态) |
+| `contents[].role` user/model | user/assistant | 未知 role 400 `input_invalid` |
+| `parts[].text` | 文本拼接(多部件换行合并) | thought 请求部件丢弃(签名回传语义不成立) |
+| `parts[].inlineData`(image/*) | content 数组 `image_url`(data URL 合成) | 音频/视频 400 `content_part_unsupported` |
+| `parts[].fileData` | **400 `content_part_unsupported`** | |
+| `parts[].functionCall`(model) | assistant tool_calls(id 按名合成,同名按序去重) | |
+| `parts[].functionResponse`(user) | role=tool 消息(tool_call_id 回指同名最近 call) | response 先于 call 400 `input_invalid` |
+| `systemInstruction`(字符串/parts 块) | system 消息 | |
+| `tools[].functionDeclarations` | chat tools(parameters 直映) | |
+| `toolConfig.functionCallingConfig.mode` | tool_choice:AUTO→auto / ANY→required / ANY+单元素名单→具名 / **NONE→none** | 非法 mode 400;多元素名单静默丢弃(登记) |
+| `generationConfig` temperature/topP/maxOutputTokens/stopSequences | 同义映射 | `safetySettings`/`topK`/`candidateCount`/`seed` 静默丢弃(登记) |
+
+### 响应与流式映射
+
+- 非流式:chat.completion → GenerateContentResponse(candidates[].content.parts:reasoning_content→`thought:true` 部件、text、tool_calls→functionCall[args 对象];finishReason:stop/tool_calls→STOP、length→MAX_TOKENS、content_filter→SAFETY;usageMetadata:prompt/candidates/cached/thoughts=reasoning[子集口径];modelVersion 回显别名)。
+- 流式(alt=sse):OpenAI chunk → 增量帧(text/thought parts)→ 终帧(finishReason+usageMetadata);functionCall 按收束帧发出(完整对象,无增量形态,登记);上游断流以 `{error:{code:500,status:"INTERNAL"}}` 帧诚实收尾,不伪造正常终帧。
+- 错误信封:`{error:{code,message,status}}`(+`muniu_code` 网关机器码扩展字段,SDK 容忍附加字段);status 映射 bad_request→INVALID_ARGUMENT、429→RESOURCE_EXHAUSTED、超时→DEADLINE_EXCEEDED、其余→INTERNAL。上游「HTTP 200 + 流内错误帧」失真样式已入语料负面形态(联调断言口径=终帧内容而非状态码)。
+
+### 管道等价性
+
+翻译产物与等价 chat 请求 canonical 逐字节同构 ⇒ 治理/插件/限流/failover/计量/语义缓存全同构(跨协议缓存命中钉子测试);gemini 候选工具多轮翻译完整,不触发桥接豁免(声明式缺口,ADR-0015 决策 4)。

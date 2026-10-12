@@ -19,12 +19,13 @@ import (
 // 的混合转发状态(buildPool 的注册副作用被快照化吸收)。
 // loadedAt = 快照生成时刻(模型发现 /v1/models 的 created 语义;进程内稳定)。
 type topologySnapshot struct {
-	providers []config.Provider             // 原始定义(池保留的 DeepEqual 基准)
-	routes    map[string][]config.Candidate // priority 升序已排序
-	pools     map[string]*keypool.Pool
-	adapters  map[string]adapter.Adapter // provider → 出站适配器(与池同生命周期)
-	caps      map[governKey]config.ModelCapability
-	loadedAt  time.Time
+	providers   []config.Provider             // 原始定义(池保留的 DeepEqual 基准)
+	routes      map[string][]config.Candidate // priority 升序已排序
+	pools       map[string]*keypool.Pool
+	adapters    map[string]adapter.Adapter // provider → 出站适配器(与池同生命周期)
+	caps        map[governKey]config.ModelCapability
+	nativeResps map[string]bool // provider → native_responses 声明(responses 直通资格,声明制)
+	loadedAt    time.Time
 }
 
 // TopologyStats 一次替换的池处置统计(可观测/日志)。
@@ -114,12 +115,13 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 	stats.Removed = len(oldByName) // 旧有新无:池与适配器随旧快照释放(在途请求持旧快照完成)
 
 	p.topo.Store(&topologySnapshot{
-		providers: append([]config.Provider(nil), cfg.Providers...),
-		routes:    sortRoutes(cfg.Routes),
-		pools:     pools,
-		adapters:  adapters,
-		caps:      buildCaps(cfg.Capabilities),
-		loadedAt:  time.Now(),
+		providers:   append([]config.Provider(nil), cfg.Providers...),
+		routes:      sortRoutes(cfg.Routes),
+		pools:       pools,
+		adapters:    adapters,
+		caps:        buildCaps(cfg.Capabilities),
+		nativeResps: buildNativeResps(cfg.Providers),
+		loadedAt:    time.Now(),
 	})
 	return stats, nil
 }

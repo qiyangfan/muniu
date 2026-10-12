@@ -431,6 +431,12 @@ func assemble(cfg *config.Config, logger *slog.Logger) (http.Handler, []string, 
 		{"POST /v1/messages", server.Chain(chatProxy.HandlerMessages(),
 			server.RequestID, server.Recover(logger), server.AccessLog(logger),
 			server.AdaptAnthropicKey, verifier.Middleware, gate.Middleware)},
+		// Gemini 原生入站(gemini-native-protocol):同款边缘翻译;鉴权头/查询参数适配仅挂
+		// 本路由,先于 verifier(?key= 读后剥离,防访问日志泄漏);{modelMethod} 整段通配,
+		// handler 内解析 {model}:{method} 后缀(mux 通配符不支持段内混合)
+		{"POST /v1beta/models/{modelMethod}", server.Chain(chatProxy.HandlerGemini(),
+			server.RequestID, server.Recover(logger), server.AccessLog(logger),
+			server.AdaptGeminiKey, verifier.Middleware, gate.Middleware)},
 		// 无状态边界:不存储 response,恒 404(挂鉴权链,不泄漏给未鉴权方)
 		{"GET /v1/responses/{id}", server.Chain(chatProxy.HandlerResponsesStateless(), dataPlaneMW...)},
 		// 模型发现(gateway-parity):数据面鉴权必须,但刻意不挂配额/限流/计量/插件——

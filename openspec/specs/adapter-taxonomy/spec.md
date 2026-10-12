@@ -11,25 +11,24 @@
 
 #### Scenario: 值域来自实现集合
 
-- GIVEN `adapter.For` 支持 openai、deepseek、moonshot、glm、qwen、doubao、anthropic
+- GIVEN `adapter.For` 支持 openai、deepseek、moonshot、glm、qwen、doubao、anthropic、gemini
 - WHEN 读取配置校验使用的适配器值域,或读取非法取值错误提示中列举的取值
 - THEN 两处内容均为上述集合(排序一致),且与实现分支逐项相等
 
 #### Scenario: 未实现的形态不在值域内
 
-- GIVEN 某适配器类型名(如 `gemini`)在文档或历史清单中出现,但 `adapter.For` 无对应构造分支
+- GIVEN 某适配器类型名(如 `cohere`)在文档或讨论中出现,但 `adapter.For` 无对应构造分支
 - WHEN 读取 `Types()`
 - THEN 该类型名不在返回值中
-
 ### Requirement: 不可实现的适配器取值在加载期拒绝
 
 `providers[].adapter` 取值不在值域内时,`config.Load` MUST 在配置加载期拒绝(拒绝启动),错误信息 MUST 指出具体条目(下标与 provider name)、MUST 原样回显非法取值、MUST 列出由值域单源渲染的真实取值集合;系统 MUST NOT 进入就绪状态,MUST NOT 推迟到适配器装配期才暴露。
 
 #### Scenario: 配置写了无实现的形态
 
-- GIVEN 某 provider 配置 `adapter: gemini`(config 曾手抄过该 token,但 `For` 无实现)
+- GIVEN 某 provider 配置 `adapter: cohere`(该类型名在文档中出现,但 `For` 无实现)
 - WHEN 执行配置加载
-- THEN 加载失败并报出该条目的下标与 name,错误串中不再把 `gemini` 列为合法取值
+- THEN 加载失败并报出该条目的下标与 name,错误串中不把 `cohere` 列为合法取值
 
 #### Scenario: 合法取值不受影响
 

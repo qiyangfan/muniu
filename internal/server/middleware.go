@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -132,6 +133,34 @@ func AdaptAnthropicKey(next http.Handler) http.Handler {
 		if r.URL.Path == "/v1/messages" &&
 			r.Header.Get("Authorization") == "" && r.Header.Get("X-Api-Key") != "" {
 			r.Header.Set("Authorization", "Bearer "+r.Header.Get("X-Api-Key"))
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// AdaptGeminiKey Gemini 入站(/v1beta/models/*)鉴权适配(gemini-native-protocol):
+// Gemini 客户端以 x-goog-api-key 头或 ?key= 查询参数携带凭证,数据面 verifier 只认
+// Authorization Bearer。缺失 Authorization 时按序补写(头优先,参数兜底);
+// ?key= 必须读后从 URL 剥离——访问日志、上游请求、错误回显中不得出现该参数。
+func AdaptGeminiKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1beta/models/") {
+			if r.Header.Get("Authorization") == "" {
+				if k := r.Header.Get("X-Goog-Api-Key"); k != "" {
+					r.Header.Set("Authorization", "Bearer "+k)
+				} else if k := r.URL.Query().Get("key"); k != "" {
+					r.Header.Set("Authorization", "Bearer "+k)
+				}
+			}
+			// ?key= 读后剥离(鉴权已完成载体转换;防泄漏优先于参数透传)
+			if r.URL.Query().Get("key") != "" {
+				q := r.URL.Query()
+				q.Del("key")
+				r2 := *r
+				r2.URL = r.URL.JoinPath() // 保留路径;查询串重建
+				r2.URL.RawQuery = q.Encode()
+				r = &r2
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

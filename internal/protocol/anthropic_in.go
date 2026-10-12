@@ -59,9 +59,9 @@ type messagesRequest struct {
 	ToolChoice    json.RawMessage `json:"tool_choice"`
 }
 
-// TranslateMessagesRequest Anthropic Messages 请求 → 规范 chat 请求(映射表见设计文档)。
+// translateMessagesRequest Anthropic Messages 请求 → 规范 chat 请求(映射表见设计文档)。
 // 返回的 ChatRequest.Raw 即 canonical chat JSON 字节——治理/缓存/计量与等价 chat 请求同构。
-func TranslateMessagesRequest(body []byte) (*ChatRequest, error) {
+func translateMessagesRequest(body []byte) (*ChatRequest, error) {
 	var mr messagesRequest
 	if err := json.Unmarshal(body, &mr); err != nil {
 		return nil, &MessagesUnsupportedError{Code: CodeInputInvalid}

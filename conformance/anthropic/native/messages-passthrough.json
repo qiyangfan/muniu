@@ -1,0 +1,19 @@
+{
+  "capability": "protocol-native-passthrough",
+  "scenario": "messages-passthrough",
+  "source_url": "https://docs.anthropic.com/en/api/messages",
+  "note": "同构直通语料(protocol-native-passthrough;不属于 provider 回放 schema,由 internal/adapter/bridge/native_test.go 单源消费):①原始体(native_in.raw 为紧凑 JSON 字符串——字节级断言要求,格式化会破坏逐字节比对)含多模态与扩展字段(cache_control/top_k/metadata/stop_sequences),断言出站 wire 除 model 值外逐字节等于原始体;②流式事件序列 meta 对照(NativeStreamEvent 读侧)。⚠ 各国产分支端点的 anthropic 形态差异(quirks 缺位)待真 key 冒烟后按 quirk 纪律回填;来源=官方 Messages API 公开稳定形态。",
+  "native_in": {
+    "raw": "{\"model\":\"alias-a\",\"max_tokens\":64,\"top_k\":3,\"metadata\":{\"user_id\":\"u\"},\"stop_sequences\":[\"END\"],\"system\":[{\"type\":\"text\",\"text\":\"be nice\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"image\",\"source\":{\"type\":\"base64\",\"media_type\":\"image/png\",\"data\":\"aGk=\"}},{\"type\":\"text\",\"text\":\"看图\",\"cache_control\":{\"type\":\"ephemeral\"}}]}]}"
+  },
+  "upstream_model": "claude-up",
+  "stream": [
+    {"payload": "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":21,\"cache_read_input_tokens\":3}}}", "meta": {"has_content": false, "is_usage": true, "is_done": false}},
+    {"payload": "{\"type\":\"ping\"}", "meta": {"has_content": false, "is_usage": false, "is_done": false}},
+    {"payload": "{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}", "meta": {"has_content": false, "is_usage": false, "is_done": false}},
+    {"payload": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}", "meta": {"has_content": true, "is_usage": false, "is_done": false}},
+    {"payload": "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"x\\\"\"}}", "meta": {"has_content": true, "is_usage": false, "is_done": false}},
+    {"payload": "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}", "meta": {"has_content": false, "is_usage": true, "is_done": false}},
+    {"payload": "{\"type\":\"message_stop\"}", "meta": {"has_content": false, "is_usage": false, "is_done": true}}
+  ]
+}

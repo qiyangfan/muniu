@@ -1,0 +1,35 @@
+{
+  "capability": "gemini-native-protocol",
+  "scenario": "双向语料单源",
+  "source_url": "https://ai.google.dev/api/generate-content",
+  "note": "Gemini wire 双向语料单源(gemini-native-protocol 决策 1):被入站翻译(消费 wire 产 canonical)与出站适配器(消费 canonical 产 wire)反向消费,回环对拍(出站∘入站=恒等,可翻译子集域)作漂移探测器。⚠ 合成语料(无真实 key,按公开契约保守合成,来源标注;owner 提供真实样例/模拟端点响应后逐条充实复核)。含「HTTP 200 + 流内错误帧」负面形态(百炼实证的上游失真样式,runbook 断言口径=终帧内容而非状态码)。",
+  "request": {
+    "path_model": "gemini-x",
+    "body": {
+      "systemInstruction": {"parts": [{"text": "be nice"}]},
+      "contents": [
+        {"role": "user", "parts": [{"text": "查天气"}]},
+        {"role": "model", "parts": [{"functionCall": {"name": "weather", "args": {"city": "北京"}}}]},
+        {"role": "user", "parts": [{"functionResponse": {"name": "weather", "response": {"temp": "晴"}}}]},
+        {"role": "user", "parts": [{"text": "画个图", "inlineData": {"mimeType": "image/png", "data": "aGk="}}]}
+      ],
+      "tools": [{"functionDeclarations": [{"name": "weather", "description": "查天气", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]}],
+      "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
+      "generationConfig": {"temperature": 0.5, "topP": 0.9, "maxOutputTokens": 1024, "stopSequences": ["END"]}
+    }
+  },
+  "nonstream_response": {
+    "candidates": [
+      {"content": {"parts": [{"text": "今天晴天"}], "role": "model"}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 13, "candidatesTokenCount": 5, "cachedContentTokenCount": 3, "thoughtsTokenCount": 0, "totalTokenCount": 21},
+    "modelVersion": "gemini-x"
+  },
+  "stream_frames": [
+    "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"今天\"}],\"role\":\"model\"},\"index\":0}]}",
+    "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"晴天\"}],\"role\":\"model\"},\"index\":0}]}",
+    "{\"candidates\":[{\"content\":{\"parts\":[],\"role\":\"model\"},\"index\":0,\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":13,\"candidatesTokenCount\":5,\"totalTokenCount\":18}}"
+  ],
+  "error_envelope": {"error": {"code": 429, "message": "Resource has been exhausted", "status": "RESOURCE_EXHAUSTED"}},
+  "in_stream_error_frame": "{\"error\":{\"code\":429,\"message\":\"Resource has been exhausted\",\"status\":\"RESOURCE_EXHAUSTED\"}}"
+}

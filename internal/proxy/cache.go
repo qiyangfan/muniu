@@ -80,16 +80,91 @@ func (p *Proxy) lookupCacheFor(tenantID string, r *http.Request, req *protocol.C
 	return nil, &cachePhase{enabled: true, fp: fp, vec: vec, inputTk: inputTokens}
 }
 
-// storePhase 存储阶段:出站成功且响应准入 → 入库。stream 场景传拼接出的响应体。
-func (p *Proxy) storePhase(r *http.Request, ph *cachePhase, req *protocol.ChatRequest, cand failover.Candidate, responseBody []byte) {
+// storePhase 存储阶段:出站成功且响应准入 → 入库。
+// 直通双存(protocol-native-passthrough):canonical 侧(跨协议命中)与原生体+标签+表单
+// (同构恒等回放);canonical 衍生失败仅降级为跨协议不可命中,原生侧照常入库。
+func (p *Proxy) storePhase(r *http.Request, ph *cachePhase, req *protocol.ChatRequest, cand failover.Candidate, m *meterState, nat *inboundNative) {
 	if p.cache == nil || ph == nil || !ph.enabled {
 		return
 	}
 	defer func() { _ = recover() }()
-	if !semantic.ResponseAdmissible(responseBody, int(ph.inputTk)) {
+	canonical := m.outBody
+	if m.nativePath {
+		canonical = m.canonicalBody
+		if len(canonical) == 0 && len(m.outBody) == 0 {
+			return
+		}
+	}
+	if len(canonical) > 0 && !semantic.ResponseAdmissible(canonical, int(ph.inputTk)) {
 		return
 	}
-	_ = p.cache.Store(r.Context(), authTenant(r.Context()), ph.fp, req.Model, ph.vec, responseBody)
+	if !m.nativePath || nat == nil || len(m.outBody) == 0 {
+		if len(canonical) == 0 {
+			return
+		}
+		_ = p.cache.Store(r.Context(), authTenant(r.Context()), ph.fp, req.Model, ph.vec, canonical)
+		return
+	}
+	form := cacheFormNonStream
+	if m.stream {
+		form = cacheFormStream
+	}
+	if len(canonical) == 0 {
+		canonical = []byte("null") // canonical 缺失占位(response 列 NOT NULL;回放侧按不可回放跳过)
+	}
+	_ = p.cache.StoreNative(r.Context(), authTenant(r.Context()), ph.fp, req.Model, ph.vec,
+		canonical, m.outBody, string(nat.proto), form)
+}
+
+// cacheReplayable 命中条目是否可回放:原生侧同协议同表单,或 canonical 侧非占位存在。
+// 不可回放(如 canonical 缺失且协议/表单不符)按未命中继续——命中是优化,不得阻断请求。
+func cacheReplayable(res *semantic.LookupResult, nat *inboundNative, stream bool) bool {
+	if nat != nil && len(res.NativeResponse) > 0 &&
+		res.NativeProto == string(nat.proto) && nativeFormCompatible(res.NativeForm, stream) {
+		return true
+	}
+	return len(res.Response) > 0 && string(res.Response) != "null"
+}
+
+// 缓存表单标记(原生体回放的表单兼容判定)。
+const (
+	cacheFormStream    = "stream"
+	cacheFormNonStream = "nonstream"
+)
+
+// replayHit 命中回放(直通扩展):同协议命中且表单兼容 → 原生体恒等回放(零翻译,
+// writer 直通模式恒等写);跨协议/表单不兼容 → 既有 canonical 路径(反向映射)。
+func (p *Proxy) replayHit(w http.ResponseWriter, r *http.Request, res *semantic.LookupResult, nat *inboundNative, stream bool) {
+	if nat != nil && len(res.NativeResponse) > 0 &&
+		res.NativeProto == string(nat.proto) && nativeFormCompatible(res.NativeForm, stream) {
+		setWriterNativeMode(w, true)
+		h := w.Header()
+		if stream {
+			h.Set("Content-Type", "text/event-stream")
+			h.Set("Cache-Control", "no-cache")
+			h.Set("X-Accel-Buffering", "no")
+		} else {
+			h.Set("Content-Type", "application/json")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(res.NativeResponse)
+		flush(w)
+		return
+	}
+	if stream {
+		p.replayStream(w, r, res)
+	} else {
+		p.replayNonStream(w, r, res)
+	}
+}
+
+// nativeFormCompatible 原生体表单兼容:条目表单与当前请求流式形态一致(流式对流式)。
+// 空表单(历史条目/翻译路径条目)不兼容。
+func nativeFormCompatible(form string, stream bool) bool {
+	if stream {
+		return form == cacheFormStream
+	}
+	return form == cacheFormNonStream
 }
 
 // replayNonStream 命中回放(非流式):存储的 OpenAI 响应直接写出。

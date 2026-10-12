@@ -35,6 +35,13 @@ type meterState struct {
 	upstreamMsg  string            // 上游错误 body 中的人类可读 message(终结信封透传用)
 	usageFrames  []json.RawMessage // 上游 usage 原始对象(可多帧:流式 start/delta 各一)
 	outBody      []byte            // 成功响应体(非流式=改写产物;流式=拼包结果;缓存入库候选)
+	// 直通扩展(protocol-native-passthrough;翻译路径恒零值)
+	upstreamBody   []byte // 不换道类上游错误体(原样透传客户端,零归一改写)
+	upstreamStatus int    // 配套状态码
+	upstreamCT     string // 配套 Content-Type(缺省 application/json)
+	nativePath     bool   // 本 attempt 实际走直通(缓存双存侧判定)
+	nativeRespID   string // 直通 responses 成功响应 id(亲和回写载体)
+	canonicalBody  []byte // 直通双存的 canonical 侧(可 nil=降级为跨协议不可命中)
 }
 
 // markFirstToken 记录首 token 延迟(仅首个内容帧时生效)。

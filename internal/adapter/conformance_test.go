@@ -167,16 +167,21 @@ func replayStream(t *testing.T, ad adapter.Adapter, f *conformanceFixture) {
 	assertUsage(t, ad, usageFrames, f.Expect.Usage, f.Provider, f.Scenario)
 }
 
-// replayNonStream 非流式回放:body.usage 归一断言。
+// replayNonStream 非流式回放:body.usage(OpenAI 形态)或 usageMetadata(Gemini 形态)归一断言。
 func replayNonStream(t *testing.T, ad adapter.Adapter, f *conformanceFixture) {
 	t.Helper()
 	var body struct {
-		Usage json.RawMessage `json:"usage"`
+		Usage         json.RawMessage `json:"usage"`
+		UsageMetadata json.RawMessage `json:"usageMetadata"` // Gemini GenerateContentResponse 键名
 	}
 	if err := json.Unmarshal(f.UpstreamRaw.Body, &body); err != nil {
 		t.Fatalf("body 非法: %v", err)
 	}
-	assertUsage(t, ad, []json.RawMessage{body.Usage}, f.Expect.Usage, f.Provider, f.Scenario)
+	usage := body.Usage
+	if len(usage) == 0 {
+		usage = body.UsageMetadata
+	}
+	assertUsage(t, ad, []json.RawMessage{usage}, f.Expect.Usage, f.Provider, f.Scenario)
 }
 
 // assertUsage 归一 usage(多帧合并)与期望逐字段比对(nil 期望跳过;无帧而期望存在 → 失败)。

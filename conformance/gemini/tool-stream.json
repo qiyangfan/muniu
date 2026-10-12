@@ -1,0 +1,21 @@
+{
+  "provider": "gemini",
+  "scenario": "tool-stream",
+  "source_url": "https://ai.google.dev/api/caching#FunctionCall",
+  "note": "⚠ 合成语料:functionCall 部件流式 + usageMetadata 终帧。finishReason=STOP 伴随 functionCall(Gemini 以 STOP 收束工具调用,适配器按 tool_calls 存在映射 finish_reason)。",
+  "inbound": {"model": "alias-a", "messages": [{"role": "user", "content": "查天气"}]},
+  "upstream_raw": {
+    "stream": [
+      "{\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"weather\",\"args\":{\"city\":\"北京\"}}}],\"role\":\"model\"},\"index\":0}]}",
+      "{\"candidates\":[{\"content\":{\"parts\":[],\"role\":\"model\"},\"index\":0,\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":13,\"candidatesTokenCount\":5,\"totalTokenCount\":18}}"
+    ]
+  },
+  "expect": {
+    "passthrough_lossless": false,
+    "usage": {"prompt_tokens": 13, "completion_tokens": 5},
+    "events": [
+      {"has_content": true, "is_usage": false, "is_done": false},
+      {"has_content": false, "is_usage": true, "is_done": false}
+    ]
+  }
+}

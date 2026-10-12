@@ -2,6 +2,12 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-12,三 change 交付+评审循环收口;本批提交推送)
+
+- **三 change 交付(验收记录 34-37)**:`fix-responses-input-forms`(4/4)/`protocol-native-passthrough`(20/20,ADR-0014)/`gemini-native-protocol`(12/12,ADR-0015)全部实施并归档,主 specs 同步(`openspec validate --all` 18/18);dashscope 单 key 三组真上游冒烟全过(anthropic 分支直通+工具多轮/responses 快捷形态/gemini 双实例全链),临时 key 与实例已清理。
+- **代码审查迭代循环(同日,三轮收敛+增量一轮)**:69 文件未提交变更全量评审,确认 6 真实缺陷全部根修(gemini 工具 id 转义/原生流式双存入库/attempt 快照一致性/responses status 保真/gemini 并行工具测序 StreamSequencer/失格请求治理统一出口),4 项观察裁决落地(gitignore/gemini writer 死代码/reasoning summary[]/native_responses 校验扩桥接族),回归测试 7 个;3 项登记不改(模型名不 escape 与基座同缝/GET 代理无计量行/gemini 真实 wire 待验证,见开放项)。
+- **门禁**:`make check` exit=0(coverage 71.0%),gofmt 全仓干净;本批经 owner 指令提交推送(工具链独立一笔,主交付一笔,哈希见 git log)。
+
 ## 当前状态(2026-10-02,三仓标准件视觉全面收敛——owner 插话裁决;后续承下节)
 
 - **三仓标准件视觉收敛(2026-10-02,owner 插话「视觉效果、UI 规范对齐,不各自为政」即指令;muniu 全面收敛+密度档废止经 AskUserQuestion 终态确认)**:ui/ 十件按 kongming 最新配方逐类手工翻译——card 密度收敛(rounded-2xl+shadow-xl+p-6+卡题 text-lg,原「密档刻意区分勿混改」登记废止)+CardTitle 多态 as(h2/h3/h4 默认 h3);button(+Slot/asChild、触控热区、暗色变体)、input(size prop+日期族 block 修复,三仓单源)、textarea(暗色变体)、select(Trigger 字阶+Icon 命名+动画类)、skeleton(bg-accent)、badge(kongming 全集对齐,destructive 改实底;success/warning 软底变体收编入 kongming 单源)、alert-dialog(窄屏贴底抽屉=三仓单源,kongming 已同款收编)、table(导出名对齐 TableHeader/TableBody/TableRow/TableHead/TableCell,卡片底容器移交 DataList 桌面形态);`ui/alert.tsx` 拆分 error-alert(text 单参 API,9 处 children 用法迁移)+notice-banner(本仓特有件);新增 status-badge(Providers 状态表/Pricing 来源三元拼 Badge 收编);empty-state/stat-card 对齐;tw-animate-css 入仓(Article 4 增补)。调用点:登录卡 as="h2" 删 text-xl 密档补偿、Providers 两处原生 h2 回归 CardTitle as="h2"、Overview 默认 h3。门禁:typecheck/lint/lint:css/format/test 6/6/build 全绿;独立子代理复审 1 P2(.gitkeep 误删,已恢复)+2 P3(宪法字阶/table 注释,均已改)全处置;登录页 375/1280 浏览器实测(heading level 2+卡面配方)过。已提交并推送(eb59e7a 归档移动+7de59ff 本批,owner 授权,ls-remote 核对一致)。
@@ -66,8 +72,8 @@
 
 1. 【已完成·已归档】fix-api-key-binding-identifiers 7/7(make check 全绿+跨仓验收,验收记录 33)。
 2. 【已完成·已归档】recover-pending-usage-settlement 5/5——木牛侧实现/测试/联调全过;锦官收口后本仓 `openspec archive` 已执行(主规格 sync +1 Requirement),归档位 `archive/2026-10-02-recover-pending-usage-settlement`。
-3. 跨仓联合修改/外部依赖事项单源:聚合目录 [`../HANDOFF.md`](../HANDOFF.md)(CardTitle 语义联合修改、kongming ui/input 日期族同步、ingest 形态控制台读数口径、push 后 CI 实跑)。
-4. 【跨仓·待 kongming 落地】CardTitle 标题语义对齐:kongming change `2026-10-02-card-title-heading-semantics`(as 默认 h3)实施归档后,经 `scripts/sync-frontend-standard.sh` 同步本仓 `ui/card.tsx`,并按聚合层登记清单改三处调用点(App 登录卡 as="h2" 并删密档覆写与注释、Providers 两处原生 h2 回归 `<CardTitle as="h2">`、Overview 默认 h3)。
+3. 【已销案 2026-10-12】原引用的聚合单源 `../HANDOFF.md` 在 longzhong/ 下不存在(指针失联);所辖四项经核查均已完成(CardTitle as 已落地、kongming input 日期族已合流销案)或无 muniu 侧动作(ingest 读数归锦官、push 后 CI 实跑归下条)。**裁决:不重建聚合状态文件**——跨仓状态聚合无维护归属,重建即再腐化;若未来需要,由 owner 立维护规则后另立。跨仓事项一律以各仓 HANDOFF + change 文件为单源。
+4. 【已完成 2026-10-12】git 提交/推送(owner 指令):工具链与主交付两笔;push 后 CI 实跑结果补记于验收记录 38。
 
 以下是此前交付与条件事项，保持原记录：
 
@@ -99,14 +105,45 @@
 | 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
 | 2026-09-12 | B 档四项(Responses 入站/images/Gemini 出站/桥接工具往返)用户点名升格 | backlog 升格规则要求用户点名后先 ADR 再排期;四项价值/成本不等,不应捆绑同判 | 架构师独立裁决分层:桥接工具边界=缺陷级先行;Gemini=成本被低估的轻形态;Responses=战略项先 ADR;images/audio=新计量维度零消费者 | **①②③ 立项,④ 不立项**:ADR-0012 + openspec `upstream-egress-batch`/`responses-api-inbound` 已立(validate 通过);桥接边界方案升级为「候选适配性豁免跳过 + 独占时明确信封 + EMA 豁免」(比单纯 fail-fast 更符合换道哲学,详见 egress-batch design) |
 | 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属;修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③④非本批因果链,下一批次处置 |
-| 2026-09-13 | upstream-egress-batch Gemini 三项(冒烟/quirk/价目)待外部 GEMINI_API_KEY,无限期挂起污染活动清单 | 继续 etc 等待 / 归档并登记搁置 / 立即放弃 | **用户裁决:无限搁置**——①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者;纯新增零沉没成本 | change 归档(anthropic-bridge delta 合入主 specs;gemini-egress delta 随裁决移除,不把未打算满足的 MUST 合入主 specs);设计论述留档 design.md,未来解锁按原设计「轻形态+冒烟先行」重新立项 |
+| 2026-09-13 | upstream-egress-batch Gemini 三项(冒烟/quirk/价目)待外部 GEMINI_API_KEY,无限期挂起污染活动清单 | 继续 etc 等待 / 归档并登记搁置 / 立即放弃 | **用户裁决:无限搁置**——①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者;纯新增零沉没成本 | change 归档(anthropic-bridge delta 合入主 specs;gemini-egress delta 随裁决移除,不把未打算满足的 MUST 合入主 specs);设计论述留档 design.md,未来解锁按原设计「轻形态+冒烟先行」重新立项。**【销案 2026-10-12】**ADR-0015(gemini-native-protocol)落地取代「轻形态」路径:原生双向实现 + 双实例(dashscope 承载)冒烟已过(验收记录 37),本搁置项不存在了 |
 | 2026-09-26 | 控制台 ui/CardTitle 基线渲染为 div(kongming 同源),无标题语义;卡题进不了读屏标题大纲(Providers 两处已用原生 h2 承载 CardTitle 配方临时兜住,Overview/Login 仍是 div) | 控制台可访问性缺口,ui/ 标准件语义缺陷是系统性的 | CardTitle 增多态 heading(如 as)支持;属 ui/ 语义级改动,按宪法 Article 5 须 kongming 先行,本仓随后对齐 | **关闭(2026-10-02 批次三)**:kongming change 已先行,本仓 card.tsx 多态 as 已落地,登录卡 as="h2"、Providers 两处原生 h2 回归 `<CardTitle as="h2">`、Overview 默认 h3,门禁全绿 |
-| 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;待冒烟仅确认最优形态(不阻塞) |
+| 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;**【关闭 2026-10-12】**dashscope anthropic 分支(/apps/anthropic)真 key 冒烟:声明 bearer 直连成功,文本与工具多轮全链过(验收记录 37);其余分支首次接入时按同配方实证即可 |
+| 2026-10-12 | gemini 真实上游多工具调用 wire 形态未实证(语料为合成,无 GEMINI_API_KEY) | 并行 functionCall 跨帧测序修复按公开契约落地,真实分帧形态未复核 | 真 key 或 owner 提供真实样例后按 docs/gemini-e2e-runbook.md 冒烟复核 | 待验证 |
 | 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | | **已终裁(2026-10-02 owner 追认)**:三 devDeps 正式保留,开放项销案;宪法 Article 4 注明测试工具属 devDeps 不占白名单口径 |
 | 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | | 本仓已修;**kongming 已于 2026-10-02 批次三合入并流向 jinguan(三仓单源),销案** |
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**38. 代码审查迭代循环收口 + 提交推送(2026-10-12,owner 指令「归档,写好 handoff,提交所有代码,push,注意 ci 情况」)**
+- 评审:69 文件三轮收敛,6 真实缺陷根修+回归测试(详见当前状态同日节与对话收口报告);`make check` exit=0(vet+lint 0 issues+20 包 race,coverage gate PASS 71.0%);`openspec validate --all` 18/18;gofmt 全仓干净。
+- 提交切分:①工具链(mise.toml+ci.yml,golangci-lint 2.14 独立可回退);②主交付(三 change 实现/测试/fixture/归档/ADR/文档/HANDOFF)。
+- push:origin/main(哈希见 git log);CI 实跑:【待补记】。
+
+**37. 三 change 归档 + 三组真上游冒烟(2026-10-12,owner 裁决授权;dashscope 单 key 承载)**
+- 归档:`fix-responses-input-forms` / `protocol-native-passthrough` / `gemini-native-protocol` 三 change 全部实施完毕后经 `openspec archive` 归档(archive/2026-10-12-*),主 specs 同步:responses-inbound 请求翻译契约(+3 场景)与无状态边界改写、anthropic-bridge 两 requirement 声明式缺口化、新建 protocol-native-passthrough(7 requirements)/gemini-inbound(5)/gemini-native-outbound(5)、adapter-taxonomy 值域示例翻转;`openspec validate --all` 18/18。
+- 冒烟一(anthropic 分支直通,dashscope /apps/anthropic,Bearer 声明):/v1/messages 文本请求 → **直通**成功,客户端收到分支原生 anthropic 字节(cache_creation_input_tokens/prompt_tokens_details 等翻译路径不会产生的字段=直通证据);工具多轮(tool_use/tool_result)经直通端到端收敛——本批前该流量恒 400 `bridge_tool_roundtrip_unsupported`。2026-09-26「分支鉴权待冒烟」开放项就此关闭。
+- 冒烟二(responses 缺省形态,compatible-mode qwen-plus):`{"input":[{"role":"user","content":"…"}]}`(省略 type+字符串 content,修复前 400 `input_invalid`)→ 200 completed,usage 18/4,与显式部件形态行为一致。
+- 冒烟三(gemini 双实例,runbook 首跑):B(18781→gemini 入站+dashscope)入站直连 ✓(candidates/usageMetadata 17/1);A(gemini 出站→B)全链非流式 ✓(「蓝色」,16/1)+ 流式 ✓(增量帧→终帧 finishReason=STOP;终帧 usage 补零=B 侧上游流式未回 usage 的既有「无上游 usage 补零值」登记语义,非 gemini 新缺口)。**冒烟暴露并根修一处配置约定缺陷**:gemini 适配器自拼 /v1beta 与 base_url 版本段重复致 404——按 openai 系「base_url 含版本段」惯例收口(适配器只拼 /models/{model}:方法),单测与 runbook 同步。
+- 门禁:冒烟后 `make check` 复跑 exit=0(coverage 70.3%);资源纪律:临时 key 全部吊销、三实例停机、临时配置/库删除。
+
+**36. Gemini 原生协议出入站(2026-10-11,openspec `gemini-native-protocol` 12/12)**
+- 判据:测试先行全组(语料双向/出站适配/入站 handler/鉴权剥离/声明式缺口/组合回归)+ 既有 6 类适配器零改动回放 + make check 全绿。
+- 证据:①语料=`conformance/gemini/` 三 provider 回放 fixture(text/tool-stream、nonstream)+ `native/corpus.json` 双向语料单源(含「HTTP 200+流内错误帧」负面形态,⚠ 保守合成已标注);回放 harness 扩 usageMetadata 键(passthrough_lossless=false 桥接语义)。②协议层=`protocol/gemini.go` 双向翻译(入站 contents/systemInstruction/tools/toolConfig 含 NONE/generationConfig/inlineData→canonical;fileData/音视频/未知 role/response 先于 call 显式拒)+反向映射(非流式 GenerateContentResponse/流式编码器/错误信封)+回环对拍钉子。③出站=`adapter/gemini.go` 五方法+声明式缺口(ToolRoundtripComplete=true)+StreamCloseDone(流无 [DONE],干净关流=正常收尾);buildRequest 走 Raw 层完整信封(tool_calls/tool_call_id——Message 结构不携带,anthropic 桥接缺口的根因);NormalizeUsage 双形态兼容(对齐 bridge 先例)。④入站=`proxy/gemini.go` handler({model}:{method} 整段通配+alt=sse 校验)+writer 家族+`server.AdaptGeminiKey`(x-goog-api-key/?key= 双形态,?key= 读后剥离,单测钉死);路由 `POST /v1beta/models/{modelMethod}` 进漂移门禁,openapi.yaml 同步。⑤bridgegate 升级「Bridger ∧ ToolRoundtripComplete=false」:gemini 工具多轮正常出站不豁免(e2e 钉死),anthropic 豁免行为零改动回放;值域单源回归(types_test 断言 gemini 可构造;退役期钉子按 adapter-taxonomy delta 翻转,不存在例改 cohere)。⑥组合=gemini×gemini 全链(翻译往返+干净收尾)、跨协议缓存 canonical 同构、鉴权剥离、用法缺失负面。⑦文档=ADR-0015、proxy-and-streaming「Gemini 入站翻译」节、upstream-adapters Gemini 归一表转正+真异构矩阵行、provider-presets 双条目、ADR-0013 备选解除注记、`docs/gemini-e2e-runbook.md` 双实例 runbook(断言口径=流终帧内容)。
+- 门禁:`make check` exit=0(lint 0 issues,coverage gate PASS 70.3%);`openspec validate --all` 18/18。
+- 顺带根修:管道流前失败信封经协议 wrapper 改写时直写底层 writer(messages/gemini 两 wrapper 同源缺陷——原实现二次进 tail 被丢弃,客户端空响应;messages 为既有缺陷一并修复)。
+- 环境修复记录(本日批次,见验收记录 34):golangci-lint 钉版升 2.14(mise.toml+ci.yml 同步)。
+
+**35. 同构直通路由(2026-10-11,openspec `protocol-native-passthrough` 20/20)**
+- 判据:测试先行全组(路径判定表/直通接口/writer/缓存双存/bridgegate/粘性)+ 既有全量零改动回放 + make check 全绿。
+- 证据:①协议层=`TranslationResult` 双形态(canonical 单源+原始体+失格标记,Ex 入口 legacy wrapper 零改动)、`RewriteModelInPlace` 原位手术(键序/未知字段逐字节);②adapter=`NativePreparer`(`NativeProto` 协议身份自述+PrepareNative+meta-only 读侧+原生 usage 归一)/`NativeFetcher`(GET 代理),bridge/openai 双实现 + `conformance/anthropic/native/` 直通语料;③proxy=每 attempt 判定(`decideNativePath` 表驱动 8 格)+writer 模式位(trackWriter 穿透,首字节前唯一切换点)+治理原始体裁决权补记(翻译器静默丢弃参数不漏管,组合测试暴露)+惰性拒绝(别名预判/换道升格,时序契约测试钉死)+错误信封按路径分域;④缓存双存=迁移 0008(semantic_cache +native_response/proto/form)+`StoreNative`+`replayHit` 择优(同构恒等回放/跨协议 canonical)+canonical 占位 null 可回放判据;⑤bridgegate 收窄=豁免仅翻译路径(messages×anthropic 工具多轮直通恢复,chat 边界既有测试零改动回放);⑥粘性=亲和表(TTL 24h+LRU 4096)+`stickyRoute` 三域(拒绝/自解释 `response_affinity_lost`/域收缩)+GET 代理(未知恒 404)+`muniu_sticky_requests_total`;testkit 有状态替身(内存存储+自测试)+链式 e2e(创建→prev 链式→GET 代理);⑦config=`native_responses` 声明(缺省 false,anthropic 声明拒启)+example yaml 样例。
+- 门禁:`make check` exit=0(lint 0 issues,coverage gate PASS 70.0%);`go test ./...` 全绿(messages/responses e2e 既有钉子零改动回放);`openspec validate` 通过。
+- 文档:ADR-0014(同构直通+协议平等原则+有状态收编论证)、proxy-and-streaming「同构直通」契约节(判定表/保真不变式/信封分域/惰性拒绝/双存/粘性)、upstream-adapters 直通接口注记、ADR-0013 交叉引用(明确不做改写为翻译路径域)、provider-presets responses 可用性实证表(百炼勿声明)。
+
+**34. Responses 官方快捷形态修复(2026-10-11,openspec `fix-responses-input-forms` 4/4)**
+- 判据:失败测试先红后绿 + 拒绝清单/信封零改动 + proxy 全量零改动回放 + make check 全绿。
+- 证据:①红=`TestTranslateResponsesRequest_官方快捷形态` 原始报错 `responses: input_invalid`(①省略type+字符串content);②绿=respItem.Content 改 json.RawMessage 二态解析(contentParts():字符串→单text部件折叠/数组→现行路径/数字·null·对象→`input_invalid`)+ type 缺省按 role 判定(空type无role 维持 `input_invalid`,function_call 家族不猜测);对拍钉死快捷/显式type/部件数组三形态 canonical 逐字节一致;③`go test ./internal/protocol/ -race` 全绿(既有用例零改动)、`go test ./internal/proxy/ -race` 全绿;④`make check` exit=0(lint 0 issues,coverage gate PASS 69.1%)。文档:proxy-and-streaming.md 映射表补两行快捷形态 + 百炼 responses 多轮回放服务端缺口知识注记(kongming 绕行无须回滚)。
+- 环境修复(同轮):golangci-lint 2.13.2 内嵌 x/tools 读不了 go1.27.2 补丁版 stdlib v5 export data(make check lint 假红;go vet/test 不受影响)——mise.toml 与 ci.yml 钉版同步升 2.14(v2.14),本地二进制经 `go install …@v2.14.0` 自编译放置于 mise 安装目录(GitHub 限流期暂替,限流解除后 `mise install` 可换官方工件)。
 
 **32. 状态备份与恢复(2026-09-30,openspec `2026-09-30-state-backup-restore` 12/12)**
 - 判据:快照在线一致(VACUUM INTO,纯 SQL 零新依赖)+ 完整性自检 + manifest 行数/哈希 + 恢复四道闸(sha256→自校验→持锁探测→force)+ 失败原子性 + make check 全绿 + 活实例冒烟。

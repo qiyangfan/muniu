@@ -39,7 +39,7 @@
 | Kimi For Coding | `https://api.kimi.com/coding/v1` | openai ⚠ | kimi-for-coding | 订阅制;Responses 原生 |
 | GLM 智谱(国内) | `https://open.bigmodel.cn/api/paas/v4` | glm(quirk) | glm-5.3 / glm-5-turbo | 三端点分立:Coding Plan chat=`/api/coding/paas/v4`、Responses=`/api/v1`,混用不消耗套餐 |
 | GLM en(z.ai) | `https://api.z.ai/api/paas/v4` | glm(quirk)⚠ | glm-5.3 | 国际站 |
-| Qwen 千问(百炼国内) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | openai | qwen-plus / qwen3.8-max | kongming 主模型现役端点 |
+| Qwen 千问(百炼国内) | `https://dashscope.aliyuncs.com/compatible-mode/v1` | openai | qwen-plus / qwen3.8-max | kongming 主模型现役端点;⚠ responses 原生端点多轮回放有服务端缺口,勿声明 `native_responses`(实证见下) |
 | QwenCloud(百炼国际) | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` | openai | qwen3.8-max | Key 与国内不通用 |
 | Doubao 火山方舟(按量) | `https://ark.cn-beijing.volces.com/api/v3` | openai | doubao-seed-2-1-pro-260628 | 订阅红线:Coding=`/api/coding/v3`、Agent=`/api/plan/v3`,与按量互斥 |
 | BytePlus ModelArk(国际) | `https://ark.ap-southeast.bytepluses.com/api/v3` | openai⚠ | ark-code-latest(订阅 `/api/coding/v3`) | |
@@ -99,6 +99,16 @@
 | OpenRouter | `https://openrouter.ai/api/v1` | |
 | Ollama(本地) | `http://127.0.0.1:11434/v1` | 冒烟已入名册(`PROVIDER=ollama`) |
 | vLLM / SGLang 自托管 | `http://<host>/v1` | 同上 |
+
+### responses 原生端点可用性实证(`native_responses` 声明依据;ADR-0014 声明制)
+
+| 家 | responses 原生端点 | 实证状态(2026-10-11) | 声明建议 |
+|---|---|---|---|
+| OpenAI 官方 | `https://api.openai.com/v1`( Responses API 发源地) | 未直测(大陆不可达);官方契约完整 | 可声明(官方文档背书) |
+| Qwen 百炼(dashscope) | `/api/v2/services/agents`(独立端点,非 compatible-mode) | **多轮工具回放四路径全 400**(服务端把 `function_call_output` 译成 `role:'tool'` 被自家校验器拒;kongming e2e 四路径对照实证) | **勿声明**;上游修复后翻开关即切,零代码改动 |
+| 其余 openai 系 | 逐家未实证 | 「OpenAI 兼容」≠「responses 端点可用」 | 未实证前勿声明;首次接入按 `make smoke` responses 场景实证后声明 |
+
+声明制语义:未声明候选对 responses 入站走既有 chat 翻译兜底(行为与本注记前逐字节一致);声明仅解锁直通车道的路由资格,不改变任何翻译路径行为。
 
 ## D. 需要新协议工作的家(backlog,目录不承诺)
 

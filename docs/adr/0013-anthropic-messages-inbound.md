@@ -8,7 +8,7 @@ muniu 新增 Anthropic Messages 入站形态(`POST /v1/messages`),复用 ADR-001
 
 1. **v1 范围**:文本 + 函数调用全链(tool_use/tool_result 与 chat tool_calls 互译,工具多轮请求侧完整),流式与非流式;`reasoning_content` 映射为无签名 thinking 块(展示形态)。
 2. **鉴权头适配**:Anthropic 客户端以 `x-api-key` 携带 key——装配层 `AdaptAnthropicKey` 仅对该路径把缺失的 Authorization 补写为 Bearer,verifier 单点不动。
-3. **明确不做(v1)**:多模态内容块(image/document 等,400 `content_block_unsupported`)、请求侧 thinking 块回传(丢弃:签名回传语义不成立)、`top_k`/`metadata`(静默丢弃)、服务端会话存储(与 ADR-0012 同款无状态边界)。
+3. **明确不做(v1,以下均系「翻译路径域」限制;ADR-0014 同构直通恢复原生支持)**:多模态内容块(image/document 等,400 `content_block_unsupported`)、请求侧 thinking 块回传(丢弃:签名回传语义不成立)、`top_k`/`metadata`(静默丢弃)、服务端会话存储。经 ADR-0014 直通路径(messages 入站 × anthropic 候选),上述字段/能力原生透传零丢失。
 4. **已知偏差(登记于 proxy-and-streaming.md「Anthropic 入站翻译」)**:`message_start.usage.input_tokens` 恒 0,真实用量在 `message_delta.usage` 补全;管道内错误信封形态与 chat 同构(SDK 读 error.message 可读)。
 
 ## 理由
@@ -19,7 +19,7 @@ muniu 新增 Anthropic Messages 入站形态(`POST /v1/messages`),复用 ADR-001
 
 ## 备选与否决
 
-- Gemini generateContent 入站:客户端生态集中于 AI Studio 场景,当前零已知消费者——不立项,与 Gemini 出站轻形态同条件触发(出现真实需求 + 网络可达性解禁再立法)。
+- Gemini generateContent 入站:客户端生态集中于 AI Studio 场景,当前零已知消费者——不立项,与 Gemini 出站轻形态同条件触发(出现真实需求 + 网络可达性解禁再立法)。**【已解除 2026-10-11】**owner 点名触发成立,ADR-0015 立项落地(gemini-native-protocol);本条保留为历史裁决记录。
 - 流式补 `event:` SSE 行与 message_start 预填 input_tokens:前者 SDK 不依赖;后者需管道预扫描无法实现,超集补全已在 message_delta——均否决。
 
 ## 后果
@@ -27,3 +27,4 @@ muniu 新增 Anthropic Messages 入站形态(`POST /v1/messages`),复用 ADR-001
 - `internal/protocol/anthropic_in.go` 增 Messages DTO 与双向翻译纯函数(测试先行域);`internal/proxy/messages.go` 增 handler;路由 `POST /v1/messages` 进漂移门禁。
 - 出站候选为 anthropic 桥接(官方或各家分支端点)时,工具多轮边界不适用——Messages 入站的 tool 请求侧翻译完整;chat 入站经 anthropic 出站的往返仍受 ADR-0011 前登记边界约束(bridge_tool_roundtrip_unsupported)。
 - 与 ADR-0012 的备选记录衔接:本 ADR 即该 backlog 的升格落地;spec 基线以本文 + 设计文档契约为准(openspec change 后补立项)。
+- **ADR-0014 扩展注记(2026-10-11)**:本 ADR 的「翻译路径域」边界(多模态拒绝/usage 恒 0 偏差/流式往返)在同构流量上由同构直通解除——messages 入站 × anthropic 候选走原始体直通,真实 usage 与全部扩展字段原生直达;翻译路径契约对跨协议对保持不变。

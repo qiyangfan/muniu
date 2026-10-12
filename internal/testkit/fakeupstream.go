@@ -87,6 +87,11 @@ func StartJSONUpstream(tb testing.TB, status int, body string) *Upstream {
 // record 记录请求(body 先读全,记录失败不干扰剧本)。
 func (u *Upstream) record(r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
+	u.recordBody(r, body)
+}
+
+// recordBody 以调用方已读的 body 记录请求(body 需二次消费的替身用,如存储语义)。
+func (u *Upstream) recordBody(r *http.Request, body []byte) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.bodies = append(u.bodies, body)
@@ -207,3 +212,75 @@ const JSONOKBody = `{"id":"chatcmpl-2","object":"chat.completion","model":"fake"
 
 // JSON500Body 上游 5xx 错误响应。
 const JSON500Body = `{"error":{"message":"upstream exploded","type":"server_error"}}`
+
+// ---- 有状态 Responses 替身(protocol-native-passthrough 7.3) ----
+
+// responsesUpstream 有状态 fake:内存 response 存储 + POST 创建 / GET 查询,
+// 形态按 OpenAI Responses 公开契约钉死(见 fakeupstream_stateful_test.go)。
+type responsesUpstream struct {
+	*Upstream
+	mu     sync.Mutex
+	stored map[string]string // respID → 存储体
+	next   int
+}
+
+// Stored 查询内存存储(断言链式上下文/GET 命中)。
+func (u *responsesUpstream) Stored(id string) (string, bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	body, ok := u.stored[id]
+	return body, ok
+}
+
+// StartResponsesUpstream 启动有状态 fake:POST /responses 创建(分配 resp_N 并回显
+// 请求体中的 input 语义),GET /responses/{id} 返回存储体(404 = 未创建)。
+func StartResponsesUpstream(tb testing.TB) *responsesUpstream {
+	tb.Helper()
+	base := &Upstream{}
+	u := &responsesUpstream{Upstream: base, stored: map[string]string{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /responses", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		base.recordBody(r, body)
+		u.mu.Lock()
+		u.next++
+		id := "resp_" + itoa(u.next)
+		u.stored[id] = string(body)
+		u.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"` + id + `","object":"response","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"已收到"}]}],"usage":{"input_tokens":13,"output_tokens":1}}`))
+	})
+	mux.HandleFunc("GET /responses/{id}", func(w http.ResponseWriter, r *http.Request) {
+		base.record(r)
+		id := r.PathValue("id")
+		u.mu.Lock()
+		body, ok := u.stored[id]
+		u.mu.Unlock()
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"No response found with id ` + id + `."}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	})
+	base.server = httptest.NewServer(mux)
+	tb.Cleanup(base.server.Close)
+	return u
+}
+
+// itoa 极小整数转字符串(testkit 内零依赖)。
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	pos := len(b)
+	for n > 0 {
+		pos--
+		b[pos] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[pos:])
+}
