@@ -61,7 +61,7 @@ func TestTranslateGeminiRequest_合法映射(t *testing.T) {
 		t.Fatalf("inlineData 应映射 image_url: %s", raw)
 	}
 	// generationConfig 同义
-	for _, want := range []string{`"temperature":0.5`, `"top_p":0.9`, `"max_tokens":1024`, `"stop":["END"]`} {
+	for _, want := range []string{`"temperature":0.5`, `"top_p":0.9`, `"top_k":40`, `"max_tokens":1024`, `"stop":["END"]`} {
 		if !strings.Contains(raw, want) {
 			t.Fatalf("generationConfig 缺 %s: %s", want, raw)
 		}

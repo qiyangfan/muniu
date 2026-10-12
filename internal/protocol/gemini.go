@@ -71,6 +71,7 @@ type geminiTool struct {
 type geminiGenConfig struct {
 	Temperature     *float64 `json:"temperature"`
 	TopP            *float64 `json:"topP"`
+	TopK            *float64 `json:"topK"`
 	MaxOutputTokens *int64   `json:"maxOutputTokens"`
 	StopSequences   []string `json:"stopSequences"`
 }
@@ -142,6 +143,10 @@ func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRe
 	}
 	if gr.GenerationConfig.TopP != nil {
 		b.WriteString(`,"top_p":` + fmt.Sprint(*gr.GenerationConfig.TopP))
+	}
+	// topK → canonical top_k(qwen 系字段;与 top_p 同缝,治理 Raw 层可裁决)
+	if gr.GenerationConfig.TopK != nil {
+		b.WriteString(`,"top_k":` + fmt.Sprint(*gr.GenerationConfig.TopK))
 	}
 	if gr.GenerationConfig.MaxOutputTokens != nil && *gr.GenerationConfig.MaxOutputTokens > 0 {
 		b.WriteString(`,"max_tokens":` + fmt.Sprint(*gr.GenerationConfig.MaxOutputTokens))

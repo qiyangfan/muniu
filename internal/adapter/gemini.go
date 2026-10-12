@@ -162,6 +162,13 @@ func (g *Gemini) buildRequest(in *protocol.ChatRequest) ([]byte, error) {
 			gencNotNil(&out.GenerationConfig)["topP"] = topP
 		}
 	}
+	// canonical top_k → generationConfig.topK(与 top_p 同缝;消 qwen 系参数的静默丢失)
+	if raw, ok := fields["top_k"]; ok {
+		var topK float64
+		if json.Unmarshal(raw, &topK) == nil {
+			gencNotNil(&out.GenerationConfig)["topK"] = topK
+		}
+	}
 	if in.Tools != nil && string(in.Tools) != "null" {
 		var oaiTools []struct {
 			Type     string `json:"type"`

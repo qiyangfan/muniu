@@ -15,7 +15,7 @@
       ],
       "tools": [{"functionDeclarations": [{"name": "weather", "description": "查天气", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}]}],
       "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
-      "generationConfig": {"temperature": 0.5, "topP": 0.9, "maxOutputTokens": 1024, "stopSequences": ["END"]}
+      "generationConfig": {"temperature": 0.5, "topP": 0.9, "topK": 40, "maxOutputTokens": 1024, "stopSequences": ["END"]}
     }
   },
   "nonstream_response": {

@@ -60,7 +60,7 @@ func TestGemini_Prepare_逐字段(t *testing.T) {
 
 	t.Run("system提升与参数", func(t *testing.T) {
 		out, err := g.Prepare(chatFrom(t,
-			`{"model":"a","max_tokens":256,"temperature":0.5,"top_p":0.9,"messages":[{"role":"system","content":"be nice"},{"role":"user","content":"hi"}]}`), "m", "k")
+			`{"model":"a","max_tokens":256,"temperature":0.5,"top_p":0.9,"top_k":40,"messages":[{"role":"system","content":"be nice"},{"role":"user","content":"hi"}]}`), "m", "k")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,6 +74,7 @@ func TestGemini_Prepare_逐字段(t *testing.T) {
 				MaxOutputTokens int64   `json:"maxOutputTokens"`
 				Temperature     float64 `json:"temperature"`
 				TopP            float64 `json:"topP"`
+				TopK            float64 `json:"topK"`
 			} `json:"generationConfig"`
 		}
 		if err := json.Unmarshal(out.Body, &wire); err != nil {
@@ -82,7 +83,8 @@ func TestGemini_Prepare_逐字段(t *testing.T) {
 		if wire.SystemInstruction == nil || wire.SystemInstruction.Parts[0].Text != "be nice" {
 			t.Fatalf("system 提升不符: %s", out.Body)
 		}
-		if wire.GenerationConfig.MaxOutputTokens != 256 || wire.GenerationConfig.Temperature != 0.5 || wire.GenerationConfig.TopP != 0.9 {
+		if wire.GenerationConfig.MaxOutputTokens != 256 || wire.GenerationConfig.Temperature != 0.5 ||
+			wire.GenerationConfig.TopP != 0.9 || wire.GenerationConfig.TopK != 40 {
 			t.Fatalf("generationConfig 不符: %s", out.Body)
 		}
 	})
