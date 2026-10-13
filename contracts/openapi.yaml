@@ -6,6 +6,46 @@ info:
   version: 0.3.0
 components:
   schemas:
+    AdminActor:
+      type: object
+      required: [kind, name]
+      properties:
+        kind: {type: string, enum: [session, token, login]}
+        name: {type: string}
+    AdminUser:
+      type: object
+      required: [id, username, status, created_at]
+      properties:
+        id: {type: string}
+        username: {type: string}
+        status: {type: string, enum: [active, disabled]}
+        created_at: {type: string}
+        last_login_at: {type: string, nullable: true}
+    AdminAudit:
+      type: object
+      required: [id, actor_kind, actor_name, action, outcome, created_at]
+      properties:
+        id: {type: string}
+        request_id: {type: string}
+        actor_kind: {type: string, enum: [session, token, login]}
+        actor_name: {type: string}
+        action: {type: string}
+        target_id: {type: string}
+        outcome: {type: string}
+        detail: {type: string, description: 脱敏 JSON 摘要}
+        created_at: {type: string}
+    ImagePricingView:
+      type: object
+      required: [alias, currency, default, tiers]
+      properties:
+        alias: {type: string}
+        source: {type: string, enum: [db, yaml]}
+        currency: {type: string, enum: [CNY, USD]}
+        default: {type: string, description: "十进制报价/张，最多九位小数"}
+        tiers:
+          type: object
+          additionalProperties: {type: string}
+        updated_at: {type: string}
     Tenant:
       type: object
       properties:
@@ -27,6 +67,9 @@ components:
         tpm_limit: { type: integer, format: int64, description: "0=不限" }
         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
         expires_at: { type: string, nullable: true, description: "RFC3339;null=永不过期" }
+        status: { type: string, enum: [active, revoked], description: "生命周期终态位;可逆启停见 disabled" }
+        disabled: { type: boolean, description: "true=已停用(可逆恢复);吊销终态不受影响" }
+        max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限" }
     KeyCreateRequest:
       type: object
       required: [name]
@@ -37,6 +80,7 @@ components:
         tpm_limit: { type: integer, format: int64, description: "0=不限" }
         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
         expires_at: { type: string, description: "RFC3339;空=永不过期;不得早于当前时刻(创建期拒绝;立即失效经 PATCH)" }
+        max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限" }
     KeyCreateResponse:
       type: object
       description: 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。
@@ -58,6 +102,8 @@ components:
         tpm_limit: { type: integer, format: int64 }
         daily_quota_credits: { type: integer, format: int64, description: "日配额 credit(1 credit = 本位币十亿分之一);0=不限" }
         expires_at: { type: string, nullable: true }
+        disabled: { type: boolean, description: "可逆停用(true=停用/false=恢复);吊销终态不受影响" }
+        max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限(预检+流中两道闸,超限 402 cost_budget_exceeded)" }
     ModelEntry:
       type: object
       properties:
@@ -450,3 +496,165 @@ paths:
       responses:
         "200": { description: 已切换 }
         "404": { description: 插件不存在 }
+
+  /v1/images/generations:
+    post:
+      summary: 同步图片生成
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, prompt]
+              properties:
+                model: {type: string}
+                prompt: {type: string}
+                n: {type: integer, minimum: 1, default: 1}
+                size: {type: string}
+                quality: {type: string}
+              additionalProperties: true
+      responses:
+        "200":
+          description: 上游完整响应（保留上游 2xx 状态码）
+  /admin/v1/image-pricing:
+    get:
+      summary: 图片生成价目列表
+      responses:
+        "200":
+          description: 静态兜底与运行态覆盖
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [pricing]
+                properties:
+                  pricing:
+                    type: array
+                    items: {$ref: "#/components/schemas/ImagePricingView"}
+  /admin/v1/image-pricing/{alias}:
+    parameters:
+      - in: path
+        name: alias
+        required: true
+        schema: {type: string}
+    put:
+      summary: 整体覆盖图片生成价目
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ImagePricingView"}
+      responses:
+        "200": {description: 已持久化并即时生效}
+        "400": {description: 整单校验失败}
+    delete:
+      summary: 撤销运行态覆盖
+      responses:
+        "200": {description: 已回落静态兜底}
+        "404": {description: 无运行态覆盖}
+
+  /admin/v1/auth/login:
+    post:
+      summary: 管理员账密登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: {type: string}
+                password: {type: string, format: password}
+      responses:
+        "200":
+          description: 签发 HttpOnly 会话 cookie，有效期 12 小时
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminActor"}
+        "401": {description: 凭据无效或账号锁定}
+  /admin/v1/auth/logout:
+    post:
+      summary: 注销当前管理员会话
+      responses:
+        "200": {description: 会话已失效}
+  /admin/v1/auth/whoami:
+    get:
+      summary: 当前操作员身份
+      responses:
+        "200":
+          description: 会话或共享令牌身份
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminActor"}
+  /admin/v1/admins:
+    get:
+      summary: 管理员账号列表
+      responses:
+        "200":
+          description: 账号公开字段，不含密码或哈希
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [admins]
+                properties:
+                  admins:
+                    type: array
+                    items: {$ref: "#/components/schemas/AdminUser"}
+    post:
+      summary: 创建管理员
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: {type: string}
+                password: {type: string, minLength: 8, format: password}
+      responses:
+        "200":
+          description: 已创建
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminUser"}
+        "400": {description: 用户名冲突或口令非法}
+  /admin/v1/admins/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+    patch:
+      summary: 启停管理员或改密
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                disabled: {type: boolean}
+                password: {type: string, minLength: 8, format: password}
+      responses:
+        "200": {description: 已更新，停用或改密即时注销该账号全部会话}
+        "404": {description: 账号不存在}
+  /admin/v1/audit:
+    get:
+      summary: 操作审计倒序游标分页
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
+      responses:
+        "200":
+          description: 审计行与下一游标
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items: {$ref: "#/components/schemas/AdminAudit"}
+                  next_cursor: {type: string}

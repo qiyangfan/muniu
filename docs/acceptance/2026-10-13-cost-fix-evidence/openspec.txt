@@ -1,0 +1,25 @@
+- Validating...
+✓ spec/adapter-taxonomy
+✓ spec/admin-operators
+✓ spec/anthropic-bridge
+✓ spec/api-key-lifecycle
+✓ spec/data-plane-metering-sink
+✓ spec/data-plane-observability
+✓ spec/data-plane-state-sync
+✓ spec/gemini-inbound
+✓ spec/gemini-native-outbound
+✓ spec/image-generation
+✓ spec/model-capability-governance
+✓ spec/model-discovery
+✓ spec/platform-data-plane
+✓ spec/plugin-runtime
+✓ spec/pricing-management
+✓ spec/pricing-time-windows
+✓ spec/protocol-native-passthrough
+✓ spec/request-cost-budget
+✓ spec/responses-inbound
+✓ spec/state-backup
+✓ spec/traffic-governance
+✓ spec/usage-metrics
+✓ spec/webhook-alerting
+Totals: 23 passed, 0 failed (23 items)

@@ -1,0 +1,27 @@
+- Validating...
+✓ spec/adapter-taxonomy
+✓ spec/admin-operators
+✓ spec/anthropic-bridge
+✓ spec/api-key-lifecycle
+✓ spec/data-plane-metering-sink
+✓ spec/data-plane-observability
+✓ spec/data-plane-state-sync
+✓ spec/gemini-inbound
+✓ spec/gemini-native-outbound
+✓ spec/image-generation
+✓ spec/model-capability-governance
+✓ spec/model-discovery
+✗ spec/platform-data-plane
+  ⚠ [WARNING] overview: Purpose section is still a placeholder rather than a Purpose anyone wrote (the sentence `openspec archive` writes for a new capability, or a `TBD`/`TODO` marker left in its place). Replace it with what this capability is for, editing the main spec directly: a `## Purpose` in a delta is read only when the capability is created, so it cannot replace this one.
+✓ spec/plugin-runtime
+✓ spec/pricing-management
+✓ spec/pricing-time-windows
+✓ spec/protocol-native-passthrough
+✓ spec/request-cost-budget
+✓ spec/responses-inbound
+✓ spec/state-backup
+✓ spec/traffic-governance
+✓ spec/usage-metrics
+✓ spec/webhook-alerting
+Totals: 22 passed, 1 failed (23 items)
+Details: openspec validate platform-data-plane --type spec

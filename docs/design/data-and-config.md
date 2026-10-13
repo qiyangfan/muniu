@@ -37,6 +37,8 @@ CREATE TABLE api_keys (
   daily_quota_credits INTEGER NOT NULL DEFAULT 0, -- 0=不限;credit 单位(1 credit = 本位币 1e-9),迁移 0007 重命名换算
   currency         TEXT NOT NULL DEFAULT 'CNY' CHECK (currency IN ('CNY','USD')),
   expires_at       TEXT,                        -- 迁移 0006;可空=NULL 永不过期;RFC3339;过期判定在鉴权层逐请求以当前时钟执行
+  disabled_at      TEXT,                        -- 迁移 0009;可空=NULL 启用;可逆停用(吊销仍是唯一终态,判定先吊销后停用)
+  max_request_cost_credits INTEGER NOT NULL DEFAULT 0, -- 迁移 0010;单请求成本预算,0=不限(预检+流中两道闸)
   created_at TEXT NOT NULL,
   revoked_at TEXT
 );
@@ -106,3 +108,21 @@ standalone 形态的全量运营态(key 哈希/用量账本/价目)在单文件 
 - 备份语义为**语句开始时刻的一致快照**:快照内账本自洽,不要求与备份后到达的写入一致。
 - 明确不做:定时/自动备份(OS 层 cron/launchd/Time Machine 的职责)、云同步、加密、
   增量备份、cluster 形态(无状态副本 + jinguan PG 自有备份生态,ADR-0005 边界)。
+
+## 图片价目与管理面身份（ADR-0016/0017）
+
+追加迁移 0011 `image_pricing(alias TEXT PK,currency TEXT CNY|USD,default_credits INTEGER>0,tiers TEXT JSON,updated_at TEXT)`。tiers 为 `size|quality → credit/张` 对象；读取期严格解析，损坏拒启/拒刷新。配置 `image_pricing` 是按别名组织的静态报价映射（currency/default/tiers 字符串），与既有 pricing 平行。
+
+追加迁移 0012：
+
+- `admin_users(id TEXT UUIDv7 PK,username TEXT UNIQUE,password_hash TEXT,status TEXT active|disabled,created_at TEXT,last_login_at TEXT nullable)`；哈希为 argon2id PHC 串，列表/API/日志不回显。
+- `admin_sessions(token_hash TEXT SHA-256 PK,user_id TEXT FK,created_at TEXT,expires_at TEXT)`；令牌 32 随机字节，固定 12h、HttpOnly、SameSite=Lax、Path=/；逐请求查活跃账号，停用/改密与全部会话删除同事务，登录签发条件再次核验活跃状态与密码版本，防止并发停用/改密后签发旧凭据。
+- `admin_audit_log(id TEXT UUIDv7 PK,request_id TEXT,actor_kind TEXT session|token|login,actor_name TEXT,action TEXT,target_id TEXT,outcome TEXT,detail TEXT,created_at TEXT)`，按 created_at/id 倒序复合游标查询，只增不改；变更与登录成败同步留痕，写失败告警，动作不回滚。
+
+管理面挂载条件为共享令牌或活跃管理员账号；现行 Bearer 轨保留，actor 为 management-token。`muniu admins add|list|disable|enable|passwd` 直连同库，口令走 stdin，tty 禁回显并双次确认。`POST /admin/v1/auth/login|logout`、`GET /admin/v1/auth/whoami`、`GET/POST /admin/v1/admins`、`PATCH /admin/v1/admins/{id}`、`GET /admin/v1/audit` 是管理 API；数据面 API key 与运维身份分离。
+
+登录连续失败 5 次锁 15 分钟，进程内计数重启清零。PHC 参数随串解析且施加资源上限；口令至少 8 字符。过期会话启动清扫/命中惰性清理，不增加后台任务。会话轨与登录入口使用 Go 标准库 CrossOriginProtection 拒绝跨站写操作；Bearer 脚本轨行为保留。cookie 在本地 HTTP 不设 Secure；远程访问须由 TLS 反代终止。审计 body 只取允许的业务标量，password/token/secret 脱敏，未知字段只留字段名。管理请求体上限 1MiB。
+
+`GET /metrics` 仍独立使用 Bearer token 门禁，不因账号轨引入而开放；身份与静态报价仍不属于 SIGHUP 热更域。
+
+供应商管理页与 keypool gauge 在每次读取时复用 Proxy.Topology() 的当前同一快照，不持启动时 providers/pools 作为热更后的真相；无动态视图注入的管理 handler 保留静态形态用于独立调用与测试。

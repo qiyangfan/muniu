@@ -1,0 +1,5 @@
+# github.com/solvela/muniu/internal/admin_test [github.com/solvela/muniu/internal/admin.test]
+internal/admin/operators_test.go:17:51: unknown field AdminAuth in struct literal of type admin.Deps
+internal/admin/operators_test.go:40:32: unknown field AdminAuth in struct literal of type admin.Deps
+FAIL	github.com/solvela/muniu/internal/admin [build failed]
+FAIL

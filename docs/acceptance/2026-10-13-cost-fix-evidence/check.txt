@@ -1,0 +1,46 @@
+go vet ./...
+0 issues.
+cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm test && pnpm format:check
+$ tsc --noEmit
+$ eslint .
+$ stylelint "src/**/*.css"
+$ vitest run
+
+ RUN  v5.0.3 /Users/solvela/workspace/longzhong/muniu/web
+
+
+ Test Files  6 passed (6)
+      Tests  15 passed (15)
+   Start at  16:08:52
+   Duration  1.92s (environment 54%, import 21%, tests 15%, transform 10%, worker 1%)
+
+$ prettier --check .
+Checking formatting...
+All matched files use Prettier code style!
+go test -race -covermode=atomic -coverprofile=coverage.out ./...
+ok  	github.com/solvela/muniu/cmd/muniu	(cached)	coverage: 52.6% of statements
+ok  	github.com/solvela/muniu/cmd/tokenctl	1.745s	coverage: 1.5% of statements
+ok  	github.com/solvela/muniu/internal/adapter	(cached)	coverage: 78.2% of statements
+ok  	github.com/solvela/muniu/internal/adapter/bridge	(cached)	coverage: 81.1% of statements
+ok  	github.com/solvela/muniu/internal/admin	(cached)	coverage: 70.6% of statements
+ok  	github.com/solvela/muniu/internal/alerting	(cached)	coverage: 91.1% of statements
+ok  	github.com/solvela/muniu/internal/auth	(cached)	coverage: 83.0% of statements
+ok  	github.com/solvela/muniu/internal/config	(cached)	coverage: 78.2% of statements
+ok  	github.com/solvela/muniu/internal/failover	(cached)	coverage: 87.0% of statements
+ok  	github.com/solvela/muniu/internal/keypool	(cached)	coverage: 83.0% of statements
+ok  	github.com/solvela/muniu/internal/logging	(cached)	coverage: 25.0% of statements
+ok  	github.com/solvela/muniu/internal/metering	(cached)	coverage: 76.9% of statements
+ok  	github.com/solvela/muniu/internal/metrics	(cached)	coverage: 95.0% of statements
+ok  	github.com/solvela/muniu/internal/plugin	(cached)	coverage: 79.8% of statements
+ok  	github.com/solvela/muniu/internal/presets	(cached)	coverage: 100.0% of statements
+ok  	github.com/solvela/muniu/internal/protocol	(cached)	coverage: 82.6% of statements
+ok  	github.com/solvela/muniu/internal/proxy	(cached)	coverage: 76.3% of statements
+ok  	github.com/solvela/muniu/internal/ratelimit	(cached)	coverage: 71.5% of statements
+ok  	github.com/solvela/muniu/internal/semantic	(cached)	coverage: 66.3% of statements
+ok  	github.com/solvela/muniu/internal/server	(cached)	coverage: 56.6% of statements
+ok  	github.com/solvela/muniu/internal/store	(cached)	coverage: 48.3% of statements
+ok  	github.com/solvela/muniu/internal/testkit	(cached)	coverage: 28.0% of statements
+?   	github.com/solvela/muniu/internal/version	[no test files]
+	github.com/solvela/muniu/web		coverage: 0.0% of statements
+go tool cover -func=coverage.out | awk '/^total:/ {gsub("%",""); total=$3; if (total+0 < 65) { printf "coverage gate FAIL: %.1f%% < 65%%\n", total; exit 1 } printf "coverage gate PASS: %.1f%%\n", total }'
+coverage gate PASS: 69.9%

@@ -218,6 +218,60 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1beta/models/{modelMethod}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Gemini 原生入站(ADR-0015;边缘翻译为 chat 后进同一管道;{modelMethod} = {model}:generateContent | {model}:streamGenerateContent?alt=sse) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description Gemini 形态 key;与 Authorization Bearer / ?key= 三选一(?key= 读后剥离) */
+                    "X-Goog-Api-Key"?: string;
+                };
+                path: {
+                    /** @description {model}:{method} 整段(冒号连接) */
+                    modelMethod: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 非流式 GenerateContentResponse / 流式 alt=sse 增量帧→终帧(finishReason+usageMetadata) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description content_part_unsupported / stream_form_unsupported / input_invalid(Gemini error 信封) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 鉴权/限流错误(信封为 Gemini error 形态 */
+                "4XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/responses/{id}": {
         parameters: {
             query?: never;
@@ -225,7 +279,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 无状态网关不存储 response,恒 404 */
+        /** 亲和已知代理转发(ADR-0014 粘性路由)/ 未知恒 404 自解释 */
         get: {
             parameters: {
                 query?: never;
@@ -250,7 +304,36 @@ export interface paths {
         };
         put?: never;
         post?: never;
-        delete?: never;
+        /** 亲和已知代理转发删除上游状态(ADR-0014 粘性路由)/ 未知恒 404 自解释 */
+        delete: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 上游删除结果原样透传 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description response_not_found(无亲和记录) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -962,10 +1045,499 @@ export interface paths {
         };
         trace?: never;
     };
+    "/v1/images/generations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 同步图片生成 */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        model: string;
+                        prompt: string;
+                        /** @default 1 */
+                        n?: number;
+                        size?: string;
+                        quality?: string;
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description 上游完整响应（保留上游 2xx 状态码） */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/image-pricing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 图片生成价目列表 */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 静态兜底与运行态覆盖 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            pricing: components["schemas"]["ImagePricingView"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/image-pricing/{alias}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alias: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** 整体覆盖图片生成价目 */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    alias: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ImagePricingView"];
+                };
+            };
+            responses: {
+                /** @description 已持久化并即时生效 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 整单校验失败 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        post?: never;
+        /** 撤销运行态覆盖 */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    alias: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已回落静态兜底 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 无运行态覆盖 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 管理员账密登录 */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        username: string;
+                        /** Format: password */
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description 签发 HttpOnly 会话 cookie，有效期 12 小时 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminActor"];
+                    };
+                };
+                /** @description 凭据无效或账号锁定 */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 注销当前管理员会话 */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 会话已失效 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/auth/whoami": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 当前操作员身份 */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 会话或共享令牌身份 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminActor"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/admins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 管理员账号列表 */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 账号公开字段，不含密码或哈希 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            admins: components["schemas"]["AdminUser"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** 创建管理员 */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        username: string;
+                        /** Format: password */
+                        password: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description 已创建 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AdminUser"];
+                    };
+                };
+                /** @description 用户名冲突或口令非法 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/admins/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** 启停管理员或改密 */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        disabled?: boolean;
+                        /** Format: password */
+                        password?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description 已更新，停用或改密即时注销该账号全部会话 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 账号不存在 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/admin/v1/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 操作审计倒序游标分页 */
+        get: {
+            parameters: {
+                query?: {
+                    cursor?: string;
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 审计行与下一游标 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            items: components["schemas"]["AdminAudit"][];
+                            next_cursor: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AdminActor: {
+            /** @enum {string} */
+            kind: "session" | "token" | "login";
+            name: string;
+        };
+        AdminUser: {
+            id: string;
+            username: string;
+            /** @enum {string} */
+            status: "active" | "disabled";
+            created_at: string;
+            last_login_at?: string | null;
+        };
+        AdminAudit: {
+            id: string;
+            request_id?: string;
+            /** @enum {string} */
+            actor_kind: "session" | "token" | "login";
+            actor_name: string;
+            action: string;
+            target_id?: string;
+            outcome: string;
+            /** @description 脱敏 JSON 摘要 */
+            detail?: string;
+            created_at: string;
+        };
+        ImagePricingView: {
+            alias: string;
+            /** @enum {string} */
+            source?: "db" | "yaml";
+            /** @enum {string} */
+            currency: "CNY" | "USD";
+            /** @description 十进制报价/张，最多九位小数 */
+            default: string;
+            tiers: {
+                [key: string]: string;
+            };
+            updated_at?: string;
+        };
         Tenant: {
             id?: string;
             name?: string;
@@ -1000,6 +1572,18 @@ export interface components {
             daily_quota_credits?: number;
             /** @description RFC3339;null=永不过期 */
             expires_at?: string | null;
+            /**
+             * @description 生命周期终态位;可逆启停见 disabled
+             * @enum {string}
+             */
+            status?: "active" | "revoked";
+            /** @description true=已停用(可逆恢复);吊销终态不受影响 */
+            disabled?: boolean;
+            /**
+             * Format: int64
+             * @description 单请求成本预算 credit;0=不限
+             */
+            max_request_cost_credits?: number;
         };
         KeyCreateRequest: {
             /** @description 租户名,缺省 default */
@@ -1017,8 +1601,13 @@ export interface components {
              * @description 0=不限
              */
             daily_quota_credits?: number;
-            /** @description RFC3339;空=永不过期 */
+            /** @description RFC3339;空=永不过期;不得早于当前时刻(创建期拒绝;立即失效经 PATCH) */
             expires_at?: string;
+            /**
+             * Format: int64
+             * @description 单请求成本预算 credit;0=不限
+             */
+            max_request_cost_credits?: number;
         };
         /** @description 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。 */
         KeyCreateResponse: {
@@ -1057,6 +1646,13 @@ export interface components {
              */
             daily_quota_credits?: number;
             expires_at?: string | null;
+            /** @description 可逆停用(true=停用/false=恢复);吊销终态不受影响 */
+            disabled?: boolean;
+            /**
+             * Format: int64
+             * @description 单请求成本预算 credit;0=不限(预检+流中两道闸,超限 402 cost_budget_exceeded)
+             */
+            max_request_cost_credits?: number;
         };
         ModelEntry: {
             id?: string;

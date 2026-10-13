@@ -1,0 +1,18 @@
+vite v6.4.3 building for production...
+
+(!) outDir /tmp/muniu-review-dist is not inside project root and will not be emptied.
+Use --emptyOutDir to override.
+
+transforming...
+✓ 2329 modules transformed.
+rendering chunks...
+computing gzip size...
+../../../../../../tmp/muniu-review-dist/index.html                   1.11 kB │ gzip:   0.73 kB
+../../../../../../tmp/muniu-review-dist/assets/index-cF_-QsZK.css   40.66 kB │ gzip:   8.03 kB
+../../../../../../tmp/muniu-review-dist/assets/index-C0WXmLdG.js   770.45 kB │ gzip: 228.10 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 3.62s

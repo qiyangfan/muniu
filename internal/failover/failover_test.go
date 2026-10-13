@@ -49,6 +49,10 @@ func TestDecide_判定表(t *testing.T) {
 		// unknown(表外防御:按 5xx 同待遇)
 		{"unknown×未过×流式", ClassUnknown, false, true, ActionNextCandidate},
 		{"unknown×已过×流式", ClassUnknown, true, true, ActionAbort},
+		// cost_budget_exceeded 行(网关策略类:静默终结不换道,不计 key 失败——context_canceled 同族)
+		{"cost_budget_exceeded×未过×流式→静默", ClassCostBudget, false, true, ActionSilent},
+		{"cost_budget_exceeded×已过×流式→静默", ClassCostBudget, true, true, ActionSilent},
+		{"cost_budget_exceeded×非流式→静默", ClassCostBudget, false, false, ActionSilent},
 	}
 	for _, c := range cases {
 		t.Run(c.coord, func(t *testing.T) {

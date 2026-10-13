@@ -197,3 +197,14 @@ pricing:
 #     config:
 #       rules: |
 #         [{"pointer":"/messages/*/name","op":"remove"},{"pointer":"/metadata/user_id","op":"replace","value":"[REDACTED]"}]
+
+# 同步图片生成的静态兜底价（可选；报价/张，最多九位小数，DB 运行态覆盖）。
+# image_pricing:
+#   image-model-alias:
+#     currency: CNY
+#     default: "0.35"
+#     tiers:
+#       "1024x1024|standard": "0.30"
+# 管理面支持本地管理员会话或 MUNIU_ADMIN_TOKEN：
+# 首次引导 muniu admins add --username <管理员>，tty 双次口令；无 token 但有活跃账号亦开放。
+# 管理员凭据在本地 SQLite，仅存 argon2id PHC；无需新增 YAML 明文口令字段。

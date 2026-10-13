@@ -1,7 +1,7 @@
 # platform-data-plane Specification
 
 ## Purpose
-TBD - created by archiving change sighup-config-reload. Update Purpose after archive.
+定义网关通过 SIGHUP 重读本地配置并原子热替换数据面拓扑的运维契约：合法变更即时生效，校验失败保留旧态，未变更的供应商配置保留 key 池运行状态；明确拓扑热加载与需重启生效的身份、管理面及静态价目配置边界。
 
 ## Requirements
 

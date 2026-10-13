@@ -40,6 +40,9 @@ import (
 )
 
 func main() {
+	if aa, ok := adminsSubArgs(os.Args); ok {
+		os.Exit(runAdmins(flagConfOf(os.Args), aa))
+	}
 	// keys/backup 管理子命令与网关服务分流(同一配置定位与存储)
 	if ka, ok := keysSubArgs(os.Args); ok {
 		os.Exit(runKeys(flagConfOf(os.Args), ka))
@@ -273,6 +276,10 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		return nil, nil, nil, err
 	}
 	pricingDir := metering.NewPricingDirectory(initialTables)
+	imageDir, staticImages, updateImages, err := assembleImagePricing(db, cfg, settlement, fxCnyPerUsdMilli)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	// 静态价目读侧(GET /admin/v1/pricing 的 yaml 来源行):窗口/时区如实透出,
 	// 防止控制台编辑 yaml 行时静默丢窗
 	staticHuman := make(map[string]admin.StaticEntry, len(staticDefs))
@@ -345,10 +352,12 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	}
 
 	chatProxy := proxy.New(proxy.Config{
-		Registry:  registry,
-		Providers: cfg.Providers,
-		Routes:    cfg.ModelRoutes,
-		Pricing:   pricingDir,
+		Registry:     registry,
+		Providers:    cfg.Providers,
+		Routes:       cfg.ModelRoutes,
+		Pricing:      pricingDir,
+		ImagePricing: imageDir,
+		Settlement:   settlement,
 		Timeouts: proxy.Timeouts{
 			Dial:       cfg.Server.Timeouts.DialDuration(),
 			FirstToken: cfg.Server.Timeouts.FirstTokenDuration(),
@@ -468,6 +477,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	}
 	entries := []routeEntry{
 		{"POST /v1/chat/completions", server.Chain(chatProxy.Handler(), dataPlaneMW...)},
+		{"POST /v1/images/generations", server.Chain(chatProxy.HandlerImages(), dataPlaneMW...)},
 		{"POST /v1/embeddings", server.Chain(chatProxy.HandlerEmbeddings(), dataPlaneMW...)},
 		// Responses 入站(ADR-0012):翻译后进同一管道,鉴权/配额/限流与 chat 同规
 		{"POST /v1/responses", server.Chain(chatProxy.HandlerResponses(), dataPlaneMW...)},
@@ -497,8 +507,16 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	// 管理面(T4.1):MUNIU_ADMIN_TOKEN 未配置则整体关闭(含控制台——无后端的空壳页
 	// 不该对外暴露,与告警文案保持一致)
 	adminToken := os.Getenv("MUNIU_ADMIN_TOKEN")
-	if adminToken == "" {
-		logger.Warn("MUNIU_ADMIN_TOKEN 未配置,管理面与控制台关闭")
+	adminSvc, err := auth.NewAdminService(db)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	activeAdmins, err := store.HasActiveAdmins(db)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if adminToken == "" && !activeAdmins {
+		logger.Warn("管理令牌与活跃管理员均未配置,管理面与控制台关闭")
 	}
 	refreshPricing := func() error {
 		tables, err := rebuildPricing()
@@ -509,12 +527,15 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		return nil
 	}
 	adminDeps := admin.Deps{
-		DB: db, Token: adminToken, Providers: cfg.Providers, Pools: pools,
+		DB: db, Token: adminToken, AdminAuth: adminSvc, Providers: cfg.Providers, Pools: pools,
 		Verifier: verifier, Logger: logger,
-		PricingDir:     pricingDir,
-		StaticPricing:  staticHuman,
-		RefreshPricing: refreshPricing,
-		Plugins:        pluginReg,
+		Topology:           chatProxy.Topology,
+		PricingDir:         pricingDir,
+		StaticImagePricing: staticImages,
+		UpdateImagePricing: updateImages,
+		StaticPricing:      staticHuman,
+		RefreshPricing:     refreshPricing,
+		Plugins:            pluginReg,
 	}
 	if cacheInst != nil {
 		adminDeps.CacheStats = cacheInst.Stats
@@ -544,7 +565,8 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		metrics.NewGaugeFunc("muniu_keypool_state", "key 池状态计数", func() []metrics.Sample {
 			now := time.Now()
 			var out []metrics.Sample
-			for name, pool := range pools {
+			_, currentPools := chatProxy.Topology()
+			for name, pool := range currentPools {
 				for state, n := range pool.StateCounts(now) {
 					out = append(out, metrics.Sample{Labels: [][2]string{{"provider", name}, {"state", state}}, Value: float64(n)})
 				}
@@ -564,7 +586,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		declared = append(declared, e.Pattern)
 	}
 	if adminHandler != nil {
-		root.Handle("/admin/v1/", adminHandler)
+		root.Handle("/admin/v1/", server.Chain(adminHandler, server.RequestID, server.Recover(logger)))
 		root.Handle("GET /console/", web.Handler())
 		declared = append(declared, admin.Routes()...)
 	}

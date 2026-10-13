@@ -1,0 +1,3476 @@
+diff --git a/HANDOFF.md b/HANDOFF.md
+index e831982..4938d33 100644
+--- a/HANDOFF.md
++++ b/HANDOFF.md
+@@ -2,6 +2,19 @@
+ 
+ > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
+ 
++## 当前状态(2026-10-13,冻结任务执行已结束)
++
++- images 8/8 与管理员审计 10/10 已实施、验证、归档并同步主规格；历史结算恢复 2.3 漏勾补齐，拓扑管理页/gauge 读侧漂移已修复。本轮与上一批改动均未提交。
++- 完整终态与证据：[本轮报告](docs/acceptance/2026-10-13-task-report.md)；[冻结快照](docs/acceptance/2026-10-13-task-snapshot.md)。待确认与历史阻塞不要求清零，本轮不常驻、不继续下一批。
++
++- **二次裁决(owner「求职项目完整度视角重裁,无需求方不算搁置理由」)**:①gRPC 入站**维持拒绝**(换理由:无标准 LLM gRPC API=语义真空,网关核心能力一寸锻炼不到;REST-only 与同赛道(LiteLLM/one-api/Kong)对照无缺口;grpc-go +30 传递依赖瓦解 stdlib 旗舰论点,关键词留 skills 行);②SSO/OIDC **维持拒绝**(换理由:锦官 OIDC 主场组合冗余 + standalone 零外联纪律 + 自研 JOSE 密码学危险),捆绑的「控制台多管理员+操作审计」**拆出改判立项**(ADR-0005 standalone 一等形态下管理面即最终形态,共享 token 零归因是真缺口);③images 生成**改判立项**(原「拖价目迁移不值对价」论证反向:per-image 计价维度演进本身就是计量叙事资产;one-api/LiteLLM 全支持=真实缺口);audio/edits/variations 二期同法裁决。
++- **立项已交付**:ADR-0016/0017 对应两 change 本轮已实施并归档；新增 image-generation/admin-operators 主规格，pricing-management/request-cost-budget 同步。真实厂商验收仍待外部凭据。
++
++## 当前状态(2026-10-13,零消费者话术废止批:key 启停 + 请求级成本预算两件落地)
++
++- **裁决框架再修正(owner 2026-10-13 二度点破「等消费者永远等不到」)**:「零消费者」彻底退出裁决话术,backlog 价值标准=作品集完整度(completeness IS the product);据此升格两项并当次落地——①`key-disable-toggle`(迁移 0009 `disabled_at` 可逆禁用,吊销终态优先判定,PATCH/CLI disable·enable/控制台三态徽章+启停操作);②`per-request-cost-budget`(迁移 0010 `max_request_cost_credits`;预检闸=估算输入+max_tokens 上界,超界 402 上游零调用不落账;流中闸=累计成本逐帧检查,超界断言收尾+已发生部分如实落账;判定表新格 cost_budget_exceeded=静默终结不计池)。诚实边界已登记:非流式无中断闸/max_tokens 缺失预检旁路/直通流已开闸段不中断/embeddings 不覆盖(proxy-and-streaming「请求级成本预算」节)。
++- **门禁**:`make check` exit=0(coverage gate PASS 71.2%);`openspec validate --all` 21/21;web 四件套 + vite build(/tmp)绿。两 change 已归档(archive/2026-10-13-*,主 specs +4 Requirement:api-key-lifecycle +1、新建 request-cost-budget +3)。独立子代理代码审查 1 P0(admin 签发链路漏接预算字段静默丢弃)+6 P2 全部修复,回归钉子已补。**改动未提交(等 owner 指令)**。
++
+ ## 当前状态(2026-10-12,需求方框架重判批:DELETE 代理/SIGHUP 热加载/告警 webhook 三件落地)
+ 
+ - **裁决框架修正(owner 点破「零消费方」自证拖延;completeness IS the product 重申)**:按作品集完整度重判 backlog——落地三件(状态 lane 删动词/SIGHUP 运维手势/告警主动通知,均完整 openspec 周期+归档,validate 20/20);拒绝三件各附真实理由:gRPC 入站(瓦解「零重依赖 stdlib 单二进制」主打论点,关键词留 skills 行)、SSO(ADR-0005 边界,OIDC 学习主场在锦官)、images 端点(多模态输入已四路全链,生成端点拖价目 schema 迁移不值对价);key 级模型白名单=值得做,下一批(配 kongming 灰度治理故事单独成批)。
+@@ -86,12 +99,19 @@
+ 
+ ## 下一步(严格按序)
+ 
++【2026-10-13 实施后状态】：
++
++1. 【待 owner 指令】本批提交与 push(改动全部未提交,含上批 30 文件 + 本批立项工件;推送前按纪律先 fetch 调和)。
++2. 【owner 裁决】T5.3/T5.6 基座中断处置(重启重起算或调整判据基线,见开放项 2026-10-12 行)。
++3. 【本轮已结束】images/管理员审计已归档；模型白名单、form-row help、Responses reasoning 事件及 T5.2 完整跨仓基线待确认（缺契约/源仓裁决/证据），不臆测启动。
++4. 【外部条件】GEMINI_API_KEY 到位后 gemini 真实 wire 复核;MiniMax 域名真 key 归一(承前);images 国内同步兼容端点家数(硅基流动确定,智谱待核)随 3 实施冒烟实证。
++
+ 【2026-10-02 实施后状态】：
+ 
+ 1. 【已完成·已归档】fix-api-key-binding-identifiers 7/7(make check 全绿+跨仓验收,验收记录 33)。
+ 2. 【已完成·已归档】recover-pending-usage-settlement 5/5——木牛侧实现/测试/联调全过;锦官收口后本仓 `openspec archive` 已执行(主规格 sync +1 Requirement),归档位 `archive/2026-10-02-recover-pending-usage-settlement`。
+ 3. 【已销案 2026-10-12】原引用的聚合单源 `../HANDOFF.md` 在 longzhong/ 下不存在(指针失联);所辖四项经核查均已完成(CardTitle as 已落地、kongming input 日期族已合流销案)或无 muniu 侧动作(ingest 读数归锦官、push 后 CI 实跑归下条)。**裁决:不重建聚合状态文件**——跨仓状态聚合无维护归属,重建即再腐化;若未来需要,由 owner 立维护规则后另立。跨仓事项一律以各仓 HANDOFF + change 文件为单源。
+-4. 【阻塞·待 owner 授权】push:本地两笔就绪(453b187+45d6b85+HANDOFF 如实回写),`gh auth refresh -h github.com -s workflow` 授权后 `git push origin main` 即完成;push 后 CI 实跑结果补记于验收记录 38。
++4. 【历史阻塞已关闭】workflow scope 授权与前批 push 已完成（2026-10-12 记录）；本轮只读复核 main 本地/远端同为 93ec4fb。当前改动仍需本批逐次 Git 指令。
+ 5. 【owner 裁决】T5.3/T5.6 基座中断处置:重启 dev 常驻并重新起算观察期,或按个人项目低流量前提调整发版判据基线(验收记录 22 先例);kongming 侧 ADR-007 转「已接受」与专用 key 限额回填为跨仓运营动作,随处置一并。
+ 6. 【外部条件】GEMINI_API_KEY 到位后按 docs/gemini-e2e-runbook.md 复核真实多工具调用 wire 形态(开放项 2026-10-12);MiniMax 域名双源待真 key 归一。
+ 
+@@ -124,7 +144,7 @@
+ | 2026-09-11 | reconcile.sql 口径修正(每尝试一行→DISTINCT) | 旧口径 ≤1% 判据不可达 | 已按「每尝试一行」实现修正 SQL | 已解决(口径随上项一并写入 metering.md) |
+ | 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
+ | 2026-09-12 | B 档四项(Responses 入站/images/Gemini 出站/桥接工具往返)用户点名升格 | backlog 升格规则要求用户点名后先 ADR 再排期;四项价值/成本不等,不应捆绑同判 | 架构师独立裁决分层:桥接工具边界=缺陷级先行;Gemini=成本被低估的轻形态;Responses=战略项先 ADR;images/audio=新计量维度零消费者 | **①②③ 立项,④ 不立项**:ADR-0012 + openspec `upstream-egress-batch`/`responses-api-inbound` 已立(validate 通过);桥接边界方案升级为「候选适配性豁免跳过 + 独占时明确信封 + EMA 豁免」(比单纯 fail-fast 更符合换道哲学,详见 egress-batch design) |
+-| 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属;修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③④非本批因果链,下一批次处置 |
++| 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属;修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③已于 2026-10-13 复用 Topology() 修复；④于 2026-10-12 销案；①按现行 v1 事件契约待确认 |
+ | 2026-09-13 | upstream-egress-batch Gemini 三项(冒烟/quirk/价目)待外部 GEMINI_API_KEY,无限期挂起污染活动清单 | 继续 etc 等待 / 归档并登记搁置 / 立即放弃 | **用户裁决:无限搁置**——①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者;纯新增零沉没成本 | change 归档(anthropic-bridge delta 合入主 specs;gemini-egress delta 随裁决移除,不把未打算满足的 MUST 合入主 specs);设计论述留档 design.md,未来解锁按原设计「轻形态+冒烟先行」重新立项。**【销案 2026-10-12】**ADR-0015(gemini-native-protocol)落地取代「轻形态」路径:原生双向实现 + 双实例(dashscope 承载)冒烟已过(验收记录 37),本搁置项不存在了 |
+ | 2026-09-26 | 控制台 ui/CardTitle 基线渲染为 div(kongming 同源),无标题语义;卡题进不了读屏标题大纲(Providers 两处已用原生 h2 承载 CardTitle 配方临时兜住,Overview/Login 仍是 div) | 控制台可访问性缺口,ui/ 标准件语义缺陷是系统性的 | CardTitle 增多态 heading(如 as)支持;属 ui/ 语义级改动,按宪法 Article 5 须 kongming 先行,本仓随后对齐 | **关闭(2026-10-02 批次三)**:kongming change 已先行,本仓 card.tsx 多态 as 已落地,登录卡 as="h2"、Providers 两处原生 h2 回归 `<CardTitle as="h2">`、Overview 默认 h3,门禁全绿 |
+ | 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;**【关闭 2026-10-12】**dashscope anthropic 分支(/apps/anthropic)真 key 冒烟:声明 bearer 直连成功,文本与工具多轮全链过(验收记录 37);其余分支首次接入时按同配方实证即可 |
+@@ -134,9 +154,34 @@
+ | 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | | **已终裁(2026-10-02 owner 追认)**:三 devDeps 正式保留,开放项销案;宪法 Article 4 注明测试工具属 devDeps 不占白名单口径 |
+ | 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | | 本仓已修;**kongming 已于 2026-10-02 批次三合入并流向 jinguan(三仓单源),销案** |
+ | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
++| 2026-10-13 | gRPC 入站二次裁决(原理由「瓦解 stdlib 旗舰论点」只计成本未答收益) | 补收益侧后结论更硬:LLM 行业无标准 gRPC API,自造 `muniu.proto` = 语义真空,协议保真转译核心卖点零锻炼;REST-only 与 LiteLLM/one-api/Kong 同赛道对照无缺口 | 维持不引入;关键词留简历 skills 行,学习主场在微服务语境项目 | **已终裁(2026-10-13 owner 确认重裁)**:维持拒绝;翻旧账以本行与 ROADMAP 注记为准 |
++| 2026-10-13 | SSO/OIDC 二次裁决(原理由「ADR-0005 边界」经不起追问:网关为何不能有自己的身份面) | 拆分后重裁:SSO 本体维持拒绝(锦官 OIDC 学习主场组合冗余 + standalone 零外联先验假设 + 自研 JOSE 密码学危险);被捆绑的多管理员+审计独立价值成立 | SSO 不引入;多管理员+操作审计拆出立项(ADR-0017 + openspec `admin-operators-audit`) | **已终裁(2026-10-13)**:一拒一立,论证沉淀 ADR-0017 备选节 |
+ 
+ ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+ 
++**43. 冻结任务执行（2026-10-13）**
++```text
++PATH=/Users/solvela/.local/share/mise/installs/aqua-golangci-golangci-lint/2.14.0/golangci-lint-2.14.0-darwin-arm64:$PATH make check
++0 issues.
++Test Files  3 passed (3)
++Tests  11 passed (11)
++coverage gate PASS: 69.5%
++make build / Linux arm64 静态构建：EXIT 0
++pnpm exec vite build --outDir /tmp/muniu-task-dist
++✓ built in 2.07s
++Some chunks are larger than 500 kB after minification.
++openspec validate --all --strict
++✗ spec/platform-data-plane
++Totals: 22 passed, 1 failed (23 items)
++```
++- 严格文档失败：旧 platform-data-plane Purpose 仍为 TBD，非冻结实施项，记录既有阻塞。全部原始命令与输出（含失败）、逐项终态、独立初审/追加容量失败边界与 18 组浏览器证据见本轮报告及 docs/acceptance/2026-10-13-evidence/。
++
++**42. key 启停 + 请求级成本预算(2026-10-13,openspec `key-disable-toggle`/`per-request-cost-budget` 已归档)**
++- 判据:失败测试先行(判定表新格/停用契约/预算判定先红)+ 既有全量零改动回放 + `make check` 全绿 + validate --all。
++- ①启停:`TestUpdateKeyLimits_停用与恢复`(缓存路径拒绝/恢复字段无损/吊销不复活)、`TestMiddleware_停用message可区分`、`TestAdmin_key启停与预算PATCH`、控制台组件测试(三态徽章/启停 patchKey 载荷/吊销 key 无启停钮)。②预算:`TestCostBudget_预检拒绝`(402+上游零调用+assertNoRows)、`TestCostBudget_流中中断与池无损`(断言收尾内容保留/不换道/中断行 error_class=cost_budget_exceeded/调大预算同 key 复用成功=池无损行为证明)、`TestMeterState_budgetExceeded`(真值覆盖估算/零预算与无价目旁路)、`TestKeyBudget_签发PATCH与鉴权携带`;判定表三格(failover_test)。
++- ③审查修复(独立子代理,1 P0+6 P2 全处置):admin createKey 补接 `max_request_cost_credits`(原 handler 结构体缺字段致控制台签发预算被静默丢弃,P0)+负值 400+回归钉子(签发 7777 落库断言);P2=列表回显值断言收紧/CLI 签发回执补 budget 行/metering.md CLI 收敛措辞精确化/budgetExceeded 流中段部分 usage 边角注释/disabled_at 双层解析口径注释/api-types 搭车漂移修复(HEAD openapi 漏再生,内容正确)点明。
++- 门禁:`make check` exit=0(vet+lint 0 issues+20 包 race,coverage gate PASS 71.2%);`openspec validate --all` 21/21;web 四件套 + `vite build --outDir /tmp` 绿。改动未提交(等 owner 指令)。
++
+ **41. 需求方框架重判批(2026-10-12,owner 点破零消费方自证拖延;三 openspec change 归档)**
+ - 判据:各自失败测试先行 + 既有全量零改动回放 + make check 全绿 + validate --all。
+ - ①DELETE 代理:`TestStickyE2E_DELETE代理`(按动词代理转发、上游存储真被删、未知 404 不触达、GET 零回归);openapi+routeEntry 同步。②SIGHUP:`TestSIGHUP_热加载与保持旧态`(进程内自发信号,合法新配置→新 provider 出站,非法→保持旧态继续服务);config.Locate 导出消路径双写。③告警:alerting 单测五组(去重/退避放弃/payload/失败隔离/nil 零开销)+`TestAlerting_候选全失败通知`+配置面校验测试;接入点=候选耗尽/key 池不可用/sink 落缓冲回调(metering.Options.OnSinkDown,不反向依赖)。
+diff --git a/cmd/muniu/keys.go b/cmd/muniu/keys.go
+index cc72464..0ca509f 100644
+--- a/cmd/muniu/keys.go
++++ b/cmd/muniu/keys.go
+@@ -41,6 +41,10 @@ func keysMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
+ 		return keysList(db, stdout, stderr)
+ 	case "revoke":
+ 		return keysRevoke(db, args[1:], stdout, stderr)
++	case "disable":
++		return keysToggle(db, args[1:], true, stdout, stderr)
++	case "enable":
++		return keysToggle(db, args[1:], false, stdout, stderr)
+ 	default:
+ 		_, _ = fmt.Fprintf(stderr, "muniu keys: 未知子命令 %q\n%s", args[0], keysUsage)
+ 		return 2
+@@ -51,6 +55,8 @@ const keysUsage = `用法:
+   muniu keys create --tenant default --name kongming [--rpm 120] [--tpm 0] [--daily-quota-credits 0] [--expires-at RFC3339]
+   muniu keys list
+   muniu keys revoke <prefix>
++  muniu keys disable <prefix>
++  muniu keys enable <prefix>
+ `
+ 
+ // keysCreate 签发:明文只打印一次,stderr 同时给出警示。
+@@ -63,6 +69,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
+ 	rpm := fs.Int64("rpm", 60, "RPM 限额")
+ 	tpm := fs.Int64("tpm", 0, "TPM 限额(0=不限)")
+ 	quota := fs.Int64("daily-quota-credits", 0, "日配额 credit(1 credit = 十亿分之一本币;0=不限)")
++	reqBudget := fs.Int64("max-request-cost-credits", 0, "单请求成本预算 credit(0=不限)")
+ 	expires := fs.String("expires-at", "", "过期时刻 RFC3339(空=永不过期)")
+ 	if err := fs.Parse(args); err != nil {
+ 		return 2
+@@ -71,7 +78,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
+ 		_, _ = fmt.Fprintln(stderr, "muniu keys create: --name 必填")
+ 		return 2
+ 	}
+-	opts := auth.KeyOpts{TPMLimit: *tpm, DailyQuotaCredits: *quota}
++	opts := auth.KeyOpts{TPMLimit: *tpm, DailyQuotaCredits: *quota, MaxRequestCostCredits: *reqBudget}
+ 	if *expires != "" {
+ 		t, err := time.Parse(time.RFC3339, *expires)
+ 		if err != nil {
+@@ -90,8 +97,8 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
+ 	if rec.ExpiresAt != nil {
+ 		exp = rec.ExpiresAt.UTC().Format(time.RFC3339)
+ 	}
+-	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nexpires:  %s\n",
+-		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, exp)
++	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nbudget:   %d credit/请求\nexpires:  %s\n",
++		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, rec.MaxRequestCostCredits, exp)
+ 	return 0
+ }
+ 
+@@ -106,9 +113,13 @@ func keysList(db *sql.DB, stdout, stderr io.Writer) int {
+ 		_, _ = fmt.Fprintln(stdout, "(无 key)")
+ 		return 0
+ 	}
+-	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %s\n", "PREFIX", "NAME", "TENANT", "RPM", "ID")
++	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %-9s %-12s %s\n", "PREFIX", "NAME", "TENANT", "RPM", "STATUS", "REQ-BUDGET", "ID")
+ 	for _, k := range keys {
+-		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %s\n", k.Prefix, k.Name, k.TenantID, k.RPMLimit, k.ID)
++		status := k.Status
++		if status == "active" && k.Disabled {
++			status = "disabled"
++		}
++		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %-9s %-12d %s\n", k.Prefix, k.Name, k.TenantID, k.RPMLimit, status, k.MaxRequestCostCredits, k.ID)
+ 	}
+ 	return 0
+ }
+@@ -134,6 +145,52 @@ func keysRevoke(db *sql.DB, args []string, stdout, stderr io.Writer) int {
+ 	return 0
+ }
+ 
++// keysToggle 启停 key(可逆禁用):按 prefix 定位后 PATCH disabled_at 列。
++// CLI 与网关是两个进程,无法直清网关的鉴权缓存:如实说明收敛时长(revoke 同款文案纪律)。
++func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Writer) int {
++	verb := "enable"
++	if disable {
++		verb = "disable"
++	}
++	if len(args) != 1 {
++		_, _ = fmt.Fprintf(stderr, "muniu keys %s: 需要一个 <prefix> 参数\n", verb)
++		return 2
++	}
++	keys, err := auth.ListKeys(db)
++	if err != nil {
++		_, _ = fmt.Fprintf(stderr, "muniu keys %s: %v\n", verb, err)
++		return 1
++	}
++	var target *auth.KeyRecord
++	for i := range keys {
++		if keys[i].Prefix == args[0] {
++			target = &keys[i]
++			break
++		}
++	}
++	if target == nil {
++		_, _ = fmt.Fprintf(stdout, "未找到 prefix %s 的 key\n", args[0])
++		return 1
++	}
++	if target.Status != "active" {
++		_, _ = fmt.Fprintf(stdout, "key %s 已吊销(终态),启停操作不改变其语义\n", args[0])
++		return 1
++	}
++	v := disable
++	rec, err := auth.UpdateKeyLimits(db, target.ID, auth.LimitsPatch{Disabled: &v})
++	if err != nil {
++		_, _ = fmt.Fprintf(stderr, "muniu keys %s: %v\n", verb, err)
++		return 1
++	}
++	action := "已启用"
++	if rec.Disabled {
++		action = "已停用"
++	}
++	_, _ = fmt.Fprintf(stdout, "%s key(prefix=%s);运行中网关的鉴权缓存至多 %s 内收敛。\n",
++		action, rec.Prefix, (10 * time.Second).String())
++	return 0
++}
++
+ // keysSubArgs 判定是否为 keys 子命令调用,并返回 keys 之后的参数
+ // (容忍 -c <path> 出现在子命令前的任意位置;非 keys 调用返回 false)。
+ func keysSubArgs(args []string) ([]string, bool) {
+diff --git a/cmd/muniu/main.go b/cmd/muniu/main.go
+index 939c877..f97a40e 100644
+--- a/cmd/muniu/main.go
++++ b/cmd/muniu/main.go
+@@ -40,6 +40,9 @@ import (
+ )
+ 
+ func main() {
++	if aa, ok := adminsSubArgs(os.Args); ok {
++		os.Exit(runAdmins(flagConfOf(os.Args), aa))
++	}
+ 	// keys/backup 管理子命令与网关服务分流(同一配置定位与存储)
+ 	if ka, ok := keysSubArgs(os.Args); ok {
+ 		os.Exit(runKeys(flagConfOf(os.Args), ka))
+@@ -273,6 +276,10 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
+ 		return nil, nil, nil, err
+ 	}
+ 	pricingDir := metering.NewPricingDirectory(initialTables)
++	imageDir, staticImages, updateImages, err := assembleImagePricing(db, cfg, settlement, fxCnyPerUsdMilli)
++	if err != nil {
++		return nil, nil, nil, err
++	}
+ 	// 静态价目读侧(GET /admin/v1/pricing 的 yaml 来源行):窗口/时区如实透出,
+ 	// 防止控制台编辑 yaml 行时静默丢窗
+ 	staticHuman := make(map[string]admin.StaticEntry, len(staticDefs))
+@@ -345,10 +352,11 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
+ 	}
+ 
+ 	chatProxy := proxy.New(proxy.Config{
+-		Registry:  registry,
+-		Providers: cfg.Providers,
+-		Routes:    cfg.ModelRoutes,
+-		Pricing:   pricingDir,
++		Registry:     registry,
++		Providers:    cfg.Providers,
++		Routes:       cfg.ModelRoutes,
++		Pricing:      pricingDir,
++		ImagePricing: imageDir,
+ 		Timeouts: proxy.Timeouts{
+ 			Dial:       cfg.Server.Timeouts.DialDuration(),
+ 			FirstToken: cfg.Server.Timeouts.FirstTokenDuration(),
+@@ -468,6 +476,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
+ 	}
+ 	entries := []routeEntry{
+ 		{"POST /v1/chat/completions", server.Chain(chatProxy.Handler(), dataPlaneMW...)},
++		{"POST /v1/images/generations", server.Chain(chatProxy.HandlerImages(), dataPlaneMW...)},
+ 		{"POST /v1/embeddings", server.Chain(chatProxy.HandlerEmbeddings(), dataPlaneMW...)},
+ 		// Responses 入站(ADR-0012):翻译后进同一管道,鉴权/配额/限流与 chat 同规
+ 		{"POST /v1/responses", server.Chain(chatProxy.HandlerResponses(), dataPlaneMW...)},
+@@ -497,8 +506,16 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
+ 	// 管理面(T4.1):MUNIU_ADMIN_TOKEN 未配置则整体关闭(含控制台——无后端的空壳页
+ 	// 不该对外暴露,与告警文案保持一致)
+ 	adminToken := os.Getenv("MUNIU_ADMIN_TOKEN")
+-	if adminToken == "" {
+-		logger.Warn("MUNIU_ADMIN_TOKEN 未配置,管理面与控制台关闭")
++	adminSvc, err := auth.NewAdminService(db)
++	if err != nil {
++		return nil, nil, nil, err
++	}
++	activeAdmins, err := store.HasActiveAdmins(db)
++	if err != nil {
++		return nil, nil, nil, err
++	}
++	if adminToken == "" && !activeAdmins {
++		logger.Warn("管理令牌与活跃管理员均未配置,管理面与控制台关闭")
+ 	}
+ 	refreshPricing := func() error {
+ 		tables, err := rebuildPricing()
+@@ -509,12 +526,15 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
+ 		return nil
+ 	}
+ 	adminDeps := admin.Deps{
+-		DB: db, Token: adminToken, Providers: cfg.Providers, Pools: pools,
++		DB: db, Token: adminToken, AdminAuth: adminSvc, Providers: cfg.Providers, Pools: pools,
+ 		Verifier: verifier, Logger: logger,
+-		PricingDir:     pricingDir,
+-		StaticPricing:  staticHuman,
+-		RefreshPricing: refreshPricing,
+-		Plugins:        pluginReg,
++		Topology:           chatProxy.Topology,
++		PricingDir:         pricingDir,
++		StaticImagePricing: staticImages,
++		UpdateImagePricing: updateImages,
++		StaticPricing:      staticHuman,
++		RefreshPricing:     refreshPricing,
++		Plugins:            pluginReg,
+ 	}
+ 	if cacheInst != nil {
+ 		adminDeps.CacheStats = cacheInst.Stats
+@@ -544,7 +564,8 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
+ 		metrics.NewGaugeFunc("muniu_keypool_state", "key 池状态计数", func() []metrics.Sample {
+ 			now := time.Now()
+ 			var out []metrics.Sample
+-			for name, pool := range pools {
++			_, currentPools := chatProxy.Topology()
++			for name, pool := range currentPools {
+ 				for state, n := range pool.StateCounts(now) {
+ 					out = append(out, metrics.Sample{Labels: [][2]string{{"provider", name}, {"state", state}}, Value: float64(n)})
+ 				}
+@@ -564,7 +585,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
+ 		declared = append(declared, e.Pattern)
+ 	}
+ 	if adminHandler != nil {
+-		root.Handle("/admin/v1/", adminHandler)
++		root.Handle("/admin/v1/", server.Chain(adminHandler, server.RequestID, server.Recover(logger)))
+ 		root.Handle("GET /console/", web.Handler())
+ 		declared = append(declared, admin.Routes()...)
+ 	}
+diff --git a/cmd/muniu/reload_test.go b/cmd/muniu/reload_test.go
+index 8cf64eb..2a6254f 100644
+--- a/cmd/muniu/reload_test.go
++++ b/cmd/muniu/reload_test.go
+@@ -28,17 +28,21 @@ func TestSIGHUP_热加载与保持旧态(t *testing.T) {
+ 	dbPath := filepath.Join(dir, "test.db")
+ 	up1 := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
+ 	up2 := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
++	t.Setenv("MUNIU_ADMIN_TOKEN", "reload-admin")
+ 	t.Setenv("SIGHUP_TEST_KEY_1", "k1")
+ 	t.Setenv("SIGHUP_TEST_KEY_2", "k2")
+ 
++	providerName := "p1"
+ 	writeCfg := func(baseURL, keyEnv string) {
+ 		body := fmt.Sprintf(`server:
+   addr: "127.0.0.1:0"
+ storage:
+   sqlite:
+     path: %q
++metrics:
++  enabled: true
+ providers:
+-  - name: p1
++  - name: %s
+     adapter: openai
+     weight: 1
+     base_url: %q
+@@ -46,8 +50,8 @@ providers:
+       - env: %s
+ model_routes:
+   alias-a:
+-    - { provider: p1, model: up-a, priority: 0 }
+-`, dbPath, baseURL, keyEnv)
++    - { provider: %s, model: up-a, priority: 0 }
++`, dbPath, providerName, baseURL, keyEnv, providerName)
+ 		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+ 			t.Fatal(err)
+ 		}
+@@ -99,6 +103,7 @@ model_routes:
+ 	}
+ 
+ 	// 合法新配置:provider 指向 up2 → SIGHUP → 新请求走 up2(轮询等待热替换落地)
++	providerName = "p2"
+ 	writeCfg(up2.URL(), "SIGHUP_TEST_KEY_2")
+ 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
+ 		t.Fatal(err)
+@@ -117,6 +122,37 @@ model_routes:
+ 		t.Fatal("SIGHUP 后新请求应走新 provider(up2)")
+ 	}
+ 
++	// 管理页与 gauge 必须与数据面的同一快照收敛，不能继续呈现启动 provider。
++	for _, path := range []string{"/admin/v1/providers", "/metrics"} {
++		req, err := http.NewRequest("GET", ts.URL+path, nil)
++		if err != nil {
++			t.Fatal(err)
++		}
++		req.Header.Set("Authorization", "Bearer reload-admin")
++		resp, err := http.DefaultClient.Do(req)
++		if err != nil {
++			t.Fatal(err)
++		}
++		body, err := io.ReadAll(resp.Body)
++		_ = resp.Body.Close()
++		if err != nil {
++			t.Fatal(err)
++		}
++		// Counter 保留历史 provider 是正确行为；只核对实时 keypool gauge。
++		if path == "/metrics" {
++			var gauges strings.Builder
++			for _, line := range strings.Split(string(body), "\n") {
++				if strings.HasPrefix(line, "muniu_keypool_state{") {
++					gauges.WriteString(line)
++					gauges.WriteByte('\n')
++				}
++			}
++			body = []byte(gauges.String())
++		}
++		if resp.StatusCode != 200 || !strings.Contains(string(body), "p2") || strings.Contains(string(body), "p1") {
++			t.Fatalf("热更读侧失真 %s: %d %s", path, resp.StatusCode, body)
++		}
++	}
+ 	// 非法新配置:保持旧态继续服务(绝不半更新)
+ 	writeCfgBroken := func() {
+ 		body := fmt.Sprintf(`server:
+@@ -124,8 +160,10 @@ model_routes:
+ storage:
+   sqlite:
+     path: %q
++metrics:
++  enabled: true
+ providers:
+-  - name: p1
++  - name: %s
+     adapter: nosuch-adapter
+     weight: 1
+     base_url: %q
+@@ -133,8 +171,8 @@ providers:
+       - env: SIGHUP_TEST_KEY_2
+ model_routes:
+   alias-a:
+-    - { provider: p1, model: up-a, priority: 0 }
+-`, dbPath, up2.URL())
++    - { provider: %s, model: up-a, priority: 0 }
++`, dbPath, providerName, up2.URL(), providerName)
+ 		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+ 			t.Fatal(err)
+ 		}
+diff --git a/contracts/openapi.yaml b/contracts/openapi.yaml
+index 12d0b3f..05078fc 100644
+--- a/contracts/openapi.yaml
++++ b/contracts/openapi.yaml
+@@ -6,6 +6,46 @@ info:
+   version: 0.3.0
+ components:
+   schemas:
++    AdminActor:
++      type: object
++      required: [kind, name]
++      properties:
++        kind: {type: string, enum: [session, token, login]}
++        name: {type: string}
++    AdminUser:
++      type: object
++      required: [id, username, status, created_at]
++      properties:
++        id: {type: string}
++        username: {type: string}
++        status: {type: string, enum: [active, disabled]}
++        created_at: {type: string}
++        last_login_at: {type: string, nullable: true}
++    AdminAudit:
++      type: object
++      required: [id, actor_kind, actor_name, action, outcome, created_at]
++      properties:
++        id: {type: string}
++        request_id: {type: string}
++        actor_kind: {type: string, enum: [session, token, login]}
++        actor_name: {type: string}
++        action: {type: string}
++        target_id: {type: string}
++        outcome: {type: string}
++        detail: {type: string, description: 脱敏 JSON 摘要}
++        created_at: {type: string}
++    ImagePricingView:
++      type: object
++      required: [alias, currency, default, tiers]
++      properties:
++        alias: {type: string}
++        source: {type: string, enum: [db, yaml]}
++        currency: {type: string, enum: [CNY, USD]}
++        default: {type: string, description: "十进制报价/张，最多九位小数"}
++        tiers:
++          type: object
++          additionalProperties: {type: string}
++        updated_at: {type: string}
+     Tenant:
+       type: object
+       properties:
+@@ -27,6 +67,9 @@ components:
+         tpm_limit: { type: integer, format: int64, description: "0=不限" }
+         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
+         expires_at: { type: string, nullable: true, description: "RFC3339;null=永不过期" }
++        status: { type: string, enum: [active, revoked], description: "生命周期终态位;可逆启停见 disabled" }
++        disabled: { type: boolean, description: "true=已停用(可逆恢复);吊销终态不受影响" }
++        max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限" }
+     KeyCreateRequest:
+       type: object
+       required: [name]
+@@ -37,6 +80,7 @@ components:
+         tpm_limit: { type: integer, format: int64, description: "0=不限" }
+         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
+         expires_at: { type: string, description: "RFC3339;空=永不过期;不得早于当前时刻(创建期拒绝;立即失效经 PATCH)" }
++        max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限" }
+     KeyCreateResponse:
+       type: object
+       description: 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。
+@@ -58,6 +102,8 @@ components:
+         tpm_limit: { type: integer, format: int64 }
+         daily_quota_credits: { type: integer, format: int64, description: "日配额 credit(1 credit = 本位币十亿分之一);0=不限" }
+         expires_at: { type: string, nullable: true }
++        disabled: { type: boolean, description: "可逆停用(true=停用/false=恢复);吊销终态不受影响" }
++        max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限(预检+流中两道闸,超限 402 cost_budget_exceeded)" }
+     ModelEntry:
+       type: object
+       properties:
+@@ -450,3 +496,165 @@ paths:
+       responses:
+         "200": { description: 已切换 }
+         "404": { description: 插件不存在 }
++
++  /v1/images/generations:
++    post:
++      summary: 同步图片生成
++      requestBody:
++        required: true
++        content:
++          application/json:
++            schema:
++              type: object
++              required: [model, prompt]
++              properties:
++                model: {type: string}
++                prompt: {type: string}
++                n: {type: integer, minimum: 1, default: 1}
++                size: {type: string}
++                quality: {type: string}
++              additionalProperties: true
++      responses:
++        "200":
++          description: 上游完整响应（保留上游 2xx 状态码）
++  /admin/v1/image-pricing:
++    get:
++      summary: 图片生成价目列表
++      responses:
++        "200":
++          description: 静态兜底与运行态覆盖
++          content:
++            application/json:
++              schema:
++                type: object
++                required: [pricing]
++                properties:
++                  pricing:
++                    type: array
++                    items: {$ref: "#/components/schemas/ImagePricingView"}
++  /admin/v1/image-pricing/{alias}:
++    parameters:
++      - in: path
++        name: alias
++        required: true
++        schema: {type: string}
++    put:
++      summary: 整体覆盖图片生成价目
++      requestBody:
++        required: true
++        content:
++          application/json:
++            schema: {$ref: "#/components/schemas/ImagePricingView"}
++      responses:
++        "200": {description: 已持久化并即时生效}
++        "400": {description: 整单校验失败}
++    delete:
++      summary: 撤销运行态覆盖
++      responses:
++        "200": {description: 已回落静态兜底}
++        "404": {description: 无运行态覆盖}
++
++  /admin/v1/auth/login:
++    post:
++      summary: 管理员账密登录
++      requestBody:
++        required: true
++        content:
++          application/json:
++            schema:
++              type: object
++              required: [username, password]
++              properties:
++                username: {type: string}
++                password: {type: string, format: password}
++      responses:
++        "200":
++          description: 签发 HttpOnly 会话 cookie，有效期 12 小时
++          content:
++            application/json:
++              schema: {$ref: "#/components/schemas/AdminActor"}
++        "401": {description: 凭据无效或账号锁定}
++  /admin/v1/auth/logout:
++    post:
++      summary: 注销当前管理员会话
++      responses:
++        "200": {description: 会话已失效}
++  /admin/v1/auth/whoami:
++    get:
++      summary: 当前操作员身份
++      responses:
++        "200":
++          description: 会话或共享令牌身份
++          content:
++            application/json:
++              schema: {$ref: "#/components/schemas/AdminActor"}
++  /admin/v1/admins:
++    get:
++      summary: 管理员账号列表
++      responses:
++        "200":
++          description: 账号公开字段，不含密码或哈希
++          content:
++            application/json:
++              schema:
++                type: object
++                required: [admins]
++                properties:
++                  admins:
++                    type: array
++                    items: {$ref: "#/components/schemas/AdminUser"}
++    post:
++      summary: 创建管理员
++      requestBody:
++        required: true
++        content:
++          application/json:
++            schema:
++              type: object
++              required: [username, password]
++              properties:
++                username: {type: string}
++                password: {type: string, minLength: 8, format: password}
++      responses:
++        "200":
++          description: 已创建
++          content:
++            application/json:
++              schema: {$ref: "#/components/schemas/AdminUser"}
++        "400": {description: 用户名冲突或口令非法}
++  /admin/v1/admins/{id}:
++    parameters:
++      - {name: id, in: path, required: true, schema: {type: string}}
++    patch:
++      summary: 启停管理员或改密
++      requestBody:
++        required: true
++        content:
++          application/json:
++            schema:
++              type: object
++              properties:
++                disabled: {type: boolean}
++                password: {type: string, minLength: 8, format: password}
++      responses:
++        "200": {description: 已更新，停用或改密即时注销该账号全部会话}
++        "404": {description: 账号不存在}
++  /admin/v1/audit:
++    get:
++      summary: 操作审计倒序游标分页
++      parameters:
++        - {name: cursor, in: query, schema: {type: string}}
++        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
++      responses:
++        "200":
++          description: 审计行与下一游标
++          content:
++            application/json:
++              schema:
++                type: object
++                required: [items, next_cursor]
++                properties:
++                  items:
++                    type: array
++                    items: {$ref: "#/components/schemas/AdminAudit"}
++                  next_cursor: {type: string}
+diff --git a/docs/ROADMAP.md b/docs/ROADMAP.md
+index 6f837a8..d8ca188 100644
+--- a/docs/ROADMAP.md
++++ b/docs/ROADMAP.md
+@@ -27,7 +27,7 @@
+ 
+ ## Backlog(明确不进当前阶段,防 scope creep)
+ 
+-SIGHUP/文件监听热加载 · ~~OpenAI Responses API 入站桥接~~(已升格:ADR-0012,openspec change `responses-api-inbound`) · ~~Redis 后端分布式限流~~(已落地:openspec change `cluster-ratelimit-shared-view`,ADR-0008 修订,GCRA+TPM 槽双实现与降级纪律) · ~~Anthropic Messages 入站形态~~(已落地:ADR-0013,`POST /v1/messages` 边缘翻译) · gRPC 入站 · MCP/A2A 协议(观察 agentgateway 动向) · 告警通知(webhook) · 控制台多用户/SSO · ~~插件机制(WASM)~~(已升格:ADR-0011,openspec change `wasm-plugin-runtime`) · 请求级 cost 预算中断 · Anthropic 桥接请求侧工具往返翻译(范围收窄至「chat 入站 × anthropic 出站」——messages 入站经同构直通已原生支持工具多轮;出现真实 agent 流量消费即立项) · OpenAI images/audio/files 端点(有具体消费场景才立项——按张/按秒计价是新计量维度) · key 级模型白名单 · key 启停 · ~~Gemini 原生桥接~~(已落地:ADR-0015 `gemini-native-protocol`,`adapter: gemini` 整家实现回归值域;此前的「裁撤+值域移除」裁决(ADR-0003 更正/`retire-gemini-adapter-token`)被本 ADR 取代)。
++~~SIGHUP/文件监听热加载~~(已落地:openspec change `sighup-config-reload`) · ~~OpenAI Responses API 入站桥接~~(已升格:ADR-0012,openspec change `responses-api-inbound`) · ~~Redis 后端分布式限流~~(已落地:openspec change `cluster-ratelimit-shared-view`,ADR-0008 修订,GCRA+TPM 槽双实现与降级纪律) · ~~Anthropic Messages 入站形态~~(已落地:ADR-0013,`POST /v1/messages` 边缘翻译) · gRPC 入站(2026-10-13 二次裁决维持拒绝:无标准协议可转译=语义真空,REST-only 与同赛道对照无缺口;论证入 HANDOFF 开放决策项) · MCP/A2A 协议(观察 agentgateway 动向) · ~~告警通知(webhook)~~(已落地:openspec change `webhook-alerting`) · ~~控制台多管理员+操作审计~~(已升格:ADR-0017,openspec change `admin-operators-audit`,从 SSO 捆绑中拆出) · SSO/OIDC(2026-10-13 二次裁决维持拒绝:锦官主场组合冗余 + standalone 零外联纪律) · ~~插件机制(WASM)~~(已升格:ADR-0011,openspec change `wasm-plugin-runtime`) · ~~请求级 cost 预算中断~~(已落地:openspec change `per-request-cost-budget`,预检+流中两道闸) · ~~Anthropic 桥接请求侧工具往返翻译~~(已落地:openspec change `anthropic-bridge-tool-roundtrip`,真异构两家整家实现) · ~~OpenAI images 生成端点~~(已升格:ADR-0016,openspec change `image-generation-endpoint`,同步形态全链 + per-image 计价维度) · audio/edits/variations 端点(二期:另一套计量维度与管道——TTS 二进制流/STT multipart,按同法裁决) · key 级模型白名单 · ~~key 启停~~(已落地:openspec change `key-disable-toggle`,可逆禁用) · ~~Gemini 原生桥接~~(已落地:ADR-0015 `gemini-native-protocol`,`adapter: gemini` 整家实现回归值域;此前的「裁撤+值域移除」裁决(ADR-0003 更正/`retire-gemini-adapter-token`)被本 ADR 取代)。
+ Backlog 升格规则:用户点名 + 影响当前架构设计时,先补 ADR 再排期。
+ 
+ ## 配套:人类 Go 学习路径(与执行并行,写给仓库所有者)
+diff --git a/docs/design/data-and-config.md b/docs/design/data-and-config.md
+index 2a98f6a..1b5474d 100644
+--- a/docs/design/data-and-config.md
++++ b/docs/design/data-and-config.md
+@@ -37,6 +37,8 @@ CREATE TABLE api_keys (
+   daily_quota_credits INTEGER NOT NULL DEFAULT 0, -- 0=不限;credit 单位(1 credit = 本位币 1e-9),迁移 0007 重命名换算
+   currency         TEXT NOT NULL DEFAULT 'CNY' CHECK (currency IN ('CNY','USD')),
+   expires_at       TEXT,                        -- 迁移 0006;可空=NULL 永不过期;RFC3339;过期判定在鉴权层逐请求以当前时钟执行
++  disabled_at      TEXT,                        -- 迁移 0009;可空=NULL 启用;可逆停用(吊销仍是唯一终态,判定先吊销后停用)
++  max_request_cost_credits INTEGER NOT NULL DEFAULT 0, -- 迁移 0010;单请求成本预算,0=不限(预检+流中两道闸)
+   created_at TEXT NOT NULL,
+   revoked_at TEXT
+ );
+@@ -106,3 +108,21 @@ standalone 形态的全量运营态(key 哈希/用量账本/价目)在单文件
+ - 备份语义为**语句开始时刻的一致快照**:快照内账本自洽,不要求与备份后到达的写入一致。
+ - 明确不做:定时/自动备份(OS 层 cron/launchd/Time Machine 的职责)、云同步、加密、
+   增量备份、cluster 形态(无状态副本 + jinguan PG 自有备份生态,ADR-0005 边界)。
++
++## 图片价目与管理面身份（ADR-0016/0017）
++
++追加迁移 0011 `image_pricing(alias TEXT PK,currency TEXT CNY|USD,default_credits INTEGER>0,tiers TEXT JSON,updated_at TEXT)`。tiers 为 `size|quality → credit/张` 对象；读取期严格解析，损坏拒启/拒刷新。配置 `image_pricing` 是按别名组织的静态报价映射（currency/default/tiers 字符串），与既有 pricing 平行。
++
++追加迁移 0012：
++
++- `admin_users(id TEXT UUIDv7 PK,username TEXT UNIQUE,password_hash TEXT,status TEXT active|disabled,created_at TEXT,last_login_at TEXT nullable)`；哈希为 argon2id PHC 串，列表/API/日志不回显。
++- `admin_sessions(token_hash TEXT SHA-256 PK,user_id TEXT FK,created_at TEXT,expires_at TEXT)`；令牌 32 随机字节，固定 12h、HttpOnly、SameSite=Lax、Path=/；逐请求查活跃账号，停用/改密与全部会话删除同事务，登录签发条件再次核验活跃状态与密码版本，防止并发停用/改密后签发旧凭据。
++- `admin_audit_log(id TEXT UUIDv7 PK,request_id TEXT,actor_kind TEXT session|token|login,actor_name TEXT,action TEXT,target_id TEXT,outcome TEXT,detail TEXT,created_at TEXT)`，按 created_at/id 倒序复合游标查询，只增不改；变更与登录成败同步留痕，写失败告警，动作不回滚。
++
++管理面挂载条件为共享令牌或活跃管理员账号；现行 Bearer 轨保留，actor 为 management-token。`muniu admins add|list|disable|enable|passwd` 直连同库，口令走 stdin，tty 禁回显并双次确认。`POST /admin/v1/auth/login|logout`、`GET /admin/v1/auth/whoami`、`GET/POST /admin/v1/admins`、`PATCH /admin/v1/admins/{id}`、`GET /admin/v1/audit` 是管理 API；数据面 API key 与运维身份分离。
++
++登录连续失败 5 次锁 15 分钟，进程内计数重启清零。PHC 参数随串解析且施加资源上限；口令至少 8 字符。过期会话启动清扫/命中惰性清理，不增加后台任务。会话轨与登录入口使用 Go 标准库 CrossOriginProtection 拒绝跨站写操作；Bearer 脚本轨行为保留。cookie 在本地 HTTP 不设 Secure；远程访问须由 TLS 反代终止。审计 body 只取允许的业务标量，password/token/secret 脱敏，未知字段只留字段名。管理请求体上限 1MiB。
++
++`GET /metrics` 仍独立使用 Bearer token 门禁，不因账号轨引入而开放；身份与静态报价仍不属于 SIGHUP 热更域。
++
++供应商管理页与 keypool gauge 在每次读取时复用 Proxy.Topology() 的当前同一快照，不持启动时 providers/pools 作为热更后的真相；无动态视图注入的管理 handler 保留静态形态用于独立调用与测试。
+diff --git a/docs/design/metering.md b/docs/design/metering.md
+index 1af5ca9..45ee4ff 100644
+--- a/docs/design/metering.md
++++ b/docs/design/metering.md
+@@ -49,6 +49,15 @@
+ - **控制面纳管期间撤销覆盖非粘性**:已配置 `control_plane.pricing_url` 的实例,每轮按控制面全量期望同步(内容不变跳过);
+   本地 DELETE 撤销会在下一轮被控制面期望重新覆盖——纳管实例的撤销必须在控制面侧执行。
+ 
++## 请求级成本预算(事中成本闸,2026-10-13 开放)
++
++日配额是「事后」闸(按已落账成本拦截);请求级成本预算把治理前移到「单请求」粒度:
++
++- **宿主**:`api_keys.max_request_cost_credits`(迁移 0010,0=不限),credit 与日配额同单位;PATCH/控制台写后鉴权缓存失效即生效,CLI 跨进程 ≤ 鉴权缓存 TTL(10s)收敛(输出如实提示)。
++- **两道闸**:预检(估算输入 + max_tokens 输出上界,超界 402 `cost_budget_exceeded` 上游零调用且不落账)+ 流式中断(累计成本超界断言收尾,已发生部分如实落账)。闸的判定细节与诚实边界见 proxy-and-streaming「请求级成本预算」节。
++- **计量口径**:预检拒绝不落行(上游零调用零成本,与 strict 治理 400 同族);流中中断落行,`status=error`、`error_class=cost_budget_exceeded`,usage 按真值/估算现行优先级——中断本身不是计量缺口。
++- **保守原则**:估算取「缓存折扣不计、逐帧累计轻微高估」方向,预算场景宁紧勿松;真值(usage 帧)到达即覆盖估算。
++
+ ## 异步落库(背压优先于丢单)
+ 
+ ```
+@@ -69,3 +78,11 @@
+ ## 测试要求(测试先行域)
+ 
+ 计价整数运算表驱动(含边界:0 token、恰 1e6、向上取整临界)· 估算路径(usage 缺失→estimated 置位)· 断言中断只计已转发部分 · channel 满背压行为 · 批量落库与优雅排干。
++
++## per-image 计价（ADR-0016）
++
++同步 `POST /v1/images/generations` 以 `n × 单价` 精确计费，n 缺省 1。`size|quality` 完整拼接查档位，缺省字段不猜厂商缺省值，未命中回落兜底价；无价目记零。报价为 ≤9 位小数十进制字符串，加载期换算 credit，并复用本位币汇率纪律。`image_pricing` 与 token 价目互不接管，DB 按别名整体覆盖 YAML，删除即回落。
++
++预算与计量共享请求入口取得的不可变价格。预算超界在候选循环前 402 `cost_budget_exceeded`，零上游调用、零计量行；乘法溢出 400 拒绝。响应保留上游 2xx 状态与完整字节；只有整包交付成功才置成本，非 2xx、构造失败、断流、客户端写失败的观测行成本均零。token 四列恒零、estimated=0，上游 usage 不参与计价，TPM 不消耗、语义缓存不适用。上游可能已计费而网关未交付的歧义不冒认成本；账单核对须识别该边界。
++
++在线改价先构建并校验完整候选目录，再持久化并原子发布；并发写入串行，脏 JSON 或非法价目拒绝重建并保持已发布快照。`GET/PUT/DELETE /admin/v1/image-pricing` 管理此维度，列表按别名升序标明 yaml/db 来源。
+diff --git a/docs/design/proxy-and-streaming.md b/docs/design/proxy-and-streaming.md
+index 515db55..bd6f143 100644
+--- a/docs/design/proxy-and-streaming.md
++++ b/docs/design/proxy-and-streaming.md
+@@ -32,10 +32,19 @@
+ | bad_request_400 | 参数被上游拒 | **不换道**直接返回(参数问题换家也会拒;桥接翻译缺陷另行走 adapter 修复) | 断言 |
+ | mid_stream_fail | 流中断/帧间超时/解析崩 | —(定义上已过首 token) | 断言 |
+ | context_canceled | 客户端断连 | 静默退出,不换道不计失败 | 静默退出,计量已发生部分 |
++| cost_budget_exceeded | 网关策略:单请求成本预算超限(request-cost-budget) | 静默终结,不换道不计失败(同别名跨候选价目相同,换道无解) | 静默终结(中断出口已自行写流内错误帧/402 信封) |
+ | **候选适配性豁免(桥接工具限制;防御性保留)** | 请求含 role=tool / assistant.tool_calls 且候选为**未声明工具翻译完整的桥接型**(Bridger ∧ ToolRoundtripComplete=false) | **跳过候选,不计 key EMA/冷却**(适配性不匹配≠上游故障);候选取 key 之前生效 | —(检测在候选循环,先于 attempt;anthropic 桥接已声明完整不再触发,机制经测试替身钉住) |
+ 
+ 候选耗尽仍失败 → 最终错误信封 `code=all_candidates_failed`;候选列表耗尽的 429/401 类错误在信封 `message` 中如实说明「已尝试全部候选」。**全部候选因桥接豁免跳过且无任何真实上游错误** → 最终信封 `code=bridge_tool_roundtrip_unsupported`(400,自解释文案;upstream-egress-batch 契约)。非流式请求没有「已过首 token」态(首字节前全部可重放)。
+ 
++## 请求级成本预算(request-cost-budget 契约)
++
++per-key 单请求成本上界(`max_request_cost_credits`,0=不限),两道闸把成本治理前移到「事中」:
++
++1. **预检闸**(候选循环前,四条入站 lane 共用):预算>0 ∧ 价目可得 ∧ `max_tokens`>0 时,估算「输入成本 + max_tokens×输出价」上界(缓存折扣不计,保守不低估),超界 → 402 `cost_budget_exceeded`,**上游零调用、不落计量行**(与 strict 治理 400 同族)。`max_tokens` 缺失 = 输出上界不可知,预检不拒绝(不伪保护);无价目别名同样旁路。
++2. **流中闸**(翻译出站路径):按累计成本逐帧检查——输入/输出各取「usage 帧真值优先、逐帧估算兜底」(逐帧估算轻微保守高估,预算宁紧勿松);终态帧不拦(响应已完成,事后无中断意义)。已开闸 → 流内错误帧(`cost_budget_exceeded`,402 族)+ 干净收尾,已收部分保留;未开闸 → 402 信封。已发生部分如实计量落账(`error_class=cost_budget_exceeded`)。**中断不计 key 失败**(不冷却不禁用不记 EMA,判定表静默格)。
++3. **诚实边界**:非流式无中断闸(上游原子生成,中断只省传输不省账单,不做伪保护);直通 passthrough 流已开闸段不中断(无原生协议错误帧合成机制,未开闸仍可拦);embeddings 端点不在闸覆盖内(输出形态不同)。三者均为登记限制,非缺陷。
++
+ ## SSE 透传实现契约
+ 
+ 1. **逐事件转发**:读到完整事件(以空行 `\n\n` 分隔)即 `Write` + `http.Flusher.Flush()`,**禁止攒整包、禁止按行切分 SSE 事件**(多行 data 字段合法存在);半帧残留在缓冲区直到补齐,绝不解析半个事件。
+@@ -225,3 +234,9 @@ data: [DONE]
+ ### 管道等价性
+ 
+ 翻译产物与等价 chat 请求 canonical 逐字节同构 ⇒ 治理/插件/限流/failover/计量/语义缓存全同构(跨协议缓存命中钉子测试);gemini 候选工具多轮翻译完整,不触发桥接豁免(声明式缺口,ADR-0015 决策 4)。
++
++## 同步 images 通道（ADR-0016）
++
++独立 handler 挂载于既有数据面鉴权/限流/配额链，插件请求体钩子在候选循环前执行。OpenAI 兼容基座声明 `ImagePreparer`，只改模型名；不具备能力的适配器返回 400 `images_not_supported`，不换道。沿用非流式 failover 判定表，5xx/429/传输错误可换候选；请求体 4MiB、响应体 64MiB，超限或中断不交付半包。响应读取在同一 FirstToken 计时器内完成，请求取消传导至出站。全请求仅加载一次拓扑与价格快照。
++
++只支持同步 generations；异步 submit/poll、edits/variations、audio 不在此通道。上游 url 原样返回，不托管图片、不注入 response_format。断流候选 cost=0，可能发生的上游生成费用为诚实边界，见 metering.md。
+diff --git a/docs/provider-presets.md b/docs/provider-presets.md
+index 0d76b0a..757f356 100644
+--- a/docs/provider-presets.md
++++ b/docs/provider-presets.md
+@@ -169,3 +169,7 @@ MUNIU_SMOKE_KEY=<真实key> MUNIU_SMOKE_BASE_URL=<表A/B端点> \
+   条目附各家官方文档链接、核对日期与真 key 探针记录),交叉本仓协议矩阵;录入日 2026-09-26。
+ - 维护边界:目录只登记官方端点与验证状态,**不承诺逐家长期跟进**;端点漂移由真实
+   接入(冒烟/对账告警)驱动修正,与适配矩阵的演进纪律一致。
++
++## 同步图片生成的验证边界
++
++网关已提供 OpenAI 兼容 `POST /v1/images/generations`，路由与价目需要显式配置。硅基流动、智谱等同步生成端点的真实 wire 与厂商计费均未在本批冒烟实证，不把 chat 预设的可用性等同于 images 已验证。当前证明集为假上游与协议保真测试；真实凭据到位后按手动 smoke 纪律验收。dashscope wanx 等异步任务型端点不在本通道。
+diff --git a/go.mod b/go.mod
+index d2c2867..f5fdfa5 100644
+--- a/go.mod
++++ b/go.mod
+@@ -11,6 +11,7 @@ require (
+ 	github.com/pkoukk/tiktoken-go-loader v0.0.2
+ 	github.com/redis/go-redis/v9 v9.22.0
+ 	github.com/tetratelabs/wazero v1.12.0
++	golang.org/x/crypto v0.58.0
+ 	golang.org/x/time v0.16.0
+ 	modernc.org/sqlite v1.58.0
+ )
+@@ -29,7 +30,7 @@ require (
+ 	github.com/yuin/gopher-lua v1.1.1 // indirect
+ 	go.uber.org/atomic v1.11.0 // indirect
+ 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
+-	golang.org/x/sys v0.47.0 // indirect
++	golang.org/x/sys v0.49.0 // indirect
+ 	modernc.org/libc v1.75.6 // indirect
+ 	modernc.org/mathutil v1.7.1 // indirect
+ 	modernc.org/memory v1.12.1 // indirect
+diff --git a/go.sum b/go.sum
+index 4964c78..b10bbd4 100644
+--- a/go.sum
++++ b/go.sum
+@@ -56,14 +56,16 @@ github.com/zeebo/xxh3 v1.1.0 h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=
+ github.com/zeebo/xxh3 v1.1.0/go.mod h1:IisAie1LELR4xhVinxWS5+zf1lA4p0MW4T+w+W07F5s=
+ go.uber.org/atomic v1.11.0 h1:ZvwS0R+56ePWxUNi+Atn9dWONBPp/AUETXlHW0DxSjE=
+ go.uber.org/atomic v1.11.0/go.mod h1:LUxbIzbOniOlMKjJjyPfpl4v+PKK2cNJn91OQbhoJI0=
++golang.org/x/crypto v0.58.0 h1:COkYLr4k7nDI4r6QtMML2AfzeIswWHAJthLS6K/M/54=
++golang.org/x/crypto v0.58.0/go.mod h1:Xh+kl5A+M0gMiWDytH2Hhr5Z7WbNCpv/eB/EFgfSk+w=
+ golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 h1:vr/HnozRka3pE4EsMEg1lgkXJkTFJCVUX+S/ZT6wYzM=
+ golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842/go.mod h1:XtvwrStGgqGPLc4cjQfWqZHG1YFdYs6swckp8vpsjnc=
+ golang.org/x/mod v0.38.0 h1:MECBjubtXD7yj4HrhIUcywNaGeNVUdfVnxmPajOk4yk=
+ golang.org/x/mod v0.38.0/go.mod h1:V6Xz0pq8TQ3dGqVQ1FVHuelZpAL0uNhSkk9ogYP3c40=
+ golang.org/x/sync v0.22.0 h1:SZjpbeLmrCk4xhRSZFNZW5gFUeCeFgjekvI/+gfScek=
+ golang.org/x/sync v0.22.0/go.mod h1:9xrNwdLfx4jkKbNva9FpL6vEN7evnE43NNNJQ2LF3+0=
+-golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
+-golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
++golang.org/x/sys v0.49.0 h1:XbzkgYJHdqh/8m2Uu0W/dQv8nktxx4BFHp1M0gROTXA=
++golang.org/x/sys v0.49.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
+ golang.org/x/time v0.16.0 h1:vMb6ptszcQMkcwiRTAuNNU50gom6++Q/6gY2hDM6VDE=
+ golang.org/x/time v0.16.0/go.mod h1:rVKOqvZeKvrDKTQiAHJ7wmwP0RzleSphoEA9RcdLA0s=
+ golang.org/x/tools v0.48.0 h1:3+hClM1aLL5mjMKm5ovokw9epgRXPuu2tILgismM6RE=
+diff --git a/internal/adapter/adapter.go b/internal/adapter/adapter.go
+index f11f8bc..2b8c872 100644
+--- a/internal/adapter/adapter.go
++++ b/internal/adapter/adapter.go
+@@ -207,3 +207,8 @@ func (r *Registry) Names() []string {
+ type Bridger interface {
+ 	BridgeKind() string
+ }
++
++// ImagePreparer 同步生成是可选能力，桥接适配器不声明即明确拒绝。
++type ImagePreparer interface {
++	PrepareImages(in *protocol.ImageRequest, upstreamModel, apiKey string) (*Outbound, error)
++}
+diff --git a/internal/adapter/openai.go b/internal/adapter/openai.go
+index c97bf74..3ba4d22 100644
+--- a/internal/adapter/openai.go
++++ b/internal/adapter/openai.go
+@@ -261,3 +261,15 @@ func mustJSON2(s string) string {
+ 	}
+ 	return string(b)
+ }
++
++// PrepareImages 原位改写模型，其余参数与响应形态由调用方和上游决定。
++func (o *OpenAI) PrepareImages(in *protocol.ImageRequest, upstreamModel, apiKey string) (*Outbound, error) {
++	body, err := protocol.RewriteModel(in.Raw, upstreamModel)
++	if err != nil {
++		return nil, err
++	}
++	h := http.Header{}
++	h.Set("Content-Type", "application/json")
++	h.Set("Authorization", "Bearer "+apiKey)
++	return &Outbound{URL: strings.TrimRight(o.baseURL, "/") + "/images/generations", Header: h, Body: body}, nil
++}
+diff --git a/internal/admin/admin.go b/internal/admin/admin.go
+index 072693d..bdeac5b 100644
+--- a/internal/admin/admin.go
++++ b/internal/admin/admin.go
+@@ -1,5 +1,4 @@
+-// Package admin 承载管理面(T4.1):/admin/v1/* 路由,鉴权 = MUNIU_ADMIN_TOKEN(Bearer,单管理员)。
+-// token 未配置 → Handler 返回 nil,管理面整体不注册(装配期 warn)。
++// Package admin 承载运维面双轨鉴权与动作审计；账号和共享令牌均未配置时整体关闭。
+ // keys 管理与 Phase 2 CLI 同源(复用 auth 库函数);错误信封与业务面同格式。
+ package admin
+ 
+@@ -7,6 +6,7 @@ import (
+ 	"database/sql"
+ 	"encoding/json"
+ 	"errors"
++	"io"
+ 	"log/slog"
+ 	"net/http"
+ 	"strings"
+@@ -39,16 +39,20 @@ type StaticEntry struct {
+ // (GET 列表展示用);RefreshPricing 由装配层注入——持久化成功后重建目录并原子替换。
+ type Deps struct {
+ 	DB         *sql.DB
++	AdminAuth  *auth.AdminService
+ 	Token      string
+ 	Providers  []config.Provider
+ 	Pools      map[string]*keypool.Pool
+ 	CacheStats CacheStatsProvider
++	Topology   func() ([]config.Provider, map[string]*keypool.Pool)
+ 	Verifier   *auth.Verifier
+ 
+-	PricingDir     *metering.PricingDirectory
+-	StaticPricing  map[string]StaticEntry
+-	RefreshPricing func() error
+-	Plugins        *plugin.Registry // WASM 插件注册表(ADR-0011);nil = 端点返回禁用态
++	StaticImagePricing map[string]metering.ImagePrice
++	UpdateImagePricing func(string, *store.ImagePricingRecord) error
++	PricingDir         *metering.PricingDirectory
++	StaticPricing      map[string]StaticEntry
++	RefreshPricing     func() error
++	Plugins            *plugin.Registry // WASM 插件注册表(ADR-0011);nil = 端点返回禁用态
+ 
+ 	Logger *slog.Logger
+ }
+@@ -62,6 +66,16 @@ type adminRouteEntry struct {
+ // adminRouteTable 管理面路由单一事实源:New 据此注册,Routes() 据此回报(漂移门禁消费)。
+ // 两处手写必然漂移(同业务面 /v1/messages 曾 404 的教训),模式在这里只写一次。
+ var adminRouteTable = []adminRouteEntry{
++	{"POST /admin/v1/auth/login", adminLogin},
++	{"POST /admin/v1/auth/logout", adminLogout},
++	{"GET /admin/v1/auth/whoami", adminWhoami},
++	{"GET /admin/v1/admins", adminUsersList},
++	{"POST /admin/v1/admins", adminUsersCreate},
++	{"PATCH /admin/v1/admins/{id}", adminUsersPatch},
++	{"GET /admin/v1/audit", adminAuditList},
++	{"GET /admin/v1/image-pricing", imagePricingList},
++	{"PUT /admin/v1/image-pricing/{alias}", imagePricingPut},
++	{"DELETE /admin/v1/image-pricing/{alias}", imagePricingDelete},
+ 	{"GET /admin/v1/tenants", listTenants},
+ 	{"POST /admin/v1/tenants", createTenant},
+ 	{"PATCH /admin/v1/tenants/{id}", patchTenant},
+@@ -81,32 +95,34 @@ var adminRouteTable = []adminRouteEntry{
+ 	{"PATCH /admin/v1/plugins/{name}", pluginPatch},
+ }
+ 
+-// New 构造管理面 handler;token 为空返回 nil(管理面关闭)。
++// New 按共享令牌或活跃账号开放管理面，认证装配失败不暴露空壳。
+ func New(d Deps) http.Handler {
+-	if d.Token == "" {
+-		return nil
+-	}
+ 	if d.Logger == nil {
+ 		d.Logger = slog.Default()
+ 	}
++	if d.Token == "" {
++		active, err := store.HasActiveAdmins(d.DB)
++		if err != nil {
++			d.Logger.Error("管理员挂载条件查询失败", "error_detail", err.Error())
++			return nil
++		}
++		if !active {
++			return nil
++		}
++	}
++	if d.AdminAuth == nil {
++		svc, err := auth.NewAdminService(d.DB)
++		if err != nil {
++			d.Logger.Error("管理员认证装配失败", "error_detail", err.Error())
++			return nil
++		}
++		d.AdminAuth = svc
++	}
+ 	mux := http.NewServeMux()
+ 	for _, e := range adminRouteTable {
+ 		mux.Handle(e.Pattern, e.Handler(d))
+ 	}
+-	return authAdmin(d.Token, d.Logger, mux)
+-}
+-
+-// authAdmin 管理面鉴权:Bearer token 恒等比较(用 constant time 防时序侧信道)。
+-func authAdmin(token string, logger *slog.Logger, next http.Handler) http.Handler {
+-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+-		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+-		if !secureEqual(got, token) {
+-			logger.Warn("管理面鉴权失败", "request_id", logging.RequestIDFrom(r.Context()))
+-			writeAdminError(w, r, http.StatusUnauthorized, protocol.TypeAuthFailed, "auth_failed", "管理 token 无效")
+-			return
+-		}
+-		next.ServeHTTP(w, r)
+-	})
++	return authOperators(d, auditOperators(d, mux))
+ }
+ 
+ // secureEqual 恒定时间字符串比较。
+@@ -145,7 +161,15 @@ func respondErr(d Deps, w http.ResponseWriter, r *http.Request, err error, bizCo
+ 
+ func decode(r *http.Request, v any) error {
+ 	defer func() { _ = r.Body.Close() }()
+-	return json.NewDecoder(r.Body).Decode(v)
++	decoder := json.NewDecoder(r.Body)
++	if err := decoder.Decode(v); err != nil {
++		return err
++	}
++	var extra any
++	if err := decoder.Decode(&extra); err != io.EOF {
++		return errors.New("请求体必须是单个 JSON 值")
++	}
++	return nil
+ }
+ 
+ // ---- tenants ----
+@@ -241,18 +265,26 @@ func listKeys(d Deps) http.HandlerFunc {
+ func createKey(d Deps) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		var req struct {
+-			Tenant            string `json:"tenant"`
+-			Name              string `json:"name"`
+-			RPMLimit          int64  `json:"rpm_limit"`
+-			TPMLimit          int64  `json:"tpm_limit"`
+-			DailyQuotaCredits int64  `json:"daily_quota_credits"`
+-			ExpiresAt         string `json:"expires_at"` // 可空;RFC3339(空 = 永不过期)
++			Tenant                string `json:"tenant"`
++			Name                  string `json:"name"`
++			RPMLimit              int64  `json:"rpm_limit"`
++			TPMLimit              int64  `json:"tpm_limit"`
++			DailyQuotaCredits     int64  `json:"daily_quota_credits"`
++			MaxRequestCostCredits int64  `json:"max_request_cost_credits"`
++			ExpiresAt             string `json:"expires_at"` // 可空;RFC3339(空 = 永不过期)
+ 		}
+ 		if err := decode(r, &req); err != nil || req.Name == "" {
+ 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
+ 			return
+ 		}
+-		opts := auth.KeyOpts{TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits}
++		if req.MaxRequestCostCredits < 0 {
++			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "max_request_cost_credits 不可为负")
++			return
++		}
++		opts := auth.KeyOpts{
++			TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
++			MaxRequestCostCredits: req.MaxRequestCostCredits,
++		}
+ 		if req.ExpiresAt != "" {
+ 			t, err := time.Parse(time.RFC3339, req.ExpiresAt)
+ 			if err != nil {
+@@ -287,17 +319,24 @@ func createKey(d Deps) http.HandlerFunc {
+ func patchKey(d Deps) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		var req struct {
+-			RPMLimit          *int64          `json:"rpm_limit"`
+-			TPMLimit          *int64          `json:"tpm_limit"`
+-			DailyQuotaCredits *int64          `json:"daily_quota_credits"`
+-			ExpiresAt         json.RawMessage `json:"expires_at"` // 缺省=不动;null=清除;"RFC3339"=设定
++			RPMLimit              *int64          `json:"rpm_limit"`
++			TPMLimit              *int64          `json:"tpm_limit"`
++			DailyQuotaCredits     *int64          `json:"daily_quota_credits"`
++			ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动;null=清除;"RFC3339"=设定
++			Disabled              *bool           `json:"disabled"`                 // 缺省=不动;true=停用/false=恢复
++			MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动;0=不限
+ 		}
+ 		if err := decode(r, &req); err != nil {
+ 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
+ 			return
+ 		}
++		if req.MaxRequestCostCredits != nil && *req.MaxRequestCostCredits < 0 {
++			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "max_request_cost_credits 不可为负")
++			return
++		}
+ 		patch := auth.LimitsPatch{
+ 			RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
++			Disabled: req.Disabled, MaxRequestCostCredits: req.MaxRequestCostCredits,
+ 		}
+ 		switch {
+ 		case len(req.ExpiresAt) == 0: // 字段缺省:不动
+@@ -414,12 +453,16 @@ func usage(d Deps) http.HandlerFunc {
+ func providers(d Deps) http.HandlerFunc {
+ 	return func(w http.ResponseWriter, r *http.Request) {
+ 		now := time.Now()
+-		out := make([]map[string]any, 0, len(d.Providers))
+-		for _, p := range d.Providers {
++		providers, pools := d.Providers, d.Pools
++		if d.Topology != nil {
++			providers, pools = d.Topology()
++		}
++		out := make([]map[string]any, 0, len(providers))
++		for _, p := range providers {
+ 			keys := make([]map[string]any, 0, len(p.Keys))
+ 			for _, kr := range p.Keys {
+ 				st := "unknown"
+-				if pool := d.Pools[p.Name]; pool != nil {
++				if pool := pools[p.Name]; pool != nil {
+ 					st = pool.StateOf(kr.Env, now)
+ 				}
+ 				keys = append(keys, map[string]any{"id": kr.Env, "weight": kr.Weight, "state": st})
+diff --git a/internal/admin/admin_test.go b/internal/admin/admin_test.go
+index 7bc7539..66c30fc 100644
+--- a/internal/admin/admin_test.go
++++ b/internal/admin/admin_test.go
+@@ -161,6 +161,58 @@ func TestAdmin_keysCRUD全链(t *testing.T) {
+ 	}
+ }
+ 
++// 启停与请求级成本预算的 PATCH 契约:boolean/数值字段落库回显,负预算 400(整单拒绝)。
++func TestAdmin_key启停与预算PATCH(t *testing.T) {
++	db := openDB(t)
++	h := newAdmin(t, db, "tok", nil)
++
++	code, body := call(t, h, "POST", "/admin/v1/keys", "tok", `{"tenant":"default","name":"toggle-key"}`)
++	if code != 200 {
++		t.Fatalf("签发失败: %d %s", code, body)
++	}
++	var created struct {
++		ID string `json:"id"`
++	}
++	_ = json.Unmarshal([]byte(body), &created)
++	if created.ID == "" {
++		t.Fatalf("签发响应缺 id: %s", body)
++	}
++
++	// 签发期预算真实落库(P0 回归钉子:handler 漏接字段会静默丢弃为 0)
++	code, _ = call(t, h, "POST", "/admin/v1/keys", "tok",
++		`{"tenant":"default","name":"budget-key","max_request_cost_credits":7777}`)
++	if code != 200 {
++		t.Fatalf("带预算签发失败: %d", code)
++	}
++	code, _ = call(t, h, "POST", "/admin/v1/keys", "tok",
++		`{"tenant":"default","name":"neg-budget","max_request_cost_credits":-1}`)
++	if code != 400 {
++		t.Fatalf("负预算签发应 400: %d", code)
++	}
++
++	// 停用:回执如实回显 disabled + status
++	code, body = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok", `{"disabled":true}`)
++	if code != 200 || !strings.Contains(body, `"disabled":true`) || !strings.Contains(body, `"status":"active"`) {
++		t.Fatalf("停用应 200 且回显 disabled/status: %d %s", code, body)
++	}
++	// 恢复 + 预算设定一并 PATCH
++	code, body = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok",
++		`{"disabled":false,"max_request_cost_credits":5000}`)
++	if code != 200 || !strings.Contains(body, `"disabled":false`) || !strings.Contains(body, `"max_request_cost_credits":5000`) {
++		t.Fatalf("恢复+预算应 200 且回显: %d %s", code, body)
++	}
++	// 负预算整单拒绝
++	code, _ = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok", `{"max_request_cost_credits":-1}`)
++	if code != 400 {
++		t.Fatalf("负预算应 400: %d", code)
++	}
++	// 列表回显预算字段(P2 收紧:证字段名更证值)
++	_, body = call(t, h, "GET", "/admin/v1/keys", "tok", "")
++	if !strings.Contains(body, `"max_request_cost_credits":5000`) {
++		t.Fatalf("列表应回显预算值 5000: %s", body)
++	}
++}
++
+ func TestAdmin_usage参数校验与聚合(t *testing.T) {
+ 	db := openDB(t)
+ 	h := newAdmin(t, db, "tok", nil)
+diff --git a/internal/auth/auth.go b/internal/auth/auth.go
+index a760ffa..1bb499e 100644
+--- a/internal/auth/auth.go
++++ b/internal/auth/auth.go
+@@ -63,22 +63,28 @@ func Hash(plaintext string) string {
+ 
+ // KeyRecord 签发/列表回执(管理命令与控制台;明文只在 CreateKey 返回值出现一次)。
+ // 限额三件套与过期时刻如实透出(零值/空 = 不限/永不过期)。
++// Status 是生命周期终态位(active|revoked);Disabled 是可逆运行态(启停),两者正交:
++// 吊销优先于停用,恢复操作不得复活吊销 key。
+ type KeyRecord struct {
+-	ID                string     `json:"id"`
+-	TenantID          string     `json:"tenant_id"`
+-	Name              string     `json:"name"`
+-	Prefix            string     `json:"prefix"`
+-	RPMLimit          int64      `json:"rpm_limit"`
+-	TPMLimit          int64      `json:"tpm_limit"`
+-	DailyQuotaCredits int64      `json:"daily_quota_credits"`
+-	ExpiresAt         *time.Time `json:"expires_at"`
++	ID                    string     `json:"id"`
++	TenantID              string     `json:"tenant_id"`
++	Name                  string     `json:"name"`
++	Prefix                string     `json:"prefix"`
++	RPMLimit              int64      `json:"rpm_limit"`
++	TPMLimit              int64      `json:"tpm_limit"`
++	DailyQuotaCredits     int64      `json:"daily_quota_credits"`
++	ExpiresAt             *time.Time `json:"expires_at"`
++	Status                string     `json:"status"`
++	Disabled              bool       `json:"disabled"`
++	MaxRequestCostCredits int64      `json:"max_request_cost_credits"`
+ }
+ 
+ // KeyOpts 签发可选项:零值 = 不限/永不过期(现状等价,零回归)。
+ type KeyOpts struct {
+-	TPMLimit          int64
+-	DailyQuotaCredits int64
+-	ExpiresAt         *time.Time
++	TPMLimit              int64
++	DailyQuotaCredits     int64
++	ExpiresAt             *time.Time
++	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;负值在入口拒绝)
+ }
+ 
+ // CreateKey 签发并落库;返回明文(仅此一次)与回执。
+@@ -87,8 +93,8 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
+ 	if tenant == "" {
+ 		tenant = "default"
+ 	}
+-	if rpm < 0 || opts.TPMLimit < 0 || opts.DailyQuotaCredits < 0 {
+-		return "", nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额 不可为负"))
++	if rpm < 0 || opts.TPMLimit < 0 || opts.DailyQuotaCredits < 0 || opts.MaxRequestCostCredits < 0 {
++		return "", nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额/请求预算 不可为负"))
+ 	}
+ 	if rpm <= 0 {
+ 		rpm = 60
+@@ -110,26 +116,30 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
+ 		expires = opts.ExpiresAt.UTC().Format(time.RFC3339)
+ 	}
+ 	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
+-		rpm_limit, tpm_limit, daily_quota_credits, expires_at, created_at)
+-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
++		rpm_limit, tpm_limit, daily_quota_credits, expires_at, max_request_cost_credits, created_at)
++		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+ 		id, tenantID, name, Hash(plaintext), plaintext[:12], "active",
+-		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, now); err != nil {
++		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, opts.MaxRequestCostCredits, now); err != nil {
+ 		return "", nil, fmt.Errorf("auth: 落库 api_key: %w", err)
+ 	}
+ 	return plaintext, &KeyRecord{
+ 		ID: id, TenantID: tenant, Name: name, Prefix: plaintext[:12], RPMLimit: rpm,
+ 		TPMLimit: opts.TPMLimit, DailyQuotaCredits: opts.DailyQuotaCredits, ExpiresAt: opts.ExpiresAt,
++		Status: "active", Disabled: false, MaxRequestCostCredits: opts.MaxRequestCostCredits,
+ 	}, nil
+ }
+ 
+ // LimitsPatch key 运行态限额的局部更新(PATCH 语义:省略字段不动)。
+ // ClearExpires 表达「显式 null 清除过期」;ExpiresAt 非 nil 且未 Clear 时为设定新过期。
++// Disabled 三态:true=停用(记 disabled_at)/false=恢复(清列)/nil=不动。
+ type LimitsPatch struct {
+-	RPMLimit          *int64
+-	TPMLimit          *int64
+-	DailyQuotaCredits *int64
+-	ExpiresAt         *time.Time
+-	ClearExpires      bool
++	RPMLimit              *int64
++	TPMLimit              *int64
++	DailyQuotaCredits     *int64
++	ExpiresAt             *time.Time
++	ClearExpires          bool
++	Disabled              *bool
++	MaxRequestCostCredits *int64
+ }
+ 
+ // UpdateKeyLimits 局部更新 key 限额/过期(管理面 PATCH;写后调用方须 Verifier.Invalidate)。
+@@ -137,8 +147,9 @@ type LimitsPatch struct {
+ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error) {
+ 	if (p.RPMLimit != nil && *p.RPMLimit < 0) ||
+ 		(p.TPMLimit != nil && *p.TPMLimit < 0) ||
+-		(p.DailyQuotaCredits != nil && *p.DailyQuotaCredits < 0) {
+-		return nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额 不可为负"))
++		(p.DailyQuotaCredits != nil && *p.DailyQuotaCredits < 0) ||
++		(p.MaxRequestCostCredits != nil && *p.MaxRequestCostCredits < 0) {
++		return nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额/请求预算 不可为负"))
+ 	}
+ 	sets, args := []string{}, []any{}
+ 	add := func(col string, v any) { sets = append(sets, col+" = ?"); args = append(args, v) }
+@@ -151,11 +162,21 @@ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error
+ 	if p.DailyQuotaCredits != nil {
+ 		add("daily_quota_credits", *p.DailyQuotaCredits)
+ 	}
++	if p.MaxRequestCostCredits != nil {
++		add("max_request_cost_credits", *p.MaxRequestCostCredits)
++	}
+ 	if p.ClearExpires {
+ 		add("expires_at", nil)
+ 	} else if p.ExpiresAt != nil {
+ 		add("expires_at", p.ExpiresAt.UTC().Format(time.RFC3339))
+ 	}
++	if p.Disabled != nil {
++		if *p.Disabled {
++			add("disabled_at", time.Now().UTC().Format(time.RFC3339))
++		} else {
++			add("disabled_at", nil)
++		}
++	}
+ 	if len(sets) == 0 {
+ 		// 无字段可更新:仍回读校验 key 存在性(幂等 no-op 也须 404 语义正确)
+ 		sets = append(sets, "rpm_limit = rpm_limit")
+@@ -174,10 +195,12 @@ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error
+ // keyRecordByID 按 id 读回执(Update 后回传最新行;不存在返回 ErrNotFound)。
+ func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
+ 	var r KeyRecord
+-	var exp sql.NullString
+-	err := db.QueryRow(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits, expires_at
++	var exp, dis sql.NullString
++	err := db.QueryRow(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
++		expires_at, status, disabled_at, max_request_cost_credits
+ 		FROM api_keys WHERE id = ?`, keyID).
+-		Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits, &exp)
++		Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits,
++			&exp, &r.Status, &dis, &r.MaxRequestCostCredits)
+ 	if errors.Is(err, sql.ErrNoRows) {
+ 		return nil, store.ErrNotFound
+ 	}
+@@ -191,6 +214,9 @@ func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
+ 		}
+ 		r.ExpiresAt = &t
+ 	}
++	// disabled_at 只需非空判定:形态合法性由 store 读侧严格解析并拒绝(RFC3339,宁拒不放行),
++	// 同列两层口径不同是刻意的——auth 读侧不重复解析成本
++	r.Disabled = dis.Valid && dis.String != ""
+ 	return &r, nil
+ }
+ 
+@@ -209,7 +235,8 @@ func RevokeKeyByPrefix(db *sql.DB, prefix string) (int64, error) {
+ 
+ // ListKeys 列出 key(管理命令读侧;不含 hash 明文),按签发时间升序。
+ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
+-	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits, expires_at
++	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
++		expires_at, status, disabled_at, max_request_cost_credits
+ 		FROM api_keys ORDER BY created_at`)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("auth: 列出 api_key: %w", err)
+@@ -218,8 +245,9 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
+ 	var out []KeyRecord
+ 	for rows.Next() {
+ 		var r KeyRecord
+-		var exp sql.NullString
+-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits, &exp); err != nil {
++		var exp, dis sql.NullString
++		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit,
++			&r.DailyQuotaCredits, &exp, &r.Status, &dis, &r.MaxRequestCostCredits); err != nil {
+ 			return nil, fmt.Errorf("auth: 扫 api_key 行: %w", err)
+ 		}
+ 		if exp.Valid && exp.String != "" {
+@@ -229,6 +257,7 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
+ 			}
+ 			r.ExpiresAt = &t
+ 		}
++		r.Disabled = dis.Valid && dis.String != ""
+ 		out = append(out, r)
+ 	}
+ 	return out, rows.Err()
+@@ -269,6 +298,9 @@ type Verifier struct {
+ // errKeyExpired 过期哨兵(Middleware 据此给「已过期」message,与无效/吊销可区分)。
+ var errKeyExpired = errors.New("key 已过期")
+ 
++// errKeyDisabled 停用哨兵(Middleware 据此给「已停用」message;用户动作:找管理员重新启用)。
++var errKeyDisabled = errors.New("key 已停用")
++
+ // cacheEntry 缓存条目:任意字段访问须持 v.mu。
+ type cacheEntry struct {
+ 	info      KeyInfo
+@@ -280,14 +312,15 @@ type cacheEntry struct {
+ // 收口在 verify 成功后的单点,以当前时钟逐请求执行——缓存命中路径同样精确,
+ // 缓存只影响 DB 变更可见性,不影响时间函数(过期时刻是不可变字段)。
+ type KeyInfo struct {
+-	ID                string
+-	TenantID          string
+-	Name              string
+-	RPMLimit          int64
+-	TPMLimit          int64
+-	DailyQuotaCredits int64
+-	Currency          string
+-	ExpiresAt         time.Time
++	ID                    string
++	TenantID              string
++	Name                  string
++	RPMLimit              int64
++	TPMLimit              int64
++	DailyQuotaCredits     int64
++	Currency              string
++	ExpiresAt             time.Time
++	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;请求级成本预算闸消费)
+ }
+ 
+ type ctxKey struct{}
+@@ -411,6 +444,8 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
+ 			msg := "API key 无效或已吊销"
+ 			if errors.Is(err, errKeyExpired) {
+ 				msg = "API key 已过期,请重新签发"
++			} else if errors.Is(err, errKeyDisabled) {
++				msg = "API key 已停用,请联系管理员重新启用"
+ 			}
+ 			w.Header().Set("Content-Type", "application/json")
+ 			w.WriteHeader(protocol.StatusForType(protocol.TypeAuthFailed))
+@@ -497,18 +532,23 @@ func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
+ 	if row.Status != "active" {
+ 		return nil, errors.New("key 已吊销或禁用")
+ 	}
++	// 可逆停用(迁移 0009):吊销优先已判,此处补停用判定;哨兵供 Middleware 区分文案
++	if row.DisabledAt != nil {
++		return nil, errKeyDisabled
++	}
+ 	// 租户级冻结:管理面 disable 租户必须对数据面即时生效(随本查询 JOIN 返回)
+ 	if row.TenantStatus != "" && row.TenantStatus != "active" {
+ 		return nil, errors.New("租户已禁用")
+ 	}
+ 	info := &KeyInfo{
+-		ID:                row.ID,
+-		TenantID:          row.TenantID,
+-		Name:              row.Name,
+-		RPMLimit:          row.RPMLimit,
+-		TPMLimit:          row.TPMLimit,
+-		DailyQuotaCredits: row.DailyQuotaCredits,
+-		Currency:          row.Currency,
++		ID:                    row.ID,
++		TenantID:              row.TenantID,
++		Name:                  row.Name,
++		RPMLimit:              row.RPMLimit,
++		TPMLimit:              row.TPMLimit,
++		DailyQuotaCredits:     row.DailyQuotaCredits,
++		Currency:              row.Currency,
++		MaxRequestCostCredits: row.MaxRequestCostCredits,
+ 	}
+ 	if row.ExpiresAt != nil {
+ 		info.ExpiresAt = *row.ExpiresAt
+diff --git a/internal/auth/keylimits_test.go b/internal/auth/keylimits_test.go
+index 74846db..c0ac60b 100644
+--- a/internal/auth/keylimits_test.go
++++ b/internal/auth/keylimits_test.go
+@@ -165,3 +165,157 @@ func bearerReq(plaintext string) *http.Request {
+ 	r.Header.Set("Authorization", "Bearer "+plaintext)
+ 	return r
+ }
++
++// ---- 启停(可逆禁用,key-disable-toggle)----
++
++// 停用/恢复全链:PATCH 语义、查库与缓存命中两路径拒绝、恢复字段无损、列表回显。
++func TestUpdateKeyLimits_停用与恢复(t *testing.T) {
++	db := openDB(t)
++	plaintext, rec, err := CreateKey(db, "default", "启停", 10, KeyOpts{TPMLimit: 100})
++	if err != nil {
++		t.Fatal(err)
++	}
++	v := NewVerifier(db, Options{}, testLogger())
++	// 放行一次写入鉴权缓存(停用生效必须经 Invalidate 即时达成,不等 TTL)
++	if _, err := v.verify(bearerReq(plaintext)); err != nil {
++		t.Fatalf("停用前应放行: %v", err)
++	}
++	yes, no := true, false
++	got, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{Disabled: &yes})
++	if err != nil || !got.Disabled {
++		t.Fatalf("停用后回执应 Disabled=true: %+v err=%v", got, err)
++	}
++	v.Invalidate() // 管理路径失效协议(与 admin patchKey 同款)
++	if _, err := v.verify(bearerReq(plaintext)); !errors.Is(err, errKeyDisabled) {
++		t.Fatalf("停用后应 errKeyDisabled(含缓存命中后路径): %v", err)
++	}
++	// 恢复:其余字段无损
++	got, err = UpdateKeyLimits(db, rec.ID, LimitsPatch{Disabled: &no})
++	if err != nil || got.Disabled {
++		t.Fatalf("恢复后回执应 Disabled=false: %+v err=%v", got, err)
++	}
++	if got.TPMLimit != 100 || got.RPMLimit != 10 {
++		t.Fatalf("恢复应不动限额字段: %+v", got)
++	}
++	v.Invalidate()
++	if _, err := v.verify(bearerReq(plaintext)); err != nil {
++		t.Fatalf("恢复后应放行: %v", err)
++	}
++	// 列表回显停用状态
++	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{Disabled: &yes}); err != nil {
++		t.Fatal(err)
++	}
++	keys, err := ListKeys(db)
++	if err != nil || len(keys) != 1 {
++		t.Fatalf("列表失败: %v %v", keys, err)
++	}
++	if !keys[0].Disabled || keys[0].Status != "active" {
++		t.Fatalf("列表应回显停用且 status=active: %+v", keys[0])
++	}
++}
++
++// 停用与无效/吊销/过期同归 401 auth_failed,message 可区分(用户动作:找管理员启用)。
++func TestMiddleware_停用message可区分(t *testing.T) {
++	db := openDB(t)
++	plaintext, rec, _ := CreateKey(db, "default", "停用msg", 60, KeyOpts{})
++	yes := true
++	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{Disabled: &yes}); err != nil {
++		t.Fatal(err)
++	}
++	v := NewVerifier(db, Options{}, testLogger())
++	httpRec := httptest.NewRecorder()
++	v.Middleware(http.NotFoundHandler()).ServeHTTP(httpRec, bearerReq(plaintext))
++	if httpRec.Code != http.StatusUnauthorized {
++		t.Fatalf("应 401: %d", httpRec.Code)
++	}
++	var body struct {
++		Error struct {
++			Type    string `json:"type"`
++			Code    string `json:"code"`
++			Message string `json:"message"`
++		} `json:"error"`
++	}
++	if err := json.Unmarshal(httpRec.Body.Bytes(), &body); err != nil {
++		t.Fatal(err)
++	}
++	if body.Error.Type != "auth_failed" || body.Error.Code != "auth_failed" {
++		t.Fatalf("类型应仍为 auth_failed(错误类型表零膨胀): %+v", body.Error)
++	}
++	if !strings.Contains(body.Error.Message, "已停用") {
++		t.Fatalf("message 应区分停用语义: %q", body.Error.Message)
++	}
++}
++
++// 吊销是终态:恢复操作不得复活吊销 key。
++func TestVerify_吊销key恢复操作不复活(t *testing.T) {
++	db := openDB(t)
++	plaintext, rec, _ := CreateKey(db, "default", "吊销不复活", 60, KeyOpts{})
++	if n, err := RevokeKeyByPrefix(db, rec.Prefix); err != nil || n != 1 {
++		t.Fatalf("吊销失败: %d %v", n, err)
++	}
++	no := false
++	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{Disabled: &no}); err != nil {
++		t.Fatalf("对吊销 key 恢复操作本身不应报错(无害落库): %v", err)
++	}
++	v := NewVerifier(db, Options{}, testLogger())
++	if _, err := v.verify(bearerReq(plaintext)); err == nil || errors.Is(err, errKeyDisabled) {
++		t.Fatalf("吊销 key 不得经恢复操作复活: %v", err)
++	}
++}
++
++// 请求级成本预算:签发粒度、PATCH 修改、鉴权链路携带、负值拒绝(热路径全链)。
++func TestKeyBudget_签发PATCH与鉴权携带(t *testing.T) {
++	db := openDB(t)
++	plaintext, rec, err := CreateKey(db, "default", "预算", 60, KeyOpts{MaxRequestCostCredits: 500})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if rec.MaxRequestCostCredits != 500 {
++		t.Fatalf("签发回执应带预算: %+v", rec)
++	}
++	v := NewVerifier(db, Options{}, testLogger())
++	info, err := v.verify(bearerReq(plaintext))
++	if err != nil || info.MaxRequestCostCredits != 500 {
++		t.Fatalf("鉴权应携带预算进热路径: %+v err=%v", info, err)
++	}
++	// PATCH 清零(=不限)
++	zero := int64(0)
++	got, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{MaxRequestCostCredits: &zero})
++	if err != nil || got.MaxRequestCostCredits != 0 {
++		t.Fatalf("PATCH 清零应生效: %+v err=%v", got, err)
++	}
++	v.Invalidate()
++	info, err = v.verify(bearerReq(plaintext))
++	if err != nil || info.MaxRequestCostCredits != 0 {
++		t.Fatalf("清零后鉴权应为不限: %+v err=%v", info, err)
++	}
++	// 负值拒绝(负数会被执行链解释为「不限」,与收紧意图相反)
++	neg := int64(-1)
++	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{MaxRequestCostCredits: &neg}); !store.IsBusiness(err) {
++		t.Fatalf("负预算应业务错: %v", err)
++	}
++	if _, _, err := CreateKey(db, "default", "负预算", 60, KeyOpts{MaxRequestCostCredits: -2}); !store.IsBusiness(err) {
++		t.Fatalf("负预算签发应业务错: %v", err)
++	}
++}
++
++// 缺省零回归:不携带 Disabled 字段的 PATCH 行为与既有语义一致。
++func TestUpdateKeyLimits_停用字段缺省零回归(t *testing.T) {
++	db := openDB(t)
++	plaintext, rec, err := CreateKey(db, "default", "缺省", 10, KeyOpts{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	newRPM := int64(20)
++	got, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{RPMLimit: &newRPM})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got.Disabled {
++		t.Fatalf("缺省 PATCH 不得改变停用态: %+v", got)
++	}
++	v := NewVerifier(db, Options{}, testLogger())
++	if _, err := v.verify(bearerReq(plaintext)); err != nil {
++		t.Fatalf("缺省 PATCH 后应照常放行: %v", err)
++	}
++}
+diff --git a/internal/config/config.go b/internal/config/config.go
+index 7970965..1947d22 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -139,6 +139,13 @@ type ModelCapability struct {
+ 	MaxOutputTokens int64    `yaml:"max_output_tokens" json:"max_output_tokens"` // 输出上限(0=不限制);越界 clamp max_tokens
+ }
+ 
++// ImagePrice 同步生成的静态兜底报价，与 token 价目互不接管。
++type ImagePrice struct {
++	Currency string            `yaml:"currency"`
++	Default  string            `yaml:"default"`
++	Tiers    map[string]string `yaml:"tiers"`
++}
++
+ // Config muniu.yaml 的运行态形态(启动后只读)。
+ type Config struct {
+ 	Server struct {
+@@ -183,6 +190,7 @@ type Config struct {
+ 	} `yaml:"ratelimit"`
+ 	Providers        []Provider             `yaml:"providers"`
+ 	ModelRoutes      map[string][]Candidate `yaml:"model_routes"`
++	ImagePricing     map[string]ImagePrice  `yaml:"image_pricing"`
+ 	Pricing          map[string]Price       `yaml:"pricing"`
+ 	Semantic         SemanticCfg            `yaml:"semantic"`
+ 	Models           []ModelCapability      `yaml:"models"`            // 模型能力目录(ADR-0010)
+@@ -481,6 +489,17 @@ func (c *Config) validate() error {
+ 		add("metering.settlement 非法 %q(允许 CNY|USD)", c.Metering.Settlement)
+ 	}
+ 
++	for alias, pr := range c.ImagePricing {
++		price, err := metering.ParseImagePrice(pr.Currency, pr.Default, pr.Tiers)
++		if err != nil {
++			add("image_pricing[%s]: %v", alias, err)
++			continue
++		}
++		if _, err := metering.SettleImagePrice(price, settlement, c.Metering.FXUSDCNYMilli); err != nil {
++			add("image_pricing[%s]: %v", alias, err)
++		}
++	}
++
+ 	for alias, pr := range c.Pricing {
+ 		if !legalCurrency[strings.ToUpper(pr.Currency)] {
+ 			add("pricing[%s] currency 非法 %q(允许 CNY|USD)", alias, pr.Currency)
+diff --git a/internal/failover/class.go b/internal/failover/class.go
+index 47a3bbe..4d93b25 100644
+--- a/internal/failover/class.go
++++ b/internal/failover/class.go
+@@ -8,13 +8,14 @@ type ErrorClass string
+ 
+ // 错误分类常量(语义见 proxy-and-streaming 判定表)。
+ const (
+-	ClassDialFail        ErrorClass = "dial_fail"        // 连不上、握手失败
+-	ClassTimeoutFirst    ErrorClass = "timeout_first"    // 首 token 超时
+-	ClassUpstream5xx     ErrorClass = "upstream_5xx"     // 上游 500/502/503
+-	ClassRateLimited     ErrorClass = "rate_limited_429" // 上游限频
+-	ClassAuthFailed      ErrorClass = "auth_failed_401"  // key 无效/无权
+-	ClassBadRequest      ErrorClass = "bad_request_400"  // 参数被上游拒
+-	ClassMidStreamFail   ErrorClass = "mid_stream_fail"  // 流中断/帧间超时/解析崩
+-	ClassContextCanceled ErrorClass = "context_canceled" // 客户端断连
+-	ClassUnknown         ErrorClass = "unknown"          // 未归类
++	ClassDialFail        ErrorClass = "dial_fail"            // 连不上、握手失败
++	ClassTimeoutFirst    ErrorClass = "timeout_first"        // 首 token 超时
++	ClassUpstream5xx     ErrorClass = "upstream_5xx"         // 上游 500/502/503
++	ClassRateLimited     ErrorClass = "rate_limited_429"     // 上游限频
++	ClassAuthFailed      ErrorClass = "auth_failed_401"      // key 无效/无权
++	ClassBadRequest      ErrorClass = "bad_request_400"      // 参数被上游拒
++	ClassMidStreamFail   ErrorClass = "mid_stream_fail"      // 流中断/帧间超时/解析崩
++	ClassContextCanceled ErrorClass = "context_canceled"     // 客户端断连
++	ClassCostBudget      ErrorClass = "cost_budget_exceeded" // 网关策略:单请求成本预算超限(非上游质量)
++	ClassUnknown         ErrorClass = "unknown"              // 未归类
+ )
+diff --git a/internal/failover/decide.go b/internal/failover/decide.go
+index a614ff4..db05a42 100644
+--- a/internal/failover/decide.go
++++ b/internal/failover/decide.go
+@@ -44,7 +44,9 @@ func Decide(class ErrorClass, pastFirstToken bool, stream bool) Action {
+ 			return ActionAbort
+ 		}
+ 		return ActionNextCandidate
+-	case ClassContextCanceled:
++	case ClassContextCanceled, ClassCostBudget:
++		// 网关策略类与客户端断连同族:静默终结,不换道(同别名跨候选价目相同,换道无解)、
++		// 不计 key 失败(调用方 reportKeyOutcome 同样不回写)
+ 		return ActionSilent
+ 	default:
+ 		if pastFirstToken {
+diff --git a/internal/failover/failover_test.go b/internal/failover/failover_test.go
+index d22ac25..8931643 100644
+--- a/internal/failover/failover_test.go
++++ b/internal/failover/failover_test.go
+@@ -49,6 +49,10 @@ func TestDecide_判定表(t *testing.T) {
+ 		// unknown(表外防御:按 5xx 同待遇)
+ 		{"unknown×未过×流式", ClassUnknown, false, true, ActionNextCandidate},
+ 		{"unknown×已过×流式", ClassUnknown, true, true, ActionAbort},
++		// cost_budget_exceeded 行(网关策略类:静默终结不换道,不计 key 失败——context_canceled 同族)
++		{"cost_budget_exceeded×未过×流式→静默", ClassCostBudget, false, true, ActionSilent},
++		{"cost_budget_exceeded×已过×流式→静默", ClassCostBudget, true, true, ActionSilent},
++		{"cost_budget_exceeded×非流式→静默", ClassCostBudget, false, false, ActionSilent},
+ 	}
+ 	for _, c := range cases {
+ 		t.Run(c.coord, func(t *testing.T) {
+diff --git a/internal/proxy/metering.go b/internal/proxy/metering.go
+index 9df1f40..66519d7 100644
+--- a/internal/proxy/metering.go
++++ b/internal/proxy/metering.go
+@@ -5,6 +5,7 @@ package proxy
+ 
+ import (
+ 	"encoding/json"
++	"fmt"
+ 	"net/http"
+ 	"strings"
+ 	"time"
+@@ -17,6 +18,10 @@ import (
+ 	"github.com/solvela/muniu/internal/protocol"
+ )
+ 
++// costBudgetExceededCode 请求级成本预算超限的错误码(402 quota_exceeded 类型族,
++// 错误类型表零膨胀;预检拒绝与流中断言共用)。
++const costBudgetExceededCode = "cost_budget_exceeded"
++
+ // meterState 单请求计量状态(随 attempt 生命周期演进,退出时统一落账)。
+ type meterState struct {
+ 	start time.Time
+@@ -42,6 +47,16 @@ type meterState struct {
+ 	nativePath     bool   // 本 attempt 实际走直通(缓存双存侧判定)
+ 	nativeRespID   string // 直通 responses 成功响应 id(亲和回写载体)
+ 	canonicalBody  []byte // 直通双存的 canonical 侧(可 nil=降级为跨协议不可命中)
++
++	// 请求级成本预算(per-request-cost-budget):budget<=0 或价目缺失 = 闸整体旁路零开销。
++	// 输入/输出各取「usage 帧真值优先、估算兜底」;逐帧估算有轻微保守高估(预算宁紧勿松)。
++	budget       int64             // key 配置的单请求成本上界(credit)
++	budgetPrices *metering.Pricing // 模型价目快照(别名级,跨候选同价;nil=价目缺失旁路)
++	budgetModel  string            // 估算编码用模型名(别名)
++	budgetEstIn  int64             // 输入估算(canonical 序列化计数;失格请求为 0)
++	budgetIn     int64             // 输入累计真值(usage 帧)
++	budgetOut    int64             // 输出累计真值(usage 帧)
++	budgetOutEst int64             // 输出逐帧估算累计(delta 文本/工具参数)
+ }
+ 
+ // markFirstToken 记录首 token 延迟(仅首个内容帧时生效)。
+@@ -54,6 +69,36 @@ func (m *meterState) markFirstToken() {
+ 	m.firstMs = &ms
+ }
+ 
++// budgetObserveUsage usage 帧真值并入预算累计(非零字段覆盖,与计量合并同缝)。
++func (m *meterState) budgetObserveUsage(u protocol.Usage) {
++	if u.PromptTokens > 0 {
++		m.budgetIn = u.PromptTokens
++	}
++	if u.CompletionTokens > 0 {
++		m.budgetOut = u.CompletionTokens
++	}
++}
++
++// budgetExceeded 累计成本是否已超单请求预算:缓存折扣不计(保守不低估),
++// 真值与估算取先到者(usage 帧未到时估算先行,到达后以真值覆盖)。
++// 边角登记:上游若在流中段送「部分量」usage 后仍有增量,真值压制估算会短暂低估至下一帧;
++// 实践中各家 usage 帧均为终态/累计形态,该形态未观测到,不作加权猜测。
++func (m *meterState) budgetExceeded() bool {
++	if m.budget <= 0 || m.budgetPrices == nil {
++		return false
++	}
++	in := m.budgetIn
++	if in <= 0 {
++		in = m.budgetEstIn
++	}
++	out := m.budgetOut
++	if out <= 0 {
++		out = m.budgetOutEst
++	}
++	cost := metering.CostWithCached(in, 0, out, m.budgetPrices.InputCreditsPerM, 0, m.budgetPrices.OutputCreditsPerM)
++	return cost > m.budget
++}
++
+ // record 第 11 步落账:构造行并投递计量管道(异步批量落库)。
+ // modelAlias/upstream 为对外别名与上游模型名;inputFallback 为估算路径的输入文本(chat=messages 序列化,embeddings=input)。
+ func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failover.Candidate, inputFallback string, m *meterState) {
+@@ -140,8 +185,8 @@ func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key, class fai
+ 		return
+ 	}
+ 	switch class {
+-	case failover.ClassContextCanceled:
+-		// 客户端主动断连非 key 质量问题:判定表「静默退出,不计失败」,不回写任何结果
++	case failover.ClassContextCanceled, failover.ClassCostBudget:
++		// 客户端断连/预算中断(网关策略)非 key 质量问题:判定表「静默退出,不计失败」,不回写任何结果
+ 		return
+ 	case failover.ClassRateLimited:
+ 		pool.Report(key, keypool.OutcomeRateLimited, now, m.retryAfter)
+@@ -186,6 +231,27 @@ func estimateInputTokens(inputText, model string) int64 {
+ 	return n
+ }
+ 
++// preflightBudgetExceeded 预检判定:预算>0 且价目可得且 max_tokens>0 时,
++// 估算「输入成本 + max_tokens×输出价」上界(缓存折扣不计,保守不低估);
++// 返回 (可读 message, 是否超限)。max_tokens 缺失 = 上界不可知,不伪保护(流式由中断闸兜底)。
++func (p *Proxy) preflightBudgetExceeded(req *protocol.ChatRequest, budget int64) (string, bool) {
++	if req.MaxTokens == nil || *req.MaxTokens <= 0 {
++		return "", false
++	}
++	pt := p.pricing.Get(req.Model)
++	if pt == nil {
++		return "", false // 无价目无法计价:旁路(登记于 request-cost-budget 的诚实缺口)
++	}
++	pr := pt.At(time.Now())
++	inputText, _ := json.Marshal(req.Messages)
++	in := estimateInputTokens(string(inputText), req.Model)
++	cost := metering.CostWithCached(in, 0, *req.MaxTokens, pr.InputCreditsPerM, 0, pr.OutputCreditsPerM)
++	if cost <= budget {
++		return "", false
++	}
++	return fmt.Sprintf("单请求成本预算已超限(预估上界 %d credit > 预算 %d credit)", cost, budget), true
++}
++
+ // accumulateDelta 从 SSE 载荷(适配器翻译帧)累计:content/reasoning 入估算 fallback,
+ // content 另入缓存拼包累计,tool_call 参数计入估算(纯工具流估算不归零),终态帧捕获 finish_reason。
+ // 解析失败静默跳过。
+@@ -194,13 +260,22 @@ func (m *meterState) accumulateDelta(payload []byte) {
+ 	if err != nil {
+ 		return
+ 	}
++	// 预算逐帧估算仅在闸启用时计数(零开销旁路);估算口径与落账估算一致(文本+工具参数)
++	counting := m.budget > 0 && m.budgetPrices != nil
++	var budgeted strings.Builder
+ 	for _, ch := range chunk.Choices {
+ 		if ch.Delta.Content != nil {
+ 			m.output.WriteString(*ch.Delta.Content)
+ 			m.contentOut.WriteString(*ch.Delta.Content)
++			if counting {
++				budgeted.WriteString(*ch.Delta.Content)
++			}
+ 		}
+ 		if ch.Delta.ReasoningContent != nil {
+ 			m.output.WriteString(*ch.Delta.ReasoningContent)
++			if counting {
++				budgeted.WriteString(*ch.Delta.ReasoningContent)
++			}
+ 		}
+ 		for _, raws := range [][]json.RawMessage{ch.Delta.ToolCalls, ch.ToolCalls} {
+ 			for _, rc := range raws {
+@@ -211,6 +286,9 @@ func (m *meterState) accumulateDelta(payload []byte) {
+ 				}
+ 				if json.Unmarshal(rc, &tc) == nil {
+ 					m.output.WriteString(tc.Function.Arguments)
++					if counting {
++						budgeted.WriteString(tc.Function.Arguments)
++					}
+ 				}
+ 			}
+ 		}
+@@ -218,6 +296,9 @@ func (m *meterState) accumulateDelta(payload []byte) {
+ 			m.finishReason = *ch.FinishReason
+ 		}
+ 	}
++	if counting && budgeted.Len() > 0 {
++		m.budgetOutEst += metering.EstimateOutputTokens(budgeted.String(), m.budgetModel)
++	}
+ }
+ 
+ // assembleStreamBody 流式成功后的缓存入库候选:按累计 content 拼标准 chat.completion 体。
+diff --git a/internal/proxy/native_attempt.go b/internal/proxy/native_attempt.go
+index 48f8015..d983ca1 100644
+--- a/internal/proxy/native_attempt.go
++++ b/internal/proxy/native_attempt.go
+@@ -247,7 +247,24 @@ func (p *Proxy) attemptNativeStream(w http.ResponseWriter, r *http.Request, ad a
+ 				}
+ 				if err := json.Unmarshal(src, &frame); err == nil && len(frame.Usage) > 0 && string(frame.Usage) != "null" {
+ 					m.usageFrames = append(m.usageFrames, frame.Usage)
++					// 预算真值并入(直通 lane 无 delta 估算形态,判定落在 usage 帧)
++					if m.budget > 0 && m.normalize != nil {
++						if u, uerr := m.normalize(frame.Usage); uerr == nil {
++							m.budgetObserveUsage(u)
++						}
++					}
++				}
++			}
++			// 直通流预算闸 v1 边界:仅未开闸可拦(402 信封,客户端零字节污染);
++			// 已开闸无原生协议错误帧合成机制,不中断(design D6 诚实登记,翻译路径全量覆盖)
++			if !gateOpen && !meta.IsDone && m.budgetExceeded() {
++				opCancel()
++				m.status, m.class = "error", failover.ClassCostBudget
++				if len(m.usageFrames) == 0 {
++					m.est = true
+ 				}
++				p.writeError(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, "单请求成本预算已超限")
++				return true, failover.ClassCostBudget
+ 			}
+ 			if nat.proto == protocol.InboundResponses {
+ 				if id := responsesEventID([]byte(res.payload)); id != "" {
+diff --git a/internal/proxy/proxy.go b/internal/proxy/proxy.go
+index f8dea1f..a7f4d9f 100644
+--- a/internal/proxy/proxy.go
++++ b/internal/proxy/proxy.go
+@@ -17,6 +17,7 @@ import (
+ 
+ 	"github.com/solvela/muniu/internal/adapter"
+ 	"github.com/solvela/muniu/internal/alerting"
++	"github.com/solvela/muniu/internal/auth"
+ 	"github.com/solvela/muniu/internal/config"
+ 	"github.com/solvela/muniu/internal/failover"
+ 	"github.com/solvela/muniu/internal/keypool"
+@@ -43,6 +44,7 @@ type Config struct {
+ 	Registry         *adapter.Registry
+ 	Providers        []config.Provider // provider 定义(拓扑快照的池保留基准,3.1)
+ 	Routes           map[string][]config.Candidate
++	ImagePricing     *metering.ImagePriceDirectory
+ 	Pricing          *metering.PricingDirectory // 价目目录(动态改价:管理面原子替换,转发只读);nil = 成本记 0
+ 	Timeouts         Timeouts
+ 	Pipeline         *metering.Pipeline       // 计量管道;nil = 不计量(纯转发场景)
+@@ -60,21 +62,22 @@ type Config struct {
+ 
+ // Proxy 编排器:注册表 + 拓扑快照(路由/池/适配器/能力目录,3.1 原子热替换) + 三层超时 + 计量管道。
+ type Proxy struct {
+-	registry  *adapter.Registry                // 启动装配容器(转发路径不再读——adapter 随拓扑快照)
+-	topo      atomic.Pointer[topologySnapshot] // 请求入口 Load 一次,全程同快照(换道视图一致)
+-	pricing   *metering.PricingDirectory
+-	timeouts  Timeouts
+-	pipeline  *metering.Pipeline
+-	tpm       ratelimit.TPMRecorder
+-	cache     *semantic.Cache
+-	tenantSw  func(string) bool
+-	strictGov bool
+-	plugins   *plugin.Registry
+-	alerts    *alerting.Notifier
+-	randIntn  func(int) int
+-	logger    *slog.Logger
+-	client    *http.Client
+-	affinity  *affinityTable // 有状态粘性路由亲和表(进程内 TTL+LRU;protocol-native-passthrough)
++	registry     *adapter.Registry                // 启动装配容器(转发路径不再读——adapter 随拓扑快照)
++	topo         atomic.Pointer[topologySnapshot] // 请求入口 Load 一次,全程同快照(换道视图一致)
++	imagePricing *metering.ImagePriceDirectory
++	pricing      *metering.PricingDirectory
++	timeouts     Timeouts
++	pipeline     *metering.Pipeline
++	tpm          ratelimit.TPMRecorder
++	cache        *semantic.Cache
++	tenantSw     func(string) bool
++	strictGov    bool
++	plugins      *plugin.Registry
++	alerts       *alerting.Notifier
++	randIntn     func(int) int
++	logger       *slog.Logger
++	client       *http.Client
++	affinity     *affinityTable // 有状态粘性路由亲和表(进程内 TTL+LRU;protocol-native-passthrough)
+ }
+ 
+ // New 构造代理:路由候选按 priority 升序排序;HTTP 客户端带拨号层超时与连接池。
+@@ -98,20 +101,21 @@ func New(cfg Config) *Proxy {
+ 		randIntn = func(n int) int { return rand.IntN(n) }
+ 	}
+ 	p := &Proxy{
+-		registry:  cfg.Registry,
+-		pricing:   cfg.Pricing,
+-		timeouts:  cfg.Timeouts,
+-		pipeline:  cfg.Pipeline,
+-		tpm:       cfg.TPM,
+-		cache:     cfg.Cache,
+-		tenantSw:  cfg.TenantSwitch,
+-		plugins:   cfg.Plugins,
+-		alerts:    cfg.Alerts,
+-		strictGov: cfg.StrictGovernance,
+-		randIntn:  randIntn,
+-		logger:    logger,
+-		client:    &http.Client{Transport: transport},
+-		affinity:  newAffinityTable(),
++		registry:     cfg.Registry,
++		pricing:      cfg.Pricing,
++		imagePricing: cfg.ImagePricing,
++		timeouts:     cfg.Timeouts,
++		pipeline:     cfg.Pipeline,
++		tpm:          cfg.TPM,
++		cache:        cfg.Cache,
++		tenantSw:     cfg.TenantSwitch,
++		plugins:      cfg.Plugins,
++		alerts:       cfg.Alerts,
++		strictGov:    cfg.StrictGovernance,
++		randIntn:     randIntn,
++		logger:       logger,
++		client:       &http.Client{Transport: transport},
++		affinity:     newAffinityTable(),
+ 	}
+ 	p.topo.Store(&topologySnapshot{
+ 		providers:   append([]config.Provider(nil), cfg.Providers...),
+@@ -277,6 +281,17 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
+ 		}
+ 	}
+ 
++	// 请求级成本预算预检闸(per-request-cost-budget):可计算即拒绝——估算输入 + max_tokens
++	// 输出上界超预算 402,上游零调用且不落计量行(strict 治理 400 同族);语义缓存命中已先行
++	// 返回(命中成本为 0);失格请求 canonical 不可得,旁路(直通语义字节保真优先)
++	if info := auth.KeyFrom(r.Context()); info != nil && info.MaxRequestCostCredits > 0 &&
++		(nat == nil || nat.ineligCode == "") {
++		if msg, over := p.preflightBudgetExceeded(req, info.MaxRequestCostCredits); over {
++			p.writeError(tw, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, msg)
++			return
++		}
++	}
++
+ 	// 生命周期第 8 步:构造候选迭代器(同 priority 加权随机起点,priority 递增降级)
+ 	fcs := make([]failover.Candidate, len(cands))
+ 	for i, c := range cands {
+@@ -424,6 +439,20 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
+ 		p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")
+ 		return true, failover.ClassUnknown
+ 	}
++	// 请求级成本预算装填(per-request-cost-budget):每 attempt 从 canonical 估算输入;
++	// 价目按别名解析(跨候选同价);失格请求 canonical 不可得,估算为 0(usage 真值路径仍生效)
++	if info := auth.KeyFrom(r.Context()); info != nil && info.MaxRequestCostCredits > 0 {
++		m.budget = info.MaxRequestCostCredits
++		m.budgetModel = req.Model
++		if pt := p.pricing.Get(req.Model); pt != nil {
++			pr := pt.At(time.Now())
++			m.budgetPrices = &pr
++		}
++		if nat == nil || nat.ineligCode == "" {
++			inputText, _ := json.Marshal(req.Messages)
++			m.budgetEstIn = estimateInputTokens(string(inputText), req.Model)
++		}
++	}
+ 	// 请求参数治理(ADR-0010):每次 attempt 从原始请求出发按目标 (provider, model) 重新治理——
+ 	// 换道后不得沿用上一目标的收敛结果(spec 换道重治理场景);strict 命中即 400 终结。
+ 	// 直通 attempt 以**原始体**评估治理(翻译器静默丢弃的参数不在 canonical,只评 canonical
+diff --git a/internal/proxy/stream.go b/internal/proxy/stream.go
+index 5214a56..923b6e9 100644
+--- a/internal/proxy/stream.go
++++ b/internal/proxy/stream.go
+@@ -216,7 +216,29 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter
+ 				}
+ 				if err := json.Unmarshal(src, &frame); err == nil && len(frame.Usage) > 0 && string(frame.Usage) != "null" {
+ 					m.usageFrames = append(m.usageFrames, frame.Usage)
++					// 预算真值并入(真值覆盖估算;归一失败不影响计量主路径)
++					if m.budget > 0 && m.normalize != nil {
++						if u, uerr := m.normalize(frame.Usage); uerr == nil {
++							m.budgetObserveUsage(u)
++						}
++					}
++				}
++			}
++			// 请求级成本预算流中闸:终态帧不拦(响应已完成,事后无中断意义),其余帧超限即断言;
++			// 已开闸走流内错误帧干净收尾(已收部分保留),未开闸回 402 信封
++			if !meta.IsDone && m.budgetExceeded() {
++				opCancel()
++				m.status, m.class = "error", failover.ClassCostBudget
++				if len(m.usageFrames) == 0 {
++					m.est = true
++				}
++				if gateOpen {
++					p.writeStreamAbortCode(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode,
++						"单请求成本预算已超限,已生成部分保留")
++				} else {
++					p.writeError(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, "单请求成本预算已超限")
+ 				}
++				return true, failover.ClassCostBudget
+ 			}
+ 
+ 			if meta.IsDone && !gateOpen {
+@@ -304,8 +326,13 @@ func (p *Proxy) writeEvent(w http.ResponseWriter, raw []byte) {
+ 
+ // writeStreamAbort 断言出口:流内错误帧 + 补发 [DONE] 让客户端干净收尾。
+ func (p *Proxy) writeStreamAbort(w http.ResponseWriter, r *http.Request, code string) {
++	p.writeStreamAbortCode(w, r, protocol.TypeUpstreamError, code, "上游流中断,已生成部分可能不完整")
++}
++
++// writeStreamAbortCode 断言出口通用形态(错误类型/码/文案参数化):预算中断与上游断流共用。
++func (p *Proxy) writeStreamAbortCode(w http.ResponseWriter, r *http.Request, typ, code, msg string) {
+ 	b, err := marshalEnvelope(protocol.NewErrorEnvelope(
+-		protocol.TypeUpstreamError, code, "上游流中断,已生成部分可能不完整", logging.RequestIDFrom(r.Context())))
++		typ, code, msg, logging.RequestIDFrom(r.Context())))
+ 	if err != nil {
+ 		return
+ 	}
+diff --git a/internal/store/store.go b/internal/store/store.go
+index 011dce0..6550bab 100644
+--- a/internal/store/store.go
++++ b/internal/store/store.go
+@@ -142,19 +142,23 @@ func versionOf(name string) (int64, error) {
+ // APIKey api_keys 行的读侧形态(鉴权消费)。TenantStatus 来自 JOIN tenants,
+ // 供鉴权层一并判定租户禁用(管控面冻结租户必须对数据面生效)。
+ // ExpiresAt 可空(NULL = 永不过期,迁移 0006);过期判定由鉴权层以当前时钟执行。
++// DisabledAt 可空(NULL = 启用,迁移 0009);可逆停用,吊销仍是唯一终态。
++// MaxRequestCostCredits 单请求成本上界(迁移 0010;0=不限)。
+ type APIKey struct {
+-	ID                string
+-	TenantID          string
+-	Name              string
+-	KeyHash           string
+-	Prefix            string
+-	Status            string
+-	RPMLimit          int64
+-	TPMLimit          int64
+-	DailyQuotaCredits int64
+-	Currency          string
+-	TenantStatus      string
+-	ExpiresAt         *time.Time
++	ID                    string
++	TenantID              string
++	Name                  string
++	KeyHash               string
++	Prefix                string
++	Status                string
++	RPMLimit              int64
++	TPMLimit              int64
++	DailyQuotaCredits     int64
++	Currency              string
++	TenantStatus          string
++	ExpiresAt             *time.Time
++	DisabledAt            *time.Time
++	MaxRequestCostCredits int64
+ }
+ 
+ // ErrNotFound 查无此行(哨兵,调用方 errors.Is 判定)。
+@@ -177,13 +181,15 @@ func TenantIDByName(db *sql.DB, name string) (string, error) {
+ // expires_at 列损坏(非 RFC3339)按查询错误返回——宁可拒绝该 key,不放行时间语义不明的凭据。
+ func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
+ 	row := db.QueryRow(`SELECT k.id, k.tenant_id, k.name, k.key_hash, k.prefix, k.status,
+-		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at
++		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at, k.disabled_at,
++		k.max_request_cost_credits
+ 		FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
+ 		WHERE k.key_hash = ?`, hash)
+ 	var k APIKey
+-	var exp sql.NullString
++	var exp, dis sql.NullString
+ 	err := row.Scan(&k.ID, &k.TenantID, &k.Name, &k.KeyHash, &k.Prefix, &k.Status,
+-		&k.RPMLimit, &k.TPMLimit, &k.DailyQuotaCredits, &k.Currency, &k.TenantStatus, &exp)
++		&k.RPMLimit, &k.TPMLimit, &k.DailyQuotaCredits, &k.Currency, &k.TenantStatus, &exp, &dis,
++		&k.MaxRequestCostCredits)
+ 	if errors.Is(err, sql.ErrNoRows) {
+ 		return nil, ErrNotFound
+ 	}
+@@ -197,6 +203,13 @@ func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
+ 		}
+ 		k.ExpiresAt = &t
+ 	}
++	if dis.Valid && dis.String != "" {
++		t, perr := time.Parse(time.RFC3339, dis.String)
++		if perr != nil {
++			return nil, fmt.Errorf("store: api_key %s disabled_at 非法: %w", k.Prefix, perr)
++		}
++		k.DisabledAt = &t
++	}
+ 	return &k, nil
+ }
+ 
+diff --git a/muniu.example.yaml b/muniu.example.yaml
+index 8f5680e..ab65d54 100644
+--- a/muniu.example.yaml
++++ b/muniu.example.yaml
+@@ -197,3 +197,14 @@ pricing:
+ #     config:
+ #       rules: |
+ #         [{"pointer":"/messages/*/name","op":"remove"},{"pointer":"/metadata/user_id","op":"replace","value":"[REDACTED]"}]
++
++# 同步图片生成的静态兜底价（可选；报价/张，最多九位小数，DB 运行态覆盖）。
++# image_pricing:
++#   image-model-alias:
++#     currency: CNY
++#     default: "0.35"
++#     tiers:
++#       "1024x1024|standard": "0.30"
++# 管理面支持本地管理员会话或 MUNIU_ADMIN_TOKEN：
++# 首次引导 muniu admins add --username <管理员>，tty 双次口令；无 token 但有活跃账号亦开放。
++# 管理员凭据在本地 SQLite，仅存 argon2id PHC；无需新增 YAML 明文口令字段。
+diff --git a/openspec/changes/archive/2026-10-02-recover-pending-usage-settlement/tasks.md b/openspec/changes/archive/2026-10-02-recover-pending-usage-settlement/tasks.md
+index 5ce0aca..684bbf6 100644
+--- a/openspec/changes/archive/2026-10-02-recover-pending-usage-settlement/tasks.md
++++ b/openspec/changes/archive/2026-10-02-recover-pending-usage-settlement/tasks.md
+@@ -7,4 +7,6 @@
+ 
+ - [x] 2.1 锦官实现完成后，以真实 Key ID + Mock 充值验收欠费、入账、原用量补扣、再次重放及密钥状态收敛。（≤ 2h）
+ - [x] 2.2 执行 `make check`、OpenSpec 严格校验与代码审查，核对没有钱包/支付职责进入木牛。（≤ 2h）
+-- [ ] 2.3 两仓 HANDOFF 写入同一验收链路及结果；完成实现和验证后再同步主规格与归档。（≤ 2h）
++- [x] 2.3 两仓 HANDOFF 写入同一验收链路及结果；完成实现和验证后再同步主规格与归档。（≤ 2h）
++
++补记（2026-10-13）：复核两仓 HANDOFF 的 2026-10-02 同一 :8788 链路与归档记录已齐，主规格已同步；此项为历史漏勾，无需重跑外部链路。
+diff --git a/openspec/specs/api-key-lifecycle/spec.md b/openspec/specs/api-key-lifecycle/spec.md
+index c89feba..9e09c72 100644
+--- a/openspec/specs/api-key-lifecycle/spec.md
++++ b/openspec/specs/api-key-lifecycle/spec.md
+@@ -83,3 +83,32 @@ key 列表（`GET /admin/v1/keys` 与控制台密钥页）MUST 展示 `tpm_limit
+ - **GIVEN** 兼容列表条目没有可用的 `id`
+ - **WHEN** 用户查看条目
+ - **THEN** 界面明确显示 ID 不可用并禁用复制，不以 prefix、secret 或序号充当 ID
++
++### Requirement: 运行态启停(可逆禁用)
++
++key 必须 (MUST) 支持可逆停用与恢复:管理面经 `PATCH /admin/v1/keys/{id}` 的 `disabled` 字段(true=停用/false=恢复,省略=不动),CLI 经 `keys disable <prefix>` / `keys enable <prefix>`。停用 key 的数据面请求必须 (MUST) 被拒绝:401 `auth_failed`,message 与无效/吊销/过期可区分(含「已停用」语义)。停用/恢复写后必须 (MUST) 立即失效鉴权缓存(下一请求即生效,不等缓存 TTL)。停用必须 (MUST) NOT 改变吊销终态语义:已吊销 key 不得经恢复操作复活。key 列表(管理 API 与控制台)必须 (MUST) 回显停用状态。
++
++#### Scenario: 停用即时生效(含缓存命中路径)
++
++- **WHEN** 停用一把此前 10s 内已被鉴权缓存命中过的 key,随后以该 key 发起请求
++- **THEN** 返回 401 `auth_failed`,message 含「已停用」语义,不等缓存 TTL
++
++#### Scenario: 恢复放行且其余字段无损
++
++- **WHEN** 对已停用 key 执行恢复(PATCH `disabled=false` / CLI enable)
++- **THEN** 请求恢复放行,该 key 的限额、过期等其余字段保持原值不变
++
++#### Scenario: 吊销终态不可复活
++
++- **WHEN** 对已吊销 key 执行恢复操作
++- **THEN** 该 key 仍被 401 拒绝(吊销语义),不得恢复为可用
++
++#### Scenario: 缺省零回归
++
++- **WHEN** PATCH 请求不携带 `disabled` 字段
++- **THEN** 行为与本变更前逐字节一致(既有测试零改动通过)
++
++#### Scenario: 列表回显停用状态
++
++- **WHEN** 停用一把 key 后查询 `GET /admin/v1/keys` 与控制台密钥页
++- **THEN** 该条目如实展示停用状态,与启用/吊销可区分
+diff --git a/openspec/specs/pricing-management/spec.md b/openspec/specs/pricing-management/spec.md
+index 3eb1960..aff3956 100644
+--- a/openspec/specs/pricing-management/spec.md
++++ b/openspec/specs/pricing-management/spec.md
+@@ -52,3 +52,36 @@
+ #### Scenario: 全流程
+ - **WHEN** 依次执行 GET → PUT → GET → DELETE → DELETE
+ - **THEN** 分别得到:yaml 来源条目 → 200 ok → db 来源条目与新价 → 200 ok → 404
++
++### Requirement: per-image 价目维度与回落语义
++
++价目管理域必须 (MUST) 增设 per-image 价目形态(与 token 价目平行的第二维度):键空间同为模型别名,值形态为「币种 + 兜底单价 + size|quality 档位表」。来源与回落必须 (MUST) 与 token 价目同款——DB 运行态覆盖整体取代该别名,YAML 静态兜底开箱可用,列表标注来源。价目数值必须 (MUST) 全程零浮点(人类可读十进制 ≤9 位小数,加载期换算整数 credit);档位表必须 (MUST) 以 JSON 存储、读取期严格解析,解析失败整目录重建拒绝(宁拒不放行)。token 价目与 per-image 价目必须 (MUST) 互不接管。
++
++#### Scenario: 覆盖与回落
++
++- **WHEN** 别名 X 写入 images 运行态覆盖(兜底 0.35/张)后删除该覆盖
++- **THEN** 生效单价先为 0.35、删除后立即回落 YAML 兜底价(无 YAML 行则无价目,计量记 0)
++
++#### Scenario: 档位命中与兜底
++
++- **WHEN** 档位表含 `"1024x1024|standard": 0.30`,请求 quality=hd
++- **THEN** 该请求按兜底单价计费(未命中档位不报错、不拒请求)
++
++#### Scenario: 校验失败整单拒绝
++
++- **WHEN** 写入请求含非法字段(币种非 CNY/USD、单价非十进制或 ≤0、档位键非 `size|quality` 形态、档位 JSON 非法)
++- **THEN** 整单拒绝返回 400,不落库不刷新,目录保持原状
++
++### Requirement: per-image 价目管理 API 契约
++
++管理 API 必须 (MUST) 提供 `GET /admin/v1/image-pricing`(按别名升序)、`PUT /admin/v1/image-pricing/{alias}`(幂等覆盖)、`DELETE /admin/v1/image-pricing/{alias}`(撤销运行态覆盖,无覆盖返回 404),经管理面鉴权;在线改价必须 (MUST) 先校验后持久化再原子替换转发侧目录,下一请求生效零重启;脏数据必须 (MUST) 不进热路径(目录重建失败保持原状)。
++
++#### Scenario: 改价下一请求生效
++
++- **WHEN** 管理面成功写入别名 X 的新 images 价目
++- **THEN** 后续 images 请求的计量行即按新价计费,服务全程无重启
++
++#### Scenario: API 全流程
++
++- **WHEN** 依次执行 GET → PUT → GET → DELETE → DELETE
++- **THEN** 分别得到:yaml 来源条目(或空)→ 200 ok → db 来源条目与新价 → 200 ok → 404
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index 0a01a80..a981c4e 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -1,5 +1,6 @@
+ import { useEffect, useState } from "react";
+ import {
++  ClipboardList,
+   ChartColumn,
+   KeyRound,
+   LayoutDashboard,
+@@ -9,7 +10,7 @@ import {
+   Tags,
+   type LucideIcon,
+ } from "lucide-react";
+-import { api, ApiError, getToken, setToken } from "./lib/api";
++import { api, ApiError, setToken, type AdminActor } from "./lib/api";
+ import { useTheme } from "./lib/theme";
+ import { cn } from "./lib/utils";
+ import { Button } from "./components/ui/button";
+@@ -22,57 +23,95 @@ import Keys from "./pages/Keys";
+ import Usage from "./pages/Usage";
+ import Providers from "./pages/Providers";
+ import Pricing from "./pages/Pricing";
++import Audit from "./pages/Audit";
+ 
+-// 登录 = 输入 admin token,先经一次真实请求校验再进入(否则无效 token 表现为各页静默空白)
+-function Login({ onOk }: { onOk: () => void }) {
+-  const [v, setV] = useState("");
++// 登录双轨共享 whoami，页面重载可恢复 HttpOnly 会话，不依赖浏览器可读的会话密钥。
++function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
++  const [username, setUsername] = useState("");
++  const [password, setPassword] = useState("");
++  const [tokenMode, setTokenMode] = useState(false);
++  const [token, setLoginToken] = useState("");
+   const [err, setErr] = useState("");
+   const [busy, setBusy] = useState(false);
+   return (
+     <div className="min-h-dvh grid place-items-center bg-background px-4">
+       <Card className="w-full max-w-96">
+         <CardHeader>
+-          {/* 登录卡题即页内最高级,升页面级 h2(CardTitle 标题语义,kongming 对齐);
+-              原 text-xl 密档补偿随视觉收敛废止 */}
+           <CardTitle as="h2">木牛控制台</CardTitle>
+         </CardHeader>
+-        <CardContent>
++        <CardContent className="space-y-4">
+           <form
+             className="grid gap-4"
+             onSubmit={async (e) => {
+               e.preventDefault();
+               setBusy(true);
+               setErr("");
+-              setToken(v.trim());
+               try {
+-                await api.listTenants(); // 廉价校验:token 无效在此拦截,不放进入主界面
+-                onOk();
++                setToken("");
++                if (tokenMode) {
++                  setToken(token.trim());
++                  onOk(await api.whoami());
++                } else {
++                  onOk(await api.login(username, password));
++                }
++                setPassword("");
+               } catch (e2) {
+                 setToken("");
+-                setErr(
+-                  e2 instanceof ApiError && e2.status === 401
+-                    ? "管理员令牌无效或已过期,请重新登录"
+-                    : `错误:${e2 instanceof Error ? e2.message : "登录失败,请稍后重试"}`,
+-                );
++                setErr(e2 instanceof Error ? e2.message : "登录失败，请稍后重试");
+               } finally {
+                 setBusy(false);
+               }
+             }}
+           >
+-            <FormRow label="管理员令牌" htmlFor="admin-token">
+-              <Input
+-                id="admin-token"
+-                type="password"
+-                placeholder="粘贴管理员令牌"
+-                value={v}
+-                onChange={(e) => setV(e.target.value)}
+-              />
+-            </FormRow>
++            {tokenMode ? (
++              <FormRow label="管理员令牌" htmlFor="admin-token">
++                <Input
++                  id="admin-token"
++                  type="password"
++                  autoComplete="off"
++                  value={token}
++                  onChange={(e) => setLoginToken(e.target.value)}
++                  required
++                />
++              </FormRow>
++            ) : (
++              <>
++                <FormRow label="用户名" htmlFor="admin-username">
++                  <Input
++                    id="admin-username"
++                    autoComplete="username"
++                    value={username}
++                    onChange={(e) => setUsername(e.target.value)}
++                    required
++                  />
++                </FormRow>
++                <FormRow label="密码" htmlFor="admin-password">
++                  <Input
++                    id="admin-password"
++                    type="password"
++                    autoComplete="current-password"
++                    value={password}
++                    onChange={(e) => setPassword(e.target.value)}
++                    required
++                  />
++                </FormRow>
++              </>
++            )}
+             {err && <ErrorAlert text={err} />}
+             <Button type="submit" className="w-full" disabled={busy}>
+-              {busy ? "校验中…" : "登录"}
++              {busy ? "登录中…" : "登录"}
+             </Button>
+           </form>
++          <Button
++            variant="ghost"
++            className="w-full"
++            onClick={() => {
++              setTokenMode((v) => !v);
++              setErr("");
++            }}
++          >
++            {tokenMode ? "使用账号登录" : "使用管理令牌登录"}
++          </Button>
+         </CardContent>
+       </Card>
+     </div>
+@@ -86,19 +125,58 @@ const TABS: { key: TabKey; label: string; shortLabel: string; icon: LucideIcon }
+   { key: "usage", label: "用量明细", shortLabel: "用量", icon: ChartColumn },
+   { key: "providers", label: "供应商", shortLabel: "供应商", icon: Server },
+   { key: "pricing", label: "价目管理", shortLabel: "价目", icon: Tags },
++  { key: "audit", label: "操作审计", shortLabel: "审计", icon: ClipboardList },
+ ];
+ 
+-type TabKey = "overview" | "keys" | "usage" | "providers" | "pricing";
++type TabKey = "overview" | "keys" | "usage" | "providers" | "pricing" | "audit";
+ 
+ export default function App() {
+-  const [logged, setLogged] = useState(getToken() !== "");
++  const [actor, setActor] = useState<AdminActor | null>(null);
++  const [checking, setChecking] = useState(true);
++  const [probeError, setProbeError] = useState("");
++  useEffect(() => {
++    let live = true;
++    const expired = () => {
++      setToken("");
++      setActor(null);
++    };
++    window.addEventListener("muniu-session-expired", expired);
++    api
++      .whoami()
++      .then((a) => {
++        if (live) setActor(a);
++      })
++      .catch((e) => {
++        if (live && (!(e instanceof ApiError) || e.status !== 401)) setProbeError(e.message);
++      })
++      .finally(() => {
++        if (live) setChecking(false);
++      });
++    return () => {
++      live = false;
++      window.removeEventListener("muniu-session-expired", expired);
++    };
++  }, []);
+   const [tab, setTab] = useState<TabKey>("overview");
+   const { theme, toggle } = useTheme();
+   // 页签切换回顶:滚动残留会让新页面一进来就在中部(移动端长列表下尤其明显)
+   useEffect(() => {
+     window.scrollTo(0, 0);
+   }, [tab]);
+-  if (!logged) return <Login onOk={() => setLogged(true)} />;
++  if (checking)
++    return (
++      <div className="p-6 text-sm text-muted-foreground" role="status">
++        正在确认登录状态…
++      </div>
++    );
++  if (probeError)
++    return (
++      <div className="p-6 space-y-4">
++        <ErrorAlert text={probeError} />
++        <Button onClick={() => window.location.reload()}>重试</Button>
++      </div>
++    );
++  if (!actor) return <Login onOk={setActor} />;
+ 
+   const themeToggle = (
+     <Button
+@@ -118,9 +196,21 @@ export default function App() {
+     <Button
+       size="sm"
+       variant="ghost-destructive"
+-      onClick={() => {
+-        setToken("");
+-        setLogged(false);
++      onClick={async () => {
++        try {
++          await api.logout();
++          setToken("");
++          setActor(null);
++          setProbeError("");
++        } catch (e) {
++          if (e instanceof ApiError && e.status === 401) {
++            setToken("");
++            setActor(null);
++            setProbeError("");
++          } else {
++            setProbeError((e as Error).message);
++          }
++        }
+       }}
+     >
+       退出
+@@ -130,9 +220,9 @@ export default function App() {
+   return (
+     <div className="min-h-dvh">
+       {/* 顶栏全端粘性;移动端只留品牌+主操作,导航下沉到底部标签栏 */}
+-      <header className="sticky top-0 z-40 flex h-14 items-center gap-6 border-b border-border bg-card px-4 md:px-6">
++      <header className="sticky top-0 z-40 flex h-14 items-center gap-4 border-b border-border bg-card px-4 md:px-6">
+         <span className="shrink-0 font-semibold text-primary">木牛 muniu</span>
+-        <nav className="hidden items-center gap-4 md:flex" aria-label="主导航">
++        <nav className="hidden items-center gap-1 md:flex" aria-label="主导航">
+           {TABS.map((t) => (
+             <Button
+               key={t.key}
+@@ -141,11 +231,15 @@ export default function App() {
+               aria-current={tab === t.key ? "page" : undefined}
+               onClick={() => setTab(t.key)}
+             >
+-              {t.label}
++              <span className="hidden lg:inline">{t.label}</span>
++              <span className="lg:hidden">{t.shortLabel}</span>
+             </Button>
+           ))}
+         </nav>
+         <div className="ml-auto flex items-center gap-1">
++          <span className="max-w-24 truncate text-xs text-muted-foreground">
++            {actor.kind === "token" ? "共享管理令牌" : actor.name}
++          </span>
+           {themeToggle}
+           {logout}
+         </div>
+@@ -156,14 +250,15 @@ export default function App() {
+         {tab === "usage" && <Usage />}
+         {tab === "providers" && <Providers />}
+         {tab === "pricing" && <Pricing />}
++        {tab === "audit" && <Audit />}
+       </main>
+       {/* 移动端主导航:拇指区底部标签栏(图标+短标签),让出 iOS 安全区;md+ 由顶栏接管 */}
+       <nav
+         className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card md:hidden"
+         aria-label="主导航"
+       >
+-        {/* grid-cols-5 与 TABS.length 硬绑定:增删页签须同步改列数 */}
+-        <div className="grid grid-cols-5 pb-[env(safe-area-inset-bottom)]">
++        {/* grid-cols-6 与 TABS.length 硬绑定:增删页签须同步改列数 */}
++        <div className="grid grid-cols-6 pb-[env(safe-area-inset-bottom)]">
+           {TABS.map((t) => {
+             const active = tab === t.key;
+             return (
+diff --git a/web/src/lib/api-types.d.ts b/web/src/lib/api-types.d.ts
+index 2244a45..cfcc2bf 100644
+--- a/web/src/lib/api-types.d.ts
++++ b/web/src/lib/api-types.d.ts
+@@ -218,6 +218,60 @@ export interface paths {
+         patch?: never;
+         trace?: never;
+     };
++    "/v1beta/models/{modelMethod}": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        get?: never;
++        put?: never;
++        /** Gemini 原生入站(ADR-0015;边缘翻译为 chat 后进同一管道;{modelMethod} = {model}:generateContent | {model}:streamGenerateContent?alt=sse) */
++        post: {
++            parameters: {
++                query?: never;
++                header?: {
++                    /** @description Gemini 形态 key;与 Authorization Bearer / ?key= 三选一(?key= 读后剥离) */
++                    "X-Goog-Api-Key"?: string;
++                };
++                path: {
++                    /** @description {model}:{method} 整段(冒号连接) */
++                    modelMethod: string;
++                };
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 非流式 GenerateContentResponse / 流式 alt=sse 增量帧→终帧(finishReason+usageMetadata) */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++                /** @description content_part_unsupported / stream_form_unsupported / input_invalid(Gemini error 信封) */
++                400: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++                /** @description 鉴权/限流错误(信封为 Gemini error 形态 */
++                "4XX": {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
+     "/v1/responses/{id}": {
+         parameters: {
+             query?: never;
+@@ -225,7 +279,7 @@ export interface paths {
+             path?: never;
+             cookie?: never;
+         };
+-        /** 无状态网关不存储 response,恒 404 */
++        /** 亲和已知代理转发(ADR-0014 粘性路由)/ 未知恒 404 自解释 */
+         get: {
+             parameters: {
+                 query?: never;
+@@ -250,7 +304,36 @@ export interface paths {
+         };
+         put?: never;
+         post?: never;
+-        delete?: never;
++        /** 亲和已知代理转发删除上游状态(ADR-0014 粘性路由)/ 未知恒 404 自解释 */
++        delete: {
++            parameters: {
++                query?: never;
++                header: {
++                    Authorization: string;
++                };
++                path: {
++                    id: string;
++                };
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 上游删除结果原样透传 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++                /** @description response_not_found(无亲和记录) */
++                404: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
+         options?: never;
+         head?: never;
+         patch?: never;
+@@ -962,10 +1045,499 @@ export interface paths {
+         };
+         trace?: never;
+     };
++    "/v1/images/generations": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        get?: never;
++        put?: never;
++        /** 同步图片生成 */
++        post: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody: {
++                content: {
++                    "application/json": {
++                        model: string;
++                        prompt: string;
++                        /** @default 1 */
++                        n?: number;
++                        size?: string;
++                        quality?: string;
++                    } & {
++                        [key: string]: unknown;
++                    };
++                };
++            };
++            responses: {
++                /** @description 上游完整响应（保留上游 2xx 状态码） */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
++    "/admin/v1/image-pricing": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        /** 图片生成价目列表 */
++        get: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 静态兜底与运行态覆盖 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": {
++                            pricing: components["schemas"]["ImagePricingView"][];
++                        };
++                    };
++                };
++            };
++        };
++        put?: never;
++        post?: never;
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
++    "/admin/v1/image-pricing/{alias}": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path: {
++                alias: string;
++            };
++            cookie?: never;
++        };
++        get?: never;
++        /** 整体覆盖图片生成价目 */
++        put: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path: {
++                    alias: string;
++                };
++                cookie?: never;
++            };
++            requestBody: {
++                content: {
++                    "application/json": components["schemas"]["ImagePricingView"];
++                };
++            };
++            responses: {
++                /** @description 已持久化并即时生效 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++                /** @description 整单校验失败 */
++                400: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        post?: never;
++        /** 撤销运行态覆盖 */
++        delete: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path: {
++                    alias: string;
++                };
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 已回落静态兜底 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++                /** @description 无运行态覆盖 */
++                404: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
++    "/admin/v1/auth/login": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        get?: never;
++        put?: never;
++        /** 管理员账密登录 */
++        post: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody: {
++                content: {
++                    "application/json": {
++                        username: string;
++                        /** Format: password */
++                        password: string;
++                    };
++                };
++            };
++            responses: {
++                /** @description 签发 HttpOnly 会话 cookie，有效期 12 小时 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["AdminActor"];
++                    };
++                };
++                /** @description 凭据无效或账号锁定 */
++                401: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
++    "/admin/v1/auth/logout": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        get?: never;
++        put?: never;
++        /** 注销当前管理员会话 */
++        post: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 会话已失效 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
++    "/admin/v1/auth/whoami": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        /** 当前操作员身份 */
++        get: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 会话或共享令牌身份 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["AdminActor"];
++                    };
++                };
++            };
++        };
++        put?: never;
++        post?: never;
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
++    "/admin/v1/admins": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        /** 管理员账号列表 */
++        get: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 账号公开字段，不含密码或哈希 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": {
++                            admins: components["schemas"]["AdminUser"][];
++                        };
++                    };
++                };
++            };
++        };
++        put?: never;
++        /** 创建管理员 */
++        post: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody: {
++                content: {
++                    "application/json": {
++                        username: string;
++                        /** Format: password */
++                        password: string;
++                    };
++                };
++            };
++            responses: {
++                /** @description 已创建 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": components["schemas"]["AdminUser"];
++                    };
++                };
++                /** @description 用户名冲突或口令非法 */
++                400: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
++    "/admin/v1/admins/{id}": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path: {
++                id: string;
++            };
++            cookie?: never;
++        };
++        get?: never;
++        put?: never;
++        post?: never;
++        delete?: never;
++        options?: never;
++        head?: never;
++        /** 启停管理员或改密 */
++        patch: {
++            parameters: {
++                query?: never;
++                header?: never;
++                path: {
++                    id: string;
++                };
++                cookie?: never;
++            };
++            requestBody: {
++                content: {
++                    "application/json": {
++                        disabled?: boolean;
++                        /** Format: password */
++                        password?: string;
++                    };
++                };
++            };
++            responses: {
++                /** @description 已更新，停用或改密即时注销该账号全部会话 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++                /** @description 账号不存在 */
++                404: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content?: never;
++                };
++            };
++        };
++        trace?: never;
++    };
++    "/admin/v1/audit": {
++        parameters: {
++            query?: never;
++            header?: never;
++            path?: never;
++            cookie?: never;
++        };
++        /** 操作审计倒序游标分页 */
++        get: {
++            parameters: {
++                query?: {
++                    cursor?: string;
++                    limit?: number;
++                };
++                header?: never;
++                path?: never;
++                cookie?: never;
++            };
++            requestBody?: never;
++            responses: {
++                /** @description 审计行与下一游标 */
++                200: {
++                    headers: {
++                        [name: string]: unknown;
++                    };
++                    content: {
++                        "application/json": {
++                            items: components["schemas"]["AdminAudit"][];
++                            next_cursor: string;
++                        };
++                    };
++                };
++            };
++        };
++        put?: never;
++        post?: never;
++        delete?: never;
++        options?: never;
++        head?: never;
++        patch?: never;
++        trace?: never;
++    };
+ }
+ export type webhooks = Record<string, never>;
+ export interface components {
+     schemas: {
++        AdminActor: {
++            /** @enum {string} */
++            kind: "session" | "token" | "login";
++            name: string;
++        };
++        AdminUser: {
++            id: string;
++            username: string;
++            /** @enum {string} */
++            status: "active" | "disabled";
++            created_at: string;
++            last_login_at?: string | null;
++        };
++        AdminAudit: {
++            id: string;
++            request_id?: string;
++            /** @enum {string} */
++            actor_kind: "session" | "token" | "login";
++            actor_name: string;
++            action: string;
++            target_id?: string;
++            outcome: string;
++            /** @description 脱敏 JSON 摘要 */
++            detail?: string;
++            created_at: string;
++        };
++        ImagePricingView: {
++            alias: string;
++            /** @enum {string} */
++            source?: "db" | "yaml";
++            /** @enum {string} */
++            currency: "CNY" | "USD";
++            /** @description 十进制报价/张，最多九位小数 */
++            default: string;
++            tiers: {
++                [key: string]: string;
++            };
++            updated_at?: string;
++        };
+         Tenant: {
+             id?: string;
+             name?: string;
+@@ -1000,6 +1572,18 @@ export interface components {
+             daily_quota_credits?: number;
+             /** @description RFC3339;null=永不过期 */
+             expires_at?: string | null;
++            /**
++             * @description 生命周期终态位;可逆启停见 disabled
++             * @enum {string}
++             */
++            status?: "active" | "revoked";
++            /** @description true=已停用(可逆恢复);吊销终态不受影响 */
++            disabled?: boolean;
++            /**
++             * Format: int64
++             * @description 单请求成本预算 credit;0=不限
++             */
++            max_request_cost_credits?: number;
+         };
+         KeyCreateRequest: {
+             /** @description 租户名,缺省 default */
+@@ -1017,8 +1601,13 @@ export interface components {
+              * @description 0=不限
+              */
+             daily_quota_credits?: number;
+-            /** @description RFC3339;空=永不过期 */
++            /** @description RFC3339;空=永不过期;不得早于当前时刻(创建期拒绝;立即失效经 PATCH) */
+             expires_at?: string;
++            /**
++             * Format: int64
++             * @description 单请求成本预算 credit;0=不限
++             */
++            max_request_cost_credits?: number;
+         };
+         /** @description 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。 */
+         KeyCreateResponse: {
+@@ -1057,6 +1646,13 @@ export interface components {
+              */
+             daily_quota_credits?: number;
+             expires_at?: string | null;
++            /** @description 可逆停用(true=停用/false=恢复);吊销终态不受影响 */
++            disabled?: boolean;
++            /**
++             * Format: int64
++             * @description 单请求成本预算 credit;0=不限(预检+流中两道闸,超限 402 cost_budget_exceeded)
++             */
++            max_request_cost_credits?: number;
+         };
+         ModelEntry: {
+             id?: string;
+diff --git a/web/src/lib/api.ts b/web/src/lib/api.ts
+index ab5cc2d..720d20f 100644
+--- a/web/src/lib/api.ts
++++ b/web/src/lib/api.ts
+@@ -1,6 +1,11 @@
+ // 管理 API 客户端:类型一律来自 openapi-typescript 生成的 api-types.d.ts(禁手写 API 类型,ADR-005 纪律)。
+ import type { components, paths } from "./api-types";
+ 
++export type AdminActor = components["schemas"]["AdminActor"];
++export type AdminAudit = components["schemas"]["AdminAudit"];
++
++export type ImagePricingEntry = components["schemas"]["ImagePricingView"];
++
+ export type Tenant = components["schemas"]["Tenant"];
+ export type KeyRecord = components["schemas"]["KeyRecord"];
+ export type KeyCreateResponse = components["schemas"]["KeyCreateResponse"];
+@@ -68,6 +73,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
+     throw e;
+   }
+   const text = await resp.text();
++  if (resp.status === 401 && path !== "/admin/v1/auth/login") {
++    window.dispatchEvent(new Event("muniu-session-expired"));
++  }
+   if (!resp.ok) {
+     let detail = "";
+     try {
+@@ -85,6 +93,20 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
+ }
+ 
+ export const api = {
++  login: (username: string, password: string) =>
++    call<AdminActor>("POST", "/admin/v1/auth/login", { username, password }),
++  logout: () => call<{ ok: boolean }>("POST", "/admin/v1/auth/logout"),
++  whoami: () => call<AdminActor>("GET", "/admin/v1/auth/whoami"),
++  audit: (cursor = "") =>
++    call<{ items: AdminAudit[]; next_cursor: string }>(
++      "GET",
++      `/admin/v1/audit?limit=25&cursor=${encodeURIComponent(cursor)}`,
++    ),
++  listImagePricing: () => call<{ pricing: ImagePricingEntry[] }>("GET", "/admin/v1/image-pricing"),
++  putImagePricing: (alias: string, body: ImagePricingEntry) =>
++    call<{ ok: boolean }>("PUT", `/admin/v1/image-pricing/${encodeURIComponent(alias)}`, body),
++  deleteImagePricing: (alias: string) =>
++    call<{ ok: boolean }>("DELETE", `/admin/v1/image-pricing/${encodeURIComponent(alias)}`),
+   listTenants: () => call<{ tenants: Tenant[] }>("GET", "/admin/v1/tenants"),
+   createTenant: (name: string) => call<{ id: string }>("POST", "/admin/v1/tenants", { name }),
+   patchTenant: (
+@@ -100,7 +122,12 @@ export const api = {
+     tenant: string,
+     name: string,
+     rpm_limit: number,
+-    opts?: { tpm_limit?: number; daily_quota_credits?: number; expires_at?: string },
++    opts?: {
++      tpm_limit?: number;
++      daily_quota_credits?: number;
++      expires_at?: string;
++      max_request_cost_credits?: number;
++    },
+   ) =>
+     call<KeyCreateResponse>("POST", "/admin/v1/keys", {
+       tenant,
+@@ -115,6 +142,8 @@ export const api = {
+       tpm_limit?: number;
+       daily_quota_credits?: number;
+       expires_at?: string | null;
++      disabled?: boolean;
++      max_request_cost_credits?: number;
+     },
+   ) => call<KeyRecord>("PATCH", `/admin/v1/keys/${id}`, patch),
+   revokeKey: (prefix: string) => call<{ revoked: number }>("DELETE", `/admin/v1/keys/${prefix}`),
+diff --git a/web/src/pages/Keys.test.tsx b/web/src/pages/Keys.test.tsx
+index fd011aa..e197f6a 100644
+--- a/web/src/pages/Keys.test.tsx
++++ b/web/src/pages/Keys.test.tsx
+@@ -97,3 +97,53 @@ describe("密钥页 Key ID", () => {
+     expect(localStorage.length).toBe(0);
+   });
+ });
++
++describe("密钥页启停与状态徽章", () => {
++  it("状态徽章三态可区分;启停按钮按当前状态调用 patchKey;吊销 key 不提供启停", async () => {
++    vi.mocked(api.listKeys).mockResolvedValue({
++      keys: [
++        keyWithID({ name: "active-key", status: "active", disabled: false }),
++        keyWithID({
++          id: "0192f3a1-6c8b-7d2e-9a4f-000000000001",
++          prefix: "mk-stoppedkey12",
++          name: "stopped-key",
++          status: "active",
++          disabled: true,
++        }),
++        keyWithID({
++          id: "0192f3a1-6c8b-7d2e-9a4f-000000000002",
++          prefix: "mk-revokedkey1",
++          name: "revoked-key",
++          status: "revoked",
++          disabled: false,
++        }),
++      ],
++    });
++    vi.mocked(api.patchKey).mockResolvedValue(keyWithID({}));
++    render(<Keys />);
++
++    // 徽章三态如实渲染(双形态=桌面表格+移动卡片,同文本成对出现)
++    expect((await screen.findAllByText("已吊销")).length).toBeGreaterThanOrEqual(1);
++    expect(screen.getAllByText("已停用").length).toBeGreaterThanOrEqual(1);
++
++    // 启用中的 key → 停用;已停用的 key → 启用(patchKey 载荷即契约)
++    fireEvent.click(screen.getAllByRole("button", { name: "停用" })[0]);
++    await vi.waitFor(() =>
++      expect(api.patchKey).toHaveBeenCalledWith("0192f3a1-6c8b-7d2e-9a4f-5b6c7d8e9f0a", {
++        disabled: true,
++      }),
++    );
++    fireEvent.click(screen.getAllByRole("button", { name: "启用" })[0]);
++    await vi.waitFor(() =>
++      expect(api.patchKey).toHaveBeenCalledWith("0192f3a1-6c8b-7d2e-9a4f-000000000001", {
++        disabled: false,
++      }),
++    );
++
++    // 吊销终态:启停按钮缺席(启用/停用按钮只属于前两把 key;双形态成对出现 ×2),
++    // 吊销按钮三把俱在 ×2
++    expect(screen.getAllByRole("button", { name: "停用" }).length).toBe(2);
++    expect(screen.getAllByRole("button", { name: "启用" }).length).toBe(2);
++    expect(screen.getAllByRole("button", { name: "吊销" }).length).toBe(6);
++  });
++});
+diff --git a/web/src/pages/Keys.tsx b/web/src/pages/Keys.tsx
+index 714d6a0..3876871 100644
+--- a/web/src/pages/Keys.tsx
++++ b/web/src/pages/Keys.tsx
+@@ -20,9 +20,19 @@ import { Card } from "../components/ui/card";
+ import { CopyButton } from "../components/copy-button";
+ import { DataList, type DataCol } from "../components/data-list";
+ import { FormRow } from "../components/form-row";
++import { StatusBadge, type StatusMeta } from "../components/status-badge";
+ import { formatDateTime, formatNumber } from "../lib/datetime";
+ import { fmtCredits, rfc3339ToLocal } from "../lib/utils";
+ 
++// key 状态徽章三态:吊销终态 > 可逆停用 > 启用(与后端判定顺序一致,先吊销后停用)。
++const KEY_STATUS_META: StatusMeta = {
++  active: { label: "启用", variant: "success" },
++  disabled: { label: "已停用", variant: "warning" },
++  revoked: { label: "已吊销", variant: "destructive" },
++};
++const keyStatusOf = (k: KeyRecord): string =>
++  k.status === "revoked" ? "revoked" : k.disabled ? "disabled" : "active";
++
+ // 快捷过期时刻:点击填入 N 天后的本地时刻(datetime-local 分钟精度)。
+ // 签发表单与编辑弹窗共用,文案与行为单源。
+ function QuickExpires({ onPick }: { onPick: (v: string) => void }) {
+@@ -56,12 +66,13 @@ export default function Keys() {
+   const [rpm, setRpm] = useState(60);
+   const [tpm, setTpm] = useState(0);
+   const [quota, setQuota] = useState(0);
++  const [budget, setBudget] = useState(0);
+   const [expires, setExpires] = useState("");
+   const [busy, setBusy] = useState(false); // 签发防重复
+   const [loaded, setLoaded] = useState(false);
+   const [revokeTarget, setRevokeTarget] = useState<KeyRecord | null>(null);
+   const [editTarget, setEditTarget] = useState<KeyRecord | null>(null);
+-  const [editForm, setEditForm] = useState({ rpm: 0, tpm: 0, quota: 0, expires: "" });
++  const [editForm, setEditForm] = useState({ rpm: 0, tpm: 0, quota: 0, budget: 0, expires: "" });
+ 
+   const refresh = useCallback(() => {
+     api
+@@ -88,6 +99,18 @@ export default function Keys() {
+     }
+   };
+ 
++  // 启停(可逆):吊销终态的 key 不允许启停操作(按钮层已隐藏,此处防御)
++  const toggleDisabled = async (k: KeyRecord) => {
++    if (!k.id || k.status === "revoked") return;
++    try {
++      await api.patchKey(k.id, { disabled: !k.disabled });
++      setErr("");
++      refresh();
++    } catch (e2) {
++      setErr((e2 as Error).message);
++    }
++  };
++
+   const openEdit = (k: KeyRecord) => {
+     setErr(""); // 清上次操作残留错误,避免弹窗一打开就显示旧错误
+     setEditTarget(k);
+@@ -95,6 +118,7 @@ export default function Keys() {
+       rpm: k.rpm_limit ?? 0,
+       tpm: k.tpm_limit ?? 0,
+       quota: k.daily_quota_credits ?? 0,
++      budget: k.max_request_cost_credits ?? 0,
+       expires: rfc3339ToLocal(k.expires_at ?? ""),
+     });
+   };
+@@ -107,6 +131,7 @@ export default function Keys() {
+         rpm_limit: editForm.rpm,
+         tpm_limit: editForm.tpm,
+         daily_quota_credits: editForm.quota,
++        max_request_cost_credits: editForm.budget,
+         // 输入框清空 = 显式清除过期(null);选值 = 设定新过期(datetime-local 本地时区 → UTC)
+         expires_at: editForm.expires === "" ? null : new Date(editForm.expires).toISOString(),
+       });
+@@ -204,6 +229,18 @@ export default function Keys() {
+       headTitle: "1 credit = 十亿分之一本币",
+       render: (k) => fmtQuota(k.daily_quota_credits),
+     },
++    {
++      key: "budget",
++      label: "请求预算(credit)",
++      numeric: true,
++      headTitle: "单请求成本上界:预检拒绝超预算请求,流式超限中断;0 = 不限",
++      render: (k) => fmtQuota(k.max_request_cost_credits),
++    },
++    {
++      key: "status",
++      label: "状态",
++      render: (k) => <StatusBadge meta={KEY_STATUS_META} value={keyStatusOf(k)} />,
++    },
+     { key: "expires", label: "过期", render: (k) => fmtExpires(k.expires_at) },
+     {
+       key: "actions",
+@@ -214,6 +251,15 @@ export default function Keys() {
+           <Button variant="ghost" size={mobile ? "sm" : "xs"} onClick={() => openEdit(k)}>
+             编辑
+           </Button>
++          {k.status !== "revoked" && (
++            <Button
++              variant="ghost"
++              size={mobile ? "sm" : "xs"}
++              onClick={() => void toggleDisabled(k)}
++            >
++              {k.disabled ? "启用" : "停用"}
++            </Button>
++          )}
+           <Button
+             variant="ghost-destructive"
+             size={mobile ? "sm" : "xs"}
+@@ -242,6 +288,7 @@ export default function Keys() {
+               const r = await api.createKey(tenant, name, rpm, {
+                 tpm_limit: tpm,
+                 daily_quota_credits: quota,
++                max_request_cost_credits: budget,
+                 ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
+               });
+               setIssued({ key: r.key, id: r.id });
+@@ -251,6 +298,7 @@ export default function Keys() {
+               setExpires("");
+               setTpm(0);
+               setQuota(0);
++              setBudget(0);
+               refresh();
+             } catch (e2) {
+               setErr((e2 as Error).message);
+@@ -300,6 +348,14 @@ export default function Keys() {
+               onChange={(e) => setQuota(Number(e.target.value))}
+             />
+           </FormRow>
++          <FormRow label="请求预算(credit)" htmlFor="key-budget">
++            <Input
++              id="key-budget"
++              type="number"
++              value={budget}
++              onChange={(e) => setBudget(Number(e.target.value))}
++            />
++          </FormRow>
+           <FormRow label="过期时刻(本地时间)" htmlFor="key-expires">
+             <>
+               <Input
+@@ -320,7 +376,8 @@ export default function Keys() {
+         </form>
+       </Card>
+       <p className="text-xs text-muted-foreground">
+-        RPM/TPM 与日配额填 0 表示不限制;过期时刻留空表示永不过期;1 credit = 十亿分之一本币。
++        RPM/TPM 与日配额填 0 表示不限制;请求预算填 0 表示不限(超预算的请求会被拒绝或中断流式);
++        过期时刻留空表示永不过期;1 credit = 十亿分之一本币。
+       </p>
+       {/* 错误必须独立于明文区展示:混用会让操作者把错误串当 key 复制走 */}
+       {err && <ErrorAlert text={`错误:${err}`} />}
+@@ -390,6 +447,14 @@ export default function Keys() {
+                 onChange={(e) => setEditForm({ ...editForm, quota: Number(e.target.value) })}
+               />
+             </FormRow>
++            <FormRow label="请求预算(credit)" htmlFor="edit-budget">
++              <Input
++                id="edit-budget"
++                type="number"
++                value={editForm.budget}
++                onChange={(e) => setEditForm({ ...editForm, budget: Number(e.target.value) })}
++              />
++            </FormRow>
+             <FormRow label="过期时刻(本地时间)" htmlFor="edit-expires">
+               <>
+                 <Input
+@@ -403,7 +468,7 @@ export default function Keys() {
+             </FormRow>
+           </div>
+           <p className="text-xs text-muted-foreground">
+-            RPM/TPM 与日配额填 0 表示不限制;过期时刻清空 = 永不过期。
++            RPM/TPM 与日配额、请求预算填 0 表示不限制;过期时刻清空 = 永不过期。
+           </p>
+           <AlertDialogFooter>
+             <AlertDialogCancel>取消</AlertDialogCancel>
+diff --git a/web/src/pages/Pricing.tsx b/web/src/pages/Pricing.tsx
+index bd7f6d9..b6a6dff 100644
+--- a/web/src/pages/Pricing.tsx
++++ b/web/src/pages/Pricing.tsx
+@@ -1,3 +1,4 @@
++import ImagePricing from "./ImagePricing";
+ // 价目管理:在线改价(动态价目,metering.md「动态价目」)——列表/编辑/撤销覆盖。
+ // 价目为运营态数据:改价即时生效零重启;静态配置价的行经编辑即建 DB 覆盖。
+ import { useCallback, useEffect, useState } from "react";
+@@ -455,6 +456,7 @@ export default function Pricing() {
+       </div>
+       <DataList columns={columns} rows={entries} rowKey={(p) => p.alias ?? ""} empty="暂无价目" />
+ 
++      <ImagePricing />
+       <AlertDialog
+         open={removeTarget !== null}
+         onOpenChange={(o) => {

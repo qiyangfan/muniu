@@ -3,9 +3,11 @@ package metering
 
 import "testing"
 
+var costBenchmarkResult int64
+
 func BenchmarkCost(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = Cost(1200, 800, 2_000_000, 8_000_000)
+		costBenchmarkResult = Cost(1200+int64(i%512), 800, 2_000_000, 8_000_000)
 	}
 }

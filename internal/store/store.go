@@ -142,19 +142,23 @@ func versionOf(name string) (int64, error) {
 // APIKey api_keys 行的读侧形态(鉴权消费)。TenantStatus 来自 JOIN tenants,
 // 供鉴权层一并判定租户禁用(管控面冻结租户必须对数据面生效)。
 // ExpiresAt 可空(NULL = 永不过期,迁移 0006);过期判定由鉴权层以当前时钟执行。
+// DisabledAt 可空(NULL = 启用,迁移 0009);可逆停用,吊销仍是唯一终态。
+// MaxRequestCostCredits 单请求成本上界(迁移 0010;0=不限)。
 type APIKey struct {
-	ID                string
-	TenantID          string
-	Name              string
-	KeyHash           string
-	Prefix            string
-	Status            string
-	RPMLimit          int64
-	TPMLimit          int64
-	DailyQuotaCredits int64
-	Currency          string
-	TenantStatus      string
-	ExpiresAt         *time.Time
+	ID                    string
+	TenantID              string
+	Name                  string
+	KeyHash               string
+	Prefix                string
+	Status                string
+	RPMLimit              int64
+	TPMLimit              int64
+	DailyQuotaCredits     int64
+	Currency              string
+	TenantStatus          string
+	ExpiresAt             *time.Time
+	DisabledAt            *time.Time
+	MaxRequestCostCredits int64
 }
 
 // ErrNotFound 查无此行(哨兵,调用方 errors.Is 判定)。
@@ -177,13 +181,15 @@ func TenantIDByName(db *sql.DB, name string) (string, error) {
 // expires_at 列损坏(非 RFC3339)按查询错误返回——宁可拒绝该 key,不放行时间语义不明的凭据。
 func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
 	row := db.QueryRow(`SELECT k.id, k.tenant_id, k.name, k.key_hash, k.prefix, k.status,
-		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at
+		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at, k.disabled_at,
+		k.max_request_cost_credits
 		FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
 		WHERE k.key_hash = ?`, hash)
 	var k APIKey
-	var exp sql.NullString
+	var exp, dis sql.NullString
 	err := row.Scan(&k.ID, &k.TenantID, &k.Name, &k.KeyHash, &k.Prefix, &k.Status,
-		&k.RPMLimit, &k.TPMLimit, &k.DailyQuotaCredits, &k.Currency, &k.TenantStatus, &exp)
+		&k.RPMLimit, &k.TPMLimit, &k.DailyQuotaCredits, &k.Currency, &k.TenantStatus, &exp, &dis,
+		&k.MaxRequestCostCredits)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -196,6 +202,13 @@ func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
 			return nil, fmt.Errorf("store: api_key %s expires_at 非法: %w", k.Prefix, perr)
 		}
 		k.ExpiresAt = &t
+	}
+	if dis.Valid && dis.String != "" {
+		t, perr := time.Parse(time.RFC3339, dis.String)
+		if perr != nil {
+			return nil, fmt.Errorf("store: api_key %s disabled_at 非法: %w", k.Prefix, perr)
+		}
+		k.DisabledAt = &t
 	}
 	return &k, nil
 }

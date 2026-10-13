@@ -1,0 +1,6 @@
+ok  	github.com/solvela/muniu/internal/proxy	0.740s
+--- FAIL: TestAdminOperators_严格JSON与拒绝路径审计 (0.08s)
+    operators_test.go:146: 多值 JSON 未拒: 200
+FAIL
+FAIL	github.com/solvela/muniu/internal/admin	1.271s
+FAIL

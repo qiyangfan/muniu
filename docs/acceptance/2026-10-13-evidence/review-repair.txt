@@ -1,0 +1,2 @@
+ok  	github.com/solvela/muniu/internal/admin	0.906s
+ok  	github.com/solvela/muniu/internal/proxy	1.216s

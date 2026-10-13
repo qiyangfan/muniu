@@ -32,9 +32,18 @@
 | bad_request_400 | 参数被上游拒 | **不换道**直接返回(参数问题换家也会拒;桥接翻译缺陷另行走 adapter 修复) | 断言 |
 | mid_stream_fail | 流中断/帧间超时/解析崩 | —(定义上已过首 token) | 断言 |
 | context_canceled | 客户端断连 | 静默退出,不换道不计失败 | 静默退出,计量已发生部分 |
+| cost_budget_exceeded | 网关策略:单请求成本预算超限(request-cost-budget) | 静默终结,不换道不计失败(同别名跨候选价目相同,换道无解) | 静默终结(中断出口已自行写流内错误帧/402 信封) |
 | **候选适配性豁免(桥接工具限制;防御性保留)** | 请求含 role=tool / assistant.tool_calls 且候选为**未声明工具翻译完整的桥接型**(Bridger ∧ ToolRoundtripComplete=false) | **跳过候选,不计 key EMA/冷却**(适配性不匹配≠上游故障);候选取 key 之前生效 | —(检测在候选循环,先于 attempt;anthropic 桥接已声明完整不再触发,机制经测试替身钉住) |
 
 候选耗尽仍失败 → 最终错误信封 `code=all_candidates_failed`;候选列表耗尽的 429/401 类错误在信封 `message` 中如实说明「已尝试全部候选」。**全部候选因桥接豁免跳过且无任何真实上游错误** → 最终信封 `code=bridge_tool_roundtrip_unsupported`(400,自解释文案;upstream-egress-batch 契约)。非流式请求没有「已过首 token」态(首字节前全部可重放)。
+
+## 请求级成本预算(request-cost-budget 契约)
+
+per-key 单请求成本上界(`max_request_cost_credits`,0=不限),两道闸把成本治理前移到「事中」:
+
+1. **预检闸**(候选循环前,四条入站 lane 共用):预算>0 ∧ 价目可得 ∧ `max_tokens`>0 时,估算「输入成本 + max_tokens×输出价」上界(缓存折扣不计,保守不低估),超界 → 402 `cost_budget_exceeded`,**上游零调用、不落计量行**(与 strict 治理 400 同族)。`max_tokens` 缺失 = 输出上界不可知,预检不拒绝(不伪保护);无价目别名同样旁路。
+2. **流中闸**(翻译出站路径):按累计成本逐帧检查——输入/输出各取「usage 帧真值优先、逐帧估算兜底」(逐帧估算轻微保守高估,预算宁紧勿松);终态帧不拦(响应已完成,事后无中断意义)。已开闸 → 流内错误帧(`cost_budget_exceeded`,402 族)+ 干净收尾,已收部分保留;未开闸 → 402 信封。已发生部分如实计量落账(`error_class=cost_budget_exceeded`)。**中断不计 key 失败**(不冷却不禁用不记 EMA,判定表静默格)。
+3. **诚实边界**:非流式无中断闸(上游原子生成,中断只省传输不省账单,不做伪保护);直通 passthrough 流已开闸段不中断(无原生协议错误帧合成机制,未开闸仍可拦);embeddings 端点不在闸覆盖内(输出形态不同)。三者均为登记限制,非缺陷。
 
 ## SSE 透传实现契约
 
@@ -225,3 +234,9 @@ data: [DONE]
 ### 管道等价性
 
 翻译产物与等价 chat 请求 canonical 逐字节同构 ⇒ 治理/插件/限流/failover/计量/语义缓存全同构(跨协议缓存命中钉子测试);gemini 候选工具多轮翻译完整,不触发桥接豁免(声明式缺口,ADR-0015 决策 4)。
+
+## 同步 images 通道（ADR-0016）
+
+独立 handler 挂载于既有数据面鉴权/限流/配额链，插件请求体钩子在候选循环前执行。OpenAI 兼容基座声明 `ImagePreparer`，只改模型名；不具备能力的适配器返回 400 `images_not_supported`，不换道。沿用非流式 failover 判定表，5xx/429/传输错误可换候选；请求体 4MiB、响应体 64MiB，超限或中断不交付半包。响应读取在同一 FirstToken 计时器内完成，请求取消传导至出站。全请求仅加载一次拓扑与价格快照。
+
+只支持同步 generations；异步 submit/poll、edits/variations、audio 不在此通道。上游 url 原样返回，不托管图片、不注入 response_format。断流候选 cost=0，可能发生的上游生成费用为诚实边界，见 metering.md。

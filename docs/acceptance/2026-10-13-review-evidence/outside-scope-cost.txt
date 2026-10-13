@@ -1,0 +1,5 @@
+--- FAIL: TestReview范围外乘积溢出 (0.00s)
+    review_overlay_test.go:5: 成本乘积回绕：got=7766279631453 want=100000000000000
+FAIL
+FAIL	github.com/solvela/muniu/internal/metering	0.623s
+FAIL

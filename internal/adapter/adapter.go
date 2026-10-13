@@ -207,3 +207,8 @@ func (r *Registry) Names() []string {
 type Bridger interface {
 	BridgeKind() string
 }
+
+// ImagePreparer 同步生成是可选能力，桥接适配器不声明即明确拒绝。
+type ImagePreparer interface {
+	PrepareImages(in *protocol.ImageRequest, upstreamModel, apiKey string) (*Outbound, error)
+}

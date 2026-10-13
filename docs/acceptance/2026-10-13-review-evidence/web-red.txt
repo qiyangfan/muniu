@@ -1,0 +1,569 @@
+
+ RUN  v5.0.3 /Users/solvela/workspace/longzhong/muniu/web
+
+ ❯ src/lib/api.test.ts (1 test | 1 failed) 6ms
+   × 旧登录态的迟到401不能清除新登录态 5ms
+ ❯ src/pages/Audit.test.tsx (2 tests | 2 failed) 170ms
+   × 审计整数详情保留原始十进制值 32ms
+   × StrictMode的迟到首屏不能覆盖已加载后页 137ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/api.test.ts > 旧登录态的迟到401不能清除新登录态
+AssertionError: expected "vi.fn()" to not be called at all, but actually been called 1 times
+
+Received:
+
+  1st vi.fn() call:
+
+    Array [
+      Event {
+        "isTrusted": false,
+      },
+    ]
+
+
+Number of calls: 1
+
+ ❯ src/lib/api.test.ts:33:25
+     31|     finish(new Response('{"error":{"message":"凭据已过期"}}', { status: 401…
+     32|     await old;
+     33|     expect(expired).not.toHaveBeenCalled();
+       |                         ^
+     34|   } finally {
+     35|     window.removeEventListener("muniu-session-expired", expired);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  src/pages/Audit.test.tsx > 审计整数详情保留原始十进制值
+TestingLibraryElementError: Unable to find an element with the text: /9007199254740993/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"rounded-2xl bg-card text-card-foreground shadow-xl"[39m
+      [33mdata-slot[39m=[32m"card"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6"[39m
+        [33mdata-slot[39m=[32m"card-header"[39m
+      [36m>[39m
+        [36m<h3[39m
+          [33mclass[39m=[32m"text-lg font-semibold leading-none tracking-tight"[39m
+          [33mdata-slot[39m=[32m"card-title"[39m
+        [36m>[39m
+          [0m操作审计[0m
+        [36m</h3>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"p-6 pt-0 space-y-4"[39m
+        [33mdata-slot[39m=[32m"card-content"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+        [36m>[39m
+          [0m管理变更与登录记录按时间倒序显示。共享令牌记录无法区分个人操作员。[0m
+        [36m</p>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"relative inline-flex shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap transition-all outline-none after:absolute after:rounded-[inherit] after:content-[''] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input-fill/30 dark:hover:bg-input-fill/50 h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5 after:-inset-1.5"[39m
+          [33mdata-size[39m=[32m"sm"[39m
+          [33mdata-slot[39m=[32m"button"[39m
+          [33mdata-variant[39m=[32m"outline"[39m
+        [36m>[39m
+          [0m刷新[0m
+        [36m</button>[39m
+        [36m<div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"hidden sm:block"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"rounded-2xl bg-card text-card-foreground shadow-xl overflow-hidden"[39m
+              [33mdata-slot[39m=[32m"card"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"relative w-full overflow-x-auto"[39m
+                [33mdata-slot[39m=[32m"table-container"[39m
+              [36m>[39m
+                [36m<table[39m
+                  [33mclass[39m=[32m"w-full caption-bottom text-sm"[39m
+                  [33mdata-slot[39m=[32m"table"[39m
+                [36m>[39m
+                  [36m<thead[39m
+                    [33mclass[39m=[32m"[&_tr]:border-b"[39m
+                    [33mdata-slot[39m=[32m"table-header"[39m
+                  [36m>[39m
+                    [36m<tr[39m
+                      [33mclass[39m=[32m"border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted"[39m
+                      [33mdata-slot[39m=[32m"table-row"[39m
+                    [36m>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m操作员[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m操作[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m结果[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m时间[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m目标标识[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m操作详情[0m
+                      [36m</th>[39m
+                    [36m</tr>[39m
+                  [36m</thead>[39m
+                  [36m<tbody[39m
+                    [33mclass[39m=[32m"[&_tr:last-child]:border-0"[39m
+                    [33mdata-slot[39m=[32m"table-body"[39m
+                  [36m>[39m
+                    [36m<tr[39m
+                      [33mclass[39m=[32m"border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted"[39m
+                      [33mdata-slot[39m=[32m"table-row"[39m
+                    [36m>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0malice[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m密钥 · 更新[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m成功[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m2026-10-13 08:00:00[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px] max-w-48 break-all"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m—[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px] max-w-64 whitespace-normal break-all"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [36m<span[39m
+                          [33mclass[39m=[32m"break-all"[39m
+                        [36m>[39m
+                          [0m请求成本预算：9007199254740992[0m
+                        [36m</span>[39m
+                      [36m</td>[39m
+                    [36m</tr>[39m
+                  [36m</tbody>[39m
+                [36m</table>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"space-y-3 sm:hidden"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"rounded-2xl bg-card text-card-foreground shadow-xl space-y-3 p-4"[39m
+              [33mdata-slot[39m=[32m"card"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex items-start justify-between gap-2"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0 text-sm font-medium break-all"[39m
+                [36m>[39m
+                  [0malice[0m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"shrink-0"[39m
+                [36m>[39m
+                  [0m成功[0m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<dl[39m
+                [33mclass[39m=[32m"grid grid-cols-2 gap-x-4 gap-y-3"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m操作[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [0m密钥 · 更新[0m
+                  [36m</dd>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m时间[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [0m2026-10-13 08:00:00[0m
+                  [36m</dd>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m目标标识[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [0m—[0m
+                  [36m</dd>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0 col-span-2"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m操作详情[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"break-all"[39m
+                    [36m>[39m
+                      [0m请求成本预算：9007199254740992[0m
+                    [36m</span>[39m
+                  [36m</dd>[39m
+                [36m</div>[39m
+              [36m</dl>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ Object.getElementError node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/query-helpers.js:109:15
+ ❯ src/pages/Audit.test.tsx:24:17
+     22|   render(<Audit />);
+     23|   await screen.findAllByText("alice");
+     24|   expect(screen.getAllByText(/9007199254740993/).length).toBeGreaterTh…
+       |                 ^
+     25| });
+     26| it("StrictMode的迟到首屏不能覆盖已加载后页", async () => {
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  src/pages/Audit.test.tsx > StrictMode的迟到首屏不能覆盖已加载后页
+TestingLibraryElementError: Unable to find an element with the text: second. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"rounded-2xl bg-card text-card-foreground shadow-xl"[39m
+      [33mdata-slot[39m=[32m"card"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6"[39m
+        [33mdata-slot[39m=[32m"card-header"[39m
+      [36m>[39m
+        [36m<h3[39m
+          [33mclass[39m=[32m"text-lg font-semibold leading-none tracking-tight"[39m
+          [33mdata-slot[39m=[32m"card-title"[39m
+        [36m>[39m
+          [0m操作审计[0m
+        [36m</h3>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"p-6 pt-0 space-y-4"[39m
+        [33mdata-slot[39m=[32m"card-content"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+        [36m>[39m
+          [0m管理变更与登录记录按时间倒序显示。共享令牌记录无法区分个人操作员。[0m
+        [36m</p>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"relative inline-flex shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap transition-all outline-none after:absolute after:rounded-[inherit] after:content-[''] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input-fill/30 dark:hover:bg-input-fill/50 h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5 after:-inset-1.5"[39m
+          [33mdata-size[39m=[32m"sm"[39m
+          [33mdata-slot[39m=[32m"button"[39m
+          [33mdata-variant[39m=[32m"outline"[39m
+        [36m>[39m
+          [0m刷新[0m
+        [36m</button>[39m
+        [36m<div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"hidden sm:block"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"rounded-2xl bg-card text-card-foreground shadow-xl overflow-hidden"[39m
+              [33mdata-slot[39m=[32m"card"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"relative w-full overflow-x-auto"[39m
+                [33mdata-slot[39m=[32m"table-container"[39m
+              [36m>[39m
+                [36m<table[39m
+                  [33mclass[39m=[32m"w-full caption-bottom text-sm"[39m
+                  [33mdata-slot[39m=[32m"table"[39m
+                [36m>[39m
+                  [36m<thead[39m
+                    [33mclass[39m=[32m"[&_tr]:border-b"[39m
+                    [33mdata-slot[39m=[32m"table-header"[39m
+                  [36m>[39m
+                    [36m<tr[39m
+                      [33mclass[39m=[32m"border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted"[39m
+                      [33mdata-slot[39m=[32m"table-row"[39m
+                    [36m>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m操作员[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m操作[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m结果[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m时间[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m目标标识[0m
+                      [36m</th>[39m
+                      [36m<th[39m
+                        [33mclass[39m=[32m"h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-head"[39m
+                      [36m>[39m
+                        [0m操作详情[0m
+                      [36m</th>[39m
+                    [36m</tr>[39m
+                  [36m</thead>[39m
+                  [36m<tbody[39m
+                    [33mclass[39m=[32m"[&_tr:last-child]:border-0"[39m
+                    [33mdata-slot[39m=[32m"table-body"[39m
+                  [36m>[39m
+                    [36m<tr[39m
+                      [33mclass[39m=[32m"border-b transition-colors hover:bg-muted/50 has-aria-expanded:bg-muted/50 data-[state=selected]:bg-muted"[39m
+                      [33mdata-slot[39m=[32m"table-row"[39m
+                    [36m>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0mold[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m密钥 · 更新[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m成功[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m2026-10-13 08:00:00[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px] max-w-48 break-all"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [0m—[0m
+                      [36m</td>[39m
+                      [36m<td[39m
+                        [33mclass[39m=[32m"p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px] max-w-64 whitespace-normal break-all"[39m
+                        [33mdata-slot[39m=[32m"table-cell"[39m
+                      [36m>[39m
+                        [36m<span[39m
+                          [33mclass[39m=[32m"break-all"[39m
+                        [36m>[39m
+                          [0m请求成本预算：9007199254740992[0m
+                        [36m</span>[39m
+                      [36m</td>[39m
+                    [36m</tr>[39m
+                  [36m</tbody>[39m
+                [36m</table>[39m
+              [36m</div>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"space-y-3 sm:hidden"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"rounded-2xl bg-card text-card-foreground shadow-xl space-y-3 p-4"[39m
+              [33mdata-slot[39m=[32m"card"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"flex items-start justify-between gap-2"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0 text-sm font-medium break-all"[39m
+                [36m>[39m
+                  [0mold[0m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"shrink-0"[39m
+                [36m>[39m
+                  [0m成功[0m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<dl[39m
+                [33mclass[39m=[32m"grid grid-cols-2 gap-x-4 gap-y-3"[39m
+              [36m>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m操作[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [0m密钥 · 更新[0m
+                  [36m</dd>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m时间[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [0m2026-10-13 08:00:00[0m
+                  [36m</dd>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m目标标识[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [0m—[0m
+                  [36m</dd>[39m
+                [36m</div>[39m
+                [36m<div[39m
+                  [33mclass[39m=[32m"min-w-0 col-span-2"[39m
+                [36m>[39m
+                  [36m<dt[39m
+                    [33mclass[39m=[32m"text-xs text-muted-foreground"[39m
+                  [36m>[39m
+                    [0m操作详情[0m
+                  [36m</dt>[39m
+                  [36m<dd[39m
+                    [33mclass[39m=[32m"mt-0.5 text-sm break-words tabular-nums"[39m
+                  [36m>[39m
+                    [36m<span[39m
+                      [33mclass[39m=[32m"break-all"[39m
+                    [36m>[39m
+                      [0m请求成本预算：9007199254740992[0m
+                    [36m</span>[39m
+                  [36m</dd>[39m
+                [36m</div>[39m
+              [36m</dl>[39m
+            [36m</div>[39m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"relative inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all outline-none after:absolute after:rounded-[inherit] after:content-[''] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input-fill/30 dark:hover:bg-input-fill/50 h-9 px-4 py-2 has-[>svg]:px-3 after:-inset-1 w-full"[39m
+          [33mdata-size[39m=[32m"default"[39m
+          [33mdata-slot[39m=[32m"button"[39m
+          [33mdata-variant[39m=[32m"outline"[39m
+        [36m>[39m
+          [0m加载更多[0m
+        [36m</button>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ Object.getElementError node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/query-helpers.js:109:15
+ ❯ src/pages/Audit.test.tsx:53:17
+     51|     resolveOld({ items: [row("old")], next_cursor: "cursor" });
+     52|   });
+     53|   expect(screen.getAllByText("second").length).toBeGreaterThan(0);
+       |                 ^
+     54|   expect(screen.queryAllByText("old").length).toBe(0);
+     55| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  2 failed (2)
+      Tests  3 failed (3)
+   Start at  14:56:11
+   Duration  1.00s (environment 65%, import 16%, tests 12%, transform 7%, worker 1%)
+

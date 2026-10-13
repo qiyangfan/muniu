@@ -1,0 +1,9 @@
+Task status: ✓ Complete
+
+Specs to update:
+  admin-operators: create
+Applying changes to openspec/specs/admin-operators/spec.md:
+  + 4 added
+Totals: + 4, ~ 0, - 0, → 0
+Specs updated successfully.
+Change 'admin-operators-audit' archived as '2026-10-13-admin-operators-audit'.

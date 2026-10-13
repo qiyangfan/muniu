@@ -1,0 +1,7 @@
+go vet ./...
+0 issues.
+cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm test && pnpm format:check
+$ tsc --noEmit
+src/pages/ImagePricing.tsx(238,27): error TS2304: Cannot find name 'current'.
+[ELIFECYCLE] Command failed with exit code 2.
+make: *** [web-check] Error 2

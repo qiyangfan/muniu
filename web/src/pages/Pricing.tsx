@@ -1,3 +1,4 @@
+import ImagePricing from "./ImagePricing";
 // 价目管理:在线改价(动态价目,metering.md「动态价目」)——列表/编辑/撤销覆盖。
 // 价目为运营态数据:改价即时生效零重启;静态配置价的行经编辑即建 DB 覆盖。
 import { useCallback, useEffect, useState } from "react";
@@ -455,6 +456,7 @@ export default function Pricing() {
       </div>
       <DataList columns={columns} rows={entries} rowKey={(p) => p.alias ?? ""} empty="暂无价目" />
 
+      <ImagePricing />
       <AlertDialog
         open={removeTarget !== null}
         onOpenChange={(o) => {

@@ -216,7 +216,29 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter
 				}
 				if err := json.Unmarshal(src, &frame); err == nil && len(frame.Usage) > 0 && string(frame.Usage) != "null" {
 					m.usageFrames = append(m.usageFrames, frame.Usage)
+					// 预算真值并入(真值覆盖估算;归一失败不影响计量主路径)
+					if m.budget > 0 && m.normalize != nil {
+						if u, uerr := m.normalize(frame.Usage); uerr == nil {
+							m.budgetObserveUsage(u)
+						}
+					}
 				}
+			}
+			// 请求级成本预算流中闸:终态帧不拦(响应已完成,事后无中断意义),其余帧超限即断言;
+			// 已开闸走流内错误帧干净收尾(已收部分保留),未开闸回 402 信封
+			if !meta.IsDone && m.budgetExceeded() {
+				opCancel()
+				m.status, m.class = "error", failover.ClassCostBudget
+				if len(m.usageFrames) == 0 {
+					m.est = true
+				}
+				if gateOpen {
+					p.writeStreamAbortCode(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode,
+						"单请求成本预算已超限,已生成部分保留")
+				} else {
+					p.writeError(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, "单请求成本预算已超限")
+				}
+				return true, failover.ClassCostBudget
 			}
 
 			if meta.IsDone && !gateOpen {
@@ -304,8 +326,13 @@ func (p *Proxy) writeEvent(w http.ResponseWriter, raw []byte) {
 
 // writeStreamAbort 断言出口:流内错误帧 + 补发 [DONE] 让客户端干净收尾。
 func (p *Proxy) writeStreamAbort(w http.ResponseWriter, r *http.Request, code string) {
+	p.writeStreamAbortCode(w, r, protocol.TypeUpstreamError, code, "上游流中断,已生成部分可能不完整")
+}
+
+// writeStreamAbortCode 断言出口通用形态(错误类型/码/文案参数化):预算中断与上游断流共用。
+func (p *Proxy) writeStreamAbortCode(w http.ResponseWriter, r *http.Request, typ, code, msg string) {
 	b, err := marshalEnvelope(protocol.NewErrorEnvelope(
-		protocol.TypeUpstreamError, code, "上游流中断,已生成部分可能不完整", logging.RequestIDFrom(r.Context())))
+		typ, code, msg, logging.RequestIDFrom(r.Context())))
 	if err != nil {
 		return
 	}

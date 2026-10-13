@@ -1,0 +1,1 @@
+ok  	github.com/solvela/muniu/internal/proxy	0.682s

@@ -247,7 +247,24 @@ func (p *Proxy) attemptNativeStream(w http.ResponseWriter, r *http.Request, ad a
 				}
 				if err := json.Unmarshal(src, &frame); err == nil && len(frame.Usage) > 0 && string(frame.Usage) != "null" {
 					m.usageFrames = append(m.usageFrames, frame.Usage)
+					// 预算真值并入(直通 lane 无 delta 估算形态,判定落在 usage 帧)
+					if m.budget > 0 && m.normalize != nil {
+						if u, uerr := m.normalize(frame.Usage); uerr == nil {
+							m.budgetObserveUsage(u)
+						}
+					}
 				}
+			}
+			// 直通流预算闸 v1 边界:仅未开闸可拦(402 信封,客户端零字节污染);
+			// 已开闸无原生协议错误帧合成机制,不中断(design D6 诚实登记,翻译路径全量覆盖)
+			if !gateOpen && !meta.IsDone && m.budgetExceeded() {
+				opCancel()
+				m.status, m.class = "error", failover.ClassCostBudget
+				if len(m.usageFrames) == 0 {
+					m.est = true
+				}
+				p.writeError(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, "单请求成本预算已超限")
+				return true, failover.ClassCostBudget
 			}
 			if nat.proto == protocol.InboundResponses {
 				if id := responsesEventID([]byte(res.payload)); id != "" {

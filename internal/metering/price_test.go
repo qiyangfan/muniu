@@ -4,6 +4,9 @@ package metering
 
 import (
 	"errors"
+	"math"
+	"math/big"
+	"math/rand"
 	"testing"
 )
 
@@ -136,5 +139,78 @@ func TestCostWithCached_基本语义(t *testing.T) {
 	// 钳制后 = prompt(100)×price(1e3 credit/M) = 0.1 credit → ceil 1(逐段取整口径)
 	if got := CostWithCached(100, 500, 0, 1_000, 0, 1_000); got != 1 {
 		t.Fatalf("cached 钳制后应只剩输入段(ceil 后 1 credit): %d", got)
+	}
+}
+
+func TestCostWithCached_宽乘积精确计价(t *testing.T) {
+	for _, c := range []struct {
+		name                                                               string
+		prompt, cached, output, inputPrice, cachedPrice, outputPrice, want int64
+	}{
+		{"已报告回绕", 100_000_000, 0, 0, 1_000_000_000_000, 0, 0, 100_000_000_000_000},
+		{"三段宽乘积", 100_000_000, 50_000_000, 50_000_000, 1_000_000_000_000, 500_000_000_000, 2_000_000_000_000, 175_000_000_000_000},
+		{"缓存价回落", 100_000_000, 50_000_000, 0, 1_000_000_000_000, 0, 0, 100_000_000_000_000},
+		{"缓存钳制", 100_000_000, math.MaxInt64, 0, 1_000_000_000_000, 500_000_000_000, 0, 50_000_000_000_000},
+		{"宽乘积向上取整", math.MaxInt64, 0, 0, 2, 0, 0, 18_446_744_073_710},
+		{"最终金额恰为上界", 1_000_000, 0, 0, math.MaxInt64, 0, 0, math.MaxInt64},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := CostWithCached(c.prompt, c.cached, c.output, c.inputPrice, c.cachedPrice, c.outputPrice)
+			if got != c.want {
+				t.Fatalf("成本 got=%d want=%d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestCostWithCached_无法表示金额显式失败(t *testing.T) {
+	for _, c := range [][6]int64{
+		{math.MaxInt64, 0, 0, math.MaxInt64, 0, 0},
+		{1_000_000, 0, 1, math.MaxInt64, 0, 1},
+		{1_000_000, 0, 1_000_000, math.MaxInt64/2 + 1, 0, math.MaxInt64/2 + 1},
+	} {
+		if got := CostWithCached(c[0], c[1], c[2], c[3], c[4], c[5]); got >= 0 {
+			t.Fatalf("不能把溢出费用伪报为有效值: %d", got)
+		}
+	}
+}
+
+func TestCostWithCached_三段大整数对拍(t *testing.T) {
+	r := rand.New(rand.NewSource(13))
+	ceil := func(tokens, price int64) *big.Int {
+		n := new(big.Int).Mul(big.NewInt(tokens), big.NewInt(price))
+		n.Add(n, big.NewInt(tokensPerM-1))
+		return n.Quo(n, big.NewInt(tokensPerM))
+	}
+	for i := 0; i < 500; i++ {
+		prompt, cached, output := r.Int63(), r.Int63(), r.Int63()
+		in, cache, out := r.Int63(), r.Int63(), r.Int63()
+		if i%2 == 0 {
+			prompt %= 100_000_000
+			cached %= 100_000_000
+			output %= 100_000_000
+			in %= 1_000_000_000_000_000
+			cache %= 1_000_000_000_000_000
+			out %= 1_000_000_000_000_000
+		}
+		if i%7 == 0 {
+			cache = 0
+		}
+		got := CostWithCached(prompt, cached, output, in, cache, out)
+		if cache == 0 {
+			cache = in
+		}
+		if cached > prompt {
+			cached = prompt
+		}
+		expected := new(big.Int).Add(ceil(prompt-cached, in), ceil(cached, cache))
+		expected.Add(expected, ceil(output, out))
+		want := int64(-1)
+		if expected.IsInt64() {
+			want = expected.Int64()
+		}
+		if got != want {
+			t.Fatalf("三段对拍第 %d 组: got=%d want=%s", i, got, expected.String())
+		}
 	}
 }
