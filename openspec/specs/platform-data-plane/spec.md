@@ -7,7 +7,7 @@ TBD - created by archiving change sighup-config-reload. Update Purpose after arc
 
 ### Requirement: SIGHUP 配置热加载
 
-进程必须 (MUST) 响应 `SIGHUP`:按启动时同一解析链重读配置文件;新配置校验失败必须 (MUST) 保持旧配置继续服务并输出结构化告警;校验通过必须 (MUST) 经既有拓扑热替换入口原子替换 providers/routes/能力目录与池(provider 配置未变时池运行态无损,与控制面拉取同一入口同一语义)。热更范围必须 (MUST) 如实登记:auth/metrics/管理面装配与静态价目兜底不热更(价目运营态走管理面)。
+进程必须 (MUST) 响应 `SIGHUP`:按启动时同一解析链重读配置文件;新配置校验失败必须 (MUST) 保持旧配置继续服务并输出结构化告警;校验通过必须 (MUST) 经既有拓扑热替换入口原子替换 providers/routes/能力目录与池(provider 配置未变时池运行态无损,与控制面拉取同一入口同一语义)。热更范围必须 (MUST) 如实登记:热替换仅覆盖上述拓扑域,其余装配一律不热更(auth/metrics/metering 刷盘参数/管理面/静态价目兜底/告警装配/日志与超时等;价目运营态走管理面,告警 webhook 端点变更重启生效)。
 
 #### Scenario: 合法新配置热替换生效
 

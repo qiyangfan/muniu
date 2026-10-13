@@ -26,7 +26,7 @@
 #### Scenario: 去重窗口内静默
 
 - **WHEN** 同一 provider 的 key 池不可用事件在窗口内连续发生
-- **THEN** 仅首次发射 webhook,后续事件仅计数
+- **THEN** 仅首次发射 webhook,后续事件静默丢弃(不通知、不留痕)
 
 #### Scenario: 窗口过期重新通知
 

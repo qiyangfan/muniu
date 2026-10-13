@@ -412,7 +412,9 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	// SIGHUP 配置热加载(sighup-config-reload;运维手势 → 既有原子热替换机器):
 	// 重读配置文件,校验失败保持旧态告警;成功则拓扑/池/适配器/能力目录经
 	// ReplaceTopology 原子热替换(provider 未变时池运行态无损,与控制面拉取同一入口)。
-	// 范围登记:auth/metrics/管理面/静态价目兜底不热更(价目运营态走管理面,兜底重启生效)。
+	// 范围登记:热替换仅覆盖上述拓扑域,其余装配一律不热更(auth/metrics/metering 刷盘参数/
+	// 管理面/静态价目兜底/告警装配/日志与超时等;价目运营态走管理面,webhook 变更重启生效,
+	// 与 platform-data-plane 热更登记同文)。
 	sighup := make(chan os.Signal, 1)
 	signal.Notify(sighup, syscall.SIGHUP)
 	go func() {

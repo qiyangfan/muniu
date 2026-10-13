@@ -149,7 +149,6 @@ model_routes:
 		t.Fatalf("非法配置应保持旧态继续服务: %d %s", code, body)
 	}
 	if up2.RequestCount() <= before {
-		// 仍经旧态(=非法加载前的 up2)服务即可;断言未被拆毁
-		_ = before
+		t.Fatal("旧态应仍经 up2 服务(拓扑未被拆毁)")
 	}
 }
