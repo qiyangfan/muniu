@@ -1,0 +1,7 @@
+--- FAIL: TestCostBudget_usage之后的增量仍须检查 (0.20s)
+    cost_budget_test.go:209: 旧usage真值压住后续增量，预算没有中断
+--- FAIL: TestCostBudget_在途预算与落账不得跨价目 (0.02s)
+    cost_budget_test.go:249: 入口预检用旧价，落账用了新价：144
+FAIL
+FAIL	github.com/solvela/muniu/internal/proxy	1.047s
+FAIL

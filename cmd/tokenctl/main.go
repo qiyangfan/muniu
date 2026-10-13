@@ -1,10 +1,10 @@
 // tokenctl 练手 CLI(Phase 0):复用 internal/metering 的计价换算,顺带预习 flag/标准库用法。
 // 子命令:
 //
-//	cost  —— 按「价目 × token 数」计算成本,各段与合计均以 μ(货币百万分之一)整数运算后转人类可读;
+//	cost  —— 按「价目 × token 数」计算成本,各段与合计均以 credit(本币十亿分之一)整数运算后转人类可读;
 //	chars —— 统计 stdin 字节/字符/中文字符数,并给出粗估 token(非 BPE,仅供预算参考)。
 //
-// 金额展示一律由 μ 整数格式化,全程不经 float(conventions「金额整数」铁则)。
+// 金额展示一律由 credit 整数格式化,全程不经 float(conventions「金额整数」铁则)。
 package main
 
 import (
@@ -59,9 +59,9 @@ func currencySymbol(code string) string {
 	}
 }
 
-// formatMicro 把 μ 整数格式化为 6 位小数的可读金额;整数拼接而非 float,精度无损。
-func formatMicro(micro int64) string {
-	return fmt.Sprintf("%d.%06d", micro/1_000_000, micro%1_000_000)
+// formatCredits 与计费契约共用十亿分之一单位，不能再按旧 μ 单位放大金额。
+func formatCredits(credits int64) string {
+	return fmt.Sprintf("%d.%09d", credits/1_000_000_000, credits%1_000_000_000)
 }
 
 func runCost(args []string) {
@@ -88,12 +88,16 @@ func runCost(args []string) {
 	inCost := metering.Cost(*inTokens, 0, inMicroPerM, outMicroPerM)
 	outCost := metering.Cost(0, *outTokens, inMicroPerM, outMicroPerM)
 	total := metering.Cost(*inTokens, *outTokens, inMicroPerM, outMicroPerM)
+	if total < 0 {
+		fmt.Fprintln(os.Stderr, "tokenctl: token 数非法或计价金额超出 int64 范围")
+		os.Exit(1)
+	}
 	sym := currencySymbol(*currency)
 
 	fmt.Printf("币种:   %s\n", strings.ToUpper(*currency))
-	fmt.Printf("输入:   %d token × %s/百万 = %dμ(%s%s)\n", *inTokens, *inPrice, inCost, sym, formatMicro(inCost))
-	fmt.Printf("输出:   %d token × %s/百万 = %dμ(%s%s)\n", *outTokens, *outPrice, outCost, sym, formatMicro(outCost))
-	fmt.Printf("合计:   %dμ(%s%s)\n", total, sym, formatMicro(total))
+	fmt.Printf("输入:   %d token × %s/百万 = %d credit(%s%s)\n", *inTokens, *inPrice, inCost, sym, formatCredits(inCost))
+	fmt.Printf("输出:   %d token × %s/百万 = %d credit(%s%s)\n", *outTokens, *outPrice, outCost, sym, formatCredits(outCost))
+	fmt.Printf("合计:   %d credit(%s%s)\n", total, sym, formatCredits(total))
 }
 
 // runChars 统计 stdin 文本规模并粗估 token。

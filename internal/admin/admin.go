@@ -1,5 +1,4 @@
-// Package admin 承载管理面(T4.1):/admin/v1/* 路由,鉴权 = MUNIU_ADMIN_TOKEN(Bearer,单管理员)。
-// token 未配置 → Handler 返回 nil,管理面整体不注册(装配期 warn)。
+// Package admin 承载运维面双轨鉴权与动作审计；账号和共享令牌均未配置时整体关闭。
 // keys 管理与 Phase 2 CLI 同源(复用 auth 库函数);错误信封与业务面同格式。
 package admin
 
@@ -7,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -39,16 +39,20 @@ type StaticEntry struct {
 // (GET 列表展示用);RefreshPricing 由装配层注入——持久化成功后重建目录并原子替换。
 type Deps struct {
 	DB         *sql.DB
+	AdminAuth  *auth.AdminService
 	Token      string
 	Providers  []config.Provider
 	Pools      map[string]*keypool.Pool
 	CacheStats CacheStatsProvider
+	Topology   func() ([]config.Provider, map[string]*keypool.Pool)
 	Verifier   *auth.Verifier
 
-	PricingDir     *metering.PricingDirectory
-	StaticPricing  map[string]StaticEntry
-	RefreshPricing func() error
-	Plugins        *plugin.Registry // WASM 插件注册表(ADR-0011);nil = 端点返回禁用态
+	StaticImagePricing map[string]metering.ImagePrice
+	UpdateImagePricing func(string, *store.ImagePricingRecord) error
+	PricingDir         *metering.PricingDirectory
+	StaticPricing      map[string]StaticEntry
+	RefreshPricing     func() error
+	Plugins            *plugin.Registry // WASM 插件注册表(ADR-0011);nil = 端点返回禁用态
 
 	Logger *slog.Logger
 }
@@ -62,6 +66,16 @@ type adminRouteEntry struct {
 // adminRouteTable 管理面路由单一事实源:New 据此注册,Routes() 据此回报(漂移门禁消费)。
 // 两处手写必然漂移(同业务面 /v1/messages 曾 404 的教训),模式在这里只写一次。
 var adminRouteTable = []adminRouteEntry{
+	{"POST /admin/v1/auth/login", adminLogin},
+	{"POST /admin/v1/auth/logout", adminLogout},
+	{"GET /admin/v1/auth/whoami", adminWhoami},
+	{"GET /admin/v1/admins", adminUsersList},
+	{"POST /admin/v1/admins", adminUsersCreate},
+	{"PATCH /admin/v1/admins/{id}", adminUsersPatch},
+	{"GET /admin/v1/audit", adminAuditList},
+	{"GET /admin/v1/image-pricing", imagePricingList},
+	{"PUT /admin/v1/image-pricing/{alias}", imagePricingPut},
+	{"DELETE /admin/v1/image-pricing/{alias}", imagePricingDelete},
 	{"GET /admin/v1/tenants", listTenants},
 	{"POST /admin/v1/tenants", createTenant},
 	{"PATCH /admin/v1/tenants/{id}", patchTenant},
@@ -81,32 +95,34 @@ var adminRouteTable = []adminRouteEntry{
 	{"PATCH /admin/v1/plugins/{name}", pluginPatch},
 }
 
-// New 构造管理面 handler;token 为空返回 nil(管理面关闭)。
+// New 按共享令牌或活跃账号开放管理面，认证装配失败不暴露空壳。
 func New(d Deps) http.Handler {
-	if d.Token == "" {
-		return nil
-	}
 	if d.Logger == nil {
 		d.Logger = slog.Default()
+	}
+	if d.Token == "" {
+		active, err := store.HasActiveAdmins(d.DB)
+		if err != nil {
+			d.Logger.Error("管理员挂载条件查询失败", "error_detail", err.Error())
+			return nil
+		}
+		if !active {
+			return nil
+		}
+	}
+	if d.AdminAuth == nil {
+		svc, err := auth.NewAdminService(d.DB)
+		if err != nil {
+			d.Logger.Error("管理员认证装配失败", "error_detail", err.Error())
+			return nil
+		}
+		d.AdminAuth = svc
 	}
 	mux := http.NewServeMux()
 	for _, e := range adminRouteTable {
 		mux.Handle(e.Pattern, e.Handler(d))
 	}
-	return authAdmin(d.Token, d.Logger, mux)
-}
-
-// authAdmin 管理面鉴权:Bearer token 恒等比较(用 constant time 防时序侧信道)。
-func authAdmin(token string, logger *slog.Logger, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !secureEqual(got, token) {
-			logger.Warn("管理面鉴权失败", "request_id", logging.RequestIDFrom(r.Context()))
-			writeAdminError(w, r, http.StatusUnauthorized, protocol.TypeAuthFailed, "auth_failed", "管理 token 无效")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return authOperators(d, auditOperators(d, mux))
 }
 
 // secureEqual 恒定时间字符串比较。
@@ -145,7 +161,15 @@ func respondErr(d Deps, w http.ResponseWriter, r *http.Request, err error, bizCo
 
 func decode(r *http.Request, v any) error {
 	defer func() { _ = r.Body.Close() }()
-	return json.NewDecoder(r.Body).Decode(v)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("请求体必须是单个 JSON 值")
+	}
+	return nil
 }
 
 // ---- tenants ----
@@ -241,18 +265,26 @@ func listKeys(d Deps) http.HandlerFunc {
 func createKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Tenant            string `json:"tenant"`
-			Name              string `json:"name"`
-			RPMLimit          int64  `json:"rpm_limit"`
-			TPMLimit          int64  `json:"tpm_limit"`
-			DailyQuotaCredits int64  `json:"daily_quota_credits"`
-			ExpiresAt         string `json:"expires_at"` // 可空;RFC3339(空 = 永不过期)
+			Tenant                string `json:"tenant"`
+			Name                  string `json:"name"`
+			RPMLimit              int64  `json:"rpm_limit"`
+			TPMLimit              int64  `json:"tpm_limit"`
+			DailyQuotaCredits     int64  `json:"daily_quota_credits"`
+			MaxRequestCostCredits int64  `json:"max_request_cost_credits"`
+			ExpiresAt             string `json:"expires_at"` // 可空;RFC3339(空 = 永不过期)
 		}
 		if err := decode(r, &req); err != nil || req.Name == "" {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
 			return
 		}
-		opts := auth.KeyOpts{TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits}
+		if req.MaxRequestCostCredits < 0 {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "max_request_cost_credits 不可为负")
+			return
+		}
+		opts := auth.KeyOpts{
+			TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
+			MaxRequestCostCredits: req.MaxRequestCostCredits,
+		}
 		if req.ExpiresAt != "" {
 			t, err := time.Parse(time.RFC3339, req.ExpiresAt)
 			if err != nil {
@@ -287,17 +319,24 @@ func createKey(d Deps) http.HandlerFunc {
 func patchKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			RPMLimit          *int64          `json:"rpm_limit"`
-			TPMLimit          *int64          `json:"tpm_limit"`
-			DailyQuotaCredits *int64          `json:"daily_quota_credits"`
-			ExpiresAt         json.RawMessage `json:"expires_at"` // 缺省=不动;null=清除;"RFC3339"=设定
+			RPMLimit              *int64          `json:"rpm_limit"`
+			TPMLimit              *int64          `json:"tpm_limit"`
+			DailyQuotaCredits     *int64          `json:"daily_quota_credits"`
+			ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动;null=清除;"RFC3339"=设定
+			Disabled              *bool           `json:"disabled"`                 // 缺省=不动;true=停用/false=恢复
+			MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动;0=不限
 		}
 		if err := decode(r, &req); err != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
 			return
 		}
+		if req.MaxRequestCostCredits != nil && *req.MaxRequestCostCredits < 0 {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "max_request_cost_credits 不可为负")
+			return
+		}
 		patch := auth.LimitsPatch{
 			RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
+			Disabled: req.Disabled, MaxRequestCostCredits: req.MaxRequestCostCredits,
 		}
 		switch {
 		case len(req.ExpiresAt) == 0: // 字段缺省:不动
@@ -414,12 +453,16 @@ func usage(d Deps) http.HandlerFunc {
 func providers(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
-		out := make([]map[string]any, 0, len(d.Providers))
-		for _, p := range d.Providers {
+		providers, pools := d.Providers, d.Pools
+		if d.Topology != nil {
+			providers, pools = d.Topology()
+		}
+		out := make([]map[string]any, 0, len(providers))
+		for _, p := range providers {
 			keys := make([]map[string]any, 0, len(p.Keys))
 			for _, kr := range p.Keys {
 				st := "unknown"
-				if pool := d.Pools[p.Name]; pool != nil {
+				if pool := pools[p.Name]; pool != nil {
 					st = pool.StateOf(kr.Env, now)
 				}
 				keys = append(keys, map[string]any{"id": kr.Env, "weight": kr.Weight, "state": st})

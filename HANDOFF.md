@@ -2,6 +2,20 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-13,本批已验收归档，执行 Git 交付)
+
+- images 8/8 与管理员审计 10/10 已实施、验证、归档并同步主规格；历史结算恢复 2.3 漏勾补齐，拓扑管理页/gauge 读侧漂移已修复。四 change 合计 31/31 已归档，用户已明确授权提交所有改动、push 并跟进本次 CI。
+- 本地 110 文件冻结评审已修复 17 项，复审与 `make check` 全绿（69.9%）；chat 入口计价时点调整经 owner“你自己决定”授权。旧 token 计费溢出与严格规格占位已在后续点名修复，最终门禁 69.9%、strict 23/23；详见 [补遗验收](docs/acceptance/2026-10-13-cost-overflow-fix.md)。
+- 完整终态与证据：[本轮报告](docs/acceptance/2026-10-13-task-report.md)；[冻结快照](docs/acceptance/2026-10-13-task-snapshot.md)。待确认与历史阻塞不要求清零，本轮不常驻、不继续下一批。
+
+- **二次裁决(owner「求职项目完整度视角重裁,无需求方不算搁置理由」)**:①gRPC 入站**维持拒绝**(换理由:无标准 LLM gRPC API=语义真空,网关核心能力一寸锻炼不到;REST-only 与同赛道(LiteLLM/one-api/Kong)对照无缺口;grpc-go +30 传递依赖瓦解 stdlib 旗舰论点,关键词留 skills 行);②SSO/OIDC **维持拒绝**(换理由:锦官 OIDC 主场组合冗余 + standalone 零外联纪律 + 自研 JOSE 密码学危险),捆绑的「控制台多管理员+操作审计」**拆出改判立项**(ADR-0005 standalone 一等形态下管理面即最终形态,共享 token 零归因是真缺口);③images 生成**改判立项**(原「拖价目迁移不值对价」论证反向:per-image 计价维度演进本身就是计量叙事资产;one-api/LiteLLM 全支持=真实缺口);audio/edits/variations 二期同法裁决。
+- **立项已交付**:ADR-0016/0017 对应两 change 本轮已实施并归档；新增 image-generation/admin-operators 主规格，pricing-management/request-cost-budget 同步。真实厂商验收仍待外部凭据。
+
+## 当前状态(2026-10-13,零消费者话术废止批:key 启停 + 请求级成本预算两件落地)
+
+- **裁决框架再修正(owner 2026-10-13 二度点破「等消费者永远等不到」)**:「零消费者」彻底退出裁决话术,backlog 价值标准=作品集完整度(completeness IS the product);据此升格两项并当次落地——①`key-disable-toggle`(迁移 0009 `disabled_at` 可逆禁用,吊销终态优先判定,PATCH/CLI disable·enable/控制台三态徽章+启停操作);②`per-request-cost-budget`(迁移 0010 `max_request_cost_credits`;预检闸=估算输入+max_tokens 上界,超界 402 上游零调用不落账;流中闸=累计成本逐帧检查,超界断言收尾+已发生部分如实落账;判定表新格 cost_budget_exceeded=静默终结不计池)。诚实边界已登记:非流式无中断闸/max_tokens 缺失预检旁路/直通流已开闸段不中断/embeddings 不覆盖(proxy-and-streaming「请求级成本预算」节)。
+- **门禁**:`make check` exit=0(coverage gate PASS 71.2%);`openspec validate --all` 21/21;web 四件套 + vite build(/tmp)绿。两 change 已归档(archive/2026-10-13-*,主 specs +4 Requirement:api-key-lifecycle +1、新建 request-cost-budget +3)。独立子代理代码审查 1 P0(admin 签发链路漏接预算字段静默丢弃)+6 P2 全部修复,回归钉子已补。**改动未提交(等 owner 指令)**。
+
 ## 当前状态(2026-10-12,需求方框架重判批:DELETE 代理/SIGHUP 热加载/告警 webhook 三件落地)
 
 - **裁决框架修正(owner 点破「零消费方」自证拖延;completeness IS the product 重申)**:按作品集完整度重判 backlog——落地三件(状态 lane 删动词/SIGHUP 运维手势/告警主动通知,均完整 openspec 周期+归档,validate 20/20);拒绝三件各附真实理由:gRPC 入站(瓦解「零重依赖 stdlib 单二进制」主打论点,关键词留 skills 行)、SSO(ADR-0005 边界,OIDC 学习主场在锦官)、images 端点(多模态输入已四路全链,生成端点拖价目 schema 迁移不值对价);key 级模型白名单=值得做,下一批(配 kongming 灰度治理故事单独成批)。
@@ -86,12 +100,19 @@
 
 ## 下一步(严格按序)
 
+【2026-10-13 实施后状态】：
+
+1. 【交付执行中】本批已获用户明确 Git 授权；fetch 后 main 与 origin/main 为 0/0，按已通过门禁提交全部当前改动并推送，跟进对应 CI 到终态。
+2. 【owner 裁决】T5.3/T5.6 基座中断处置(重启重起算或调整判据基线,见开放项 2026-10-12 行)。
+3. 【本轮已结束】images/管理员审计已归档；模型白名单、form-row help、Responses reasoning 事件及 T5.2 完整跨仓基线待确认（缺契约/源仓裁决/证据），不臆测启动。
+4. 【外部条件】GEMINI_API_KEY 到位后 gemini 真实 wire 复核;MiniMax 域名真 key 归一(承前);images 国内同步兼容端点家数(硅基流动确定,智谱待核)随 3 实施冒烟实证。
+
 【2026-10-02 实施后状态】：
 
 1. 【已完成·已归档】fix-api-key-binding-identifiers 7/7(make check 全绿+跨仓验收,验收记录 33)。
 2. 【已完成·已归档】recover-pending-usage-settlement 5/5——木牛侧实现/测试/联调全过;锦官收口后本仓 `openspec archive` 已执行(主规格 sync +1 Requirement),归档位 `archive/2026-10-02-recover-pending-usage-settlement`。
 3. 【已销案 2026-10-12】原引用的聚合单源 `../HANDOFF.md` 在 longzhong/ 下不存在(指针失联);所辖四项经核查均已完成(CardTitle as 已落地、kongming input 日期族已合流销案)或无 muniu 侧动作(ingest 读数归锦官、push 后 CI 实跑归下条)。**裁决:不重建聚合状态文件**——跨仓状态聚合无维护归属,重建即再腐化;若未来需要,由 owner 立维护规则后另立。跨仓事项一律以各仓 HANDOFF + change 文件为单源。
-4. 【阻塞·待 owner 授权】push:本地两笔就绪(453b187+45d6b85+HANDOFF 如实回写),`gh auth refresh -h github.com -s workflow` 授权后 `git push origin main` 即完成;push 后 CI 实跑结果补记于验收记录 38。
+4. 【历史阻塞已关闭】workflow scope 授权与前批 push 已完成（2026-10-12 记录）；本批 Git 指令已于 2026-10-13 明确下达；本地与远端起点同为 93ec4fb，最终交付证据以最新验收记录为准。
 5. 【owner 裁决】T5.3/T5.6 基座中断处置:重启 dev 常驻并重新起算观察期,或按个人项目低流量前提调整发版判据基线(验收记录 22 先例);kongming 侧 ADR-007 转「已接受」与专用 key 限额回填为跨仓运营动作,随处置一并。
 6. 【外部条件】GEMINI_API_KEY 到位后按 docs/gemini-e2e-runbook.md 复核真实多工具调用 wire 形态(开放项 2026-10-12);MiniMax 域名双源待真 key 归一。
 
@@ -110,6 +131,8 @@
 
 ## 开放决策项
 
+- 【关闭 2026-10-13】后续授权修复旧 token 计费乘积溢出：宽中间量精确计算，共用预算算法；保留 credit 精度。最终金额真超界按 owner“你帮我决定”授权保留未结算观测及核对日志，证据见补遗验收。
+
 开放决策项:2026-09-11 全部终裁后,2026-09-12 代码审查新增以下待裁决项(按现行契约保守实现中,不阻塞):。
 
 | 日期 | 现象 | 影响 | 建议 | 裁决 |
@@ -124,7 +147,7 @@
 | 2026-09-11 | reconcile.sql 口径修正(每尝试一行→DISTINCT) | 旧口径 ≤1% 判据不可达 | 已按「每尝试一行」实现修正 SQL | 已解决(口径随上项一并写入 metering.md) |
 | 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
 | 2026-09-12 | B 档四项(Responses 入站/images/Gemini 出站/桥接工具往返)用户点名升格 | backlog 升格规则要求用户点名后先 ADR 再排期;四项价值/成本不等,不应捆绑同判 | 架构师独立裁决分层:桥接工具边界=缺陷级先行;Gemini=成本被低估的轻形态;Responses=战略项先 ADR;images/audio=新计量维度零消费者 | **①②③ 立项,④ 不立项**:ADR-0012 + openspec `upstream-egress-batch`/`responses-api-inbound` 已立(validate 通过);桥接边界方案升级为「候选适配性豁免跳过 + 独占时明确信封 + EMA 豁免」(比单纯 fail-fast 更符合换道哲学,详见 egress-batch design) |
-| 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属;修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③④非本批因果链,下一批次处置 |
+| 2026-09-12 | 代码审查遗留设计未决四项:①Responses 流式不透出 reasoning_content(R1 类客户端可见空白);②usage 口径 reasoning_tokens 为 completion 子集,Responses output_tokens/指标 completion 方向已修正为不相加,与 metering 计价口径(仅 completion 计费)对齐;③keypool 状态 gauge 与管理面 providers 页持启动快照,拓扑热替换后失真(上一批次遗留);④openapi 缺 GET /metrics/EstimateInputTokens 死导出等 low 项 | | 可观测语义与既有代码归属;修复 vs 登记 | 架构裁决:①②③④均登记不阻塞——①v1 最小事件集无 reasoning 事件类型;②已按子集语义修正实现;③已于 2026-10-13 复用 Topology() 修复；④于 2026-10-12 销案；①按现行 v1 事件契约待确认 |
 | 2026-09-13 | upstream-egress-batch Gemini 三项(冒烟/quirk/价目)待外部 GEMINI_API_KEY,无限期挂起污染活动清单 | 继续 etc 等待 / 归档并登记搁置 / 立即放弃 | **用户裁决:无限搁置**——①OpenAI 格式兼容层成熟,预期偏差风险低;②中国大陆网络不可用 Gemini,实际部署零消费者;纯新增零沉没成本 | change 归档(anthropic-bridge delta 合入主 specs;gemini-egress delta 随裁决移除,不把未打算满足的 MUST 合入主 specs);设计论述留档 design.md,未来解锁按原设计「轻形态+冒烟先行」重新立项。**【销案 2026-10-12】**ADR-0015(gemini-native-protocol)落地取代「轻形态」路径:原生双向实现 + 双实例(dashscope 承载)冒烟已过(验收记录 37),本搁置项不存在了 |
 | 2026-09-26 | 控制台 ui/CardTitle 基线渲染为 div(kongming 同源),无标题语义;卡题进不了读屏标题大纲(Providers 两处已用原生 h2 承载 CardTitle 配方临时兜住,Overview/Login 仍是 div) | 控制台可访问性缺口,ui/ 标准件语义缺陷是系统性的 | CardTitle 增多态 heading(如 as)支持;属 ui/ 语义级改动,按宪法 Article 5 须 kongming 先行,本仓随后对齐 | **关闭(2026-10-02 批次三)**:kongming change 已先行,本仓 card.tsx 多态 as 已落地,登录卡 as="h2"、Providers 两处原生 h2 回归 `<CardTitle as="h2">`、Overview 默认 h3,门禁全绿 |
 | 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;**【关闭 2026-10-12】**dashscope anthropic 分支(/apps/anthropic)真 key 冒烟:声明 bearer 直连成功,文本与工具多轮全链过(验收记录 37);其余分支首次接入时按同配方实证即可 |
@@ -134,8 +157,76 @@
 | 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | | **已终裁(2026-10-02 owner 追认)**:三 devDeps 正式保留,开放项销案;宪法 Article 4 注明测试工具属 devDeps 不占白名单口径 |
 | 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | | 本仓已修;**kongming 已于 2026-10-02 批次三合入并流向 jinguan(三仓单源),销案** |
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
+| 2026-10-13 | gRPC 入站二次裁决(原理由「瓦解 stdlib 旗舰论点」只计成本未答收益) | 补收益侧后结论更硬:LLM 行业无标准 gRPC API,自造 `muniu.proto` = 语义真空,协议保真转译核心卖点零锻炼;REST-only 与 LiteLLM/one-api/Kong 同赛道对照无缺口 | 维持不引入;关键词留简历 skills 行,学习主场在微服务语境项目 | **已终裁(2026-10-13 owner 确认重裁)**:维持拒绝;翻旧账以本行与 ROADMAP 注记为准 |
+| 2026-10-13 | SSO/OIDC 二次裁决(原理由「ADR-0005 边界」经不起追问:网关为何不能有自己的身份面) | 拆分后重裁:SSO 本体维持拒绝(锦官 OIDC 学习主场组合冗余 + standalone 零外联先验假设 + 自研 JOSE 密码学危险);被捆绑的多管理员+审计独立价值成立 | SSO 不引入;多管理员+操作审计拆出立项(ADR-0017 + openspec `admin-operators-audit`) | **已终裁(2026-10-13)**:一拒一立,论证沉淀 ADR-0017 备选节 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**46. 归档与 Git 交付准备（2026-10-13）**
+```text
+openspec list
+No active changes found.
+openspec validate --all --strict
+Totals: 23 passed, 0 failed (23 items)
+git fetch origin
+git rev-list --left-right --count HEAD...origin/main
+0 0
+```
+- 四 change 31/31 已归档；代码保持上一轮 `make check` 69.9% 与原生/Linux arm64 构建通过时状态，复用验收；本次用户已授权全部提交/push/CI 跟进，无后台值守。
+
+
+**45. 旧计费溢出与严格规格补遗（2026-10-13）**
+```text
+PATH=/Users/solvela/.local/share/mise/installs/aqua-golangci-golangci-lint/2.14.0/golangci-lint-2.14.0-darwin-arm64:$PATH make check
+0 issues.
+Test Files  6 passed (6)
+Tests  15 passed (15)
+coverage gate PASS: 69.9%
+openspec validate --all --strict
+Totals: 23 passed, 0 failed (23 items)
+make build / Linux arm64 静态构建：EXIT 0
+```
+- 红绿/数学对拍/超界观测与日志/CLI 金额单位/微基准/精度裁决见 [补遗验收](docs/acceptance/2026-10-13-cost-overflow-fix.md)。两项已关闭，无迁库、无新依赖，未提交、不常驻。
+
+
+**44. 本地未提交代码审查（2026-10-13）**
+```text
+PATH=/Users/solvela/.local/share/mise/installs/aqua-golangci-golangci-lint/2.14.0/golangci-lint-2.14.0-darwin-arm64:$PATH make check
+0 issues.
+Test Files  6 passed (6)
+Tests  15 passed (15)
+coverage gate PASS: 69.9%
+make build / Linux arm64 静态构建：EXIT 0
+pnpm exec vite build --outDir /tmp/muniu-review-dist
+✓ built in 3.62s
+openspec validate --all --strict
+Totals: 22 passed, 1 failed (23 items)
+```
+- 17 项修复、先红后绿、PTY 四路径、18 组组件布局及范围外原始失败见 [评审报告](docs/acceptance/2026-10-13-code-review.md)；严格失败仍为旧 platform-data-plane Purpose 占位，Vite 体积警告保留。未提交、不常驻。
+
+
+**43. 冻结任务执行（2026-10-13）**
+```text
+PATH=/Users/solvela/.local/share/mise/installs/aqua-golangci-golangci-lint/2.14.0/golangci-lint-2.14.0-darwin-arm64:$PATH make check
+0 issues.
+Test Files  3 passed (3)
+Tests  11 passed (11)
+coverage gate PASS: 69.5%
+make build / Linux arm64 静态构建：EXIT 0
+pnpm exec vite build --outDir /tmp/muniu-task-dist
+✓ built in 2.07s
+Some chunks are larger than 500 kB after minification.
+openspec validate --all --strict
+✗ spec/platform-data-plane
+Totals: 22 passed, 1 failed (23 items)
+```
+- 严格文档失败：旧 platform-data-plane Purpose 仍为 TBD，非冻结实施项，记录既有阻塞。全部原始命令与输出（含失败）、逐项终态、独立初审/追加容量失败边界与 18 组浏览器证据见本轮报告及 docs/acceptance/2026-10-13-evidence/。
+
+**42. key 启停 + 请求级成本预算(2026-10-13,openspec `key-disable-toggle`/`per-request-cost-budget` 已归档)**
+- 判据:失败测试先行(判定表新格/停用契约/预算判定先红)+ 既有全量零改动回放 + `make check` 全绿 + validate --all。
+- ①启停:`TestUpdateKeyLimits_停用与恢复`(缓存路径拒绝/恢复字段无损/吊销不复活)、`TestMiddleware_停用message可区分`、`TestAdmin_key启停与预算PATCH`、控制台组件测试(三态徽章/启停 patchKey 载荷/吊销 key 无启停钮)。②预算:`TestCostBudget_预检拒绝`(402+上游零调用+assertNoRows)、`TestCostBudget_流中中断与池无损`(断言收尾内容保留/不换道/中断行 error_class=cost_budget_exceeded/调大预算同 key 复用成功=池无损行为证明)、`TestMeterState_budgetExceeded`(真值覆盖估算/零预算与无价目旁路)、`TestKeyBudget_签发PATCH与鉴权携带`;判定表三格(failover_test)。
+- ③审查修复(独立子代理,1 P0+6 P2 全处置):admin createKey 补接 `max_request_cost_credits`(原 handler 结构体缺字段致控制台签发预算被静默丢弃,P0)+负值 400+回归钉子(签发 7777 落库断言);P2=列表回显值断言收紧/CLI 签发回执补 budget 行/metering.md CLI 收敛措辞精确化/budgetExceeded 流中段部分 usage 边角注释/disabled_at 双层解析口径注释/api-types 搭车漂移修复(HEAD openapi 漏再生,内容正确)点明。
+- 门禁:`make check` exit=0(vet+lint 0 issues+20 包 race,coverage gate PASS 71.2%);`openspec validate --all` 21/21;web 四件套 + `vite build --outDir /tmp` 绿。改动未提交(等 owner 指令)。
 
 **41. 需求方框架重判批(2026-10-12,owner 点破零消费方自证拖延;三 openspec change 归档)**
 - 判据:各自失败测试先行 + 既有全量零改动回放 + make check 全绿 + validate --all。

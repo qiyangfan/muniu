@@ -1,0 +1,2 @@
+SIGINT 取消后退出码: 1 终端回显恢复: True
+SIGTERM 取消后退出码: 1 终端回显恢复: True

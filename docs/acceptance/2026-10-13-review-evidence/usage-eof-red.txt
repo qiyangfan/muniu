@@ -1,0 +1,5 @@
+--- FAIL: TestCostBudget_usage之后断流不得漏记 (0.56s)
+    cost_budget_test.go:313: 最后 usage 后的断流输出漏记: {ID: RequestID: TenantID: APIKeyID: Provider:prov-a ModelAlias:alias-a UpstreamModel:up-a Stream:true Status:error ErrorClass:mid_stream_fail PromptTokens:1 CompletionTokens:1 ReasoningTokens:0 CachedTokens:0 Estimated:true CostCredits:10 Currency:CNY LatencyFirstTokenMs:<nil> LatencyTotalMs:0 CreatedAt:0001-01-01 00:00:00 +0000 UTC}
+FAIL
+FAIL	github.com/solvela/muniu/internal/proxy	1.200s
+FAIL

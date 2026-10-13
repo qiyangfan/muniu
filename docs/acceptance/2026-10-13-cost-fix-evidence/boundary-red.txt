@@ -1,0 +1,7 @@
+--- FAIL: TestNewRow_成本溢出保留未结算观测 (0.00s)
+    pipeline_test.go:190: 溢出被当正常账单或丢失原始 usage: {ID:01a13445-ac24-7bbf-b393-c34d0433ee34 RequestID:overflow TenantID: APIKeyID: Provider: ModelAlias: UpstreamModel: Stream:false Status:ok ErrorClass: PromptTokens:1000000 CompletionTokens:1 ReasoningTokens:0 CachedTokens:0 Estimated:false CostCredits:0 Currency:USD LatencyFirstTokenMs:<nil> LatencyTotalMs:0 CreatedAt:2026-10-13 07:59:03.71677 +0000 UTC}
+--- FAIL: TestCostWithCached_无法表示金额显式失败 (0.00s)
+    price_test.go:171: 不能把溢出费用伪报为有效值: 1
+FAIL
+FAIL	github.com/solvela/muniu/internal/metering	0.623s
+FAIL

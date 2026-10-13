@@ -41,6 +41,10 @@ func keysMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
 		return keysList(db, stdout, stderr)
 	case "revoke":
 		return keysRevoke(db, args[1:], stdout, stderr)
+	case "disable":
+		return keysToggle(db, args[1:], true, stdout, stderr)
+	case "enable":
+		return keysToggle(db, args[1:], false, stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "muniu keys: 未知子命令 %q\n%s", args[0], keysUsage)
 		return 2
@@ -51,6 +55,8 @@ const keysUsage = `用法:
   muniu keys create --tenant default --name kongming [--rpm 120] [--tpm 0] [--daily-quota-credits 0] [--expires-at RFC3339]
   muniu keys list
   muniu keys revoke <prefix>
+  muniu keys disable <prefix>
+  muniu keys enable <prefix>
 `
 
 // keysCreate 签发:明文只打印一次,stderr 同时给出警示。
@@ -63,6 +69,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	rpm := fs.Int64("rpm", 60, "RPM 限额")
 	tpm := fs.Int64("tpm", 0, "TPM 限额(0=不限)")
 	quota := fs.Int64("daily-quota-credits", 0, "日配额 credit(1 credit = 十亿分之一本币;0=不限)")
+	reqBudget := fs.Int64("max-request-cost-credits", 0, "单请求成本预算 credit(0=不限)")
 	expires := fs.String("expires-at", "", "过期时刻 RFC3339(空=永不过期)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -71,7 +78,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "muniu keys create: --name 必填")
 		return 2
 	}
-	opts := auth.KeyOpts{TPMLimit: *tpm, DailyQuotaCredits: *quota}
+	opts := auth.KeyOpts{TPMLimit: *tpm, DailyQuotaCredits: *quota, MaxRequestCostCredits: *reqBudget}
 	if *expires != "" {
 		t, err := time.Parse(time.RFC3339, *expires)
 		if err != nil {
@@ -90,8 +97,8 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	if rec.ExpiresAt != nil {
 		exp = rec.ExpiresAt.UTC().Format(time.RFC3339)
 	}
-	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nexpires:  %s\n",
-		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, exp)
+	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nbudget:   %d credit/请求\nexpires:  %s\n",
+		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, rec.MaxRequestCostCredits, exp)
 	return 0
 }
 
@@ -106,9 +113,13 @@ func keysList(db *sql.DB, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "(无 key)")
 		return 0
 	}
-	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %s\n", "PREFIX", "NAME", "TENANT", "RPM", "ID")
+	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %-9s %-12s %s\n", "PREFIX", "NAME", "TENANT", "RPM", "STATUS", "REQ-BUDGET", "ID")
 	for _, k := range keys {
-		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %s\n", k.Prefix, k.Name, k.TenantID, k.RPMLimit, k.ID)
+		status := k.Status
+		if status == "active" && k.Disabled {
+			status = "disabled"
+		}
+		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %-9s %-12d %s\n", k.Prefix, k.Name, k.TenantID, k.RPMLimit, status, k.MaxRequestCostCredits, k.ID)
 	}
 	return 0
 }
@@ -131,6 +142,52 @@ func keysRevoke(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	// CLI 与网关是两个进程,无法直清网关的鉴权缓存:如实说明收敛时长,不承诺「立即失效」
 	_, _ = fmt.Fprintf(stdout, "已吊销 %d 把 key(prefix=%s);运行中网关的鉴权缓存至多 %s 内收敛。\n",
 		n, args[0], (10 * time.Second).String())
+	return 0
+}
+
+// keysToggle 启停 key(可逆禁用):按 prefix 定位后 PATCH disabled_at 列。
+// CLI 与网关是两个进程,无法直清网关的鉴权缓存:如实说明收敛时长(revoke 同款文案纪律)。
+func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Writer) int {
+	verb := "enable"
+	if disable {
+		verb = "disable"
+	}
+	if len(args) != 1 {
+		_, _ = fmt.Fprintf(stderr, "muniu keys %s: 需要一个 <prefix> 参数\n", verb)
+		return 2
+	}
+	keys, err := auth.ListKeys(db)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "muniu keys %s: %v\n", verb, err)
+		return 1
+	}
+	var target *auth.KeyRecord
+	for i := range keys {
+		if keys[i].Prefix == args[0] {
+			target = &keys[i]
+			break
+		}
+	}
+	if target == nil {
+		_, _ = fmt.Fprintf(stdout, "未找到 prefix %s 的 key\n", args[0])
+		return 1
+	}
+	if target.Status != "active" {
+		_, _ = fmt.Fprintf(stdout, "key %s 已吊销(终态),启停操作不改变其语义\n", args[0])
+		return 1
+	}
+	v := disable
+	rec, err := auth.UpdateKeyLimits(db, target.ID, auth.LimitsPatch{Disabled: &v})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "muniu keys %s: %v\n", verb, err)
+		return 1
+	}
+	action := "已启用"
+	if rec.Disabled {
+		action = "已停用"
+	}
+	_, _ = fmt.Fprintf(stdout, "%s key(prefix=%s);运行中网关的鉴权缓存至多 %s 内收敛。\n",
+		action, rec.Prefix, (10 * time.Second).String())
 	return 0
 }
 

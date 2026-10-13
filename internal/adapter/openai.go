@@ -261,3 +261,15 @@ func mustJSON2(s string) string {
 	}
 	return string(b)
 }
+
+// PrepareImages 原位改写模型，其余参数与响应形态由调用方和上游决定。
+func (o *OpenAI) PrepareImages(in *protocol.ImageRequest, upstreamModel, apiKey string) (*Outbound, error) {
+	body, err := protocol.RewriteModel(in.Raw, upstreamModel)
+	if err != nil {
+		return nil, err
+	}
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("Authorization", "Bearer "+apiKey)
+	return &Outbound{URL: strings.TrimRight(o.baseURL, "/") + "/images/generations", Header: h, Body: body}, nil
+}

@@ -1,0 +1,3 @@
+# 原始 diff 的上下文空格与日志结尾空行属于验收证据，必须逐字保留。
+docs/acceptance/**/*.diff whitespace=-blank-at-eol,-space-before-tab,-blank-at-eof
+docs/acceptance/**/*.txt whitespace=-blank-at-eof

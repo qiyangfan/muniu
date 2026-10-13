@@ -1,0 +1,3 @@
+ok  	github.com/solvela/muniu/internal/metering	1.349s
+ok  	github.com/solvela/muniu/internal/proxy	10.101s
+?   	github.com/solvela/muniu/cmd/tokenctl	[no test files]

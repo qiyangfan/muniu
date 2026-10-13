@@ -3,14 +3,15 @@
 // 1 credit = 账单币种的十亿分之一(1e-9;如 CNY 租户 1 credit = 1e-9 元)。
 // 选型依据:①廉价档(如 $0.003/百万Token)在 1e-9 下逐 token 恰为整数 credit(3),
 // 心智换算干净;μ 基座则连 0.02μ/token 都无法整表达,逐段 ceil 产生整数倍失真。
-// ②int64 安全裕度按入站 32MB 体上限(≈1e7 token)核算:1e7 × $200/M(2e11) = 2e18
-// 仍留 4.6× 裕度;再细一位(1e-10)该乘积即溢出,需 128 位中间量——过度设计。
+// ②最终费用沿用 int64 存储；除以百万之前的乘积可能超界，即使真实费用很小，
+// 因而乘除过程使用宽整数中间量，不能以常见 token 数或牌价证明乘积永不溢出。
 // 配置侧人类可读价目在加载期一次性换算为整数 credit/百万Token,此后全链路禁 float。
 package metering
 
 import (
 	"errors"
 	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 )
@@ -84,6 +85,7 @@ const tokensPerM = 1_000_000
 // Cost 按计费契约计算单请求成本(credit):逐段 ceil(tokens×价格/1e6) 后求和,
 // 逐段独立向上取整保证对供应商友好(单请求误差 ≤2 credit = 2e-9 本币)。
 // 价格入参即 ParsePrice 的输出(credit/百万Token);token 数与价格均为非负整数域。
+// 金额不可表示或入参越出非负域时返回 -1，调用方必须作为计价失败处理，不能结算。
 func Cost(inTokens, outTokens, inCreditsPerM, outCreditsPerM int64) int64 {
 	return CostWithCached(inTokens, 0, outTokens, inCreditsPerM, 0, outCreditsPerM)
 }
@@ -91,6 +93,7 @@ func Cost(inTokens, outTokens, inCreditsPerM, outCreditsPerM int64) int64 {
 // CostWithCached 三段计价(metering.md「缓存价」契约):
 // 未命中输入 × input 价 + 缓存命中输入 × cached 价 + 输出 × output 价,逐段独立向上取整。
 // cachedCreditsPerM=0 视为与输入同价(缺省=input);cached 超过 prompt 时钳制(防御脏数据)。
+// -1 仅为失败信号，NewRow 将其转换为未结算观测，绝不写入 cost_credits。
 func CostWithCached(promptTokens, cachedTokens, outTokens, inCreditsPerM, cachedCreditsPerM, outCreditsPerM int64) int64 {
 	if cachedCreditsPerM <= 0 {
 		cachedCreditsPerM = inCreditsPerM
@@ -101,9 +104,22 @@ func CostWithCached(promptTokens, cachedTokens, outTokens, inCreditsPerM, cached
 	if cachedTokens < 0 {
 		cachedTokens = 0
 	}
-	return ceilDiv((promptTokens-cachedTokens)*inCreditsPerM, tokensPerM) +
-		ceilDiv(cachedTokens*cachedCreditsPerM, tokensPerM) +
-		ceilDiv(outTokens*outCreditsPerM, tokensPerM)
+	if promptTokens < 0 || outTokens < 0 {
+		return -1
+	}
+	var total int64
+	for _, part := range [3]struct{ tokens, price int64 }{
+		{promptTokens - cachedTokens, inCreditsPerM},
+		{cachedTokens, cachedCreditsPerM},
+		{outTokens, outCreditsPerM},
+	} {
+		amount, valid := CostForTokens(uint64(part.tokens), part.price)
+		if !valid || amount > math.MaxInt64-total {
+			return -1
+		}
+		total += amount
+	}
+	return total
 }
 
 // ceilDiv 非负整数除法向上取整;0 除以任何正数得 0。
@@ -113,4 +129,27 @@ func ceilDiv(n, d int64) int64 {
 		q++
 	}
 	return q
+}
+
+// CostForTokens 逐段向上取整，以宽中间量保留可表示的最终 credit；false 表示不能结算。
+// token 累计允许 uint64，以容纳预算检查中“usage 真值 + 后续估算”的临时总量。
+func CostForTokens(tokens uint64, creditsPerM int64) (int64, bool) {
+	if creditsPerM < 0 {
+		return 0, false
+	}
+	hi, lo := bits.Mul64(tokens, uint64(creditsPerM))
+	if hi >= tokensPerM {
+		return 0, false
+	}
+	quotient, remainder := bits.Div64(hi, lo, tokensPerM)
+	if quotient > math.MaxInt64 {
+		return 0, false
+	}
+	if remainder > 0 {
+		quotient++
+	}
+	if quotient > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(quotient), true
 }

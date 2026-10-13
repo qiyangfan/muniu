@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  ClipboardList,
   ChartColumn,
   KeyRound,
   LayoutDashboard,
@@ -9,7 +10,7 @@ import {
   Tags,
   type LucideIcon,
 } from "lucide-react";
-import { api, ApiError, getToken, setToken } from "./lib/api";
+import { api, ApiError, setToken, type AdminActor } from "./lib/api";
 import { useTheme } from "./lib/theme";
 import { cn } from "./lib/utils";
 import { Button } from "./components/ui/button";
@@ -22,57 +23,95 @@ import Keys from "./pages/Keys";
 import Usage from "./pages/Usage";
 import Providers from "./pages/Providers";
 import Pricing from "./pages/Pricing";
+import Audit from "./pages/Audit";
 
-// 登录 = 输入 admin token,先经一次真实请求校验再进入(否则无效 token 表现为各页静默空白)
-function Login({ onOk }: { onOk: () => void }) {
-  const [v, setV] = useState("");
+// 登录双轨共享 whoami，页面重载可恢复 HttpOnly 会话，不依赖浏览器可读的会话密钥。
+function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [tokenMode, setTokenMode] = useState(false);
+  const [token, setLoginToken] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   return (
     <div className="min-h-dvh grid place-items-center bg-background px-4">
       <Card className="w-full max-w-96">
         <CardHeader>
-          {/* 登录卡题即页内最高级,升页面级 h2(CardTitle 标题语义,kongming 对齐);
-              原 text-xl 密档补偿随视觉收敛废止 */}
           <CardTitle as="h2">木牛控制台</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
           <form
             className="grid gap-4"
             onSubmit={async (e) => {
               e.preventDefault();
               setBusy(true);
               setErr("");
-              setToken(v.trim());
               try {
-                await api.listTenants(); // 廉价校验:token 无效在此拦截,不放进入主界面
-                onOk();
+                setToken("");
+                if (tokenMode) {
+                  setToken(token.trim());
+                  onOk(await api.whoami());
+                } else {
+                  onOk(await api.login(username, password));
+                }
+                setPassword("");
               } catch (e2) {
                 setToken("");
-                setErr(
-                  e2 instanceof ApiError && e2.status === 401
-                    ? "管理员令牌无效或已过期,请重新登录"
-                    : `错误:${e2 instanceof Error ? e2.message : "登录失败,请稍后重试"}`,
-                );
+                setErr(e2 instanceof Error ? e2.message : "登录失败，请稍后重试");
               } finally {
                 setBusy(false);
               }
             }}
           >
-            <FormRow label="管理员令牌" htmlFor="admin-token">
-              <Input
-                id="admin-token"
-                type="password"
-                placeholder="粘贴管理员令牌"
-                value={v}
-                onChange={(e) => setV(e.target.value)}
-              />
-            </FormRow>
+            {tokenMode ? (
+              <FormRow label="管理员令牌" htmlFor="admin-token">
+                <Input
+                  id="admin-token"
+                  type="password"
+                  autoComplete="off"
+                  value={token}
+                  onChange={(e) => setLoginToken(e.target.value)}
+                  required
+                />
+              </FormRow>
+            ) : (
+              <>
+                <FormRow label="用户名" htmlFor="admin-username">
+                  <Input
+                    id="admin-username"
+                    autoComplete="username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                  />
+                </FormRow>
+                <FormRow label="密码" htmlFor="admin-password">
+                  <Input
+                    id="admin-password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </FormRow>
+              </>
+            )}
             {err && <ErrorAlert text={err} />}
             <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "校验中…" : "登录"}
+              {busy ? "登录中…" : "登录"}
             </Button>
           </form>
+          <Button
+            variant="ghost"
+            className="w-full"
+            onClick={() => {
+              setTokenMode((v) => !v);
+              setErr("");
+            }}
+          >
+            {tokenMode ? "使用账号登录" : "使用管理令牌登录"}
+          </Button>
         </CardContent>
       </Card>
     </div>
@@ -86,19 +125,58 @@ const TABS: { key: TabKey; label: string; shortLabel: string; icon: LucideIcon }
   { key: "usage", label: "用量明细", shortLabel: "用量", icon: ChartColumn },
   { key: "providers", label: "供应商", shortLabel: "供应商", icon: Server },
   { key: "pricing", label: "价目管理", shortLabel: "价目", icon: Tags },
+  { key: "audit", label: "操作审计", shortLabel: "审计", icon: ClipboardList },
 ];
 
-type TabKey = "overview" | "keys" | "usage" | "providers" | "pricing";
+type TabKey = "overview" | "keys" | "usage" | "providers" | "pricing" | "audit";
 
 export default function App() {
-  const [logged, setLogged] = useState(getToken() !== "");
+  const [actor, setActor] = useState<AdminActor | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [probeError, setProbeError] = useState("");
+  useEffect(() => {
+    let live = true;
+    const expired = () => {
+      setToken("");
+      setActor(null);
+    };
+    window.addEventListener("muniu-session-expired", expired);
+    api
+      .whoami()
+      .then((a) => {
+        if (live) setActor(a);
+      })
+      .catch((e) => {
+        if (live && (!(e instanceof ApiError) || e.status !== 401)) setProbeError(e.message);
+      })
+      .finally(() => {
+        if (live) setChecking(false);
+      });
+    return () => {
+      live = false;
+      window.removeEventListener("muniu-session-expired", expired);
+    };
+  }, []);
   const [tab, setTab] = useState<TabKey>("overview");
   const { theme, toggle } = useTheme();
   // 页签切换回顶:滚动残留会让新页面一进来就在中部(移动端长列表下尤其明显)
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [tab]);
-  if (!logged) return <Login onOk={() => setLogged(true)} />;
+  if (checking)
+    return (
+      <div className="p-6 text-sm text-muted-foreground" role="status">
+        正在确认登录状态…
+      </div>
+    );
+  if (probeError)
+    return (
+      <div className="p-6 space-y-4">
+        <ErrorAlert text={probeError} />
+        <Button onClick={() => window.location.reload()}>重试</Button>
+      </div>
+    );
+  if (!actor) return <Login onOk={setActor} />;
 
   const themeToggle = (
     <Button
@@ -118,9 +196,21 @@ export default function App() {
     <Button
       size="sm"
       variant="ghost-destructive"
-      onClick={() => {
-        setToken("");
-        setLogged(false);
+      onClick={async () => {
+        try {
+          await api.logout();
+          setToken("");
+          setActor(null);
+          setProbeError("");
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 401) {
+            setToken("");
+            setActor(null);
+            setProbeError("");
+          } else {
+            setProbeError((e as Error).message);
+          }
+        }
       }}
     >
       退出
@@ -130,9 +220,9 @@ export default function App() {
   return (
     <div className="min-h-dvh">
       {/* 顶栏全端粘性;移动端只留品牌+主操作,导航下沉到底部标签栏 */}
-      <header className="sticky top-0 z-40 flex h-14 items-center gap-6 border-b border-border bg-card px-4 md:px-6">
+      <header className="sticky top-0 z-40 flex h-14 items-center gap-4 border-b border-border bg-card px-4 md:px-6">
         <span className="shrink-0 font-semibold text-primary">木牛 muniu</span>
-        <nav className="hidden items-center gap-4 md:flex" aria-label="主导航">
+        <nav className="hidden items-center gap-1 md:flex" aria-label="主导航">
           {TABS.map((t) => (
             <Button
               key={t.key}
@@ -141,11 +231,15 @@ export default function App() {
               aria-current={tab === t.key ? "page" : undefined}
               onClick={() => setTab(t.key)}
             >
-              {t.label}
+              <span className="hidden lg:inline">{t.label}</span>
+              <span className="lg:hidden">{t.shortLabel}</span>
             </Button>
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-1">
+          <span className="max-w-24 truncate text-xs text-muted-foreground">
+            {actor.kind === "token" ? "共享管理令牌" : actor.name}
+          </span>
           {themeToggle}
           {logout}
         </div>
@@ -156,14 +250,15 @@ export default function App() {
         {tab === "usage" && <Usage />}
         {tab === "providers" && <Providers />}
         {tab === "pricing" && <Pricing />}
+        {tab === "audit" && <Audit />}
       </main>
       {/* 移动端主导航:拇指区底部标签栏(图标+短标签),让出 iOS 安全区;md+ 由顶栏接管 */}
       <nav
         className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card md:hidden"
         aria-label="主导航"
       >
-        {/* grid-cols-5 与 TABS.length 硬绑定:增删页签须同步改列数 */}
-        <div className="grid grid-cols-5 pb-[env(safe-area-inset-bottom)]">
+        {/* grid-cols-6 与 TABS.length 硬绑定:增删页签须同步改列数 */}
+        <div className="grid grid-cols-6 pb-[env(safe-area-inset-bottom)]">
           {TABS.map((t) => {
             const active = tab === t.key;
             return (

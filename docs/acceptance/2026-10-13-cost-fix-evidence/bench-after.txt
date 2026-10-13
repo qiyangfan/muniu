@@ -1,0 +1,7 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/solvela/muniu/internal/metering
+cpu: Apple M5
+BenchmarkCost-10    	52994653	         6.289 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/solvela/muniu/internal/metering	1.190s

@@ -1,0 +1,5 @@
+ok  	github.com/solvela/muniu/internal/protocol	0.412s
+ok  	github.com/solvela/muniu/internal/proxy	3.396s
+ok  	github.com/solvela/muniu/internal/auth	2.231s
+ok  	github.com/solvela/muniu/internal/admin	0.869s
+ok  	github.com/solvela/muniu/cmd/muniu	2.459s

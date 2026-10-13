@@ -161,6 +161,58 @@ func TestAdmin_keysCRUD全链(t *testing.T) {
 	}
 }
 
+// 启停与请求级成本预算的 PATCH 契约:boolean/数值字段落库回显,负预算 400(整单拒绝)。
+func TestAdmin_key启停与预算PATCH(t *testing.T) {
+	db := openDB(t)
+	h := newAdmin(t, db, "tok", nil)
+
+	code, body := call(t, h, "POST", "/admin/v1/keys", "tok", `{"tenant":"default","name":"toggle-key"}`)
+	if code != 200 {
+		t.Fatalf("签发失败: %d %s", code, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal([]byte(body), &created)
+	if created.ID == "" {
+		t.Fatalf("签发响应缺 id: %s", body)
+	}
+
+	// 签发期预算真实落库(P0 回归钉子:handler 漏接字段会静默丢弃为 0)
+	code, _ = call(t, h, "POST", "/admin/v1/keys", "tok",
+		`{"tenant":"default","name":"budget-key","max_request_cost_credits":7777}`)
+	if code != 200 {
+		t.Fatalf("带预算签发失败: %d", code)
+	}
+	code, _ = call(t, h, "POST", "/admin/v1/keys", "tok",
+		`{"tenant":"default","name":"neg-budget","max_request_cost_credits":-1}`)
+	if code != 400 {
+		t.Fatalf("负预算签发应 400: %d", code)
+	}
+
+	// 停用:回执如实回显 disabled + status
+	code, body = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok", `{"disabled":true}`)
+	if code != 200 || !strings.Contains(body, `"disabled":true`) || !strings.Contains(body, `"status":"active"`) {
+		t.Fatalf("停用应 200 且回显 disabled/status: %d %s", code, body)
+	}
+	// 恢复 + 预算设定一并 PATCH
+	code, body = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok",
+		`{"disabled":false,"max_request_cost_credits":5000}`)
+	if code != 200 || !strings.Contains(body, `"disabled":false`) || !strings.Contains(body, `"max_request_cost_credits":5000`) {
+		t.Fatalf("恢复+预算应 200 且回显: %d %s", code, body)
+	}
+	// 负预算整单拒绝
+	code, _ = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok", `{"max_request_cost_credits":-1}`)
+	if code != 400 {
+		t.Fatalf("负预算应 400: %d", code)
+	}
+	// 列表回显预算字段(P2 收紧:证字段名更证值)
+	_, body = call(t, h, "GET", "/admin/v1/keys", "tok", "")
+	if !strings.Contains(body, `"max_request_cost_credits":5000`) {
+		t.Fatalf("列表应回显预算值 5000: %s", body)
+	}
+}
+
 func TestAdmin_usage参数校验与聚合(t *testing.T) {
 	db := openDB(t)
 	h := newAdmin(t, db, "tok", nil)

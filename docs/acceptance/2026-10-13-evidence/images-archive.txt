@@ -1,0 +1,15 @@
+Task status: ✓ Complete
+
+Specs to update:
+  image-generation: create
+  pricing-management: update
+  request-cost-budget: update
+Applying changes to openspec/specs/image-generation/spec.md:
+  + 3 added
+Applying changes to openspec/specs/pricing-management/spec.md:
+  + 2 added
+Applying changes to openspec/specs/request-cost-budget/spec.md:
+  ~ 1 modified
+Totals: + 5, ~ 1, - 0, → 0
+Specs updated successfully.
+Change 'image-generation-endpoint' archived as '2026-10-13-image-generation-endpoint'.

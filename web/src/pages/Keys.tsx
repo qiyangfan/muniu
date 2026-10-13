@@ -20,8 +20,18 @@ import { Card } from "../components/ui/card";
 import { CopyButton } from "../components/copy-button";
 import { DataList, type DataCol } from "../components/data-list";
 import { FormRow } from "../components/form-row";
+import { StatusBadge, type StatusMeta } from "../components/status-badge";
 import { formatDateTime, formatNumber } from "../lib/datetime";
 import { fmtCredits, rfc3339ToLocal } from "../lib/utils";
+
+// key 状态徽章三态:吊销终态 > 可逆停用 > 启用(与后端判定顺序一致,先吊销后停用)。
+const KEY_STATUS_META: StatusMeta = {
+  active: { label: "启用", variant: "success" },
+  disabled: { label: "已停用", variant: "warning" },
+  revoked: { label: "已吊销", variant: "destructive" },
+};
+const keyStatusOf = (k: KeyRecord): string =>
+  k.status === "revoked" ? "revoked" : k.disabled ? "disabled" : "active";
 
 // 快捷过期时刻:点击填入 N 天后的本地时刻(datetime-local 分钟精度)。
 // 签发表单与编辑弹窗共用,文案与行为单源。
@@ -56,12 +66,13 @@ export default function Keys() {
   const [rpm, setRpm] = useState(60);
   const [tpm, setTpm] = useState(0);
   const [quota, setQuota] = useState(0);
+  const [budget, setBudget] = useState(0);
   const [expires, setExpires] = useState("");
   const [busy, setBusy] = useState(false); // 签发防重复
   const [loaded, setLoaded] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<KeyRecord | null>(null);
   const [editTarget, setEditTarget] = useState<KeyRecord | null>(null);
-  const [editForm, setEditForm] = useState({ rpm: 0, tpm: 0, quota: 0, expires: "" });
+  const [editForm, setEditForm] = useState({ rpm: 0, tpm: 0, quota: 0, budget: 0, expires: "" });
 
   const refresh = useCallback(() => {
     api
@@ -88,6 +99,18 @@ export default function Keys() {
     }
   };
 
+  // 启停(可逆):吊销终态的 key 不允许启停操作(按钮层已隐藏,此处防御)
+  const toggleDisabled = async (k: KeyRecord) => {
+    if (!k.id || k.status === "revoked") return;
+    try {
+      await api.patchKey(k.id, { disabled: !k.disabled });
+      setErr("");
+      refresh();
+    } catch (e2) {
+      setErr((e2 as Error).message);
+    }
+  };
+
   const openEdit = (k: KeyRecord) => {
     setErr(""); // 清上次操作残留错误,避免弹窗一打开就显示旧错误
     setEditTarget(k);
@@ -95,6 +118,7 @@ export default function Keys() {
       rpm: k.rpm_limit ?? 0,
       tpm: k.tpm_limit ?? 0,
       quota: k.daily_quota_credits ?? 0,
+      budget: k.max_request_cost_credits ?? 0,
       expires: rfc3339ToLocal(k.expires_at ?? ""),
     });
   };
@@ -107,6 +131,7 @@ export default function Keys() {
         rpm_limit: editForm.rpm,
         tpm_limit: editForm.tpm,
         daily_quota_credits: editForm.quota,
+        max_request_cost_credits: editForm.budget,
         // 输入框清空 = 显式清除过期(null);选值 = 设定新过期(datetime-local 本地时区 → UTC)
         expires_at: editForm.expires === "" ? null : new Date(editForm.expires).toISOString(),
       });
@@ -204,6 +229,18 @@ export default function Keys() {
       headTitle: "1 credit = 十亿分之一本币",
       render: (k) => fmtQuota(k.daily_quota_credits),
     },
+    {
+      key: "budget",
+      label: "请求预算(credit)",
+      numeric: true,
+      headTitle: "单请求成本上界:预检拒绝超预算请求,流式超限中断;0 = 不限",
+      render: (k) => fmtQuota(k.max_request_cost_credits),
+    },
+    {
+      key: "status",
+      label: "状态",
+      render: (k) => <StatusBadge meta={KEY_STATUS_META} value={keyStatusOf(k)} />,
+    },
     { key: "expires", label: "过期", render: (k) => fmtExpires(k.expires_at) },
     {
       key: "actions",
@@ -214,6 +251,15 @@ export default function Keys() {
           <Button variant="ghost" size={mobile ? "sm" : "xs"} onClick={() => openEdit(k)}>
             编辑
           </Button>
+          {k.status !== "revoked" && (
+            <Button
+              variant="ghost"
+              size={mobile ? "sm" : "xs"}
+              onClick={() => void toggleDisabled(k)}
+            >
+              {k.disabled ? "启用" : "停用"}
+            </Button>
+          )}
           <Button
             variant="ghost-destructive"
             size={mobile ? "sm" : "xs"}
@@ -242,6 +288,7 @@ export default function Keys() {
               const r = await api.createKey(tenant, name, rpm, {
                 tpm_limit: tpm,
                 daily_quota_credits: quota,
+                max_request_cost_credits: budget,
                 ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
               });
               setIssued({ key: r.key, id: r.id });
@@ -251,6 +298,7 @@ export default function Keys() {
               setExpires("");
               setTpm(0);
               setQuota(0);
+              setBudget(0);
               refresh();
             } catch (e2) {
               setErr((e2 as Error).message);
@@ -300,6 +348,14 @@ export default function Keys() {
               onChange={(e) => setQuota(Number(e.target.value))}
             />
           </FormRow>
+          <FormRow label="请求预算(credit)" htmlFor="key-budget">
+            <Input
+              id="key-budget"
+              type="number"
+              value={budget}
+              onChange={(e) => setBudget(Number(e.target.value))}
+            />
+          </FormRow>
           <FormRow label="过期时刻(本地时间)" htmlFor="key-expires">
             <>
               <Input
@@ -320,7 +376,8 @@ export default function Keys() {
         </form>
       </Card>
       <p className="text-xs text-muted-foreground">
-        RPM/TPM 与日配额填 0 表示不限制;过期时刻留空表示永不过期;1 credit = 十亿分之一本币。
+        RPM/TPM 与日配额填 0 表示不限制;请求预算填 0 表示不限(超预算的请求会被拒绝或中断流式);
+        过期时刻留空表示永不过期;1 credit = 十亿分之一本币。
       </p>
       {/* 错误必须独立于明文区展示:混用会让操作者把错误串当 key 复制走 */}
       {err && <ErrorAlert text={`错误:${err}`} />}
@@ -390,6 +447,14 @@ export default function Keys() {
                 onChange={(e) => setEditForm({ ...editForm, quota: Number(e.target.value) })}
               />
             </FormRow>
+            <FormRow label="请求预算(credit)" htmlFor="edit-budget">
+              <Input
+                id="edit-budget"
+                type="number"
+                value={editForm.budget}
+                onChange={(e) => setEditForm({ ...editForm, budget: Number(e.target.value) })}
+              />
+            </FormRow>
             <FormRow label="过期时刻(本地时间)" htmlFor="edit-expires">
               <>
                 <Input
@@ -403,7 +468,7 @@ export default function Keys() {
             </FormRow>
           </div>
           <p className="text-xs text-muted-foreground">
-            RPM/TPM 与日配额填 0 表示不限制;过期时刻清空 = 永不过期。
+            RPM/TPM 与日配额、请求预算填 0 表示不限制;过期时刻清空 = 永不过期。
           </p>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>

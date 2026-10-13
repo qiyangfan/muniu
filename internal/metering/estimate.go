@@ -116,6 +116,9 @@ type RowParams struct {
 	TotalMs       int64
 }
 
+// CostOverflowClass 标记无法按 int64 表达费用的未结算观测，不属于上游失败。
+const CostOverflowClass = "cost_overflow"
+
 // NewRow 构造计量行:计价经 Cost 逐段向上取整(metering.md 契约),
 // 失败/断连请求也计量(成本按实际 token,如实记 error_class)。
 func NewRow(p RowParams) UsageRow {
@@ -128,6 +131,10 @@ func NewRow(p RowParams) UsageRow {
 		currency = p.Pricing.Currency
 		cost = CostWithCached(p.Usage.PromptTokens, p.Usage.CachedTokens, p.Usage.CompletionTokens,
 			p.Pricing.InputCreditsPerM, p.Pricing.CachedInputCreditsPerM, p.Pricing.OutputCreditsPerM)
+		if cost < 0 {
+			cost = 0
+			p.Status, p.ErrorClass, p.Estimated = "error", CostOverflowClass, true
+		}
 	}
 	return UsageRow{
 		ID:                  newUsageID(),

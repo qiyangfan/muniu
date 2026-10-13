@@ -1,0 +1,5 @@
+--- FAIL: Test金额展示_credit本币换算 (0.00s)
+    main_test.go:16: credit=0 显示=0.000000 期望=0.000000000
+FAIL
+FAIL	github.com/solvela/muniu/cmd/tokenctl	0.687s
+FAIL

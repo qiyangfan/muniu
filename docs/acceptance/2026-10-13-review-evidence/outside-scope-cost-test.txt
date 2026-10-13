@@ -1,0 +1,6 @@
+package metering
+import "testing"
+func TestReview范围外乘积溢出(t *testing.T) {
+ got:=CostWithCached(100_000_000,0,0,1_000_000_000_000,0,0)
+ if got!=100_000_000_000_000 { t.Fatalf("成本乘积回绕：got=%d want=100000000000000",got) }
+}

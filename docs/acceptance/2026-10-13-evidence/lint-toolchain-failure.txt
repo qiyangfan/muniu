@@ -1,0 +1,28 @@
+go vet ./...
+internal/failover/failover_test.go:5:8: could not import testing (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/testing/allocs.go:8:2: could not import runtime (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/runtime/alg.go:8:2: could not import internal/abi (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/internal/abi/abi.go:8:2: could not import internal/goarch (-: could not load export data: internal error in importing "internal/goarch" (cannot decode "internal/goarch", export data version 5 is greater than maximum supported version 4); please report an issue)))) (typecheck)
+import "testing"
+       ^
+internal/failover/iterator.go:6:8: could not import sort (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/sort/slice.go:8:2: could not import internal/reflectlite (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/internal/reflectlite/swapper.go:8:2: could not import internal/goarch (-: could not load export data: internal error in importing "internal/goarch" (cannot decode "internal/goarch", export data version 5 is greater than maximum supported version 4); please report an issue))) (typecheck)
+import "sort"
+       ^
+internal/metrics/metrics.go:9:2: could not import math (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/math/fma.go:7:8: could not import math/bits (-: could not load export data: internal error in importing "math/bits" (cannot decode "math/bits", export data version 5 is greater than maximum supported version 4); please report an issue)) (typecheck)
+	"math"
+	^
+internal/metrics/metrics.go:10:2: could not import sort (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/sort/slice.go:8:2: could not import internal/reflectlite (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/internal/reflectlite/swapper.go:8:2: could not import internal/goarch (-: could not load export data: internal error in importing "internal/goarch" (cannot decode "internal/goarch", export data version 5 is greater than maximum supported version 4); please report an issue))) (typecheck)
+	"sort"
+	^
+internal/metrics/metrics.go:11:2: could not import strconv (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/strconv/bytealg.go:9:8: could not import internal/bytealg (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/internal/bytealg/bytealg.go:8:2: could not import internal/cpu (-: could not load export data: internal error in importing "internal/cpu" (cannot decode "internal/cpu", export data version 5 is greater than maximum supported version 4); please report an issue))) (typecheck)
+	"strconv"
+	^
+internal/metrics/metrics.go:12:2: could not import strings (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/strings/builder.go:8:2: could not import internal/abi (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/internal/abi/abi.go:8:2: could not import internal/goarch (-: could not load export data: internal error in importing "internal/goarch" (cannot decode "internal/goarch", export data version 5 is greater than maximum supported version 4); please report an issue))) (typecheck)
+	"strings"
+	^
+internal/metrics/metrics.go:13:2: could not import sync (/Users/solvela/.local/share/mise/installs/go/1.27.2/src/sync/cond.go:8:2: could not import sync/atomic (-: could not load export data: internal error in importing "sync/atomic" (cannot decode "sync/atomic", export data version 5 is greater than maximum supported version 4); please report an issue)) (typecheck)
+	"sync"
+	^
+internal/metrics/metrics.go:14:2: could not import sync/atomic (-: could not load export data: internal error in importing "sync/atomic" (cannot decode "sync/atomic", export data version 5 is greater than maximum supported version 4); please report an issue) (typecheck)
+	"sync/atomic"
+	^
+8 issues:
+* typecheck: 8
+make: *** [lint] Error 1

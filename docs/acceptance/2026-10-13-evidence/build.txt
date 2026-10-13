@@ -1,0 +1,1 @@
+CGO_ENABLED=0 go build -ldflags "-s -w -X github.com/solvela/muniu/internal/version.Version=$(git describe --tags --always 2>/dev/null || echo dev)" -o bin/muniu ./cmd/muniu

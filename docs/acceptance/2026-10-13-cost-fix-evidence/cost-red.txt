@@ -1,0 +1,16 @@
+--- FAIL: TestCostWithCached_宽乘积精确计价 (0.00s)
+    --- FAIL: TestCostWithCached_宽乘积精确计价/已报告回绕 (0.00s)
+        price_test.go:158: 成本 got=7766279631453 want=100000000000000
+    --- FAIL: TestCostWithCached_宽乘积精确计价/三段宽乘积 (0.00s)
+        price_test.go:158: 成本 got=8979303336616 want=175000000000000
+    --- FAIL: TestCostWithCached_宽乘积精确计价/缓存价回落 (0.00s)
+        price_test.go:158: 成本 got=-10680464442256 want=100000000000000
+    --- FAIL: TestCostWithCached_宽乘积精确计价/缓存钳制 (0.00s)
+        price_test.go:158: 成本 got=-5340232221128 want=50000000000000
+    --- FAIL: TestCostWithCached_宽乘积精确计价/宽乘积向上取整 (0.00s)
+        price_test.go:158: 成本 got=0 want=18446744073710
+    --- FAIL: TestCostWithCached_宽乘积精确计价/最终金额恰为上界 (0.00s)
+        price_test.go:158: 成本 got=-1 want=9223372036854775807
+FAIL
+FAIL	github.com/solvela/muniu/internal/metering	0.629s
+FAIL

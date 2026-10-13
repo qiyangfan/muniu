@@ -1,0 +1,132 @@
+{
+  "fixture": "API 契约夹具，独立 Vite 预览 :5175；非真实厂商验收",
+  "results": [
+    {
+      "page": "login",
+      "width": 375,
+      "scrollWidth": 375,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "audit",
+      "width": 375,
+      "scrollWidth": 375,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "pricing",
+      "width": 375,
+      "scrollWidth": 375,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "login",
+      "width": 375,
+      "scrollWidth": 375,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "audit",
+      "width": 375,
+      "scrollWidth": 375,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "pricing",
+      "width": 375,
+      "scrollWidth": 375,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "login",
+      "width": 768,
+      "scrollWidth": 768,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "audit",
+      "width": 768,
+      "scrollWidth": 768,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "pricing",
+      "width": 768,
+      "scrollWidth": 768,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "login",
+      "width": 768,
+      "scrollWidth": 768,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "audit",
+      "width": 768,
+      "scrollWidth": 768,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "pricing",
+      "width": 768,
+      "scrollWidth": 768,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "login",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "audit",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "pricing",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "theme": "light",
+      "dark": false
+    },
+    {
+      "page": "login",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "audit",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "theme": "dark",
+      "dark": true
+    },
+    {
+      "page": "pricing",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "theme": "dark",
+      "dark": true
+    }
+  ],
+  "pageErrors": []
+}

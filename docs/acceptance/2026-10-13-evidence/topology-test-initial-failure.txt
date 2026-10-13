@@ -1,0 +1,88 @@
+--- FAIL: TestSIGHUP_热加载与保持旧态 (0.13s)
+    reload_test.go:142: 热更读侧失真 /metrics: 200 # HELP muniu_plugin_calls_total 插件调用计数
+        # TYPE muniu_plugin_calls_total counter
+        # HELP muniu_plugin_call_duration_ms 插件单次调用耗时(ms)
+        # TYPE muniu_plugin_call_duration_ms histogram
+        muniu_plugin_call_duration_ms_bucket{le="5"} 0
+        muniu_plugin_call_duration_ms_bucket{le="10"} 0
+        muniu_plugin_call_duration_ms_bucket{le="25"} 0
+        muniu_plugin_call_duration_ms_bucket{le="50"} 0
+        muniu_plugin_call_duration_ms_bucket{le="100"} 0
+        muniu_plugin_call_duration_ms_bucket{le="250"} 0
+        muniu_plugin_call_duration_ms_bucket{le="500"} 0
+        muniu_plugin_call_duration_ms_bucket{le="1000"} 0
+        muniu_plugin_call_duration_ms_bucket{le="2500"} 0
+        muniu_plugin_call_duration_ms_bucket{le="5000"} 0
+        muniu_plugin_call_duration_ms_bucket{le="10000"} 0
+        muniu_plugin_call_duration_ms_bucket{le="+Inf"} 0
+        muniu_plugin_call_duration_ms_sum 0
+        muniu_plugin_call_duration_ms_count 0
+        # HELP muniu_plugin_containment_total 插件 containment 事件数
+        # TYPE muniu_plugin_containment_total counter
+        # HELP muniu_requests_total 转发请求数
+        # TYPE muniu_requests_total counter
+        muniu_requests_total{model="alias-a",status="ok"} 3
+        # HELP muniu_upstream_total 上游结果数(按错误分类)
+        # TYPE muniu_upstream_total counter
+        muniu_upstream_total{provider="p1",class=""} 2
+        muniu_upstream_total{provider="p2",class=""} 1
+        # HELP muniu_request_duration_ms 请求总耗时(ms)
+        # TYPE muniu_request_duration_ms histogram
+        muniu_request_duration_ms_bucket{le="5"} 3
+        muniu_request_duration_ms_bucket{le="10"} 3
+        muniu_request_duration_ms_bucket{le="25"} 3
+        muniu_request_duration_ms_bucket{le="50"} 3
+        muniu_request_duration_ms_bucket{le="100"} 3
+        muniu_request_duration_ms_bucket{le="250"} 3
+        muniu_request_duration_ms_bucket{le="500"} 3
+        muniu_request_duration_ms_bucket{le="1000"} 3
+        muniu_request_duration_ms_bucket{le="2500"} 3
+        muniu_request_duration_ms_bucket{le="5000"} 3
+        muniu_request_duration_ms_bucket{le="10000"} 3
+        muniu_request_duration_ms_bucket{le="+Inf"} 3
+        muniu_request_duration_ms_sum 1
+        muniu_request_duration_ms_count 3
+        # HELP muniu_tokens_total token 计数(与 usage_logs 落账行同口径)
+        # TYPE muniu_tokens_total counter
+        muniu_tokens_total{direction="cached_prompt",provider="p1",model="alias-a"} 0
+        muniu_tokens_total{direction="cached_prompt",provider="p2",model="alias-a"} 0
+        muniu_tokens_total{direction="completion",provider="p1",model="alias-a"} 18
+        muniu_tokens_total{direction="completion",provider="p2",model="alias-a"} 9
+        muniu_tokens_total{direction="prompt",provider="p1",model="alias-a"} 14
+        muniu_tokens_total{direction="prompt",provider="p2",model="alias-a"} 7
+        # HELP muniu_semantic_cache_queries_total 语义缓存判定数
+        # TYPE muniu_semantic_cache_queries_total counter
+        # HELP muniu_sticky_requests_total 有状态粘性请求数
+        # TYPE muniu_sticky_requests_total counter
+        # HELP muniu_first_token_duration_ms 流式首 token 延迟(ms)
+        # TYPE muniu_first_token_duration_ms histogram
+        muniu_first_token_duration_ms_bucket{le="1"} 0
+        muniu_first_token_duration_ms_bucket{le="2"} 0
+        muniu_first_token_duration_ms_bucket{le="5"} 0
+        muniu_first_token_duration_ms_bucket{le="10"} 0
+        muniu_first_token_duration_ms_bucket{le="25"} 0
+        muniu_first_token_duration_ms_bucket{le="50"} 0
+        muniu_first_token_duration_ms_bucket{le="100"} 0
+        muniu_first_token_duration_ms_bucket{le="250"} 0
+        muniu_first_token_duration_ms_bucket{le="500"} 0
+        muniu_first_token_duration_ms_bucket{le="1000"} 0
+        muniu_first_token_duration_ms_bucket{le="2500"} 0
+        muniu_first_token_duration_ms_bucket{le="5000"} 0
+        muniu_first_token_duration_ms_bucket{le="10000"} 0
+        muniu_first_token_duration_ms_bucket{le="+Inf"} 0
+        muniu_first_token_duration_ms_sum 0
+        muniu_first_token_duration_ms_count 0
+        # HELP muniu_plugin_instances 插件 wasm 实例数(按状态)
+        # TYPE muniu_plugin_instances gauge
+        # HELP muniu_pipeline_in_flight 计量管道在途水位
+        # TYPE muniu_pipeline_in_flight gauge
+        muniu_pipeline_in_flight 0
+        # HELP muniu_metering_buffer_rows 计量本地缓冲行数
+        # TYPE muniu_metering_buffer_rows gauge
+        muniu_metering_buffer_rows 0
+        # HELP muniu_keypool_state key 池状态计数
+        # TYPE muniu_keypool_state gauge
+        muniu_keypool_state{provider="p2",state="healthy"} 1
+FAIL
+FAIL	github.com/solvela/muniu/cmd/muniu	0.925s
+FAIL

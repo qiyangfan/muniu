@@ -28,17 +28,21 @@ func TestSIGHUP_热加载与保持旧态(t *testing.T) {
 	dbPath := filepath.Join(dir, "test.db")
 	up1 := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
 	up2 := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
+	t.Setenv("MUNIU_ADMIN_TOKEN", "reload-admin")
 	t.Setenv("SIGHUP_TEST_KEY_1", "k1")
 	t.Setenv("SIGHUP_TEST_KEY_2", "k2")
 
+	providerName := "p1"
 	writeCfg := func(baseURL, keyEnv string) {
 		body := fmt.Sprintf(`server:
   addr: "127.0.0.1:0"
 storage:
   sqlite:
     path: %q
+metrics:
+  enabled: true
 providers:
-  - name: p1
+  - name: %s
     adapter: openai
     weight: 1
     base_url: %q
@@ -46,8 +50,8 @@ providers:
       - env: %s
 model_routes:
   alias-a:
-    - { provider: p1, model: up-a, priority: 0 }
-`, dbPath, baseURL, keyEnv)
+    - { provider: %s, model: up-a, priority: 0 }
+`, dbPath, providerName, baseURL, keyEnv, providerName)
 		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -99,6 +103,7 @@ model_routes:
 	}
 
 	// 合法新配置:provider 指向 up2 → SIGHUP → 新请求走 up2(轮询等待热替换落地)
+	providerName = "p2"
 	writeCfg(up2.URL(), "SIGHUP_TEST_KEY_2")
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatal(err)
@@ -117,6 +122,37 @@ model_routes:
 		t.Fatal("SIGHUP 后新请求应走新 provider(up2)")
 	}
 
+	// 管理页与 gauge 必须与数据面的同一快照收敛，不能继续呈现启动 provider。
+	for _, path := range []string{"/admin/v1/providers", "/metrics"} {
+		req, err := http.NewRequest("GET", ts.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer reload-admin")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Counter 保留历史 provider 是正确行为；只核对实时 keypool gauge。
+		if path == "/metrics" {
+			var gauges strings.Builder
+			for _, line := range strings.Split(string(body), "\n") {
+				if strings.HasPrefix(line, "muniu_keypool_state{") {
+					gauges.WriteString(line)
+					gauges.WriteByte('\n')
+				}
+			}
+			body = []byte(gauges.String())
+		}
+		if resp.StatusCode != 200 || !strings.Contains(string(body), "p2") || strings.Contains(string(body), "p1") {
+			t.Fatalf("热更读侧失真 %s: %d %s", path, resp.StatusCode, body)
+		}
+	}
 	// 非法新配置:保持旧态继续服务(绝不半更新)
 	writeCfgBroken := func() {
 		body := fmt.Sprintf(`server:
@@ -124,8 +160,10 @@ model_routes:
 storage:
   sqlite:
     path: %q
+metrics:
+  enabled: true
 providers:
-  - name: p1
+  - name: %s
     adapter: nosuch-adapter
     weight: 1
     base_url: %q
@@ -133,8 +171,8 @@ providers:
       - env: SIGHUP_TEST_KEY_2
 model_routes:
   alias-a:
-    - { provider: p1, model: up-a, priority: 0 }
-`, dbPath, up2.URL())
+    - { provider: %s, model: up-a, priority: 0 }
+`, dbPath, providerName, up2.URL(), providerName)
 		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}

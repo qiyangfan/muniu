@@ -63,22 +63,28 @@ func Hash(plaintext string) string {
 
 // KeyRecord 签发/列表回执(管理命令与控制台;明文只在 CreateKey 返回值出现一次)。
 // 限额三件套与过期时刻如实透出(零值/空 = 不限/永不过期)。
+// Status 是生命周期终态位(active|revoked);Disabled 是可逆运行态(启停),两者正交:
+// 吊销优先于停用,恢复操作不得复活吊销 key。
 type KeyRecord struct {
-	ID                string     `json:"id"`
-	TenantID          string     `json:"tenant_id"`
-	Name              string     `json:"name"`
-	Prefix            string     `json:"prefix"`
-	RPMLimit          int64      `json:"rpm_limit"`
-	TPMLimit          int64      `json:"tpm_limit"`
-	DailyQuotaCredits int64      `json:"daily_quota_credits"`
-	ExpiresAt         *time.Time `json:"expires_at"`
+	ID                    string     `json:"id"`
+	TenantID              string     `json:"tenant_id"`
+	Name                  string     `json:"name"`
+	Prefix                string     `json:"prefix"`
+	RPMLimit              int64      `json:"rpm_limit"`
+	TPMLimit              int64      `json:"tpm_limit"`
+	DailyQuotaCredits     int64      `json:"daily_quota_credits"`
+	ExpiresAt             *time.Time `json:"expires_at"`
+	Status                string     `json:"status"`
+	Disabled              bool       `json:"disabled"`
+	MaxRequestCostCredits int64      `json:"max_request_cost_credits"`
 }
 
 // KeyOpts 签发可选项:零值 = 不限/永不过期(现状等价,零回归)。
 type KeyOpts struct {
-	TPMLimit          int64
-	DailyQuotaCredits int64
-	ExpiresAt         *time.Time
+	TPMLimit              int64
+	DailyQuotaCredits     int64
+	ExpiresAt             *time.Time
+	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;负值在入口拒绝)
 }
 
 // CreateKey 签发并落库;返回明文(仅此一次)与回执。
@@ -87,8 +93,8 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 	if tenant == "" {
 		tenant = "default"
 	}
-	if rpm < 0 || opts.TPMLimit < 0 || opts.DailyQuotaCredits < 0 {
-		return "", nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额 不可为负"))
+	if rpm < 0 || opts.TPMLimit < 0 || opts.DailyQuotaCredits < 0 || opts.MaxRequestCostCredits < 0 {
+		return "", nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额/请求预算 不可为负"))
 	}
 	if rpm <= 0 {
 		rpm = 60
@@ -110,26 +116,30 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 		expires = opts.ExpiresAt.UTC().Format(time.RFC3339)
 	}
 	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
-		rpm_limit, tpm_limit, daily_quota_credits, expires_at, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		rpm_limit, tpm_limit, daily_quota_credits, expires_at, max_request_cost_credits, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, tenantID, name, Hash(plaintext), plaintext[:12], "active",
-		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, now); err != nil {
+		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, opts.MaxRequestCostCredits, now); err != nil {
 		return "", nil, fmt.Errorf("auth: 落库 api_key: %w", err)
 	}
 	return plaintext, &KeyRecord{
 		ID: id, TenantID: tenant, Name: name, Prefix: plaintext[:12], RPMLimit: rpm,
 		TPMLimit: opts.TPMLimit, DailyQuotaCredits: opts.DailyQuotaCredits, ExpiresAt: opts.ExpiresAt,
+		Status: "active", Disabled: false, MaxRequestCostCredits: opts.MaxRequestCostCredits,
 	}, nil
 }
 
 // LimitsPatch key 运行态限额的局部更新(PATCH 语义:省略字段不动)。
 // ClearExpires 表达「显式 null 清除过期」;ExpiresAt 非 nil 且未 Clear 时为设定新过期。
+// Disabled 三态:true=停用(记 disabled_at)/false=恢复(清列)/nil=不动。
 type LimitsPatch struct {
-	RPMLimit          *int64
-	TPMLimit          *int64
-	DailyQuotaCredits *int64
-	ExpiresAt         *time.Time
-	ClearExpires      bool
+	RPMLimit              *int64
+	TPMLimit              *int64
+	DailyQuotaCredits     *int64
+	ExpiresAt             *time.Time
+	ClearExpires          bool
+	Disabled              *bool
+	MaxRequestCostCredits *int64
 }
 
 // UpdateKeyLimits 局部更新 key 限额/过期(管理面 PATCH;写后调用方须 Verifier.Invalidate)。
@@ -137,8 +147,9 @@ type LimitsPatch struct {
 func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error) {
 	if (p.RPMLimit != nil && *p.RPMLimit < 0) ||
 		(p.TPMLimit != nil && *p.TPMLimit < 0) ||
-		(p.DailyQuotaCredits != nil && *p.DailyQuotaCredits < 0) {
-		return nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额 不可为负"))
+		(p.DailyQuotaCredits != nil && *p.DailyQuotaCredits < 0) ||
+		(p.MaxRequestCostCredits != nil && *p.MaxRequestCostCredits < 0) {
+		return nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额/请求预算 不可为负"))
 	}
 	sets, args := []string{}, []any{}
 	add := func(col string, v any) { sets = append(sets, col+" = ?"); args = append(args, v) }
@@ -151,10 +162,20 @@ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error
 	if p.DailyQuotaCredits != nil {
 		add("daily_quota_credits", *p.DailyQuotaCredits)
 	}
+	if p.MaxRequestCostCredits != nil {
+		add("max_request_cost_credits", *p.MaxRequestCostCredits)
+	}
 	if p.ClearExpires {
 		add("expires_at", nil)
 	} else if p.ExpiresAt != nil {
 		add("expires_at", p.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if p.Disabled != nil {
+		if *p.Disabled {
+			add("disabled_at", time.Now().UTC().Format(time.RFC3339))
+		} else {
+			add("disabled_at", nil)
+		}
 	}
 	if len(sets) == 0 {
 		// 无字段可更新:仍回读校验 key 存在性(幂等 no-op 也须 404 语义正确)
@@ -174,10 +195,12 @@ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error
 // keyRecordByID 按 id 读回执(Update 后回传最新行;不存在返回 ErrNotFound)。
 func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
 	var r KeyRecord
-	var exp sql.NullString
-	err := db.QueryRow(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits, expires_at
+	var exp, dis sql.NullString
+	err := db.QueryRow(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
+		expires_at, status, disabled_at, max_request_cost_credits
 		FROM api_keys WHERE id = ?`, keyID).
-		Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits, &exp)
+		Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits,
+			&exp, &r.Status, &dis, &r.MaxRequestCostCredits)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -191,6 +214,9 @@ func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
 		}
 		r.ExpiresAt = &t
 	}
+	// disabled_at 只需非空判定:形态合法性由 store 读侧严格解析并拒绝(RFC3339,宁拒不放行),
+	// 同列两层口径不同是刻意的——auth 读侧不重复解析成本
+	r.Disabled = dis.Valid && dis.String != ""
 	return &r, nil
 }
 
@@ -209,7 +235,8 @@ func RevokeKeyByPrefix(db *sql.DB, prefix string) (int64, error) {
 
 // ListKeys 列出 key(管理命令读侧;不含 hash 明文),按签发时间升序。
 func ListKeys(db *sql.DB) ([]KeyRecord, error) {
-	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits, expires_at
+	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
+		expires_at, status, disabled_at, max_request_cost_credits
 		FROM api_keys ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("auth: 列出 api_key: %w", err)
@@ -218,8 +245,9 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 	var out []KeyRecord
 	for rows.Next() {
 		var r KeyRecord
-		var exp sql.NullString
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits, &exp); err != nil {
+		var exp, dis sql.NullString
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit,
+			&r.DailyQuotaCredits, &exp, &r.Status, &dis, &r.MaxRequestCostCredits); err != nil {
 			return nil, fmt.Errorf("auth: 扫 api_key 行: %w", err)
 		}
 		if exp.Valid && exp.String != "" {
@@ -229,6 +257,7 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 			}
 			r.ExpiresAt = &t
 		}
+		r.Disabled = dis.Valid && dis.String != ""
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -269,6 +298,9 @@ type Verifier struct {
 // errKeyExpired 过期哨兵(Middleware 据此给「已过期」message,与无效/吊销可区分)。
 var errKeyExpired = errors.New("key 已过期")
 
+// errKeyDisabled 停用哨兵(Middleware 据此给「已停用」message;用户动作:找管理员重新启用)。
+var errKeyDisabled = errors.New("key 已停用")
+
 // cacheEntry 缓存条目:任意字段访问须持 v.mu。
 type cacheEntry struct {
 	info      KeyInfo
@@ -280,14 +312,15 @@ type cacheEntry struct {
 // 收口在 verify 成功后的单点,以当前时钟逐请求执行——缓存命中路径同样精确,
 // 缓存只影响 DB 变更可见性,不影响时间函数(过期时刻是不可变字段)。
 type KeyInfo struct {
-	ID                string
-	TenantID          string
-	Name              string
-	RPMLimit          int64
-	TPMLimit          int64
-	DailyQuotaCredits int64
-	Currency          string
-	ExpiresAt         time.Time
+	ID                    string
+	TenantID              string
+	Name                  string
+	RPMLimit              int64
+	TPMLimit              int64
+	DailyQuotaCredits     int64
+	Currency              string
+	ExpiresAt             time.Time
+	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;请求级成本预算闸消费)
 }
 
 type ctxKey struct{}
@@ -411,6 +444,8 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
 			msg := "API key 无效或已吊销"
 			if errors.Is(err, errKeyExpired) {
 				msg = "API key 已过期,请重新签发"
+			} else if errors.Is(err, errKeyDisabled) {
+				msg = "API key 已停用,请联系管理员重新启用"
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(protocol.StatusForType(protocol.TypeAuthFailed))
@@ -497,18 +532,23 @@ func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
 	if row.Status != "active" {
 		return nil, errors.New("key 已吊销或禁用")
 	}
+	// 可逆停用(迁移 0009):吊销优先已判,此处补停用判定;哨兵供 Middleware 区分文案
+	if row.DisabledAt != nil {
+		return nil, errKeyDisabled
+	}
 	// 租户级冻结:管理面 disable 租户必须对数据面即时生效(随本查询 JOIN 返回)
 	if row.TenantStatus != "" && row.TenantStatus != "active" {
 		return nil, errors.New("租户已禁用")
 	}
 	info := &KeyInfo{
-		ID:                row.ID,
-		TenantID:          row.TenantID,
-		Name:              row.Name,
-		RPMLimit:          row.RPMLimit,
-		TPMLimit:          row.TPMLimit,
-		DailyQuotaCredits: row.DailyQuotaCredits,
-		Currency:          row.Currency,
+		ID:                    row.ID,
+		TenantID:              row.TenantID,
+		Name:                  row.Name,
+		RPMLimit:              row.RPMLimit,
+		TPMLimit:              row.TPMLimit,
+		DailyQuotaCredits:     row.DailyQuotaCredits,
+		Currency:              row.Currency,
+		MaxRequestCostCredits: row.MaxRequestCostCredits,
 	}
 	if row.ExpiresAt != nil {
 		info.ExpiresAt = *row.ExpiresAt

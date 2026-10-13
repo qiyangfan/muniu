@@ -139,6 +139,13 @@ type ModelCapability struct {
 	MaxOutputTokens int64    `yaml:"max_output_tokens" json:"max_output_tokens"` // 输出上限(0=不限制);越界 clamp max_tokens
 }
 
+// ImagePrice 同步生成的静态兜底报价，与 token 价目互不接管。
+type ImagePrice struct {
+	Currency string            `yaml:"currency"`
+	Default  string            `yaml:"default"`
+	Tiers    map[string]string `yaml:"tiers"`
+}
+
 // Config muniu.yaml 的运行态形态(启动后只读)。
 type Config struct {
 	Server struct {
@@ -183,6 +190,7 @@ type Config struct {
 	} `yaml:"ratelimit"`
 	Providers        []Provider             `yaml:"providers"`
 	ModelRoutes      map[string][]Candidate `yaml:"model_routes"`
+	ImagePricing     map[string]ImagePrice  `yaml:"image_pricing"`
 	Pricing          map[string]Price       `yaml:"pricing"`
 	Semantic         SemanticCfg            `yaml:"semantic"`
 	Models           []ModelCapability      `yaml:"models"`            // 模型能力目录(ADR-0010)
@@ -479,6 +487,17 @@ func (c *Config) validate() error {
 	}
 	if !metering.ValidSettlement(settlement) {
 		add("metering.settlement 非法 %q(允许 CNY|USD)", c.Metering.Settlement)
+	}
+
+	for alias, pr := range c.ImagePricing {
+		price, err := metering.ParseImagePrice(pr.Currency, pr.Default, pr.Tiers)
+		if err != nil {
+			add("image_pricing[%s]: %v", alias, err)
+			continue
+		}
+		if _, err := metering.SettleImagePrice(price, settlement, c.Metering.FXUSDCNYMilli); err != nil {
+			add("image_pricing[%s]: %v", alias, err)
+		}
 	}
 
 	for alias, pr := range c.Pricing {

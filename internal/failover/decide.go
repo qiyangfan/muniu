@@ -44,7 +44,9 @@ func Decide(class ErrorClass, pastFirstToken bool, stream bool) Action {
 			return ActionAbort
 		}
 		return ActionNextCandidate
-	case ClassContextCanceled:
+	case ClassContextCanceled, ClassCostBudget:
+		// 网关策略类与客户端断连同族:静默终结,不换道(同别名跨候选价目相同,换道无解)、
+		// 不计 key 失败(调用方 reportKeyOutcome 同样不回写)
 		return ActionSilent
 	default:
 		if pastFirstToken {

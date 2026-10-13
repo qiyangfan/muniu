@@ -1,0 +1,76 @@
+
+ RUN  v5.0.3 /Users/solvela/workspace/longzhong/muniu/web
+
+ ❯ src/pages/ImagePricing.test.tsx (1 test | 1 failed) 112ms
+   × 保存后的新价目不被迟到首屏覆盖 111ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/pages/ImagePricing.test.tsx > 保存后的新价目不被迟到首屏覆盖
+TestingLibraryElementError: Unable to find an element with the text: 运行态覆盖. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"rounded-2xl bg-card text-card-foreground shadow-xl"[39m
+      [33mdata-slot[39m=[32m"card"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6"[39m
+        [33mdata-slot[39m=[32m"card-header"[39m
+      [36m>[39m
+        [36m<h3[39m
+          [33mclass[39m=[32m"text-lg font-semibold leading-none tracking-tight"[39m
+          [33mdata-slot[39m=[32m"card-title"[39m
+        [36m>[39m
+          [0m图片生成价目[0m
+        [36m</h3>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"p-6 pt-0 space-y-4"[39m
+        [33mdata-slot[39m=[32m"card-content"[39m
+      [36m>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+        [36m>[39m
+          [0m按张计价，size|quality 档位未命中时使用兜底单价。[0m
+        [36m</p>[39m
+        [36m<button[39m
+          [33mclass[39m=[32m"relative inline-flex shrink-0 items-center justify-center text-sm font-medium whitespace-nowrap transition-all outline-none after:absolute after:rounded-[inherit] after:content-[''] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:border-input dark:bg-input-fill/30 dark:hover:bg-input-fill/50 h-8 gap-1.5 rounded-md px-3 has-[>svg]:px-2.5 after:-inset-1.5"[39m
+          [33mdata-size[39m=[32m"sm"[39m
+          [33mdata-slot[39m=[32m"button"[39m
+          [33mdata-variant[39m=[32m"outline"[39m
+        [36m>[39m
+          [0m新增图片价目[0m
+        [36m</button>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col items-center justify-center gap-2 py-12 text-sm text-muted-foreground"[39m
+        [36m>[39m
+          [36m<div>[39m
+            [0m暂无图片生成价目[0m
+          [36m</div>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ Object.getElementError node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/.pnpm/@testing-library+dom@10.4.2/node_modules/@testing-library/dom/dist/query-helpers.js:109:15
+ ❯ src/pages/ImagePricing.test.tsx:31:17
+     29|     finish({ pricing: [] });
+     30|   });
+     31|   expect(screen.getAllByText("运行态覆盖").length).toBeGreaterThan(0);
+       |                 ^
+     32| });
+     33|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed (1)
+   Start at  14:57:26
+   Duration  891ms (environment 49%, import 25%, tests 14%, transform 11%, worker 1%)
+

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"io"
 	"log/slog"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -179,5 +180,13 @@ func TestNewRow_计价与价目币种(t *testing.T) {
 	noPrice := NewRow(RowParams{RequestID: "r", Status: "error", ErrorClass: "timeout_first", TotalMs: 1})
 	if noPrice.CostCredits != 0 || noPrice.ErrorClass != "timeout_first" {
 		t.Fatalf("无价目行应零成本并带错误类: %+v", noPrice)
+	}
+}
+
+func TestNewRow_成本溢出保留未结算观测(t *testing.T) {
+	usage := protocol.Usage{PromptTokens: 1_000_000, CompletionTokens: 1}
+	row := NewRow(RowParams{RequestID: "overflow", Status: "ok", Usage: usage, Pricing: &Pricing{Currency: "USD", InputCreditsPerM: math.MaxInt64, OutputCreditsPerM: 1}})
+	if row.Status != "error" || row.ErrorClass != "cost_overflow" || !row.Estimated || row.CostCredits != 0 || row.Currency != "USD" || row.PromptTokens != usage.PromptTokens || row.CompletionTokens != usage.CompletionTokens {
+		t.Fatalf("溢出被当正常账单或丢失原始 usage: %+v", row)
 	}
 }

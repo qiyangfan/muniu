@@ -97,3 +97,53 @@ describe("密钥页 Key ID", () => {
     expect(localStorage.length).toBe(0);
   });
 });
+
+describe("密钥页启停与状态徽章", () => {
+  it("状态徽章三态可区分;启停按钮按当前状态调用 patchKey;吊销 key 不提供启停", async () => {
+    vi.mocked(api.listKeys).mockResolvedValue({
+      keys: [
+        keyWithID({ name: "active-key", status: "active", disabled: false }),
+        keyWithID({
+          id: "0192f3a1-6c8b-7d2e-9a4f-000000000001",
+          prefix: "mk-stoppedkey12",
+          name: "stopped-key",
+          status: "active",
+          disabled: true,
+        }),
+        keyWithID({
+          id: "0192f3a1-6c8b-7d2e-9a4f-000000000002",
+          prefix: "mk-revokedkey1",
+          name: "revoked-key",
+          status: "revoked",
+          disabled: false,
+        }),
+      ],
+    });
+    vi.mocked(api.patchKey).mockResolvedValue(keyWithID({}));
+    render(<Keys />);
+
+    // 徽章三态如实渲染(双形态=桌面表格+移动卡片,同文本成对出现)
+    expect((await screen.findAllByText("已吊销")).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("已停用").length).toBeGreaterThanOrEqual(1);
+
+    // 启用中的 key → 停用;已停用的 key → 启用(patchKey 载荷即契约)
+    fireEvent.click(screen.getAllByRole("button", { name: "停用" })[0]);
+    await vi.waitFor(() =>
+      expect(api.patchKey).toHaveBeenCalledWith("0192f3a1-6c8b-7d2e-9a4f-5b6c7d8e9f0a", {
+        disabled: true,
+      }),
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "启用" })[0]);
+    await vi.waitFor(() =>
+      expect(api.patchKey).toHaveBeenCalledWith("0192f3a1-6c8b-7d2e-9a4f-000000000001", {
+        disabled: false,
+      }),
+    );
+
+    // 吊销终态:启停按钮缺席(启用/停用按钮只属于前两把 key;双形态成对出现 ×2),
+    // 吊销按钮三把俱在 ×2
+    expect(screen.getAllByRole("button", { name: "停用" }).length).toBe(2);
+    expect(screen.getAllByRole("button", { name: "启用" }).length).toBe(2);
+    expect(screen.getAllByRole("button", { name: "吊销" }).length).toBe(6);
+  });
+});

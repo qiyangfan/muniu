@@ -1,0 +1,5 @@
+--- FAIL: TestAdminAuth_CLI凭据必须可由JSON无损表达 (0.06s)
+    admin_test.go:157: CLI 接受了无法由 JSON 无损表达的凭据
+FAIL
+FAIL	github.com/solvela/muniu/internal/auth	0.611s
+FAIL

@@ -1,0 +1,49 @@
+mise by @jdx – installing 1 tool
+mise ░░░░░░░░░░░░░░░░ 0/1 · 3.0s
+  go@1.27.2  downloading  3.0s  0.7/68.2 MB · 253 kB/s
+mise ░░░░░░░░░░░░░░░░ 0/1 · 6.0s
+  go@1.27.2  downloading  6.0s  1.8/68.2 MB · 324 kB/s
+mise ░░░░░░░░░░░░░░░░ 0/1 · 9.0s
+  go@1.27.2  downloading  9.0s  3.9/68.2 MB · 448 kB/s
+mise ░░░░░░░░░░░░░░░░ 0/1 · 12.0s
+  go@1.27.2  downloading  12.0s  4.4/68.2 MB · 376 kB/s
+mise █░░░░░░░░░░░░░░░ 0/1 · 15.0s
+  go@1.27.2  downloading  15.0s  6.4/68.2 MB · 433 kB/s
+mise █░░░░░░░░░░░░░░░ 0/1 · 18.0s
+  go@1.27.2  downloading  18.0s  8.5/68.2 MB · 483 kB/s
+mise ██░░░░░░░░░░░░░░ 0/1 · 21.0s
+  go@1.27.2  downloading  21.0s  13.2/68.2 MB · 640 kB/s
+mise ███░░░░░░░░░░░░░ 0/1 · 24.0s
+  go@1.27.2  downloading  24.0s  19.4/68.2 MB · 820 kB/s
+mise ████░░░░░░░░░░░░ 0/1 · 27.0s
+  go@1.27.2  downloading  27.0s  25.5/68.2 MB · 956 kB/s
+mise █████░░░░░░░░░░░ 0/1 · 30.0s
+  go@1.27.2  downloading  30.0s  32.1/68.2 MB · 1.1 MB/s
+mise █████░░░░░░░░░░░ 0/1 · 33.0s
+  go@1.27.2  downloading  33.0s  36.5/68.2 MB · 1.1 MB/s
+mise ███████░░░░░░░░░ 0/1 · 36.3s
+  go@1.27.2  downloading  36.3s  42.8/68.2 MB · 1.2 MB/s
+mise ████████░░░░░░░░ 0/1 · 40.0s
+  go@1.27.2  downloading  40.0s  49.8/68.2 MB · 1.3 MB/s
+mise ████████░░░░░░░░ 0/1 · 44.0s
+  go@1.27.2  downloading  44.0s  54.1/68.2 MB · 1.2 MB/s
+mise █████████░░░░░░░ 0/1 · 48.4s
+  go@1.27.2  downloading  48.4s  59.6/68.2 MB · 1.2 MB/s
+mise ██████████░░░░░░ 0/1 · 53.2s
+  go@1.27.2  downloading  53.2s  63.9/68.2 MB · 1.2 MB/s
+mise ███████████░░░░░ 0/1 · 58.6s
+  go@1.27.2  downloading  58.6s  67.5/68.2 MB · 1.2 MB/s
+mise go@1.27.2 go version go1.27.2 darwin/arm64
+mise ✓ go@1.27.2  62.3s  go1.27.2.darwin-arm64.tar.gz
+mise ████████████████ 1/1 · installed 1 tool in 62.3s
+# github.com/solvela/muniu/internal/protocol [github.com/solvela/muniu/internal/protocol.test]
+internal/protocol/images_test.go:10:9: undefined: ParseImageRequest
+internal/protocol/images_test.go:12:8: undefined: ParseImageRequest
+internal/protocol/images_test.go:15:13: undefined: ParseImageRequest
+FAIL	github.com/solvela/muniu/internal/protocol [build failed]
+# github.com/solvela/muniu/internal/metering [github.com/solvela/muniu/internal/metering.test]
+internal/metering/image_price_test.go:9:5: undefined: ImagePrice
+internal/metering/image_price_test.go:15:10: undefined: ValidateImagePrice
+internal/metering/image_price_test.go:15:29: undefined: ImagePrice
+FAIL	github.com/solvela/muniu/internal/metering [build failed]
+FAIL

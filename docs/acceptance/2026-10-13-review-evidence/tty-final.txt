@@ -1,0 +1,4 @@
+SIGINT 退出码: 1 终端回显恢复: True 无密码回显: True
+SIGTERM 退出码: 1 终端回显恢复: True 无密码回显: True
+happy 退出码: 0 终端回显恢复: True 无密码回显: True
+mismatch 退出码: 1 终端回显恢复: True 无密码回显: True

@@ -17,6 +17,7 @@ import (
 
 	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/alerting"
+	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/failover"
 	"github.com/solvela/muniu/internal/keypool"
@@ -43,6 +44,8 @@ type Config struct {
 	Registry         *adapter.Registry
 	Providers        []config.Provider // provider 定义(拓扑快照的池保留基准,3.1)
 	Routes           map[string][]config.Candidate
+	Settlement       string // 网关本位币；空为 CNY，无价目行也须同币种。
+	ImagePricing     *metering.ImagePriceDirectory
 	Pricing          *metering.PricingDirectory // 价目目录(动态改价:管理面原子替换,转发只读);nil = 成本记 0
 	Timeouts         Timeouts
 	Pipeline         *metering.Pipeline       // 计量管道;nil = 不计量(纯转发场景)
@@ -60,21 +63,23 @@ type Config struct {
 
 // Proxy 编排器:注册表 + 拓扑快照(路由/池/适配器/能力目录,3.1 原子热替换) + 三层超时 + 计量管道。
 type Proxy struct {
-	registry  *adapter.Registry                // 启动装配容器(转发路径不再读——adapter 随拓扑快照)
-	topo      atomic.Pointer[topologySnapshot] // 请求入口 Load 一次,全程同快照(换道视图一致)
-	pricing   *metering.PricingDirectory
-	timeouts  Timeouts
-	pipeline  *metering.Pipeline
-	tpm       ratelimit.TPMRecorder
-	cache     *semantic.Cache
-	tenantSw  func(string) bool
-	strictGov bool
-	plugins   *plugin.Registry
-	alerts    *alerting.Notifier
-	randIntn  func(int) int
-	logger    *slog.Logger
-	client    *http.Client
-	affinity  *affinityTable // 有状态粘性路由亲和表(进程内 TTL+LRU;protocol-native-passthrough)
+	registry     *adapter.Registry                // 启动装配容器(转发路径不再读——adapter 随拓扑快照)
+	topo         atomic.Pointer[topologySnapshot] // 请求入口 Load 一次,全程同快照(换道视图一致)
+	settlement   string
+	imagePricing *metering.ImagePriceDirectory
+	pricing      *metering.PricingDirectory
+	timeouts     Timeouts
+	pipeline     *metering.Pipeline
+	tpm          ratelimit.TPMRecorder
+	cache        *semantic.Cache
+	tenantSw     func(string) bool
+	strictGov    bool
+	plugins      *plugin.Registry
+	alerts       *alerting.Notifier
+	randIntn     func(int) int
+	logger       *slog.Logger
+	client       *http.Client
+	affinity     *affinityTable // 有状态粘性路由亲和表(进程内 TTL+LRU;protocol-native-passthrough)
 }
 
 // New 构造代理:路由候选按 priority 升序排序;HTTP 客户端带拨号层超时与连接池。
@@ -97,21 +102,27 @@ func New(cfg Config) *Proxy {
 	if randIntn == nil {
 		randIntn = func(n int) int { return rand.IntN(n) }
 	}
+	settlement := cfg.Settlement
+	if settlement == "" {
+		settlement = "CNY"
+	}
 	p := &Proxy{
-		registry:  cfg.Registry,
-		pricing:   cfg.Pricing,
-		timeouts:  cfg.Timeouts,
-		pipeline:  cfg.Pipeline,
-		tpm:       cfg.TPM,
-		cache:     cfg.Cache,
-		tenantSw:  cfg.TenantSwitch,
-		plugins:   cfg.Plugins,
-		alerts:    cfg.Alerts,
-		strictGov: cfg.StrictGovernance,
-		randIntn:  randIntn,
-		logger:    logger,
-		client:    &http.Client{Transport: transport},
-		affinity:  newAffinityTable(),
+		settlement:   settlement,
+		registry:     cfg.Registry,
+		pricing:      cfg.Pricing,
+		imagePricing: cfg.ImagePricing,
+		timeouts:     cfg.Timeouts,
+		pipeline:     cfg.Pipeline,
+		tpm:          cfg.TPM,
+		cache:        cfg.Cache,
+		tenantSw:     cfg.TenantSwitch,
+		plugins:      cfg.Plugins,
+		alerts:       cfg.Alerts,
+		strictGov:    cfg.StrictGovernance,
+		randIntn:     randIntn,
+		logger:       logger,
+		client:       &http.Client{Transport: transport},
+		affinity:     newAffinityTable(),
 	}
 	p.topo.Store(&topologySnapshot{
 		providers:   append([]config.Provider(nil), cfg.Providers...),
@@ -277,6 +288,23 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 价目在请求入口选定；预检、候选尝试与落账均使用这份不可变快照。
+	var requestPrices *metering.Pricing
+	if pt := p.pricing.Get(req.Model); pt != nil {
+		pr := pt.At(time.Now())
+		requestPrices = &pr
+	}
+	var requestBudget int64
+	if info := auth.KeyFrom(r.Context()); info != nil {
+		requestBudget = info.MaxRequestCostCredits
+	}
+	if requestBudget > 0 && (nat == nil || nat.ineligCode == "") {
+		if msg, over := preflightBudgetExceeded(req, requestBudget, requestPrices); over {
+			p.writeError(tw, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, msg)
+			return
+		}
+	}
+
 	// 生命周期第 8 步:构造候选迭代器(同 priority 加权随机起点,priority 递增降级)
 	fcs := make([]failover.Candidate, len(cands))
 	for i, c := range cands {
@@ -346,7 +374,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
 			continue
 		}
-		m := &meterState{start: time.Now(), status: "ok"}
+		m := &meterState{start: time.Now(), status: "ok", priceSnapshot: requestPrices, priceSnapshotTaken: true, budget: requestBudget, budgetPrices: requestPrices}
 		handled, class := p.attempt(tw, r, topo, req, nat, path, cand, key, m)
 		if pool != nil {
 			p.reportKeyOutcome(pool, key, class, handled, m)
@@ -423,6 +451,17 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
 		p.logger.Error("provider 未注册", "provider", cand.Provider)
 		p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")
 		return true, failover.ClassUnknown
+	}
+	// 请求级成本预算装填(per-request-cost-budget):每 attempt 从 canonical 估算输入;
+	// 价目按别名解析(跨候选同价);失格请求 canonical 不可得,估算为 0(usage 真值路径仍生效)
+	if info := auth.KeyFrom(r.Context()); info != nil && info.MaxRequestCostCredits > 0 {
+		m.budget = info.MaxRequestCostCredits
+		m.budgetModel = req.Model
+
+		if nat == nil || nat.ineligCode == "" {
+			inputText, _ := json.Marshal(req.Messages)
+			m.budgetEstIn = estimateInputTokens(string(inputText), req.Model)
+		}
 	}
 	// 请求参数治理(ADR-0010):每次 attempt 从原始请求出发按目标 (provider, model) 重新治理——
 	// 换道后不得沿用上一目标的收敛结果(spec 换道重治理场景);strict 命中即 400 终结。

@@ -1,0 +1,25 @@
+--- FAIL: TestImages_计价只消费标准字段 (0.00s)
+    images_test.go:32: 未知大小写字段污染计价: n=9 tier=1024|hd
+FAIL
+FAIL	github.com/solvela/muniu/internal/protocol	1.077s
+--- FAIL: TestCostBudget_极大上界不能绕过预检 (0.10s)
+    cost_budget_test.go:171: 上界整数溢出绕过: code=200 calls=1 body={"id":"chatcmpl-2","object":"chat.completion","model":"fake","choices":[{"index":0,"message":{"role":"assistant","content":"完整回答"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":9}}
+--- FAIL: TestCostBudget_输入usage不能吞掉中断输出 (0.52s)
+    cost_budget_test.go:192: 输入usage吞掉生成成本: {ID: RequestID: TenantID: APIKeyID: Provider:prov-a ModelAlias:alias-a UpstreamModel:up-a Stream:true Status:error ErrorClass:cost_budget_exceeded PromptTokens:1 CompletionTokens:0 ReasoningTokens:0 CachedTokens:0 Estimated:false CostCredits:2 Currency:CNY LatencyFirstTokenMs:<nil> LatencyTotalMs:0 CreatedAt:0001-01-01 00:00:00 +0000 UTC}
+FAIL
+FAIL	github.com/solvela/muniu/internal/proxy	2.391s
+--- FAIL: TestAdminAuth_不存在账号不占用锁定状态 (0.19s)
+    admin_test.go:137: 未认证随机用户名永久积累 8 条锁定状态
+FAIL
+FAIL	github.com/solvela/muniu/internal/auth	1.379s
+--- FAIL: TestAdminOperators_panic不得审计为成功 (0.04s)
+    operators_test.go:196: panic审计为 ok
+FAIL
+FAIL	github.com/solvela/muniu/internal/admin	2.259s
+--- FAIL: TestAdminsCLI_空密码不得报告修改成功 (0.08s)
+    operators_test.go:143: 空密码被报告为修改成功
+--- FAIL: TestImages_无价目仍使用网关本位币 (0.04s)
+    operators_test.go:191: 无价目行币种=CNY，应为USD
+FAIL
+FAIL	github.com/solvela/muniu/cmd/muniu	2.860s
+FAIL

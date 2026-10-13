@@ -1,6 +1,11 @@
 // 管理 API 客户端:类型一律来自 openapi-typescript 生成的 api-types.d.ts(禁手写 API 类型,ADR-005 纪律)。
 import type { components, paths } from "./api-types";
 
+export type AdminActor = components["schemas"]["AdminActor"];
+export type AdminAudit = components["schemas"]["AdminAudit"];
+
+export type ImagePricingEntry = components["schemas"]["ImagePricingView"];
+
 export type Tenant = components["schemas"]["Tenant"];
 export type KeyRecord = components["schemas"]["KeyRecord"];
 export type KeyCreateResponse = components["schemas"]["KeyCreateResponse"];
@@ -12,12 +17,14 @@ export type PricingEntry = components["schemas"]["PricingView"];
 export type PricingWindow = components["schemas"]["PricingWindow"];
 
 const TOKEN_KEY = "muniu-admin-token";
+let authRevision = 0;
 
 export function getToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? "";
 }
 export function setToken(t: string): void {
   sessionStorage.setItem(TOKEN_KEY, t);
+  authRevision++;
 }
 
 export class ApiError extends Error {
@@ -51,6 +58,7 @@ const HTTP_MESSAGES: Record<number, string> = {
 const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/;
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const revision = authRevision;
   let resp: Response;
   try {
     resp = await fetch(path, {
@@ -68,6 +76,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     throw e;
   }
   const text = await resp.text();
+  if (resp.status === 401 && revision === authRevision && path !== "/admin/v1/auth/login") {
+    window.dispatchEvent(new Event("muniu-session-expired"));
+  }
   if (!resp.ok) {
     let detail = "";
     try {
@@ -85,6 +96,20 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export const api = {
+  login: (username: string, password: string) =>
+    call<AdminActor>("POST", "/admin/v1/auth/login", { username, password }),
+  logout: () => call<{ ok: boolean }>("POST", "/admin/v1/auth/logout"),
+  whoami: () => call<AdminActor>("GET", "/admin/v1/auth/whoami"),
+  audit: (cursor = "") =>
+    call<{ items: AdminAudit[]; next_cursor: string }>(
+      "GET",
+      `/admin/v1/audit?limit=25&cursor=${encodeURIComponent(cursor)}`,
+    ),
+  listImagePricing: () => call<{ pricing: ImagePricingEntry[] }>("GET", "/admin/v1/image-pricing"),
+  putImagePricing: (alias: string, body: ImagePricingEntry) =>
+    call<{ ok: boolean }>("PUT", `/admin/v1/image-pricing/${encodeURIComponent(alias)}`, body),
+  deleteImagePricing: (alias: string) =>
+    call<{ ok: boolean }>("DELETE", `/admin/v1/image-pricing/${encodeURIComponent(alias)}`),
   listTenants: () => call<{ tenants: Tenant[] }>("GET", "/admin/v1/tenants"),
   createTenant: (name: string) => call<{ id: string }>("POST", "/admin/v1/tenants", { name }),
   patchTenant: (
@@ -100,7 +125,12 @@ export const api = {
     tenant: string,
     name: string,
     rpm_limit: number,
-    opts?: { tpm_limit?: number; daily_quota_credits?: number; expires_at?: string },
+    opts?: {
+      tpm_limit?: number;
+      daily_quota_credits?: number;
+      expires_at?: string;
+      max_request_cost_credits?: number;
+    },
   ) =>
     call<KeyCreateResponse>("POST", "/admin/v1/keys", {
       tenant,
@@ -115,6 +145,8 @@ export const api = {
       tpm_limit?: number;
       daily_quota_credits?: number;
       expires_at?: string | null;
+      disabled?: boolean;
+      max_request_cost_credits?: number;
     },
   ) => call<KeyRecord>("PATCH", `/admin/v1/keys/${id}`, patch),
   revokeKey: (prefix: string) => call<{ revoked: number }>("DELETE", `/admin/v1/keys/${prefix}`),
