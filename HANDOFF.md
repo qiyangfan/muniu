@@ -171,6 +171,10 @@
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
 
+**49. 两 change 归档交付 CI 实跑(2026-10-14,owner 指令:归档/HANDOFF/提交/push/盯 CI)**
+- 提交 f4aa33b(45 文件,+1675/-75,单笔两 change 含归档与主 specs 同步);push c63bace..f4aa33b(首推 SSL 瞬断,重试成功)。
+- CI run 38491025805:**check + web-check 双 job 全绿**(conclusion success,零 failure step);validate --all 23/23(归档后 21 specs 零活动 change)。
+
 **48. 双边界裁决落地(2026-10-14,owner 委任裁决;`responses-state-ownership` 3/3,2026-10-14 已归档 archive/2026-10-14-responses-state-ownership;② 顺带根修)**
 - 判据:失败测试先行(跨 key 三拒绝/nil fail-closed/permission_error 断言先红)+ 既有全量零改动回放(三处粘性 e2e 补 KeyInfo 注入为生产语义对齐,非行为改动)+ make check 全绿 + validate --all。
 - 证据:①`TestStateOwnership_跨key三拒绝与同key零变化`(跨 key GET/DELETE 404 response_not_found 上游零调用、跨 key prevID response_affinity_lost、同 key GET/粘性/DELETE 全链通)、`TestStateOwnership_无鉴权信息failClosed`、TestAffinityTable 增归属不匹配/fail-closed 断言;②`TestAllowlist_messages流式403信封类型`(permission_error 在场+api_error 不在场+零上游);adapter/unit 全量回放零改动。
