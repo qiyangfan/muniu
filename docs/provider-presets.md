@@ -105,7 +105,7 @@
 | 家 | responses 原生端点 | 实证状态(2026-10-11) | 声明建议 |
 |---|---|---|---|
 | OpenAI 官方 | `https://api.openai.com/v1`( Responses API 发源地) | 未直测(大陆不可达);官方契约完整 | 可声明(官方文档背书) |
-| Qwen 百炼(dashscope) | `/api/v2/services/agents`(独立端点,非 compatible-mode) | **多轮工具回放四路径全 400**(服务端把 `function_call_output` 译成 `role:'tool'` 被自家校验器拒;kongming e2e 四路径对照实证) | **勿声明**;上游修复后翻开关即切,零代码改动 |
+| Qwen 百炼(dashscope) | `/api/v2/services/agents`(独立端点,非 compatible-mode);compatible-mode `/v1/responses` **单轮可用** | 多轮工具回放四路径全 400(服务端把 `function_call_output` 译成 `role:'tool'` 被自家校验器拒;kongming e2e 实证);**2026-10-14 冒烟补充**:compatible-mode 单轮 create(GET/POST)真实可用——直通创建 200、单查 GET 200 完整对象 | 多轮回放缺口仍在,**勿声明**(声明会放行 prev_id 粘性流量踩缺口);单轮语义已实证,上游补齐回放后翻开关即切,零代码改动 |
 | 其余 openai 系 | 逐家未实证 | 「OpenAI 兼容」≠「responses 端点可用」 | 未实证前勿声明;首次接入按 `make smoke` responses 场景实证后声明 |
 
 声明制语义:未声明候选对 responses 入站走既有 chat 翻译兜底(行为与本注记前逐字节一致);声明仅解锁直通车道的路由资格,不改变任何翻译路径行为。

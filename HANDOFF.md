@@ -111,7 +111,7 @@
 【2026-10-13 实施后状态】：
 
 1. 【交付执行中 2026-10-14】key-model-allowlist + responses-state-ownership 两 change 已归档并获用户明确 Git 授权：提交全部当前改动并推送，跟进对应 CI 到终态（结果补记验收记录 49）。
-2. 【owner 裁决】T5.3/T5.6 基座中断处置(重启重起算或调整判据基线,见开放项 2026-10-12 行)。
+2. 【已裁决销案 2026-10-14】T5.3/T5.6 判据基线 v2 落地(开放项 2026-10-12 行改判):日历观察期废止,发版判据=docs/v1-release-checklist.md v2;tag v1.0.0 时机待 owner 逐次指令。kongming 侧 ADR-007 状态行/限额回填仍为跨仓运营动作,随其实际使用按需。
 3. 【本轮已结束】images/管理员审计已归档；模型白名单、form-row help、Responses reasoning 事件及 T5.2 完整跨仓基线待确认（缺契约/源仓裁决/证据），不臆测启动。
 4. 【外部条件】GEMINI_API_KEY 到位后 gemini 真实 wire 复核;MiniMax 域名真 key 归一(承前);images 国内同步兼容端点家数(硅基流动确定,智谱待核)随 3 实施冒烟实证。
 
@@ -161,7 +161,7 @@
 | 2026-09-26 | 国内六家 Anthropic 分支官方文档以 ANTHROPIC_AUTH_TOKEN(Bearer)演示;另 MiniMax 端点域名双源(官方文档 minimaxi.com / cc-switch 预设 minimax.cn) | 分支对接鉴权头形态差异;域名错用同效 | **声明制已落地**(`providers[].auth: bearer`,桥接按声明发 Bearer,六家分支预设已预声明);各分支实际接受头未逐家冒烟,首次接入 `make smoke`(配 `MUNIU_SMOKE_AUTH=bearer`)实证,若个别分支缺省 x-api-key 亦可则回落缺省;域名以真 key 归一双侧 | 声明已消解「必 401」风险;**【关闭 2026-10-12】**dashscope anthropic 分支(/apps/anthropic)真 key 冒烟:声明 bearer 直连成功,文本与工具多轮全链过(验收记录 37);其余分支首次接入时按同配方实证即可 |
 | 2026-10-12 | gemini 真实上游多工具调用 wire 形态未实证(语料为合成,无 GEMINI_API_KEY) | 并行 functionCall 跨帧测序修复按公开契约落地,真实分帧形态未复核 | 真 key 或 owner 提供真实样例后按 docs/gemini-e2e-runbook.md 冒烟复核 | 待验证 |
 | 2026-10-12 | 历史悬浮遗留三项(验收记录 27 起挂账):openapi 缺 GET /metrics 行;Responses 非流式双缓冲 2×64MB;流式 writer 写侧 data: 前缀硬编码带空格 | 均为低危登记项,长期悬浮无结论 | 逐项裁决 | **关闭(2026-10-12)**:①/metrics 不入 openapi——Prometheus 标准路径,消费方是抓取器非 API 客户端,文本契约入 YAML 徒增噪音;②双缓冲不修——同构直通架构固有成本(raw+canonical 双形态并存),32MB 入站上界封顶,单二进制定位下流式翻译重构不成比例;③写侧不修——writer 只解析自家 wireOf/appendSSE 产物(恒带空格),第三方 SSE 变体在 readEvent 读侧已兼容,无可达路径 |
-| 2026-10-12 | T5.3 灰度/T5.6 观察期基座中断:podman 机器重建后 muniu 容器与 muniu-data 卷缺失,灰度周 usage_logs 无载体;kongming .env 指向的实例未常驻 | 灰度判据(无 5xx/无挂起/月末账单核对)不可验证;v1.0.0 两周观察期事实上不成立 | 重启常驻+重新起算,或按个人项目低流量前提调整发版判据基线(验收记录 22 先例) | 待 owner |
+| 2026-10-12 | T5.3 灰度/T5.6 观察期基座中断:podman 机器重建后 muniu 容器与 muniu-data 卷缺失,灰度周 usage_logs 无载体;kongming .env 指向的实例未常驻 | 灰度判据(无 5xx/无挂起/月末账单核对)不可验证;v1.0.0 两周观察期事实上不成立 | 重启常驻+重新起算,或按个人项目低流量前提调整发版判据基线(验收记录 22 先例) | **已裁决销案(2026-10-14 owner 委任)**:日历观察期方法论废止——soak 测起算日快照而对 HEAD 证据归零、真实日流量个位数信息量近零、载体瞬态(machine 重建两次灭失,自启已否决);判据基线 v2 落地(docs/v1-release-checklist.md 改版+ROADMAP Phase 5 gate 同步)=门禁+真上游冒烟+跨仓实录+边界清点,tag 时机仍由 owner 逐次指令;kongming 需要网关时按需 `make dev-up`(运行态便利,非判据动作) |
 | 2026-10-02 | web 首次引入组件测试设施:vitest+jsdom+@testing-library/react 三 devDeps 不在白名单字面清单 | 任务 2.2 明确要求组件测试;vitest 属 vite 官方测试器、纯 devDependency 不进产物;`@testing-library/dom` 经 pnpm auto-install-peers 入 lockfile,显式声明与否待裁 | | **已终裁(2026-10-02 owner 追认)**:三 devDeps 正式保留,开放项销案;宪法 Article 4 注明测试工具属 devDeps 不占白名单口径 |
 | 2026-10-02 | ui/input 日期族(date/datetime-local/time/month/week)display flex→block 修正 | Chromium 把 datetime-local 分段与日历指示器当 flex 项随内容排布,指示器不贴右缘(走查实拍归因,像素级验证修复);kongming 同源 input 存在相同潜在问题 | | 本仓已修;**kongming 已于 2026-10-02 批次三合入并流向 jinguan(三仓单源),销案** |
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
@@ -170,6 +170,12 @@
 | 2026-10-13 | key-model-allowlist 评审登记双边界:①状态 lane(GET/DELETE /v1/responses/{id})不受白名单约束(请求无别名可校验,跨 key 可读为既有形态);②messages 流式管道错误信封硬编码 api_error(proxy-and-streaming v1 登记),forbidden 类型 HTTP 403 正确但类型字段落 api_error | 均既有语义非白名单批引入;收紧=契约级变更 | ①亲和条目绑 key/租户归属或按创建时模型回溯校验;②管道错误类型映射升级(与 model_not_found/quota 同批)——均待真实治理/消费诉求触发 | **已裁决并落地(2026-10-14 owner 委任裁决)**:①修——根因是亲和条目缺归属维度(跨用户读取/不可逆删除/上下文续写=安全洞,零消费话术不适用),独立 change `responses-state-ownership` 落地(亲和绑 apiKeyID per-key,三消费点不匹配≡未知不可区分,DELETE 先拒后出站);②修——同 lane 一套错误形态(翻译期本就发 Anthropic 原生类型),流式 finish 按类型映射五类精确映射+api_error 兜底,原「待真实消费者」条款由 Anthropic SDK 实际消费满足;登记详见 proxy-and-streaming.md 两处与 change design |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**50. 当前 HEAD 真上游冒烟(2026-10-14,dashscope 单 key;v2 清单 §2 首跑,含新特性活体实证)**
+- 环境:本机临时三实例(18780 主/18781 B/18782 A,config weight 校验踩坑留证:provider 级 weight 必填非 key 级;gemini 出站 base_url 必含 /v1beta 版本段——runbook 既有约定,10-12 根修语义)。用毕三实例停机、临时配置/库/key 全删。
+- 证据:①chat 兼容 lane 200(9/41);②发现面 keyA 3 别名/keyB 白名单过滤 1 别名,单查白名单外 403 `forbidden/model_not_allowed`;③chat 白名单外 403 同形;④messages 流式 403 信封 **permission_error**(新映射活体);⑤anthropic 直通:非流式原生字段(cache_creation_input_tokens/prompt_tokens_details)、工具多轮 tool_use(get_weather/北京,toolu_id)→tool_result→终答「北京今天天气晴朗,气温为26摄氏度」;⑥responses 快捷形态 200 completed(**直通实证**:id 为百炼原生 resp_uuid);⑦**归属隔离活体**:keyB GET keyA 的 resp → 404 `response_not_found`(网关判定);⑧gemini 双实例:B 直连 17/4、A→B 全链非流式 STOP、流式 3 帧终帧 STOP(终帧 usage 补零=B 侧上游流式未回 usage 既有登记语义)。
+- **知识更新**:百炼 compatible-mode `/v1/responses` **单轮 create/GET 真实可用**(provider-presets.md responses 实证表已补充)——多轮回放缺口不变,`native_responses` 维持勿声明;冒烟实例临时声明仅作探针。
+- 门禁:冒烟后无代码改动(纯只读验证);工作区仅余本验收记录与 checklist/ROADMAP 判据 v2 文档(未提交,等 owner 指令)。
 
 **49. 两 change 归档交付 CI 实跑(2026-10-14,owner 指令:归档/HANDOFF/提交/push/盯 CI)**
 - 提交 f4aa33b(45 文件,+1675/-75,单笔两 change 含归档与主 specs 同步);push c63bace..f4aa33b(首推 SSL 瞬断,重试成功)。
