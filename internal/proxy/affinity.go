@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/protocol"
 )
@@ -29,6 +30,7 @@ const responseAffinityLostCode = "response_affinity_lost"
 type affEntry struct {
 	id       string
 	provider string
+	apiKeyID string // 归属 key(responses-state-ownership):创建请求的鉴权 key 标识
 	at       time.Time
 }
 
@@ -43,8 +45,10 @@ func newAffinityTable() *affinityTable {
 	return &affinityTable{entries: map[string]*list.Element{}, lru: list.New()}
 }
 
-// Put 记录/刷新响应 id → provider(成功响应回写;重复 id 覆盖并提升)。
-func (a *affinityTable) Put(id, provider string) {
+// Put 记录/刷新响应 id → provider + 归属 key(成功响应回写;重复 id 覆盖并提升)。
+// apiKeyID 为创建请求的鉴权 key 标识(auth 中间件保证非空;测试直挂路径可能为空,
+// 空归属条目在 Get 侧永不匹配——fail-closed)。
+func (a *affinityTable) Put(id, provider, apiKeyID string) {
 	if id == "" || provider == "" {
 		return
 	}
@@ -53,11 +57,12 @@ func (a *affinityTable) Put(id, provider string) {
 	defer a.mu.Unlock()
 	if e, ok := a.entries[id]; ok {
 		e.Value.(*affEntry).provider = provider
+		e.Value.(*affEntry).apiKeyID = apiKeyID
 		e.Value.(*affEntry).at = now
 		a.lru.MoveToFront(e)
 		return
 	}
-	a.entries[id] = a.lru.PushFront(&affEntry{id: id, provider: provider, at: now})
+	a.entries[id] = a.lru.PushFront(&affEntry{id: id, provider: provider, apiKeyID: apiKeyID, at: now})
 	for a.lru.Len() > affinityCapacity {
 		back := a.lru.Back()
 		if back == nil {
@@ -68,8 +73,13 @@ func (a *affinityTable) Put(id, provider string) {
 	}
 }
 
-// Get 查亲和(命中提升位置;过期即删,视为未知)。
-func (a *affinityTable) Get(id string) (string, bool) {
+// Get 查亲和(命中提升位置;过期即删,视为未知)。归属判定在表内单点完成:
+// apiKeyID 为空(无鉴权信息,生产不可达)或与记录不符一律 !ok——三消费点对
+// 「未知/不匹配」不可区分处理,不泄露存在性(responses-state-ownership)。
+func (a *affinityTable) Get(id, apiKeyID string) (string, bool) {
+	if apiKeyID == "" {
+		return "", false
+	}
 	now := time.Now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -78,14 +88,24 @@ func (a *affinityTable) Get(id string) (string, bool) {
 		return "", false
 	}
 	entry := e.Value.(*affEntry)
-	if now.Sub(entry.at) > affinityTTL {
-		a.lru.Remove(e)
-		delete(a.entries, id)
+	if now.Sub(entry.at) > affinityTTL || entry.apiKeyID != apiKeyID {
+		if now.Sub(entry.at) > affinityTTL {
+			a.lru.Remove(e)
+			delete(a.entries, id)
+		}
 		return "", false
 	}
 	a.lru.MoveToFront(e)
 	entry.at = now
 	return entry.provider, true
+}
+
+// apiKeyIDOf 当前请求的鉴权 key 标识(亲和归属判定;无鉴权信息返回空=永不匹配)。
+func apiKeyIDOf(r *http.Request) string {
+	if info := auth.KeyFrom(r.Context()); info != nil {
+		return info.ID
+	}
+	return ""
 }
 
 // stickyError 粘性路由的即时终态错误(自解释信封;禁盲发上游)。
@@ -103,7 +123,7 @@ func (p *Proxy) stickyRoute(r *http.Request, nat *inboundNative, topo *topologyS
 			msg:  responsesRejectMessage(protocol.CodePreviousResponseIDUnsupported),
 		}
 	}
-	provider, ok := p.affinity.Get(nat.prevID)
+	provider, ok := p.affinity.Get(nat.prevID, apiKeyIDOf(r))
 	if !ok {
 		StickyRequestsTotal.Inc("lost")
 		p.logger.Warn("粘性亲和未知,自解释降级(不盲发上游)",

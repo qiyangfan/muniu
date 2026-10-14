@@ -77,6 +77,7 @@ type KeyRecord struct {
 	Status                string     `json:"status"`
 	Disabled              bool       `json:"disabled"`
 	MaxRequestCostCredits int64      `json:"max_request_cost_credits"`
+	AllowedModels         []string   `json:"allowed_models"` // 模型别名白名单(nil/空 = 不限)
 }
 
 // KeyOpts 签发可选项:零值 = 不限/永不过期(现状等价,零回归)。
@@ -84,7 +85,31 @@ type KeyOpts struct {
 	TPMLimit              int64
 	DailyQuotaCredits     int64
 	ExpiresAt             *time.Time
-	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;负值在入口拒绝)
+	MaxRequestCostCredits int64    // 单请求成本上界(0=不限;负值在入口拒绝)
+	AllowedModels         []string // 模型别名白名单(nil/空 = 不限;条目经归一化校验)
+}
+
+// normalizeAllowlist 白名单归一化(签发/PATCH 共用入口):trim 非空(空白条目=业务错整单
+// 拒绝)、去重保首现序;返回 nil 表达「不限」。刻意不校验别名存在性——拓扑热替换下
+// 允许先于别名签发(预配置语义),校验存在性会把白名单维护与拓扑顺序耦合。
+func normalizeAllowlist(allowed []string) ([]string, error) {
+	if len(allowed) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(allowed))
+	seen := make(map[string]struct{}, len(allowed))
+	for _, a := range allowed {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			return nil, store.MarkBusiness(errors.New("auth: allowed_models 含空白条目"))
+		}
+		if _, dup := seen[a]; dup {
+			continue
+		}
+		seen[a] = struct{}{}
+		out = append(out, a)
+	}
+	return out, nil
 }
 
 // CreateKey 签发并落库;返回明文(仅此一次)与回执。
@@ -98,6 +123,10 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 	}
 	if rpm <= 0 {
 		rpm = 60
+	}
+	allowed, err := normalizeAllowlist(opts.AllowedModels)
+	if err != nil {
+		return "", nil, err
 	}
 	// CLI 传租户名;FK 指向 tenants(id),此处先解析,租户不存在即拒绝签发。
 	// 只有「真不存在」才是业务错;DB I/O 故障不得标记(会被 admin 出口当 400 外泄驱动错误)
@@ -116,22 +145,26 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 		expires = opts.ExpiresAt.UTC().Format(time.RFC3339)
 	}
 	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
-		rpm_limit, tpm_limit, daily_quota_credits, expires_at, max_request_cost_credits, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		rpm_limit, tpm_limit, daily_quota_credits, expires_at, max_request_cost_credits, allowed_models, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		id, tenantID, name, Hash(plaintext), plaintext[:12], "active",
-		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, opts.MaxRequestCostCredits, now); err != nil {
+		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, opts.MaxRequestCostCredits,
+		store.MarshalAllowlist(allowed), now); err != nil {
 		return "", nil, fmt.Errorf("auth: 落库 api_key: %w", err)
 	}
 	return plaintext, &KeyRecord{
 		ID: id, TenantID: tenant, Name: name, Prefix: plaintext[:12], RPMLimit: rpm,
 		TPMLimit: opts.TPMLimit, DailyQuotaCredits: opts.DailyQuotaCredits, ExpiresAt: opts.ExpiresAt,
 		Status: "active", Disabled: false, MaxRequestCostCredits: opts.MaxRequestCostCredits,
+		AllowedModels: allowed,
 	}, nil
 }
 
 // LimitsPatch key 运行态限额的局部更新(PATCH 语义:省略字段不动)。
 // ClearExpires 表达「显式 null 清除过期」;ExpiresAt 非 nil 且未 Clear 时为设定新过期。
 // Disabled 三态:true=停用(记 disabled_at)/false=恢复(清列)/nil=不动。
+// AllowedModels 三态同缝:nil=不动/ClearAllowModels=true=清除(恢复不限)/非 nil=整体设定
+// (两者同现以清除优先——JSON 三态互斥,此为内部 API 防御性约定)。
 type LimitsPatch struct {
 	RPMLimit              *int64
 	TPMLimit              *int64
@@ -140,6 +173,8 @@ type LimitsPatch struct {
 	ClearExpires          bool
 	Disabled              *bool
 	MaxRequestCostCredits *int64
+	AllowedModels         []string
+	ClearAllowModels      bool
 }
 
 // UpdateKeyLimits 局部更新 key 限额/过期(管理面 PATCH;写后调用方须 Verifier.Invalidate)。
@@ -177,6 +212,19 @@ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error
 			add("disabled_at", nil)
 		}
 	}
+	var allowed []string
+	if p.AllowedModels != nil {
+		normalized, nerr := normalizeAllowlist(p.AllowedModels)
+		if nerr != nil {
+			return nil, nerr
+		}
+		allowed = normalized
+	}
+	if p.ClearAllowModels {
+		add("allowed_models", nil)
+	} else if p.AllowedModels != nil {
+		add("allowed_models", store.MarshalAllowlist(allowed))
+	}
 	if len(sets) == 0 {
 		// 无字段可更新:仍回读校验 key 存在性(幂等 no-op 也须 404 语义正确)
 		sets = append(sets, "rpm_limit = rpm_limit")
@@ -195,12 +243,12 @@ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error
 // keyRecordByID 按 id 读回执(Update 后回传最新行;不存在返回 ErrNotFound)。
 func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
 	var r KeyRecord
-	var exp, dis sql.NullString
+	var exp, dis, allow sql.NullString
 	err := db.QueryRow(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
-		expires_at, status, disabled_at, max_request_cost_credits
+		expires_at, status, disabled_at, max_request_cost_credits, allowed_models
 		FROM api_keys WHERE id = ?`, keyID).
 		Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits,
-			&exp, &r.Status, &dis, &r.MaxRequestCostCredits)
+			&exp, &r.Status, &dis, &r.MaxRequestCostCredits, &allow)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, store.ErrNotFound
 	}
@@ -217,6 +265,11 @@ func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
 	// disabled_at 只需非空判定:形态合法性由 store 读侧严格解析并拒绝(RFC3339,宁拒不放行),
 	// 同列两层口径不同是刻意的——auth 读侧不重复解析成本
 	r.Disabled = dis.Valid && dis.String != ""
+	allowed, perr := store.ParseAllowlist(allow)
+	if perr != nil {
+		return nil, fmt.Errorf("auth: api_key %s: %w", r.Prefix, perr)
+	}
+	r.AllowedModels = allowed
 	return &r, nil
 }
 
@@ -236,7 +289,7 @@ func RevokeKeyByPrefix(db *sql.DB, prefix string) (int64, error) {
 // ListKeys 列出 key(管理命令读侧;不含 hash 明文),按签发时间升序。
 func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
-		expires_at, status, disabled_at, max_request_cost_credits
+		expires_at, status, disabled_at, max_request_cost_credits, allowed_models
 		FROM api_keys ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("auth: 列出 api_key: %w", err)
@@ -245,9 +298,9 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 	var out []KeyRecord
 	for rows.Next() {
 		var r KeyRecord
-		var exp, dis sql.NullString
+		var exp, dis, allow sql.NullString
 		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit,
-			&r.DailyQuotaCredits, &exp, &r.Status, &dis, &r.MaxRequestCostCredits); err != nil {
+			&r.DailyQuotaCredits, &exp, &r.Status, &dis, &r.MaxRequestCostCredits, &allow); err != nil {
 			return nil, fmt.Errorf("auth: 扫 api_key 行: %w", err)
 		}
 		if exp.Valid && exp.String != "" {
@@ -258,6 +311,11 @@ func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 			r.ExpiresAt = &t
 		}
 		r.Disabled = dis.Valid && dis.String != ""
+		allowed, perr := store.ParseAllowlist(allow)
+		if perr != nil {
+			return nil, fmt.Errorf("auth: api_key %s: %w", r.Prefix, perr)
+		}
+		r.AllowedModels = allowed
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -320,7 +378,8 @@ type KeyInfo struct {
 	DailyQuotaCredits     int64
 	Currency              string
 	ExpiresAt             time.Time
-	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;请求级成本预算闸消费)
+	MaxRequestCostCredits int64    // 单请求成本上界(0=不限;请求级成本预算闸消费)
+	AllowedModels         []string // 模型别名白名单(迁移 0013;nil/空 = 不限,数据面执行链消费)
 }
 
 type ctxKey struct{}
@@ -549,6 +608,7 @@ func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
 		DailyQuotaCredits:     row.DailyQuotaCredits,
 		Currency:              row.Currency,
 		MaxRequestCostCredits: row.MaxRequestCostCredits,
+		AllowedModels:         row.AllowedModels,
 	}
 	if row.ExpiresAt != nil {
 		info.ExpiresAt = *row.ExpiresAt

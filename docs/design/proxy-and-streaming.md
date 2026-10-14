@@ -154,7 +154,7 @@ data: [DONE]
 - `content_block_unsupported`:v1 仅支持 text/tool_use/tool_result 块(image/document 等多模态拒绝)
 - `input_invalid`:model 缺失、messages 空、角色非法或结构非法
 - 丢弃(不拒绝):thinking 块(签名回传语义不成立)、top_k、metadata
-- 错误形态:翻译期失败以 Anthropic error JSON(`{"type":"error","error":{type,message}}`)返回;**管道内错误(鉴权 401/限流 429/上游错误)信封形态与 chat 同构**(v1 登记:SDK 侧读 error.message 可读,形态统一待出现真实消费者再议)
+- 错误形态:翻译期失败以 Anthropic error JSON(`{"type":"error","error":{type,message}}`)返回;**管道内错误(流式 finish 改写)按类型映射 Anthropic 原生词汇表**——`bad_request→invalid_request_error`、`auth_failed→authentication_error`、`forbidden→permission_error`、`not_found→not_found_error`、`rate_limited→rate_limit_error`,无对应物(quota_exceeded/timeout/upstream_error/internal)维持 `api_error` 兜底由 HTTP 状态码承载语义(2026-10-14 裁决:同一 lane 一套错误形态,原「待真实消费者」登记条款由 Anthropic 协议 SDK 实际消费满足)
 
 ### 响应与流式事件映射
 
@@ -201,8 +201,8 @@ data: [DONE]
 ### 有状态粘性路由(原生 responses lane)
 
 - `previous_response_id` 仅由原生 lane 服务:别名无原生候选 → 400 `previous_response_id_unsupported`(翻译路径维持既有拒绝);亲和未知 → 400 `response_affinity_lost` 自解释(禁盲发);亲和命中 → 候选域收缩至亲和 provider(域内 key/候选 failover 照常,跨 provider 不换道——服务端状态定向单上游的显式语义)。
-- 亲和表:id→provider,进程内 TTL(24h)+LRU(4096);成功响应 id 回写;集群共享后端按 ADR-0008 复用(未配共享=实例内粘性,登记)。指标 `muniu_sticky_requests_total{result=hit|lost|unsupported}`。
-- `GET /v1/responses/{id}`:亲和已知 → 代理转发亲和 provider 原样返回;未知 → 恒 404 `response_not_found`(与既有语义一致)。DELETE 代理登记 backlog;重启丢失 → 自解释降级(提示改发全量 input)。
+- 亲和表:id→provider→**归属 key**(创建请求的鉴权 key 标识,responses-state-ownership),进程内 TTL(24h)+LRU(4096);成功响应 id 回写;集群共享后端按 ADR-0008 复用(未配共享=实例内粘性,登记;归属字段随共享视图同步演进)。指标 `muniu_sticky_requests_total{result=hit|lost|unsupported}`(归属不匹配计入 lost——对运维即丢失)。
+- `GET/DELETE /v1/responses/{id}`:亲和已知**且归属匹配**(记录 key = 请求鉴权 key;无鉴权信息 fail-closed)→ 按动词代理转发亲和 provider 原样返回;亲和未知**或归属不匹配**→ 恒 404 `response_not_found`(两类不可区分,不泄露存在性),归属不匹配时上游零调用——DELETE 不可逆,绝不出站删他 key 状态。粘性 prevID 归属不匹配 → 与「亲和未知」不可区分的 `response_affinity_lost` 降级。重启丢失 → 自解释降级(提示改发全量 input)。
 - 状态请求旁路语义缓存(检索与入库皆零,限流计量照常)。
 
 ## Gemini 入站翻译(ADR-0015,契约;conformance/gemini 语料钉死本表)

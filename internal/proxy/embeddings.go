@@ -43,6 +43,10 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 		return
 	}
+	// key 级模型白名单闸(一):先于插件钩子——被拒请求不产生插件副作用
+	if !p.enforceModelAllowlist(tw, r, req.Model) {
+		return
+	}
 	// 插件请求体钩子(ADR-0011):与 chat 同链序(限流后、候选循环前,单次执行);
 	// embeddings 输入同样承载业务载荷,脱敏必须在出站与计量之前
 	if p.plugins != nil {
@@ -59,6 +63,10 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 			req = nreq
 			if cands, ok = topo.routes[req.Model]; !ok || len(cands) == 0 {
 				p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
+				return
+			}
+			// key 级模型白名单闸(二):插件改写 model 后以最终出站别名为准再校验
+			if !p.enforceModelAllowlist(tw, r, req.Model) {
 				return
 			}
 			p.markPluginModified(tw, r, res.ModifiedBy)

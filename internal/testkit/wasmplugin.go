@@ -15,6 +15,9 @@ const (
 	FixtureReject
 	// FixtureModifyEcho hook 恒改写为原请求体(合法 JSON 回显,走通改写全链)。
 	FixtureModifyEcho
+	// FixtureModifyModel hook 恒改写为常量合法 chat 体(model=alias-b):
+	// 验证「插件改写 model 后白名单再校验」路径(key-model-allowlist)。
+	FixtureModifyModel
 	// FixtureStartFail plugin_start 返回 7(注册拒载)。
 	FixtureStartFail
 	// FixtureAbiMismatch muniu_abi_version 返回 99(ABI 不匹配拒载)。
@@ -55,6 +58,10 @@ const (
 	fxCfgValCap  = 256
 	fxMallocBase = 1024 // offset 0 保留为 malloc 失败哨兵
 )
+
+// fxModelBody FixtureModifyModel 的常量改写产物(合法 chat 体,model 为白名单外别名——
+// 与 proxy 白名单测试的别名约定耦合,属测试设施内契约)。
+const fxModelBody = `{"model":"alias-b","messages":[{"role":"user","content":"hi"}]}`
 
 // FixturePlugin 装配一个最小插件二进制。
 func FixturePlugin(kind PluginFixtureKind) []byte {
@@ -267,7 +274,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	// hook_request_body
 	b = &wasmBin{}
 	switch kind {
-	case FixtureModify:
+	case FixtureModify, FixtureModifyModel:
 		b.u8(0x00)
 		b.i32const(fxVerdictModified)
 		b.u8(0x0b)
@@ -318,6 +325,8 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	switch kind {
 	case FixtureModify:
 		b.i64const(int64(fxResultOff)<<32 | 6) // "MASKED"
+	case FixtureModifyModel:
+		b.i64const(int64(fxResultOff)<<32 | int64(len(fxModelBody))) // 常量合法 chat 体(model=alias-b)
 	case FixtureReject:
 		b.i64const(int64(fxResultOff)<<32 | 12) // "pii detected"
 	case FixtureModifyEcho:
@@ -350,6 +359,8 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	switch kind {
 	case FixtureModify:
 		segs = [][2]any{{fxResultOff, "MASKED"}}
+	case FixtureModifyModel:
+		segs = [][2]any{{fxResultOff, fxModelBody}}
 	case FixtureReject:
 		segs = [][2]any{{fxResultOff, "pii detected"}}
 	case FixtureCfg:

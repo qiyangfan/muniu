@@ -52,7 +52,7 @@ func keysMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
 }
 
 const keysUsage = `用法:
-  muniu keys create --tenant default --name kongming [--rpm 120] [--tpm 0] [--daily-quota-credits 0] [--expires-at RFC3339]
+  muniu keys create --tenant default --name kongming [--rpm 120] [--tpm 0] [--daily-quota-credits 0] [--allowed-models a,b] [--expires-at RFC3339]
   muniu keys list
   muniu keys revoke <prefix>
   muniu keys disable <prefix>
@@ -70,6 +70,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	tpm := fs.Int64("tpm", 0, "TPM 限额(0=不限)")
 	quota := fs.Int64("daily-quota-credits", 0, "日配额 credit(1 credit = 十亿分之一本币;0=不限)")
 	reqBudget := fs.Int64("max-request-cost-credits", 0, "单请求成本预算 credit(0=不限)")
+	allowed := fs.String("allowed-models", "", "模型别名白名单,逗号分隔(空=不限;条目空白/含空白条目报错)")
 	expires := fs.String("expires-at", "", "过期时刻 RFC3339(空=永不过期)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -79,6 +80,13 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	opts := auth.KeyOpts{TPMLimit: *tpm, DailyQuotaCredits: *quota, MaxRequestCostCredits: *reqBudget}
+	if *allowed != "" {
+		parts := strings.Split(*allowed, ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		opts.AllowedModels = parts // 空白条目的整单拒绝在 auth 归一化(报错退出非零)
+	}
 	if *expires != "" {
 		t, err := time.Parse(time.RFC3339, *expires)
 		if err != nil {
@@ -97,9 +105,33 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	if rec.ExpiresAt != nil {
 		exp = rec.ExpiresAt.UTC().Format(time.RFC3339)
 	}
-	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nbudget:   %d credit/请求\nexpires:  %s\n",
-		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, rec.MaxRequestCostCredits, exp)
+	allow := "不限"
+	if len(rec.AllowedModels) > 0 {
+		allow = strings.Join(rec.AllowedModels, ",")
+	}
+	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nbudget:   %d credit/请求\nmodels:   %s\nexpires:  %s\n",
+		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, rec.MaxRequestCostCredits, allow, exp)
 	return 0
+}
+
+// truncateDisplayBytes 按字节预算截断展示串,rune 边界安全(多字节字符不拦腰切断):
+// 超预算时保留预算内完整 rune 前缀并以省略号收尾,总宽不超 maxBytes。
+// 展示列宽以字节计(%-18s 与 CJK 宽度仅近似,终端对齐为尽力语义)。
+func truncateDisplayBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	const ellipsis = "…"
+	budget := maxBytes - len(ellipsis)
+	out := ""
+	for _, r := range s {
+		size := len(string(r))
+		if len(out)+size > budget {
+			break
+		}
+		out += string(r)
+	}
+	return out + ellipsis
 }
 
 // keysList 列出全部 key(不含任何明文/哈希)。
@@ -113,13 +145,17 @@ func keysList(db *sql.DB, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "(无 key)")
 		return 0
 	}
-	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %-9s %-12s %s\n", "PREFIX", "NAME", "TENANT", "RPM", "STATUS", "REQ-BUDGET", "ID")
+	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %-9s %-12s %-18s %s\n", "PREFIX", "NAME", "TENANT", "RPM", "STATUS", "REQ-BUDGET", "MODELS", "ID")
 	for _, k := range keys {
 		status := k.Status
 		if status == "active" && k.Disabled {
 			status = "disabled"
 		}
-		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %-9s %-12d %s\n", k.Prefix, k.Name, k.TenantID, k.RPMLimit, status, k.MaxRequestCostCredits, k.ID)
+		models := "不限"
+		if len(k.AllowedModels) > 0 {
+			models = truncateDisplayBytes(strings.Join(k.AllowedModels, ","), 18)
+		}
+		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %-9s %-12d %-18s %s\n", k.Prefix, k.Name, k.TenantID, k.RPMLimit, status, k.MaxRequestCostCredits, models, k.ID)
 	}
 	return 0
 }

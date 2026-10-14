@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/solvela/muniu/internal/config"
 )
@@ -98,4 +99,62 @@ func lineOf(s, field string) string {
 		}
 	}
 	return ""
+}
+
+// --allowed-models 签发与列表回显(key-model-allowlist);空白条目整单拒绝非零退出。
+func TestKeysCLI_allowedModels签发与回显(t *testing.T) {
+	cfg := testConfig(t)
+
+	var out, errOut bytes.Buffer
+	if code := keysMain(cfg, []string{"create", "--name", "wl", "--allowed-models", " m-a ,m-b,m-a"}, &out, &errOut); code != 0 {
+		t.Fatalf("签发失败: %s", errOut.String())
+	}
+	if !strings.Contains(out.String(), "models:   m-a,m-b") {
+		t.Fatalf("签发输出应含归一化白名单: %s", out.String())
+	}
+	out.Reset()
+	errOut.Reset()
+
+	if code := keysMain(cfg, []string{"create", "--name", "bad", "--allowed-models", "m-a, "}, &out, &errOut); code == 0 {
+		t.Fatal("空白条目应报错非零退出")
+	}
+	out.Reset()
+
+	if code := keysMain(cfg, []string{"list"}, &out, &errOut); code != 0 {
+		t.Fatalf("list 失败: %s", errOut.String())
+	}
+	if !strings.Contains(out.String(), "m-a,m-b") {
+		t.Fatalf("list 应回显白名单: %s", out.String())
+	}
+}
+
+// 列表截断 rune 边界安全:多字节别名不产生非法 UTF-8 乱码,截断列以省略号收尾。
+func TestKeysCLI_列表截断rune安全(t *testing.T) {
+	cfg := testConfig(t)
+
+	var out, errOut bytes.Buffer
+	long := "视频生成,文生视频pro,语音转写,向量化,重排序" // 拼接后超 18 字节
+	if code := keysMain(cfg, []string{"create", "--name", "cjk", "--allowed-models", long}, &out, &errOut); code != 0 {
+		t.Fatalf("签发失败: %s", errOut.String())
+	}
+	out.Reset()
+	if code := keysMain(cfg, []string{"list"}, &out, &errOut); code != 0 {
+		t.Fatalf("list 失败: %s", errOut.String())
+	}
+	line := ""
+	for _, l := range strings.Split(out.String(), "\n") {
+		if strings.Contains(l, "cjk") {
+			line = l
+			break
+		}
+	}
+	if line == "" {
+		t.Fatalf("list 应含 cjk 行: %s", out.String())
+	}
+	if !utf8.ValidString(line) {
+		t.Fatalf("列表输出必须为合法 UTF-8(不得拦腰截断多字节字符): %q", line)
+	}
+	if !strings.Contains(line, "…") {
+		t.Fatalf("超长白名单应以省略号截断: %q", line)
+	}
 }

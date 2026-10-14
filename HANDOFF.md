@@ -2,6 +2,14 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-14,两 change 归档交付:key-model-allowlist + responses-state-ownership;已提交推送)
+
+- **归档**:key-model-allowlist 9/9(archive/2026-10-14-key-model-allowlist,主 specs api-key-lifecycle +3 Requirement、model-discovery 改 2);responses-state-ownership 3/3(archive/2026-10-14-responses-state-ownership,主 specs protocol-native-passthrough 改 2——状态 lane 归属隔离)。`openspec validate --all` 23/23。
+- **key 级模型白名单全链**:迁移 0013 `api_keys.allowed_models`(JSON,NULL/空=不限,现状零回归);数据面六 lane 白名单闸(chat/messages/responses/gemini handleChat 双闸+embeddings 双点+images 单点,先于语义缓存与插件副作用,插件改写 model 再校验);403 新错误类型 `forbidden`(conventions 表+gemini writer PERMISSION_DENIED+messages 流式 permission_error 映射);发现面列表按 key 过滤/单查 403;admin create/PATCH 三态+CLI `--allowed-models`+控制台密钥页全链。mk2- 平台 key 恒不限(pkey.v1 载体冻结,登记)。
+- **状态 lane 归属隔离**:亲和条目绑 apiKeyID(per-key;kongming 单租户形态裁决),三消费点(stickyRoute/GET/DELETE)不匹配≡「未知」不可区分(prevID `response_affinity_lost`、404 `response_not_found`),DELETE 先拒后出站上游零调用,nil fail-closed;跨用户读取/不可逆删除/上下文续写洞闭合(responses-state-ownership)。
+- **评审循环 1 轮(双独立代理)**:修 CLI 白名单 CJK 字节截断(rune 安全)+web 签发表单 lg 网格空洞;补钉 admin 空数组等价/messages 流式 403;双边界裁决落地(开放项 2026-10-13 行已改判,proxy-and-streaming.md 两处登记同步)。
+- **门禁**:`make check` exit=0(coverage gate PASS 70.3%);web 四件套+vite build(/tmp)+vitest 15/15+裸元素自检;gofmt 干净。CI 实跑结果见验收记录 49。
+
 ## 当前状态(2026-10-13,本批已验收归档，执行 Git 交付)
 
 - images 8/8 与管理员审计 10/10 已实施、验证、归档并同步主规格；历史结算恢复 2.3 漏勾补齐，拓扑管理页/gauge 读侧漂移已修复。四 change 合计 31/31 已归档，用户已明确授权提交所有改动、push 并跟进本次 CI。
@@ -102,7 +110,7 @@
 
 【2026-10-13 实施后状态】：
 
-1. 【交付执行中】本批已获用户明确 Git 授权；fetch 后 main 与 origin/main 为 0/0，按已通过门禁提交全部当前改动并推送，跟进对应 CI 到终态。
+1. 【交付执行中 2026-10-14】key-model-allowlist + responses-state-ownership 两 change 已归档并获用户明确 Git 授权：提交全部当前改动并推送，跟进对应 CI 到终态（结果补记验收记录 49）。
 2. 【owner 裁决】T5.3/T5.6 基座中断处置(重启重起算或调整判据基线,见开放项 2026-10-12 行)。
 3. 【本轮已结束】images/管理员审计已归档；模型白名单、form-row help、Responses reasoning 事件及 T5.2 完整跨仓基线待确认（缺契约/源仓裁决/证据），不臆测启动。
 4. 【外部条件】GEMINI_API_KEY 到位后 gemini 真实 wire 复核;MiniMax 域名真 key 归一(承前);images 国内同步兼容端点家数(硅基流动确定,智谱待核)随 3 实施冒烟实证。
@@ -159,8 +167,22 @@
 | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
 | 2026-10-13 | gRPC 入站二次裁决(原理由「瓦解 stdlib 旗舰论点」只计成本未答收益) | 补收益侧后结论更硬:LLM 行业无标准 gRPC API,自造 `muniu.proto` = 语义真空,协议保真转译核心卖点零锻炼;REST-only 与 LiteLLM/one-api/Kong 同赛道对照无缺口 | 维持不引入;关键词留简历 skills 行,学习主场在微服务语境项目 | **已终裁(2026-10-13 owner 确认重裁)**:维持拒绝;翻旧账以本行与 ROADMAP 注记为准 |
 | 2026-10-13 | SSO/OIDC 二次裁决(原理由「ADR-0005 边界」经不起追问:网关为何不能有自己的身份面) | 拆分后重裁:SSO 本体维持拒绝(锦官 OIDC 学习主场组合冗余 + standalone 零外联先验假设 + 自研 JOSE 密码学危险);被捆绑的多管理员+审计独立价值成立 | SSO 不引入;多管理员+操作审计拆出立项(ADR-0017 + openspec `admin-operators-audit`) | **已终裁(2026-10-13)**:一拒一立,论证沉淀 ADR-0017 备选节 |
+| 2026-10-13 | key-model-allowlist 评审登记双边界:①状态 lane(GET/DELETE /v1/responses/{id})不受白名单约束(请求无别名可校验,跨 key 可读为既有形态);②messages 流式管道错误信封硬编码 api_error(proxy-and-streaming v1 登记),forbidden 类型 HTTP 403 正确但类型字段落 api_error | 均既有语义非白名单批引入;收紧=契约级变更 | ①亲和条目绑 key/租户归属或按创建时模型回溯校验;②管道错误类型映射升级(与 model_not_found/quota 同批)——均待真实治理/消费诉求触发 | **已裁决并落地(2026-10-14 owner 委任裁决)**:①修——根因是亲和条目缺归属维度(跨用户读取/不可逆删除/上下文续写=安全洞,零消费话术不适用),独立 change `responses-state-ownership` 落地(亲和绑 apiKeyID per-key,三消费点不匹配≡未知不可区分,DELETE 先拒后出站);②修——同 lane 一套错误形态(翻译期本就发 Anthropic 原生类型),流式 finish 按类型映射五类精确映射+api_error 兜底,原「待真实消费者」条款由 Anthropic SDK 实际消费满足;登记详见 proxy-and-streaming.md 两处与 change design |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**48. 双边界裁决落地(2026-10-14,owner 委任裁决;`responses-state-ownership` 3/3,2026-10-14 已归档 archive/2026-10-14-responses-state-ownership;② 顺带根修)**
+- 判据:失败测试先行(跨 key 三拒绝/nil fail-closed/permission_error 断言先红)+ 既有全量零改动回放(三处粘性 e2e 补 KeyInfo 注入为生产语义对齐,非行为改动)+ make check 全绿 + validate --all。
+- 证据:①`TestStateOwnership_跨key三拒绝与同key零变化`(跨 key GET/DELETE 404 response_not_found 上游零调用、跨 key prevID response_affinity_lost、同 key GET/粘性/DELETE 全链通)、`TestStateOwnership_无鉴权信息failClosed`、TestAffinityTable 增归属不匹配/fail-closed 断言;②`TestAllowlist_messages流式403信封类型`(permission_error 在场+api_error 不在场+零上游);adapter/unit 全量回放零改动。
+- 门禁:`make check` exit=0(coverage gate PASS 70.3%);`openspec validate --all` 25/25(新 change 入列全绿)。改动未提交(等 owner 指令)。
+
+**47. key 级模型白名单(2026-10-13,openspec `key-model-allowlist` 9/9;2026-10-14 已归档 archive/2026-10-14-key-model-allowlist)**
+- 判据:失败测试先行(四包编译红确认后转绿)+ 既有全量零改动回放 + make check 全绿 + validate --all + web 门禁。
+- 证据:①auth 五组(签发回显读侧贯通/归一化 trim+去重+空条目拒绝/三态 PATCH/verify 携带白名单+缓存可见性与 Invalidate 生效/损坏 JSON 拒不放行);②admin 双向契约+白名单全链(签发归一化回显/空白条目 400/PATCH 三态/未知 404/列表回显);③proxy 六 lane(`TestAllowlist_chat_白名单外403零上游`/白名单内放行+空白名单恒放行/白名单外不吃语义缓存命中(缓存通路先证 work 再证拦截)/`TestAllowlist_插件改写model后再校验`(testkit 新增 FixtureModifyModel)/多 lane 同规/模型发现过滤与单查 403/404 分支);④protocol `StatusForType(forbidden)==403` 钉子;⑤CLI `TestKeysCLI_allowedModels签发与回显`;⑥web vitest 15/15。
+- 金串:无白名单 key 请求 wire 逐字节不变 = 既有 proxy/messages/responses/gemini e2e 全量零改动回放 + `TestAllowlist_chat_白名单内放行与空白名单恒放行` 专项。
+- 实施修正:gemini writer `geminiStatusOf` 增 `forbidden→403 PERMISSION_DENIED`(原未知类型落 500 INTERNAL,本类型引入所必需);spec「六 lane 同规」场景措辞对齐 lane 原生信封形态。
+- 代码审查迭代循环(同日,1 轮收敛):双独立代理全覆盖评审(Go 后端域/web+契约域)报 4 发现,溯源裁决=修 2 登记 2——修:CLI 列表白名单按字节截断 CJK 产生非法 UTF-8(改 rune 安全截断+专项测试)、web 签发表单 lg 档 1 格网格空洞(白名单 FormRow lg:col-span-2,三档无空洞);补钉:admin PATCH 空数组=清除等价、messages 流式 403 登记形态(api_error+403+零上游)。登记(开放项表):状态 lane 不受白名单约束、messages 流式信封 api_error 硬编码——均既有语义,收紧属契约级待真实诉求。全部门禁复绿。
+- 门禁:`make check` exit=0(coverage gate PASS 70.2%);`openspec validate --all` 24/24;web 四件套+vite build(/tmp)+裸元素自检绿;gofmt 干净。改动未提交(等 owner 指令)。
 
 **46. 归档与 Git 交付准备（2026-10-13）**
 ```text

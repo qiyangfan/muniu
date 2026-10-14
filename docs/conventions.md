@@ -30,14 +30,14 @@
 {
   "error": {
     "message": "上游供应商暂时不可用,已尝试全部候选",   // 用户可读,中文优先
-    "type": "upstream_error",       // bad_request|auth_failed|rate_limited|quota_exceeded|not_found|timeout|upstream_error|internal
+    "type": "upstream_error",       // bad_request|auth_failed|rate_limited|quota_exceeded|forbidden|not_found|timeout|upstream_error|internal
     "code": "all_candidates_failed", // 机器码,snake_case
     "request_id": "01J..."
   }
 }
 ```
 
-HTTP 状态映射:`bad_request→400`,`auth_failed→401`,`quota_exceeded→402`,`rate_limited→429`,`not_found→404`,`timeout→504`,`upstream_error→502`,`internal→500`。
+HTTP 状态映射:`bad_request→400`,`auth_failed→401`,`quota_exceeded→402`,`forbidden→403`,`rate_limited→429`,`not_found→404`,`timeout→504`,`upstream_error→502`,`internal→500`。`forbidden` 表达「凭据有效但无权此操作」的治理语义(key 级模型白名单等),与 400 请求畸形可区分,客户端据此程序化引导(升级/申请)而非改参数。
 
 ## 测试范式
 

@@ -231,10 +231,14 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	topo := p.topo.Load() // 请求入口加载一次:全程同快照,换道候选视图一致
+	topo := p.topo.Load() // 请求入口加载一次:全程同一快照,换道候选视图一致
 	cands, ok := topo.routes[req.Model]
 	if !ok || len(cands) == 0 {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
+		return
+	}
+	// key 级模型白名单闸(一):fail fast 于插件钩子前——被拒请求不产生插件副作用
+	if !p.enforceModelAllowlist(tw, r, req.Model) {
 		return
 	}
 
@@ -265,6 +269,10 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 				req = nreq
 				if cands, ok = topo.routes[req.Model]; !ok || len(cands) == 0 {
 					p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
+					return
+				}
+				// key 级模型白名单闸(二):插件改写 model 后以最终出站别名为准再校验
+				if !p.enforceModelAllowlist(tw, r, req.Model) {
 					return
 				}
 				p.markPluginModified(tw, r, res.ModifiedBy)
@@ -382,7 +390,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		if class == "" {
 			// 直通成功:responses lane 回写亲和(粘性路由载体;TTL+LRU 见 affinity.go)
 			if nat != nil && nat.proto == protocol.InboundResponses && m.nativeRespID != "" {
-				p.affinity.Put(m.nativeRespID, cand.Provider)
+				p.affinity.Put(m.nativeRespID, cand.Provider, apiKeyIDOf(r))
 			}
 			p.storePhase(r, cph, req, cand, m, nat)
 			return

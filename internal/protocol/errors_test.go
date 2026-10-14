@@ -11,6 +11,7 @@ func TestStatusForType(t *testing.T) {
 		{TypeBadRequest, 400},
 		{TypeAuthFailed, 401},
 		{TypeQuotaExceeded, 402},
+		{TypeForbidden, 403},
 		{TypeRateLimited, 429},
 		{TypeNotFound, 404},
 		{TypeTimeout, 504},

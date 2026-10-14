@@ -6,6 +6,7 @@ const (
 	TypeBadRequest    = "bad_request"
 	TypeAuthFailed    = "auth_failed"
 	TypeQuotaExceeded = "quota_exceeded"
+	TypeForbidden     = "forbidden" // 访问拒绝(key 级模型白名单等治理语义;与 400 请求畸形可区分)
 	TypeRateLimited   = "rate_limited"
 	TypeNotFound      = "not_found"
 	TypeTimeout       = "timeout"
@@ -41,6 +42,7 @@ var statusByType = map[string]int{
 	TypeBadRequest:    400,
 	TypeAuthFailed:    401,
 	TypeQuotaExceeded: 402,
+	TypeForbidden:     403,
 	TypeRateLimited:   429,
 	TypeNotFound:      404,
 	TypeTimeout:       504,

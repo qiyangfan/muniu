@@ -92,7 +92,7 @@ func (p *Proxy) HandlerResponsesStateless() http.Handler {
 			p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "状态 lane 仅支持 GET/DELETE")
 			return
 		}
-		provider, ok := p.affinity.Get(respID)
+		provider, ok := p.affinity.Get(respID, apiKeyIDOf(r))
 		if !ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(protocol.StatusForType(protocol.TypeNotFound))

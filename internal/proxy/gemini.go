@@ -106,6 +106,8 @@ func geminiStatusOf(typ string) (int, string) {
 		return 400, "INVALID_ARGUMENT"
 	case protocol.TypeAuthFailed:
 		return 401, "UNAUTHENTICATED"
+	case protocol.TypeForbidden:
+		return 403, "PERMISSION_DENIED" // key 级模型白名单等治理语义(Google API 标准 status)
 	case protocol.TypeRateLimited:
 		return 429, "RESOURCE_EXHAUSTED"
 	case protocol.TypeTimeout:

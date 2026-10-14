@@ -10,6 +10,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/protocol"
 )
@@ -41,23 +42,52 @@ func (p *Proxy) ModelAliases() ([]string, time.Time) {
 
 // HandlerModels 模型发现入口:路由注册为 GET /v1/models(列表)与 GET /v1/models/{model}(单查),
 // 同一 handler 以 PathValue 分流;未命中按别名(路由键)判定,不匹配上游模型名。
+// 列表 = 全局别名目录按请求 key 白名单过滤后的视图(无白名单 = 全量,现状等价);
+// 单查三分支:白名单内命中 200 / 在全局目录但白名单外 403 model_not_allowed(与转发同码)
+// / 不在全局目录 404(现状不变)。
 func (p *Proxy) HandlerModels() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		aliases, loadedAt := p.ModelAliases()
 		created := loadedAt.Unix()
+		key := auth.KeyFrom(r.Context())
 		if id := r.PathValue("model"); id != "" {
+			known := false
 			for _, a := range aliases {
 				if a == id {
-					writeModelsJSON(w, http.StatusOK, modelEntry{ID: id, Object: "model", Created: created, OwnedBy: ownedBy})
-					return
+					known = true
+					break
 				}
 			}
-			writeModelsJSON(w, http.StatusNotFound, protocol.NewErrorEnvelope(
-				protocol.TypeNotFound, "model_not_found", "模型 "+id+" 不存在", logging.RequestIDFrom(r.Context())))
+			if !known {
+				writeModelsJSON(w, http.StatusNotFound, protocol.NewErrorEnvelope(
+					protocol.TypeNotFound, "model_not_found", "模型 "+id+" 不存在", logging.RequestIDFrom(r.Context())))
+				return
+			}
+			if !modelAllowedFor(key, id) {
+				writeModelsJSON(w, http.StatusForbidden, protocol.NewErrorEnvelope(
+					protocol.TypeForbidden, "model_not_allowed", "当前 key 无权访问模型 "+id, logging.RequestIDFrom(r.Context())))
+				return
+			}
+			writeModelsJSON(w, http.StatusOK, modelEntry{ID: id, Object: "model", Created: created, OwnedBy: ownedBy})
 			return
 		}
-		data := make([]modelEntry, 0, len(aliases))
-		for _, a := range aliases {
+		// 白名单过滤视图:交集保持 id 升序(全局目录本就升序,过滤保序)
+		view := aliases
+		if key != nil && len(key.AllowedModels) > 0 {
+			allowed := make(map[string]struct{}, len(key.AllowedModels))
+			for _, a := range key.AllowedModels {
+				allowed[a] = struct{}{}
+			}
+			out := make([]string, 0, len(aliases))
+			for _, a := range aliases {
+				if _, ok := allowed[a]; ok {
+					out = append(out, a)
+				}
+			}
+			view = out
+		}
+		data := make([]modelEntry, 0, len(view))
+		for _, a := range view {
 			data = append(data, modelEntry{ID: a, Object: "model", Created: created, OwnedBy: ownedBy})
 		}
 		writeModelsJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})

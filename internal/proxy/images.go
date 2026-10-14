@@ -52,6 +52,10 @@ func (p *Proxy) handleImages(w http.ResponseWriter, r *http.Request) {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 		return
 	}
+	// key 级模型白名单闸(images 管道插件后单点解析,一处校验即最终别名)
+	if !p.enforceModelAllowlist(tw, r, req.Model) {
+		return
+	}
 	price := p.imagePricing.Get(req.Model)
 	var cost int64
 	currency := p.settlement

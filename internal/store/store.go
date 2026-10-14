@@ -6,6 +6,7 @@ package store
 import (
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -159,6 +160,35 @@ type APIKey struct {
 	ExpiresAt             *time.Time
 	DisabledAt            *time.Time
 	MaxRequestCostCredits int64
+	AllowedModels         []string // 模型别名白名单(迁移 0013;nil/空 = 不限)
+}
+
+// ParseAllowlist 白名单列 JSON 解析(单源,签发/查询/更新三侧共用):nil/空串 = 不限;
+// 非法 JSON 按错误返回——宁可拒绝该 key,不放行语义不明的凭据(expires_at 损坏同款纪律)。
+func ParseAllowlist(raw sql.NullString) ([]string, error) {
+	if !raw.Valid || raw.String == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw.String), &out); err != nil {
+		return nil, fmt.Errorf("store: allowed_models 列非法: %w", err)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+// MarshalAllowlist 白名单列落库形态:空切片归一为 NULL(与「不限」等价,免双态漂移)。
+func MarshalAllowlist(allowed []string) any {
+	if len(allowed) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(allowed)
+	if err != nil { // []string 序列化不可失败;防御性兜底按 NULL(不限)处理
+		return nil
+	}
+	return string(b)
 }
 
 // ErrNotFound 查无此行(哨兵,调用方 errors.Is 判定)。
@@ -182,20 +212,25 @@ func TenantIDByName(db *sql.DB, name string) (string, error) {
 func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
 	row := db.QueryRow(`SELECT k.id, k.tenant_id, k.name, k.key_hash, k.prefix, k.status,
 		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at, k.disabled_at,
-		k.max_request_cost_credits
+		k.max_request_cost_credits, k.allowed_models
 		FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
 		WHERE k.key_hash = ?`, hash)
 	var k APIKey
-	var exp, dis sql.NullString
+	var exp, dis, allow sql.NullString
 	err := row.Scan(&k.ID, &k.TenantID, &k.Name, &k.KeyHash, &k.Prefix, &k.Status,
 		&k.RPMLimit, &k.TPMLimit, &k.DailyQuotaCredits, &k.Currency, &k.TenantStatus, &exp, &dis,
-		&k.MaxRequestCostCredits)
+		&k.MaxRequestCostCredits, &allow)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("store: 查 api_key: %w", err)
 	}
+	allowed, perr := ParseAllowlist(allow)
+	if perr != nil {
+		return nil, fmt.Errorf("store: api_key %s: %w", k.Prefix, perr)
+	}
+	k.AllowedModels = allowed
 	if exp.Valid && exp.String != "" {
 		t, perr := time.Parse(time.RFC3339, exp.String)
 		if perr != nil {

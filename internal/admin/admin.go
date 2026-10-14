@@ -265,13 +265,14 @@ func listKeys(d Deps) http.HandlerFunc {
 func createKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Tenant                string `json:"tenant"`
-			Name                  string `json:"name"`
-			RPMLimit              int64  `json:"rpm_limit"`
-			TPMLimit              int64  `json:"tpm_limit"`
-			DailyQuotaCredits     int64  `json:"daily_quota_credits"`
-			MaxRequestCostCredits int64  `json:"max_request_cost_credits"`
-			ExpiresAt             string `json:"expires_at"` // 可空;RFC3339(空 = 永不过期)
+			Tenant                string   `json:"tenant"`
+			Name                  string   `json:"name"`
+			RPMLimit              int64    `json:"rpm_limit"`
+			TPMLimit              int64    `json:"tpm_limit"`
+			DailyQuotaCredits     int64    `json:"daily_quota_credits"`
+			MaxRequestCostCredits int64    `json:"max_request_cost_credits"`
+			AllowedModels         []string `json:"allowed_models"` // 缺省/空 = 不限;空白条目整单拒绝
+			ExpiresAt             string   `json:"expires_at"`     // 可空;RFC3339(空 = 永不过期)
 		}
 		if err := decode(r, &req); err != nil || req.Name == "" {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
@@ -283,7 +284,7 @@ func createKey(d Deps) http.HandlerFunc {
 		}
 		opts := auth.KeyOpts{
 			TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
-			MaxRequestCostCredits: req.MaxRequestCostCredits,
+			MaxRequestCostCredits: req.MaxRequestCostCredits, AllowedModels: req.AllowedModels,
 		}
 		if req.ExpiresAt != "" {
 			t, err := time.Parse(time.RFC3339, req.ExpiresAt)
@@ -310,6 +311,7 @@ func createKey(d Deps) http.HandlerFunc {
 			"id":  rec.ID, "prefix": rec.Prefix, "tenant": rec.TenantID,
 			"rpm_limit": rec.RPMLimit, "tpm_limit": rec.TPMLimit,
 			"daily_quota_credits": rec.DailyQuotaCredits, "expires_at": rec.ExpiresAt,
+			"allowed_models": rec.AllowedModels,
 		})
 	}
 }
@@ -325,6 +327,7 @@ func patchKey(d Deps) http.HandlerFunc {
 			ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动;null=清除;"RFC3339"=设定
 			Disabled              *bool           `json:"disabled"`                 // 缺省=不动;true=停用/false=恢复
 			MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动;0=不限
+			AllowedModels         json.RawMessage `json:"allowed_models"`           // 缺省=不动;null=清除(不限);数组=整体设定
 		}
 		if err := decode(r, &req); err != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
@@ -337,6 +340,18 @@ func patchKey(d Deps) http.HandlerFunc {
 		patch := auth.LimitsPatch{
 			RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
 			Disabled: req.Disabled, MaxRequestCostCredits: req.MaxRequestCostCredits,
+		}
+		switch {
+		case len(req.AllowedModels) == 0: // 字段缺省:不动
+		case string(req.AllowedModels) == "null":
+			patch.ClearAllowModels = true
+		default:
+			var models []string
+			if err := json.Unmarshal(req.AllowedModels, &models); err != nil {
+				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "allowed_models 须为字符串数组或 null")
+				return
+			}
+			patch.AllowedModels = models // 空白条目整单拒绝在 auth 归一化(MarkBusiness→400)
 		}
 		switch {
 		case len(req.ExpiresAt) == 0: // 字段缺省:不动

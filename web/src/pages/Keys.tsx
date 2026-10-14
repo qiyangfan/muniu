@@ -4,6 +4,7 @@ import { KeyRound } from "lucide-react";
 import { api, type KeyRecord } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { ErrorAlert } from "../components/error-alert";
 import { NoticeBanner } from "../components/notice-banner";
 import {
@@ -32,6 +33,14 @@ const KEY_STATUS_META: StatusMeta = {
 };
 const keyStatusOf = (k: KeyRecord): string =>
   k.status === "revoked" ? "revoked" : k.disabled ? "disabled" : "active";
+
+// 白名单 textarea ⇄ 数组:每行一个别名(别名理论可含逗号,按行分隔无歧义);空行忽略。
+const allowlistToText = (models: string[] | null | undefined) => (models ?? []).join("\n");
+const textToAllowlist = (text: string) =>
+  text
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
 // 快捷过期时刻:点击填入 N 天后的本地时刻(datetime-local 分钟精度)。
 // 签发表单与编辑弹窗共用,文案与行为单源。
@@ -67,12 +76,20 @@ export default function Keys() {
   const [tpm, setTpm] = useState(0);
   const [quota, setQuota] = useState(0);
   const [budget, setBudget] = useState(0);
+  const [allowed, setAllowed] = useState("");
   const [expires, setExpires] = useState("");
   const [busy, setBusy] = useState(false); // 签发防重复
   const [loaded, setLoaded] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<KeyRecord | null>(null);
   const [editTarget, setEditTarget] = useState<KeyRecord | null>(null);
-  const [editForm, setEditForm] = useState({ rpm: 0, tpm: 0, quota: 0, budget: 0, expires: "" });
+  const [editForm, setEditForm] = useState({
+    rpm: 0,
+    tpm: 0,
+    quota: 0,
+    budget: 0,
+    expires: "",
+    allowed: "",
+  });
 
   const refresh = useCallback(() => {
     api
@@ -120,6 +137,7 @@ export default function Keys() {
       quota: k.daily_quota_credits ?? 0,
       budget: k.max_request_cost_credits ?? 0,
       expires: rfc3339ToLocal(k.expires_at ?? ""),
+      allowed: allowlistToText(k.allowed_models),
     });
   };
 
@@ -134,6 +152,9 @@ export default function Keys() {
         max_request_cost_credits: editForm.budget,
         // 输入框清空 = 显式清除过期(null);选值 = 设定新过期(datetime-local 本地时区 → UTC)
         expires_at: editForm.expires === "" ? null : new Date(editForm.expires).toISOString(),
+        // 白名单保存即整体设定:清空 = null(恢复不限),有行 = 数组整体替换
+        allowed_models:
+          textToAllowlist(editForm.allowed).length === 0 ? null : textToAllowlist(editForm.allowed),
       });
       setErr("");
       setEditTarget(null);
@@ -241,6 +262,21 @@ export default function Keys() {
       label: "状态",
       render: (k) => <StatusBadge meta={KEY_STATUS_META} value={keyStatusOf(k)} />,
     },
+    {
+      key: "allowed",
+      label: "模型白名单",
+      headTitle: "白名单外的别名请求将被拒绝(403);空 = 不限",
+      render: (k) => {
+        const models = k.allowed_models ?? [];
+        if (models.length === 0) return <span className="text-muted-foreground">不限</span>;
+        const text = models.join(", ");
+        return (
+          <span title={text} className="font-mono">
+            {text.length > 24 ? `${text.slice(0, 22)}…` : text}
+          </span>
+        );
+      },
+    },
     { key: "expires", label: "过期", render: (k) => fmtExpires(k.expires_at) },
     {
       key: "actions",
@@ -289,6 +325,10 @@ export default function Keys() {
                 tpm_limit: tpm,
                 daily_quota_credits: quota,
                 max_request_cost_credits: budget,
+                // 白名单留空 = 不限;有行 = 数组签发
+                ...(textToAllowlist(allowed).length > 0
+                  ? { allowed_models: textToAllowlist(allowed) }
+                  : {}),
                 ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
               });
               setIssued({ key: r.key, id: r.id });
@@ -299,6 +339,7 @@ export default function Keys() {
               setTpm(0);
               setQuota(0);
               setBudget(0);
+              setAllowed("");
               refresh();
             } catch (e2) {
               setErr((e2 as Error).message);
@@ -367,8 +408,22 @@ export default function Keys() {
               <QuickExpires onPick={setExpires} />
             </>
           </FormRow>
-          {/* xl 占两列补齐第二行(配额/过期/签发同排),不留网格空洞 */}
-          <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-2">
+          {/* lg 3 列下白名单跨 2 格与过期同行填满;xl 4 列回落单格——三档网格均无空洞 */}
+          <FormRow
+            label="模型白名单(每行一个别名)"
+            htmlFor="key-allowed"
+            className="lg:col-span-2 xl:col-span-1"
+          >
+            <Textarea
+              id="key-allowed"
+              rows={2}
+              placeholder={"留空 = 不限\nm-flash\nm-pro"}
+              value={allowed}
+              onChange={(e) => setAllowed(e.target.value)}
+            />
+          </FormRow>
+          {/* 提交按钮独占一行,不留网格空洞 */}
+          <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-4">
             <Button type="submit" disabled={busy} className="w-full sm:w-auto">
               {busy ? "签发中…" : "签发"}
             </Button>
@@ -377,7 +432,8 @@ export default function Keys() {
       </Card>
       <p className="text-xs text-muted-foreground">
         RPM/TPM 与日配额填 0 表示不限制;请求预算填 0 表示不限(超预算的请求会被拒绝或中断流式);
-        过期时刻留空表示永不过期;1 credit = 十亿分之一本币。
+        过期时刻留空表示永不过期;模型白名单留空表示不限,白名单外的别名请求将被拒绝(403);1 credit =
+        十亿分之一本币。
       </p>
       {/* 错误必须独立于明文区展示:混用会让操作者把错误串当 key 复制走 */}
       {err && <ErrorAlert text={`错误:${err}`} />}
@@ -466,9 +522,19 @@ export default function Keys() {
                 <QuickExpires onPick={(v) => setEditForm({ ...editForm, expires: v })} />
               </>
             </FormRow>
+            <FormRow label="模型白名单(每行一个别名)" htmlFor="edit-allowed">
+              <Textarea
+                id="edit-allowed"
+                rows={2}
+                placeholder={"清空 = 不限\nm-flash\nm-pro"}
+                value={editForm.allowed}
+                onChange={(e) => setEditForm({ ...editForm, allowed: e.target.value })}
+              />
+            </FormRow>
           </div>
           <p className="text-xs text-muted-foreground">
-            RPM/TPM 与日配额、请求预算填 0 表示不限制;过期时刻清空 = 永不过期。
+            RPM/TPM 与日配额、请求预算填 0 表示不限制;过期时刻清空 = 永不过期;白名单保存即整体设定,
+            清空 = 恢复不限。
           </p>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>

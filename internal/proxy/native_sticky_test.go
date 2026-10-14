@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
+	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/protocol"
@@ -22,18 +23,25 @@ import (
 // TestAffinityTable 亲和表语义:Put/Get 覆盖刷新、LRU 容量淘汰、TTL 过期视为未知。
 func TestAffinityTable(t *testing.T) {
 	a := newAffinityTable()
-	a.Put("resp_1", "prov-a")
-	if got, ok := a.Get("resp_1"); !ok || got != "prov-a" {
+	a.Put("resp_1", "prov-a", "k1")
+	if got, ok := a.Get("resp_1", "k1"); !ok || got != "prov-a" {
 		t.Fatalf("亲和查询不符: %q %v", got, ok)
 	}
+	// 归属不匹配/无鉴权信息:一律视为未知(fail-closed,responses-state-ownership)
+	if _, ok := a.Get("resp_1", "k2"); ok {
+		t.Fatal("跨 key 查询应不可见")
+	}
+	if _, ok := a.Get("resp_1", ""); ok {
+		t.Fatal("无鉴权信息应 fail-closed")
+	}
 	// 覆盖写
-	a.Put("resp_1", "prov-b")
-	if got, _ := a.Get("resp_1"); got != "prov-b" {
+	a.Put("resp_1", "prov-b", "k1")
+	if got, _ := a.Get("resp_1", "k1"); got != "prov-b" {
 		t.Fatalf("覆盖写不符: %q", got)
 	}
 	// LRU 容量淘汰(容量 4096:灌满 + 1,最老条目被逐)
 	for i := 0; i < affinityCapacity+1; i++ {
-		a.Put(string(rune('A'+i%26))+"-"+time.Now().Format("150405.000000000")+string(rune(i)), "p")
+		a.Put(string(rune('A'+i%26))+"-"+time.Now().Format("150405.000000000")+string(rune(i)), "p", "k1")
 	}
 	_ = a // 容量淘汰不 panic 即达意(精确淘汰序属实现细节,由 Get 命中率兜底)
 	if a.lru.Len() > affinityCapacity {
@@ -73,7 +81,9 @@ func TestStickyRoute(t *testing.T) {
 		t.Fatalf("亲和未知应自解释: %+v", err)
 	}
 	// 命中:候选域收缩至亲和 provider(域内 failover 照常 = 保留该 provider 全部候选)
-	p.affinity.Put("resp_1", "a2")
+	// (归属判定经 ctx KeyInfo;r 未注入 = 空 key = fail-closed,先注入再验命中)
+	r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{ID: "k1", TenantID: "t"}))
+	p.affinity.Put("resp_1", "a2", "k1")
 	got, err := p.stickyRoute(r, &inboundNative{proto: protocol.InboundResponses, prevID: "resp_1"}, snap, cands)
 	if err != nil || len(got) != 1 || got[0].Provider != "a2" {
 		t.Fatalf("候选域应收缩至亲和 provider: %+v %+v", got, err)
@@ -114,7 +124,11 @@ func TestStickyE2E_创建亲和GET代理(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/responses", p.HandlerResponses())
 	mux.Handle("GET /v1/responses/{id}", p.HandlerResponsesStateless())
-	ts := httptest.NewServer(mux)
+	// 归属隔离(responses-state-ownership):生产路径 auth 中间件恒挂 KeyInfo,测试同构注入
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{ID: "k1", TenantID: testTenant}))
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
 
 	// 创建:落亲和(ra 首选)
@@ -217,7 +231,11 @@ func TestStickyE2E_有状态链式全链(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/responses", p.HandlerResponses())
 	mux.Handle("GET /v1/responses/{id}", p.HandlerResponsesStateless())
-	ts := httptest.NewServer(mux)
+	// 归属隔离(responses-state-ownership):生产路径 auth 中间件恒挂 KeyInfo,测试同构注入
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{ID: "k1", TenantID: testTenant}))
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
 
 	// 创建
@@ -265,7 +283,11 @@ func TestStickyE2E_DELETE代理(t *testing.T) {
 	mux.Handle("POST /v1/responses", p.HandlerResponses())
 	mux.Handle("GET /v1/responses/{id}", p.HandlerResponsesStateless())
 	mux.Handle("DELETE /v1/responses/{id}", p.HandlerResponsesStateless())
-	ts := httptest.NewServer(mux)
+	// 归属隔离(responses-state-ownership):生产路径 auth 中间件恒挂 KeyInfo,测试同构注入
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{ID: "k1", TenantID: testTenant}))
+		mux.ServeHTTP(w, r)
+	}))
 	t.Cleanup(ts.Close)
 
 	resp, body := postPath(t, ts.URL, "/v1/responses", `{"model":"alias-r","stream":false,"input":"你好"}`)

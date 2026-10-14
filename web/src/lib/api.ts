@@ -130,6 +130,7 @@ export const api = {
       daily_quota_credits?: number;
       expires_at?: string;
       max_request_cost_credits?: number;
+      allowed_models?: string[];
     },
   ) =>
     call<KeyCreateResponse>("POST", "/admin/v1/keys", {
@@ -147,6 +148,7 @@ export const api = {
       expires_at?: string | null;
       disabled?: boolean;
       max_request_cost_credits?: number;
+      allowed_models?: string[] | null;
     },
   ) => call<KeyRecord>("PATCH", `/admin/v1/keys/${id}`, patch),
   revokeKey: (prefix: string) => call<{ revoked: number }>("DELETE", `/admin/v1/keys/${prefix}`),

@@ -24,6 +24,7 @@ const keyWithID = (over: Partial<KeyRecord>): KeyRecord => ({
   tpm_limit: 0,
   daily_quota_credits: 0,
   expires_at: null,
+  allowed_models: null,
   ...over,
 });
 
@@ -76,6 +77,7 @@ describe("密钥页 Key ID", () => {
       tpm_limit: 0,
       daily_quota_credits: 0,
       expires_at: null,
+      allowed_models: null,
     });
     render(<Keys />);
 

@@ -70,6 +70,7 @@ components:
         status: { type: string, enum: [active, revoked], description: "生命周期终态位;可逆启停见 disabled" }
         disabled: { type: boolean, description: "true=已停用(可逆恢复);吊销终态不受影响" }
         max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限" }
+        allowed_models: { type: array, items: { type: string }, nullable: true, description: "模型别名白名单;null/空=不限(数据面白名单外别名 403 model_not_allowed)" }
     KeyCreateRequest:
       type: object
       required: [name]
@@ -81,10 +82,11 @@ components:
         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
         expires_at: { type: string, description: "RFC3339;空=永不过期;不得早于当前时刻(创建期拒绝;立即失效经 PATCH)" }
         max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限" }
+        allowed_models: { type: array, items: { type: string }, description: "模型别名白名单;缺省/空=不限;空白条目 400 整单拒绝;不校验别名存在性(可先于拓扑别名签发)" }
     KeyCreateResponse:
       type: object
       description: 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。
-      required: [key, id, prefix, tenant, rpm_limit, tpm_limit, daily_quota_credits, expires_at]
+      required: [key, id, prefix, tenant, rpm_limit, tpm_limit, daily_quota_credits, expires_at, allowed_models]
       properties:
         key: { type: string, description: "明文密钥(mk- 前缀),仅此一次返回" }
         id: { type: string, description: "Key ID(本地签发为 UUID;平台接入可为任意合法字符串)" }
@@ -94,6 +96,7 @@ components:
         tpm_limit: { type: integer, format: int64, description: "0=不限" }
         daily_quota_credits: { type: integer, format: int64, description: "0=不限" }
         expires_at: { type: string, nullable: true, description: "RFC3339;null=永不过期" }
+        allowed_models: { type: array, items: { type: string }, nullable: true, description: "归一化(trim+去重)后的白名单;null/空=不限" }
     KeyPatchRequest:
       type: object
       description: 局部更新(省略字段不动;expires_at 显式 null 清除过期)
@@ -104,6 +107,7 @@ components:
         expires_at: { type: string, nullable: true }
         disabled: { type: boolean, description: "可逆停用(true=停用/false=恢复);吊销终态不受影响" }
         max_request_cost_credits: { type: integer, format: int64, description: "单请求成本预算 credit;0=不限(预检+流中两道闸,超限 402 cost_budget_exceeded)" }
+        allowed_models: { type: array, items: { type: string }, nullable: true, description: "三态:省略=不动;null=清除恢复不限;数组=整体替换(非合并);空白条目 400 整单拒绝;写后鉴权缓存立即失效" }
     ModelEntry:
       type: object
       properties:

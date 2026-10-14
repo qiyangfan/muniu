@@ -278,6 +278,7 @@ func (w *messagesStreamWriter) finish() {
 			var probe struct {
 				Error *struct {
 					Message string `json:"message"`
+					Type    string `json:"type"`
 				} `json:"error"`
 			}
 			if json.Unmarshal(bytes.TrimSpace(w.tail), &probe) == nil && probe.Error != nil {
@@ -285,12 +286,15 @@ func (w *messagesStreamWriter) finish() {
 				if msg == "" {
 					msg = "上游处理失败"
 				}
+				// 管道错误类型 → Anthropic 原生类型(与翻译期 writeMessagesError 同缝;
+				// 无对应物的类型维持 api_error 兜底,语义由 HTTP 状态码承载)
+				typ := messagesPipelineErrorTypeOf(probe.Error.Type)
 				// 状态码已由管道 WriteHeader 写出(不可重复),此处仅改写 body 形态。
 				// 必须直写底层 ResponseWriter——经 wrapper 会再次进 tail 被丢弃(finish 是最后一步)
 				w.Header().Set("Content-Type", "application/json")
 				b, _ := json.Marshal(map[string]any{
 					"type":  "error",
-					"error": map[string]any{"type": "api_error", "message": msg},
+					"error": map[string]any{"type": typ, "message": msg},
 				})
 				_, _ = w.ResponseWriter.Write(append(b, '\n'))
 			} else {
@@ -322,5 +326,26 @@ func (w *messagesStreamWriter) Flush() {
 func (w *messagesNonStreamWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
+	}
+}
+
+// messagesPipelineErrorTypeOf 管道错误类型 → Anthropic 原生错误类型(流式 finish 改写用):
+// 与翻译期 writeMessagesError 的类型词汇表同缝(同一 lane 一套错误形态);
+// 有官方对应物的五类精确映射,无对应物(quota_exceeded/timeout/upstream_error/internal
+// 及未知类型)维持 api_error 兜底——语义由 HTTP 状态码承载,不发明 Anthropic 不存在的类型。
+func messagesPipelineErrorTypeOf(typ string) string {
+	switch typ {
+	case protocol.TypeBadRequest:
+		return "invalid_request_error"
+	case protocol.TypeAuthFailed:
+		return "authentication_error"
+	case protocol.TypeForbidden:
+		return "permission_error"
+	case protocol.TypeNotFound:
+		return "not_found_error"
+	case protocol.TypeRateLimited:
+		return "rate_limit_error"
+	default:
+		return "api_error"
 	}
 }

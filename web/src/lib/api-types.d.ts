@@ -1584,6 +1584,8 @@ export interface components {
              * @description 单请求成本预算 credit;0=不限
              */
             max_request_cost_credits?: number;
+            /** @description 模型别名白名单;null/空=不限(数据面白名单外别名 403 model_not_allowed) */
+            allowed_models?: string[] | null;
         };
         KeyCreateRequest: {
             /** @description 租户名,缺省 default */
@@ -1608,6 +1610,8 @@ export interface components {
              * @description 单请求成本预算 credit;0=不限
              */
             max_request_cost_credits?: number;
+            /** @description 模型别名白名单;缺省/空=不限;空白条目 400 整单拒绝;不校验别名存在性(可先于拓扑别名签发) */
+            allowed_models?: string[];
         };
         /** @description 签发回执(字段集与 handler 实际输出一致,契约门禁双向钉死)。id 是用量 key_id 与控制面绑定的连接值,不是 secret 也不是 prefix。 */
         KeyCreateResponse: {
@@ -1633,6 +1637,8 @@ export interface components {
             daily_quota_credits: number;
             /** @description RFC3339;null=永不过期 */
             expires_at: string | null;
+            /** @description 归一化(trim+去重)后的白名单;null/空=不限 */
+            allowed_models: string[] | null;
         };
         /** @description 局部更新(省略字段不动;expires_at 显式 null 清除过期) */
         KeyPatchRequest: {
@@ -1653,6 +1659,8 @@ export interface components {
              * @description 单请求成本预算 credit;0=不限(预检+流中两道闸,超限 402 cost_budget_exceeded)
              */
             max_request_cost_credits?: number;
+            /** @description 三态:省略=不动;null=清除恢复不限;数组=整体替换(非合并);空白条目 400 整单拒绝;写后鉴权缓存立即失效 */
+            allowed_models?: string[] | null;
         };
         ModelEntry: {
             id?: string;
