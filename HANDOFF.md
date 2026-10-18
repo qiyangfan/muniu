@@ -11,7 +11,7 @@
 - **hooks 基线根修四处**:Usage 抽 keyed 子组件(react.dev key 重置模式)/Audit·ImagePricing 取数拆「纯取数+事件处理器重置」/Keys Date.now 内联 onClick(purity);行为逐点等价(统计区间行改数据到达后显示,唯一可见微差)。
 - **CI 一致性**:plugins.yml checkout@v7、release.yml node 24(与 ci.yml 收敛)。
 - **评审循环(同日,双独立代理 1 轮收敛)**:无 P0/P1;2 条 P3 全处置——①计数措辞「11 调用点」改「11 文件 14 处」;②Audit/ImagePricing 挂载 effect 的 cleanup 快照抬版本号实为净零死代码(快照读在自增前),修复=整段移除(竞态由单调版本号+严格相等判定独立把守,卸载后 setState 本身 no-op;评审员建议的「快照后移」被否——多次刷新后卸载会把版本号往下拉,若 effect 重跑可复活过期响应)。
-- **门禁**:make check 全绿(coverage gate PASS 70.4%);embed 冒烟+console 五页走查+真上游 dashscope 单笔(9/20 tokens,usage 落库读回一致)全过,详见验收记录 51。
+- **门禁**:make check 全绿(coverage gate PASS 70.4%);embed 冒烟+console 五页走查+真上游 dashscope 单笔(9/20 tokens,usage 落库读回一致)全过,详见验收记录 52。
 
 ## 当前状态(2026-10-14,两 change 归档交付:key-model-allowlist + responses-state-ownership;已提交推送)
 
@@ -121,7 +121,7 @@
 
 【2026-10-18 实施后状态】：
 
-1. 【执行中 2026-10-18】tech-stack-refresh-2026-10 已 12/12 全勾并归档(archive/2026-10-18-tech-stack-refresh-2026-10),经 owner 指令提交/push;CI 实跑结果补记验收记录 51。
+1. 【执行中 2026-10-18】tech-stack-refresh-2026-10 已 12/12 全勾并归档(archive/2026-10-18-tech-stack-refresh-2026-10),经 owner 指令提交/push;CI 实跑结果补记验收记录 52。
 2. 【到点再评估】TS 7/typescript-eslint(#12518,预计 7.1+)、node 26 LTS(2026-10-28 转)、hnsw 新 tag、pnpm/各依赖下一轮——均见开放决策项 2026-10-18 行。
 
 【2026-10-13 实施后状态】：
@@ -156,7 +156,7 @@
 ## 开放决策项
 
 - 【新增 2026-10-18】web 依赖白名单增补 `oxc-transform-react`(devDep;plugin-react ≥6 `compiler:true` 的官方指定载体,react 系工具链,oxc/React 团队联合产出)。React Compiler 关闭口径 = vite.config.ts 摘 `compiler: true` 一行,零残留。
-- 【观察 2026-10-18】coder/hnsw 维持 v0.6.1(上游最新正式 tag;main 有未发版正确性修复,钉伪版本被实测 7× 热路径回退否决,bench 判据见验收记录 51):上游发 v0.6.2+ 即重评估。
+- 【观察 2026-10-18】coder/hnsw 维持 v0.6.1(上游最新正式 tag;main 有未发版正确性修复,钉伪版本被实测 7× 热路径回退否决,bench 判据见验收记录 52):上游发 v0.6.2+ 即重评估。
 - 【观察 2026-10-18】低频维护依赖:goccy/go-yaml(v1.19.2,9 个月无发版)、pkoukk/tiktoken-go(v0.1.8,13 个月;google/uuid 因其传递引用保留在 go.sum,非本仓直接依赖);随 govulncheck 例行复查。
 - 【跟踪 2026-10-18】TS 7(tsgo)被 typescript-eslint 支持矩阵阻断(<6.1.0,#12518,预计 7.1+ 官宣后评估);node 26 于 2026-10-28 转 LTS 后下轮工具链再议;encoding/json/jsontext 流式解析改造涉 protocol 字节保真敏感区,维持观察不做。
 - 【关闭 2026-10-13】后续授权修复旧 token 计费乘积溢出：宽中间量精确计算，共用预算算法；保留 credit 精度。最终金额真超界按 owner“你帮我决定”授权保留未结算观测及核对日志，证据见补遗验收。
@@ -191,23 +191,23 @@
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
 
-**51. 全栈技术底座刷新(2026-10-18,openspec `tech-stack-refresh-2026-10` 12/12;调研→立项→实施→验收单会话闭环,owner「全权调研并决策」授权)**
+**52. 全栈技术底座刷新(2026-10-18,openspec `tech-stack-refresh-2026-10` 12/12;调研→立项→实施→验收单会话闭环,owner「全权调研并决策」授权)**
 - 判据:逐任务门禁各自全绿(Go=`make check`,web=四件套+build /tmp)+ hnsw bench 对比 + embed 冒烟 + 真上游数据面单笔 + 三档×亮暗走查。
 - 证据:①stdlib uuid 替换后 1000 样本 v7 小写连字符格式+单调递增回归过,真实签发 key ID `01a14e91-…` 即 stdlib v7;②hnsw bench(1 万条 1536 维 Top5,M1 Pro):基线 HNSWTop5 381µs/op·323 allocs vs main 伪版本(36cab60)2.69ms/op·1092 allocs、选型评估 p99 8.35ms——**7× 回退**,连同 owner 不钉哈希裁决回退 v0.6.1;③web 全链:pnpm 12 迁移 lockfile(9.0 格式)后 frozen-lockfile 过、TS 6.0.3 `tsc -b` 绿、Vite 8/Rolldown 构建 720ms(前 2.6s)、compiler 产物 `_c(`/`useMemoCache` 特征 11+6 处实证生效、bundle 769→787KB(+18KB 编译器运行时);④embed 冒烟(临时实例 :18785,已清理):`/console/` 200 + `/console/assets/*.js` 200(769KB)+ healthz 200;⑤真上游 dashscope qwen-plus 单笔(chat 兼容 lane)200,usage 9/20 tokens,`/admin/v1/usage` 读回 requests=1 一致(临时实例 :18786 与 key 已清理);⑥走查:图表页 375/768/1280×亮暗六帧(双系列/万\/亿轴格式/移动 h-48 折降/暗色对比度)+ 改码四页(密钥/用量/审计/价目含图片计价)1280 实渲染全过——走查中 Providers 一次白屏经查为走查 mock 数据 `keys` 误给非数组所致(非应用缺陷,`key={k.id}` 在位);⑦`make check` exit=0(coverage gate PASS 70.4%),`openspec validate --all` 24/24,`CGO_ENABLED=0 go build ./...` 过。
 - 踩坑留证:①pnpm 12 首次 `install --frozen-lockfile` 报 lockfile not up to date——需先跑一次非 frozen 迁移格式,其后 frozen 恢复;②plugin-react 6 `compiler:true` 缺 `oxc-transform-react` 时报错清晰指路装包;③stdlib `uuid` 为顶级 import 且 `NewV7()` 无错误返回(单调保证强于 google/uuid),`uuid.Must` 生成包装整体消失;④`go mod tidy` 把 x/sys 从 indirect 改 direct 系修正历史误标(cmd/muniu admins TTY 一直直接引用),非新增依赖。
 - **代码评审迭代循环(同日,双独立代理分侧,1 轮收敛)**:Go 侧逐文件核验(含 stdlib 源码级对照:被删的 3 处 google 版 err 分支恒 nil error 属死代码、google `New()` 失败本就 panic,v4 回退删除零可观测损失;go-redis 9.23 pipeline 专属池不触本仓用法面;`go mod tidy -diff` 零差异);web 侧四页新旧行为逐点对照 + `pnpm list` 全 20 直接依赖实证 + StrictMode 竞态测试复跑绿。2 条 P3 修复:计数措辞 11 处→11 文件 14 处(HANDOFF+归档三件);Audit/ImagePricing 挂载 effect 的 cleanup 版本号快照自增实为净零死代码,整段移除并以单调版本号机制论证等价(评审员「快照后移」方案经推演存在拉低版本号复活过期响应隐患,否决);修复后 web 四件套 15/15 + make check 复绿。
-
-**50. 当前 HEAD 真上游冒烟(2026-10-14,dashscope 单 key;v2 清单 §2 首跑,含新特性活体实证)**
-- 环境:本机临时三实例(18780 主/18781 B/18782 A,config weight 校验踩坑留证:provider 级 weight 必填非 key 级;gemini 出站 base_url 必含 /v1beta 版本段——runbook 既有约定,10-12 根修语义)。用毕三实例停机、临时配置/库/key 全删。
-- 证据:①chat 兼容 lane 200(9/41);②发现面 keyA 3 别名/keyB 白名单过滤 1 别名,单查白名单外 403 `forbidden/model_not_allowed`;③chat 白名单外 403 同形;④messages 流式 403 信封 **permission_error**(新映射活体);⑤anthropic 直通:非流式原生字段(cache_creation_input_tokens/prompt_tokens_details)、工具多轮 tool_use(get_weather/北京,toolu_id)→tool_result→终答「北京今天天气晴朗,气温为26摄氏度」;⑥responses 快捷形态 200 completed(**直通实证**:id 为百炼原生 resp_uuid);⑦**归属隔离活体**:keyB GET keyA 的 resp → 404 `response_not_found`(网关判定);⑧gemini 双实例:B 直连 17/4、A→B 全链非流式 STOP、流式 3 帧终帧 STOP(终帧 usage 补零=B 侧上游流式未回 usage 既有登记语义)。
-- **知识更新**:百炼 compatible-mode `/v1/responses` **单轮 create/GET 真实可用**(provider-presets.md responses 实证表已补充)——多轮回放缺口不变,`native_responses` 维持勿声明;冒烟实例临时声明仅作探针。
-- 门禁:冒烟后无代码改动(纯只读验证);工作区仅余本验收记录与 checklist/ROADMAP 判据 v2 文档(未提交,等 owner 指令)。
 
 **51. gemini lane 第三方多方认证(2026-10-14,owner 插话「自产自销/好歹用第三方多方认证」;零代码改动,纯验证)**
 - 拓扑:官方 genai SDK(临时 Go module,不动仓内 go.mod)→ muniu(gemini 入站+出站双 lane)→ new-api(QuantumNous,独立 Gemini-native 服务端,发行版二进制)→ dashscope qwen-plus;每个 wire 跳点 muniu 只占一侧。
 - 证据:非流式 15/74 + finishReason=STOP;流式增量帧全解析、终帧 STOP+真实 usage;**多工具往返**——SDK 声明双工具,qwen 并行发起 get_time+get_weather 两个 functionCall(空 id 双向容忍),SDK 回传双 functionResponse 后终答正确合成("北京当前时间是14:00,天气晴,气温25℃",usage 325/18);new-api 扩展 usage 字段(billing_usage 等)适配器容忍实证。
 - 踩坑留证:new-api 渠道 base_url 带 /v1 会拼出 /v1/v1/… 上游 404;临时实例拆除必须按端口 kill——进程 argv 为相对路径,pkill -f 按目录模式匹配不到,残留实例顶着已删除二进制继续服务(本日实际踩中并补救)。
 - 现场:实例/令牌/临时目录(含 160MB 二进制与两块 SQLite)全部拆除并核验;repo 仅改 runbook+本文件(未提交,等 owner 指令)。
+
+**50. 当前 HEAD 真上游冒烟(2026-10-14,dashscope 单 key;v2 清单 §2 首跑,含新特性活体实证)**
+- 环境:本机临时三实例(18780 主/18781 B/18782 A,config weight 校验踩坑留证:provider 级 weight 必填非 key 级;gemini 出站 base_url 必含 /v1beta 版本段——runbook 既有约定,10-12 根修语义)。用毕三实例停机、临时配置/库/key 全删。
+- 证据:①chat 兼容 lane 200(9/41);②发现面 keyA 3 别名/keyB 白名单过滤 1 别名,单查白名单外 403 `forbidden/model_not_allowed`;③chat 白名单外 403 同形;④messages 流式 403 信封 **permission_error**(新映射活体);⑤anthropic 直通:非流式原生字段(cache_creation_input_tokens/prompt_tokens_details)、工具多轮 tool_use(get_weather/北京,toolu_id)→tool_result→终答「北京今天天气晴朗,气温为26摄氏度」;⑥responses 快捷形态 200 completed(**直通实证**:id 为百炼原生 resp_uuid);⑦**归属隔离活体**:keyB GET keyA 的 resp → 404 `response_not_found`(网关判定);⑧gemini 双实例:B 直连 17/4、A→B 全链非流式 STOP、流式 3 帧终帧 STOP(终帧 usage 补零=B 侧上游流式未回 usage 既有登记语义)。
+- **知识更新**:百炼 compatible-mode `/v1/responses` **单轮 create/GET 真实可用**(provider-presets.md responses 实证表已补充)——多轮回放缺口不变,`native_responses` 维持勿声明;冒烟实例临时声明仅作探针。
+- 门禁:冒烟后无代码改动(纯只读验证);工作区仅余本验收记录与 checklist/ROADMAP 判据 v2 文档(未提交,等 owner 指令)。
 
 **49. 两 change 归档交付 CI 实跑(2026-10-14,owner 指令:归档/HANDOFF/提交/push/盯 CI)**
 - 提交 f4aa33b(45 文件,+1675/-75,单笔两 change 含归档与主 specs 同步);push c63bace..f4aa33b(首推 SSL 瞬断,重试成功)。
