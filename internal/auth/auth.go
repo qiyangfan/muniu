@@ -19,8 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/protocol"
@@ -138,7 +137,7 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 		return "", nil, fmt.Errorf("auth: 解析租户: %w", err)
 	}
 	plaintext := Generate()
-	id := uuid.Must(uuid.NewV7()).String()
+	id := uuid.NewV7().String()
 	now := time.Now().UTC().Format(time.RFC3339)
 	var expires any
 	if opts.ExpiresAt != nil {

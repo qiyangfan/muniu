@@ -44,19 +44,26 @@ const textToAllowlist = (text: string) =>
 
 // 快捷过期时刻:点击填入 N 天后的本地时刻(datetime-local 分钟精度)。
 // 签发表单与编辑弹窗共用,文案与行为单源。
+// 纯度规则:Date.now() 只允许出现在事件属性闭包内(点击时刻取 now),
+// 抽函数经 .map 传递会丢事件处理器豁免,故内联进 onClick。
 function QuickExpires({ onPick }: { onPick: (v: string) => void }) {
-  const pick = (days: number) => {
-    const d = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    onPick(
-      `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`,
-    );
-  };
   return (
     <div className="flex flex-wrap gap-2">
-      {[1, 7, 30].map((d) => (
-        <Button key={d} type="button" variant="outline" size="sm" onClick={() => pick(d)}>
-          {d} 天后
+      {[1, 7, 30].map((days) => (
+        <Button
+          key={days}
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            const d = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+            const pad = (n: number) => String(n).padStart(2, "0");
+            onPick(
+              `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`,
+            );
+          }}
+        >
+          {days} 天后
         </Button>
       ))}
     </div>

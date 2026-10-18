@@ -9,8 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/store"
@@ -27,7 +26,7 @@ func TestE2E_配额耗尽仍可列模型(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.InsertUsageBatch(kdb, []store.UsageRow{{
-		ID: uuid.Must(uuid.NewV7()).String(), RequestID: "req-quota-pin",
+		ID: uuid.NewV7().String(), RequestID: "req-quota-pin",
 		TenantID: "01900000-0000-7000-8000-000000000001", APIKeyID: rec.ID,
 		Provider: "openai", ModelAlias: e2eAlias, UpstreamModel: "upstream-a",
 		Status: "ok", CostCredits: 100, LatencyTotalMs: 1,

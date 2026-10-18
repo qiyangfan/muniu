@@ -3,12 +3,11 @@ package metering
 
 import (
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // newUsageID usage_logs 主键:UUIDv7(与 request_id 同源,天然去重底座)。
-func newUsageID() string { return uuid.Must(uuid.NewV7()).String() }
+func newUsageID() string { return uuid.NewV7().String() }
 
 // timeNowUTC 时间源(变量化,测试可注入)。
 var timeNowUTC = func() time.Time { return time.Now().UTC() }

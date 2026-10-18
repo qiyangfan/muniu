@@ -8,8 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // Tenant 租户行(管理侧形态;JSON 字段 snake_case 供管理 API 输出)。
@@ -46,7 +45,7 @@ func ListTenants(db *sql.DB) ([]Tenant, error) {
 
 // CreateTenant 创建租户(名称唯一)。
 func CreateTenant(db *sql.DB, name string) (string, error) {
-	id := uuid.Must(uuid.NewV7()).String()
+	id := uuid.NewV7().String()
 	_, err := db.Exec(`INSERT INTO tenants (id, name, created_at) VALUES (?,?,?)`,
 		id, name, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {

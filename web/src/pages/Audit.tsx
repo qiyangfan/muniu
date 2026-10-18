@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type AdminAudit } from "../lib/api";
 import { DataList, type DataCol } from "../components/data-list";
 import { ErrorAlert } from "../components/error-alert";
@@ -75,27 +75,35 @@ export default function Audit() {
   const [next, setNext] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const load = async (cursor = "") => {
+  // 纯取数:setState 全部落在 promise 回调(effect 首挂直呼不触发 set-state-in-effect;
+  // 初挂 loading=true/err="" 初始态已等价)
+  const fetchPage = useCallback((cursor = "") => {
     const current = ++version.current;
+    return api
+      .audit(cursor)
+      .then((page) => {
+        if (current !== version.current) return;
+        setRows((old) => (cursor ? [...old, ...page.items] : page.items));
+        setNext(page.next_cursor);
+      })
+      .catch((e) => {
+        if (current === version.current) setErr((e as Error).message);
+      })
+      .finally(() => {
+        if (current === version.current) setLoading(false);
+      });
+  }, []);
+  // 事件处理器路径:同步重置出加载态(effect 内禁同步 setState,事件回调不受限)
+  const load = (cursor = "") => {
     setLoading(true);
     setErr("");
-    try {
-      const page = await api.audit(cursor);
-      if (current !== version.current) return;
-      setRows((old) => (cursor ? [...old, ...page.items] : page.items));
-      setNext(page.next_cursor);
-    } catch (e) {
-      if (current === version.current) setErr((e as Error).message);
-    } finally {
-      if (current === version.current) setLoading(false);
-    }
+    void fetchPage(cursor);
   };
   useEffect(() => {
-    void load();
-    return () => {
-      version.current++;
-    };
-  }, []);
+    // 竞态由 fetchPage 的单调版本号 + 严格相等判定独立把守(版本号只增,旧响应必过期);
+    // cleanup 不再自增版本号:卸载后 setState 本身是 no-op,自增无可观测效果(评审循环 1 收敛)
+    void fetchPage();
+  }, [fetchPage]);
   const cols: DataCol<AdminAudit>[] = [
     {
       key: "actor",

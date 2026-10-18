@@ -31,6 +31,53 @@ type RangeDays = (typeof RANGES)[number];
 export default function Usage() {
   const [dim, setDim] = useState<Dim>("day");
   const [days, setDays] = useState<RangeDays>(7);
+
+  return (
+    <div className="space-y-4">
+      {/* 筛选分组:移动端两行各占一档、按钮等宽(分段控件手感),sm+ 恢复同行左组+右组 */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="flex gap-1.5" role="group" aria-label="统计维度">
+          {DIMS.map((d) => (
+            <Button
+              key={d}
+              size="sm"
+              variant={dim === d ? "default" : "secondary"}
+              aria-pressed={dim === d}
+              onClick={() => setDim(d)}
+              className="flex-1 sm:flex-none"
+            >
+              {DIM_LABELS[d]}
+            </Button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5 sm:ml-auto" role="group" aria-label="时间范围">
+          <span className="sr-only sm:not-sr-only sm:text-xs sm:text-muted-foreground">
+            时间范围
+          </span>
+          {RANGES.map((r) => (
+            <Button
+              key={r}
+              size="sm"
+              variant={days === r ? "default" : "secondary"}
+              aria-pressed={days === r}
+              onClick={() => setDays(r)}
+              className="flex-1 sm:flex-none"
+            >
+              近 {r} 天
+            </Button>
+          ))}
+        </div>
+      </div>
+      {/* key 重置模式(react.dev「reset state with a key」):切换维度/范围即重挂载报表,
+          loaded/range/keyNames 回初始态出骨架屏——原实现靠 effect 首行同步 setState 重置,
+          与 react-hooks/set-state-in-effect 冲突;重挂载后报表查询参恒定,无需过期响应丢弃以外的机制 */}
+      <UsageReport key={`${dim}-${days}`} dim={dim} days={days} />
+    </div>
+  );
+}
+
+// 报表体:key 化子组件,dim/days 变化即整体重挂载,effect 内仅异步 setState。
+function UsageReport({ dim, days }: { dim: Dim; days: RangeDays }) {
   const [points, setPoints] = useState<UsagePoint[]>([]);
   const [keyNames, setKeyNames] = useState<Map<string, string>>(new Map());
   const [range, setRange] = useState<{ from: Date; to: Date } | null>(null);
@@ -39,22 +86,22 @@ export default function Usage() {
 
   useEffect(() => {
     // 401/网络错误必须可见:静默吞掉会渲染成「空报表」,与真实零用量无法区分。
-    // 快速切换维度/范围时丢弃过期响应(cleanup 置 cancelled),防旧数据配新表头
+    // 卸载后迟到响应经 cleanup cancelled 丢弃,防旧数据配新表头
     let cancelled = false;
     const to = new Date();
     const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
-    setRange({ from, to });
-    setLoaded(false);
     api
       .usage({ group_by: dim, from: from.toISOString(), to: to.toISOString() })
       .then((r) => {
         if (cancelled) return;
+        setRange({ from, to });
         setPoints(r.points);
         setErr("");
         setLoaded(true);
       })
       .catch((e) => {
         if (cancelled) return;
+        setRange({ from, to });
         setErr(e.message);
         setLoaded(true);
       });
@@ -70,8 +117,6 @@ export default function Usage() {
           setKeyNames(m);
         })
         .catch(() => {});
-    } else {
-      setKeyNames(new Map());
     }
     return () => {
       cancelled = true;
@@ -126,42 +171,8 @@ export default function Usage() {
   ];
 
   return (
-    <div className="space-y-4">
+    <>
       {err && <ErrorAlert text={`加载失败:${err}`} />}
-      {/* 筛选分组:移动端两行各占一档、按钮等宽(分段控件手感),sm+ 恢复同行左组+右组 */}
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        <div className="flex gap-1.5" role="group" aria-label="统计维度">
-          {DIMS.map((d) => (
-            <Button
-              key={d}
-              size="sm"
-              variant={dim === d ? "default" : "secondary"}
-              aria-pressed={dim === d}
-              onClick={() => setDim(d)}
-              className="flex-1 sm:flex-none"
-            >
-              {DIM_LABELS[d]}
-            </Button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1.5 sm:ml-auto" role="group" aria-label="时间范围">
-          <span className="sr-only sm:not-sr-only sm:text-xs sm:text-muted-foreground">
-            时间范围
-          </span>
-          {RANGES.map((r) => (
-            <Button
-              key={r}
-              size="sm"
-              variant={days === r ? "default" : "secondary"}
-              aria-pressed={days === r}
-              onClick={() => setDays(r)}
-              className="flex-1 sm:flex-none"
-            >
-              近 {r} 天
-            </Button>
-          ))}
-        </div>
-      </div>
       {range && (
         <p className="text-xs text-muted-foreground">
           统计区间:{formatDateTime(range.from)} 至 {formatDateTime(range.to)}
@@ -176,6 +187,6 @@ export default function Usage() {
         loading={!loaded}
         skeletonRows={3}
       />
-    </div>
+    </>
   );
 }

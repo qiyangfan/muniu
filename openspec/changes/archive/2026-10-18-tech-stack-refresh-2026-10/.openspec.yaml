@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-18
+# 纯工程底座变更(依赖版本/工具链/CI),零外部可观测行为变化,不产生能力规格 delta
+skip_specs: true

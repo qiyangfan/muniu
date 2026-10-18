@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/solvela/muniu/internal/store"
 )
 
@@ -62,11 +62,7 @@ func (s *AdminService) Create(username, password string) (store.AdminUser, error
 	if err != nil {
 		return store.AdminUser{}, store.MarkBusiness(err)
 	}
-	id, err := uuid.NewV7()
-	if err != nil {
-		return store.AdminUser{}, err
-	}
-	u := store.AdminUser{ID: id.String(), Username: username, PasswordHash: hash, Status: "active", CreatedAt: s.now().UTC().Format(time.RFC3339)}
+	u := store.AdminUser{ID: uuid.NewV7().String(), Username: username, PasswordHash: hash, Status: "active", CreatedAt: s.now().UTC().Format(time.RFC3339)}
 	if err := store.CreateAdminUser(s.db, u); err != nil {
 		return store.AdminUser{}, err
 	}

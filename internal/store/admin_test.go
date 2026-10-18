@@ -6,8 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // sqlDB 标准库连接别名(测试内直用)。
@@ -98,15 +97,15 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 
 	// 三行:普通成功 / 语义缓存命中 / estimated 行(不计成本)
 	rows := []UsageRow{
-		{ID: uuid.Must(uuid.NewV7()).String(), RequestID: "r1", TenantID: "t1", APIKeyID: "k1",
+		{ID: uuid.NewV7().String(), RequestID: "r1", TenantID: "t1", APIKeyID: "k1",
 			Provider: "deepseek", ModelAlias: "m1", UpstreamModel: "u", Status: "ok",
 			PromptTokens: 100, CompletionTokens: 50, CostCredits: 500, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
-		{ID: uuid.Must(uuid.NewV7()).String(), RequestID: "r2", TenantID: "t1", APIKeyID: "k1",
+		{ID: uuid.NewV7().String(), RequestID: "r2", TenantID: "t1", APIKeyID: "k1",
 			Provider: "semantic-cache", ModelAlias: "m1", UpstreamModel: "u", Status: "ok",
 			PromptTokens: 100, CompletionTokens: 50, CostCredits: 0, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
-		{ID: uuid.Must(uuid.NewV7()).String(), RequestID: "r3", TenantID: "t1", APIKeyID: "k2",
+		{ID: uuid.NewV7().String(), RequestID: "r3", TenantID: "t1", APIKeyID: "k2",
 			Provider: "deepseek", ModelAlias: "m2", UpstreamModel: "u", Status: "error",
 			PromptTokens: 10, CompletionTokens: 0, Estimated: true, CostCredits: 999, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},

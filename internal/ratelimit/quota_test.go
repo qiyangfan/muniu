@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/solvela/muniu/internal/store"
 )
@@ -26,7 +25,7 @@ func seedQuota(t *testing.T, tenantQuota int64) *Quota {
 	now := time.Now().UTC().Format(time.RFC3339)
 	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status, daily_quota_credits, created_at)
 		VALUES (?,?,?,?,?,?,?,?)`,
-		uuid.Must(uuid.NewV7()).String(), quotaTenant, "k", "hash-quota", "mk-quota", "active", 100, now); err != nil {
+		uuid.NewV7().String(), quotaTenant, "k", "hash-quota", "mk-quota", "active", 100, now); err != nil {
 		t.Fatal(err)
 	}
 	// 租户聚合闸(迁移 0002 加列)
@@ -102,7 +101,7 @@ func TestQuota_quota0不限(t *testing.T) {
 func insertUsage(t *testing.T, q *Quota, reqID, tenantID, keyID string, cost int64, at time.Time) {
 	t.Helper()
 	row := store.UsageRow{
-		ID: uuid.Must(uuid.NewV7()).String(), RequestID: reqID,
+		ID: uuid.NewV7().String(), RequestID: reqID,
 		TenantID: tenantID, APIKeyID: keyID,
 		Provider: "p", ModelAlias: "m", UpstreamModel: "u",
 		Status: "ok", CostCredits: cost, Currency: "CNY",

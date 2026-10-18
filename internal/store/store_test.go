@@ -7,8 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 func TestMigrate_幂等_重复打开不报错(t *testing.T) {
@@ -72,7 +71,7 @@ func TestGetAPIKeyByHash_查得与未查得(t *testing.T) {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err = db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status, rpm_limit, created_at, revoked_at)
 		VALUES (?,?,?,?,?,?,?,?,NULL)`,
-		uuid.Must(uuid.NewV7()).String(), "01900000-0000-7000-8000-000000000001",
+		uuid.NewV7().String(), "01900000-0000-7000-8000-000000000001",
 		"测试key", "deadbeef", "mk-abcdef12", "active", 120, now)
 	if err != nil {
 		t.Fatalf("插入测试 key: %v", err)

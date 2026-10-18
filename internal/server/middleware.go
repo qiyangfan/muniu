@@ -9,8 +9,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/protocol"
@@ -22,13 +21,10 @@ const RequestIDHeader = "X-Muniu-Request-Id"
 // RequestID 签发 UUIDv7(与 DB 主键同源),写 ctx + 回带响应头。
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id, err := uuid.NewV7()
-		if err != nil {
-			// v7 依赖单调时钟,失败概率极低;退化为 v4 保住链路可用性
-			id = uuid.New()
-		}
-		w.Header().Set(RequestIDHeader, id.String())
-		next.ServeHTTP(w, r.WithContext(logging.WithRequestID(r.Context(), id.String())))
+		// stdlib v7 保证排序单调(时钟回拨除外),不返回错误,无需退化路径
+		id := uuid.NewV7().String()
+		w.Header().Set(RequestIDHeader, id)
+		next.ServeHTTP(w, r.WithContext(logging.WithRequestID(r.Context(), id)))
 	})
 }
 

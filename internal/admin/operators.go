@@ -12,8 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/protocol"
@@ -329,12 +329,7 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 					}
 				}
 			}
-			id, idErr := uuid.NewV7()
-			if idErr != nil {
-				d.Logger.Error("审计 ID 生成失败", "error_detail", idErr.Error())
-				return
-			}
-			a := store.AdminAudit{ID: id.String(), RequestID: logging.RequestIDFrom(r.Context()), ActorKind: actor.Kind, ActorName: actor.Name, Action: action, TargetID: target, Outcome: outcome, Detail: detail, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
+			a := store.AdminAudit{ID: uuid.NewV7().String(), RequestID: logging.RequestIDFrom(r.Context()), ActorKind: actor.Kind, ActorName: actor.Name, Action: action, TargetID: target, Outcome: outcome, Detail: detail, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
 			if err := store.AppendAdminAudit(d.DB, a); err != nil {
 				d.Logger.Error("管理动作审计写入失败", "request_id", a.RequestID, "action", action, "error_detail", err.Error())
 			}

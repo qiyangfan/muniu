@@ -26,7 +26,8 @@ jobs:
           package_json_file: web/package.json
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          # 与 ci.yml 收敛同一 LTS 线(node 26 于 2026-10-28 转 LTS 后另行评估)
+          node-version: 24
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
       - name: build web dist

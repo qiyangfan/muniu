@@ -21,7 +21,7 @@ jobs:
         with:
           # 与 mise.toml 钉死的版本一致:latest 会随上游大版本漂移,门禁不可复现
           # (action 要求 v 前缀的完整版本号)
-          version: "v2.14"
+          version: "v2.15"
       # 覆盖率门禁与 make test 同式:race + atomic profile,聚合 total <65% 即红
       - name: go test (race) + coverage gate
         run: |

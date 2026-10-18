@@ -36,10 +36,11 @@ export default function ImagePricing() {
   const [tiers, setTiers] = useState("{}");
   const [busy, setBusy] = useState(false);
   const [remove, setRemove] = useState<string | null>(null);
-  const refresh = useCallback(() => {
+  // 纯取数:setState 全部落在 promise 回调(effect 首挂直呼不触发 set-state-in-effect;
+  // 初挂 loading=true 初始态已等价)
+  const fetchAll = useCallback(() => {
     const current = ++version.current;
-    setLoading(true);
-    api
+    return api
       .listImagePricing()
       .then((r) => {
         if (current !== version.current) return;
@@ -53,12 +54,16 @@ export default function ImagePricing() {
         if (current === version.current) setLoading(false);
       });
   }, []);
+  // 事件处理器路径:同步置加载态(effect 内禁同步 setState,事件回调不受限)
+  const refresh = useCallback(() => {
+    setLoading(true);
+    void fetchAll();
+  }, [fetchAll]);
   useEffect(() => {
-    refresh();
-    return () => {
-      version.current++;
-    };
-  }, [refresh]);
+    // 竞态由 fetchAll 的单调版本号 + 严格相等判定独立把守(版本号只增,旧响应必过期);
+    // cleanup 不再自增版本号:卸载后 setState 本身是 no-op,自增无可观测效果(评审循环 1 收敛)
+    void fetchAll();
+  }, [fetchAll]);
   const edit = (r?: ImagePricingEntry) => {
     setEditing(r?.alias ?? "");
     setCurrency(r?.currency ?? "CNY");

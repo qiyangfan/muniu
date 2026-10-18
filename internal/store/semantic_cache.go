@@ -6,8 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // CacheRow semantic_cache 行(读侧形态)。
@@ -48,7 +47,7 @@ func UpsertCacheRowNative(db *sql.DB, tenantID, fingerprint, modelAlias string, 
 		  native_response=excluded.native_response, native_proto=excluded.native_proto,
 		  native_form=excluded.native_form,
 		  hits=0, created_at=excluded.created_at, expires_at=excluded.expires_at`,
-		uuid.Must(uuid.NewV7()).String(), tenantID, fingerprint, modelAlias,
+		uuid.NewV7().String(), tenantID, fingerprint, modelAlias,
 		embedding, response, nativeResponse, nativeProto, nativeForm,
 		now.Format(time.RFC3339Nano),
 		now.Add(ttl).Format(time.RFC3339Nano))
