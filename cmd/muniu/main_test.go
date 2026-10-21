@@ -1,5 +1,5 @@
-// 装配层端到端测试:配置→存储→鉴权→限流→代理→fake 上游全链,验证
-// 流式/非流式透传、鉴权负面路径、usage_logs 计量落账(main 的 assemble 逻辑)。
+// 装配层端到端测试：配置→存储→鉴权→限流→代理→fake 上游全链，验证流式与非流式
+// 透传、鉴权负面路径与 usage_logs 计量落账，覆盖 main 的 assemble 逻辑。
 package main
 
 import (
@@ -29,8 +29,8 @@ const (
 	e2eJSONBody   = `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`
 )
 
-// newE2E 起一个 fake 上游 + 指向它的完整装配(含存储/鉴权/限流/计量),返回可请求的 server。
-// 返回明文 key(已签发入库)与断言用 db 打开函数。
+// newE2E 起一个 fake 上游与指向它的完整装配，含存储/鉴权/限流/计量，返回可请求的 server、
+// 已签发入库的明文 key 与断言用 db 打开函数。
 func newE2E(t *testing.T, events []testkit.Event, jsonStatus int, jsonBody string) (*httptest.Server, string, *sql.DB) {
 	t.Helper()
 	t.Setenv("E2E_FAKE_KEY", "sk-e2e")
@@ -77,7 +77,7 @@ pricing:
 		t.Fatalf("配置加载失败: %v", err)
 	}
 
-	// 先签发一把测试 key(装配会重新打开同一库)
+	// 先签发一把测试 key，装配会重新打开同一库。
 	seed, err := config.Load(cfgPath)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,6 @@ pricing:
 	return ts, plaintext, assertDB
 }
 
-// config0Open 按已加载配置打开存储(测试辅助)。
 func config0Open(cfg *config.Config) (*sql.DB, error) {
 	return store.Open(cfg.Storage.SQLite.Path)
 }
@@ -136,7 +135,7 @@ func TestE2E_流式_透传与计量落账(t *testing.T) {
 
 	rows := waitUsageLogs(t, adb, 1)
 	r := rows[0]
-	// testkit usage 帧:prompt 12 / completion 34;价目 2.00/8.00 → 24+272=29600 credit(价目 2.00/8.00 元/M)
+	// testkit usage 帧 prompt 12 / completion 34，价目 2.00/8.00 元/M → 24μ+272μ=296μ，即 296000 credit。
 	assertRow(t, r, map[string]any{
 		"stream": float64(1), "status": "ok",
 		"prompt_tokens": float64(12), "completion_tokens": float64(34),
@@ -161,7 +160,7 @@ func TestE2E_非流式_透传与计量落账(t *testing.T) {
 	}
 
 	rows := waitUsageLogs(t, adb, 1)
-	// JSONOKBody usage:prompt 7 / completion 9;→ 14+72=86μ
+	// JSONOKBody usage prompt 7 / completion 9 → 14μ+72μ=86μ。
 	assertRow(t, rows[0], map[string]any{
 		"stream": float64(0), "status": "ok",
 		"prompt_tokens": float64(7), "completion_tokens": float64(9),
@@ -203,7 +202,7 @@ func TestE2E_健康检查(t *testing.T) {
 	}
 }
 
-// waitUsageLogs 轮询等待计量落库(管道 500ms 批量窗口,异步落库)。
+// waitUsageLogs 轮询等待计量落库，管道 500ms 批量窗口异步落账。
 func waitUsageLogs(t *testing.T, db *sql.DB, want int) []map[string]any {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -220,7 +219,6 @@ func waitUsageLogs(t *testing.T, db *sql.DB, want int) []map[string]any {
 	}
 }
 
-// queryUsageLogs 读全表计量行。
 func queryUsageLogs(t *testing.T, db *sql.DB, rows *[]map[string]any) {
 	t.Helper()
 	q := `SELECT stream AS stream, status AS status,
@@ -255,7 +253,7 @@ func queryUsageLogs(t *testing.T, db *sql.DB, rows *[]map[string]any) {
 	}
 }
 
-// assertRow 校验计量行字段(sqlite 数值经 database/sql 出来是 int64/string,统一转 float 比对)。
+// assertRow 校验计量行字段；sqlite 数值经 database/sql 出来是 int64/string，统一转 float 比对。
 func assertRow(t *testing.T, row map[string]any, want map[string]any) {
 	t.Helper()
 	for k, w := range want {
@@ -288,8 +286,8 @@ func toFloat(v any) (float64, bool) {
 	}
 }
 
-// TestE2E_语义缓存命中实录(闸门判据):同义两问(空白抖动)第二问命中
-// provider=semantic-cache 且 cost 0。准入依赖显式 temperature=0。
+// TestE2E_语义缓存命中实录：空白抖动的同义两问第二问命中 provider=semantic-cache 且 cost 0，
+// 准入依赖显式 temperature=0。
 func TestE2E_语义缓存命中实录(t *testing.T) {
 	t.Setenv("E2E_FAKE_KEY", "sk-e2e")
 	const embBody = `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.8,0.6]}],"model":"up-emb","usage":{"prompt_tokens":5,"total_tokens":5}}`
@@ -342,7 +340,7 @@ pricing:
 		t.Fatal(err)
 	}
 
-	// 种子 key + 打开 default 租户语义缓存开关
+	// 种子 key + 打开 default 租户语义缓存开关。
 	kdb, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -376,18 +374,18 @@ pricing:
 		return resp.StatusCode, string(b)
 	}
 
-	// 第一问:未命中 → 上游
+	// 第一问：未命中 → 上游。
 	code1, body1 := post("法国的首都是哪里")
 	if code1 != 200 || body1 != testkit.JSONOKBody {
 		t.Fatalf("第一问应上游返回: %d %s", code1, body1)
 	}
-	// 第二问:空白抖动的同义问 → 命中
+	// 第二问：空白抖动的同义问 → 命中。
 	code2, body2 := post("法国的 首都是哪里")
 	if code2 != 200 || body2 != testkit.JSONOKBody {
 		t.Fatalf("第二问应命中回放: %d %s", code2, body2)
 	}
 
-	// 断言计量:第一行 openai 成本正常,第二行 provider=semantic-cache cost 0
+	// 断言计量：上游行成本正常，命中行 provider=semantic-cache 且 cost 0。
 	assertDB, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -421,8 +419,8 @@ pricing:
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	// 4 行 = [问1嵌入 emb-fake, 问1 chat-fake 86μ, 问2嵌入 emb-fake, 问2命中 semantic-cache 0μ]
-	// 嵌入调用走同链路计量(T4.3 契约)
+	// 4 行 = 问1嵌入 emb-fake、问1 chat-fake 86μ、问2嵌入 emb-fake、问2命中 semantic-cache 0μ；
+	// 嵌入调用也经过计量中间件。
 	if len(rows) != 4 {
 		t.Fatalf("应 4 行计量(2 嵌入 + 1 上游 + 1 命中),实际 %d: %+v", len(rows), rows)
 	}

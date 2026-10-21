@@ -1,7 +1,7 @@
-// 自校验平台 key(ADR-0006):HMAC 签名载体,网关离线验真,不查任何库。
-// 形态:mk2-<base64url(payload)>.<base64url(tag128)>;
+// 自校验平台 key：HMAC 签名载体，网关离线验真，不查任何库。
+// 形态为 mk2-<base64url(payload)>.<base64url(tag128)>，
 // payload = "pkey.v1|<tenant_id>|<key_id>|<expires_unix>|<rpm>|<tpm>|<daily_quota_credits>"。
-// 限额随载体下发(签发时定,换发生效)——控制面失联时鉴权与限额仍可用;吊销经版本化名单同步收敛。
+// 限额随载体下发，签发时定、换发生效，控制面失联时鉴权与限额仍可用；吊销经版本化名单同步收敛。
 package auth
 
 import (
@@ -15,19 +15,19 @@ import (
 	"time"
 )
 
-// PlatformKeyPrefix 平台 key 前缀(与查库 key 的 mk- 并存路由)。
+// PlatformKeyPrefix 平台 key 前缀，与查库 key 的 mk- 并存路由。
 const PlatformKeyPrefix = "mk2-"
 
-// platformPayloadVersion 载体版本(格式演进时递增并拒绝旧版本)。
+// platformPayloadVersion 载体版本，格式演进时递增并拒绝旧版本。
 const platformPayloadVersion = "pkey.v1"
 
-// platformTagBytes HMAC 截断长度(128bit,防碰撞充分)。
+// platformTagBytes HMAC 截断长度 128bit，防碰撞充分。
 const platformTagBytes = 16
 
-// ErrPlatformKey 平台 key 无效(篡改/过期/格式/未知密钥),对外统一归 401。
+// ErrPlatformKey 平台 key 无效，篡改、过期、格式非法或未知密钥，对外统一归 401。
 var ErrPlatformKey = errors.New("auth: 平台 key 无效")
 
-// PlatformClaims 平台 key 载体字段(限额签发时定,换发生效——ADR-0006 已知取舍)。
+// PlatformClaims 平台 key 载体字段，限额签发时定、换发生效。
 type PlatformClaims struct {
 	TenantID          string
 	KeyID             string
@@ -37,7 +37,7 @@ type PlatformClaims struct {
 	DailyQuotaCredits int64
 }
 
-// FormatPlatformKey 签发平台 key(控制面产品同构实现;此处供测试与未来本地签发)。
+// FormatPlatformKey 签发平台 key，控制面产品有同构实现，此处供测试与未来本地签发。
 func FormatPlatformKey(c PlatformClaims, secret []byte) (string, error) {
 	if c.TenantID == "" || c.KeyID == "" || c.ExpiresUnix <= 0 {
 		return "", fmt.Errorf("auth: 平台 key 载体字段不完整")
@@ -59,7 +59,7 @@ func FormatPlatformKey(c PlatformClaims, secret []byte) (string, error) {
 		"." + base64.RawURLEncoding.EncodeToString(tag), nil
 }
 
-// ParsePlatformKey 验真:任一密钥验通过即有效(密钥轮换);过期/篡改/格式非法一律 ErrPlatformKey。
+// ParsePlatformKey 验真：任一密钥验通过即有效，以支持密钥轮换；过期、篡改、格式非法一律 ErrPlatformKey。
 func ParsePlatformKey(key string, secrets [][]byte, now time.Time) (*PlatformClaims, error) {
 	bad := func(err error) (*PlatformClaims, error) { return nil, fmt.Errorf("%w: %v", ErrPlatformKey, err) }
 	if !strings.HasPrefix(key, PlatformKeyPrefix) || len(secrets) == 0 {
@@ -100,7 +100,7 @@ func ParsePlatformKey(key string, secrets [][]byte, now time.Time) (*PlatformCla
 	return claims, nil
 }
 
-// platformPayload 载体序列化(| 分隔;字段值不得含 |,由签发方校验)。
+// platformPayload 载体序列化，以 | 分隔；字段值不得含 |，由签发方校验。
 func platformPayload(c PlatformClaims) string {
 	return strings.Join([]string{
 		platformPayloadVersion, c.TenantID, c.KeyID,

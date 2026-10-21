@@ -1,5 +1,4 @@
-// 模型能力目录(ADR-0010)配置契约测试:合法解析、非法声明加载期一次列全。
-// 测试先行域:先红后绿。
+// 模型能力目录配置测试：合法解析、非法声明加载期一次列全。
 package config
 
 import (
@@ -7,7 +6,7 @@ import (
 	"testing"
 )
 
-// capabilityYAML 合法样例(基于 minimalYAML 同款 provider)。
+// capabilityYAML 合法样例，provider 与 minimalYAML 同款。
 const capabilityYAML = `
 providers:
   - name: a
@@ -88,7 +87,7 @@ strict_governance: true
 	}
 	for _, want := range []string{
 		"ghost",      // 引用不存在的 provider
-		"m2",         // 负数上限 / 空 drop 参数(同条目)
+		"m2",         // 负数上限与空 drop 参数同条目
 		"-5",         // 负数上限
 		"重名",         // (a, m1) 重复声明
 		"缺 model",    // 条目缺 model

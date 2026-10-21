@@ -1,4 +1,4 @@
-// 用量明细:维度筛选 + 时间范围 + 聚合表。
+// 用量明细按维度和时间范围聚合。
 import { useEffect, useState } from "react";
 import { api, type UsagePoint } from "../lib/api";
 import { Button } from "../components/ui/button";
@@ -10,14 +10,14 @@ import { fmtCredits } from "../lib/utils";
 const DIMS = ["day", "key", "model", "provider"] as const;
 type Dim = (typeof DIMS)[number];
 
-// 英文参数值是后端契约,仅显示层做中文映射
+// API 使用英文维度值；页面只翻译显示文案。
 const DIM_LABELS: Record<Dim, string> = {
   day: "按日",
   key: "按密钥",
   model: "按模型",
   provider: "按供应商",
 };
-// 首列列头随维度变化,比统一「维度」更可读
+// 首列标题随统计维度变化。
 const DIM_COL: Record<Dim, string> = {
   day: "日期",
   key: "密钥",
@@ -34,7 +34,6 @@ export default function Usage() {
 
   return (
     <div className="space-y-4">
-      {/* 筛选分组:移动端两行各占一档、按钮等宽(分段控件手感),sm+ 恢复同行左组+右组 */}
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <div className="flex gap-1.5" role="group" aria-label="统计维度">
           {DIMS.map((d) => (
@@ -68,15 +67,12 @@ export default function Usage() {
           ))}
         </div>
       </div>
-      {/* key 重置模式(react.dev「reset state with a key」):切换维度/范围即重挂载报表,
-          loaded/range/keyNames 回初始态出骨架屏——原实现靠 effect 首行同步 setState 重置,
-          与 react-hooks/set-state-in-effect 冲突;重挂载后报表查询参恒定,无需过期响应丢弃以外的机制 */}
+      {/* 筛选变化时重挂载报表，重置加载态和数据。 */}
       <UsageReport key={`${dim}-${days}`} dim={dim} days={days} />
     </div>
   );
 }
 
-// 报表体:key 化子组件,dim/days 变化即整体重挂载,effect 内仅异步 setState。
 function UsageReport({ dim, days }: { dim: Dim; days: RangeDays }) {
   const [points, setPoints] = useState<UsagePoint[]>([]);
   const [keyNames, setKeyNames] = useState<Map<string, string>>(new Map());
@@ -85,8 +81,7 @@ function UsageReport({ dim, days }: { dim: Dim; days: RangeDays }) {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    // 401/网络错误必须可见:静默吞掉会渲染成「空报表」,与真实零用量无法区分。
-    // 卸载后迟到响应经 cleanup cancelled 丢弃,防旧数据配新表头
+    // 显示查询错误，避免与零用量混淆；丢弃卸载后返回的旧请求。
     let cancelled = false;
     const to = new Date();
     const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
@@ -105,8 +100,7 @@ function UsageReport({ dim, days }: { dim: Dim; days: RangeDays }) {
         setErr(e.message);
         setLoaded(true);
       });
-    // 按密钥维度时 dim 是内部 api_key_id,并行拉密钥清单建 id→前缀映射给人话显示;
-    // 映射失败回退显示原始 ID,不阻塞报表
+    // 密钥维度使用 ID 查询；补充拉取前缀用于显示，失败时回退到 ID。
     if (dim === "key") {
       api
         .listKeys()
@@ -123,14 +117,13 @@ function UsageReport({ dim, days }: { dim: Dim; days: RangeDays }) {
     };
   }, [dim, days]);
 
-  // 密钥维度值 → 「前缀…」;已吊销等映射缺失时回退完整 ID(单元格 title 亦标完整值)
+  // 密钥维度显示对应前缀；找不到时回退到完整 ID。
   const dimText = (v: string | undefined) => {
     if (dim !== "key" || !v) return v ?? "—";
     const prefix = keyNames.get(v);
     return prefix ? `${prefix}…` : v;
   };
 
-  // 列定义单源:桌面表格与移动卡片共用
   const columns: DataCol<UsagePoint>[] = [
     {
       key: "dim",

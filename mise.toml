@@ -1,7 +1,6 @@
-# 工具链统一由 mise 管理;`mise install` 即可复现本地开发环境。
-# CI 不走 mise(actions/setup-go + golangci-lint-action),版本语义与此处保持一致。
+# 本地工具链版本由 mise 管理；运行 `mise install` 安装。
 [tools]
 go = "1.27"
 "aqua:golangci/golangci-lint" = "2.15"
-# 控制台工具链:版本经 web/package.json packageManager 双钉(mise 供本地,action-setup 供 CI)
+# pnpm 版本也须与 web/package.json 的 packageManager 字段一致。
 pnpm = "12.14"

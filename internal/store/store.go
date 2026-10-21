@@ -1,6 +1,6 @@
-// Package store 承载 SQLite 存取:打开(pragma)、embed 迁移执行与 repo 方法。
-// 铁则(architecture「包结构」):store 只被 metering/auth/tenant 消费,依赖方向只出不进;
-// 已应用的迁移文件禁改,修 schema 只追加新文件(data-and-config「迁移机制」)。
+// Package store 承载 SQLite 存取：打开(pragma)、embed 迁移执行与 repo 方法。
+// store 只被 metering/auth/tenant 消费，依赖方向只出不进；
+// 已应用的迁移文件禁改，修 schema 只追加新文件。
 package store
 
 import (
@@ -16,14 +16,14 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite" // 纯 Go SQLite 驱动(CGO_ENABLED=0 可用)
+	_ "modernc.org/sqlite" // 纯 Go SQLite 驱动，CGO_ENABLED=0 可用。
 )
 
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
-// Open 打开(必要时创建)SQLite 库并执行未应用迁移。
-// pragma 随 DSN 传入:WAL + busy_timeout 5s + foreign_keys(data-and-config「迁移机制」)。
+// Open 打开必要时创建的 SQLite 库并执行未应用迁移。
+// pragma 随 DSN 传入：WAL、busy_timeout 5s、foreign_keys。
 func Open(path string) (*sql.DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -35,7 +35,7 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: 打开数据库: %w", err)
 	}
-	// 单文件库:连接复用同一句柄,规避多连接写锁竞争;读并发由 WAL 承担
+	// 单文件库：连接复用同一句柄，规避多连接写锁竞争；读并发由 WAL 承担。
 	db.SetMaxOpenConns(1)
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
@@ -48,16 +48,16 @@ func Open(path string) (*sql.DB, error) {
 	return db, nil
 }
 
-// migrate 顺序执行未应用的迁移:单事务一文件,失败整体回滚并中止启动。
-// 幂等:schema_migrations 已记录的版本跳过,重复打开/并发打开安全。
-// 注意:账表由 0001 迁移按契约 DDL 创建(禁在此预建,否则与逐字 DDL 冲突),
+// migrate 顺序执行未应用的迁移：单事务一文件，失败整体回滚并中止启动。
+// 幂等：schema_migrations 已记录的版本跳过，重复打开与并发打开安全。
+// 注意：账表由 0001 迁移的 DDL 逐字创建，禁在此预建，否则与迁移冲突；
 // 执行器经 sqlite_master 探测其存在性。
 func migrate(db *sql.DB) error {
 	entries, err := fs.Glob(migrationsFS, "migrations/*.sql")
 	if err != nil {
 		return fmt.Errorf("store: 读取迁移清单: %w", err)
 	}
-	sort.Strings(entries) // 文件名 0001_init.sql 顺序编号,字典序即应用序
+	sort.Strings(entries) // 文件名 0001_init.sql 顺序编号，字典序即应用序。
 
 	applied := map[int64]bool{}
 	var accountExists int
@@ -115,7 +115,7 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
-// versionOf 从文件名取版本号(0001_init.sql → 1);命名不合法即拒绝启动。
+// versionOf 从文件名取版本号(0001_init.sql → 1)；命名不合法即拒绝启动。
 func versionOf(name string) (int64, error) {
 	base := strings.TrimPrefix(filepath.Base(name), "migrations/")
 	digits := base
@@ -140,11 +140,11 @@ func versionOf(name string) (int64, error) {
 
 // ---- repo ----
 
-// APIKey api_keys 行的读侧形态(鉴权消费)。TenantStatus 来自 JOIN tenants,
-// 供鉴权层一并判定租户禁用(管控面冻结租户必须对数据面生效)。
-// ExpiresAt 可空(NULL = 永不过期,迁移 0006);过期判定由鉴权层以当前时钟执行。
-// DisabledAt 可空(NULL = 启用,迁移 0009);可逆停用,吊销仍是唯一终态。
-// MaxRequestCostCredits 单请求成本上界(迁移 0010;0=不限)。
+// APIKey api_keys 行的读侧形态，鉴权消费。TenantStatus 来自 JOIN tenants，
+// 供鉴权层一并判定租户禁用；管控面冻结租户必须对数据面生效。
+// ExpiresAt 可空，NULL 表示永不过期，见迁移 0006；过期判定由鉴权层以当前时钟执行。
+// DisabledAt 可空，NULL 表示启用，见迁移 0009；可逆停用，吊销仍是唯一终态。
+// MaxRequestCostCredits 单请求成本上界，见迁移 0010，0 表示不限。
 type APIKey struct {
 	ID                    string
 	TenantID              string
@@ -160,11 +160,11 @@ type APIKey struct {
 	ExpiresAt             *time.Time
 	DisabledAt            *time.Time
 	MaxRequestCostCredits int64
-	AllowedModels         []string // 模型别名白名单(迁移 0013;nil/空 = 不限)
+	AllowedModels         []string // 模型别名白名单，见迁移 0013；nil/空 表示不限。
 }
 
-// ParseAllowlist 白名单列 JSON 解析(单源,签发/查询/更新三侧共用):nil/空串 = 不限;
-// 非法 JSON 按错误返回——宁可拒绝该 key,不放行语义不明的凭据(expires_at 损坏同款纪律)。
+// ParseAllowlist 白名单列 JSON 解析，签发/查询/更新三侧共用：nil/空串 = 不限；
+// 非法 JSON 按错误返回，宁可拒绝该 key，不放行语义不明的凭据；expires_at 损坏同此纪律。
 func ParseAllowlist(raw sql.NullString) ([]string, error) {
 	if !raw.Valid || raw.String == "" {
 		return nil, nil
@@ -179,22 +179,22 @@ func ParseAllowlist(raw sql.NullString) ([]string, error) {
 	return out, nil
 }
 
-// MarshalAllowlist 白名单列落库形态:空切片归一为 NULL(与「不限」等价,免双态漂移)。
+// MarshalAllowlist 白名单列落库形态：空切片归一为 NULL，与不限等价，免双态漂移。
 func MarshalAllowlist(allowed []string) any {
 	if len(allowed) == 0 {
 		return nil
 	}
 	b, err := json.Marshal(allowed)
-	if err != nil { // []string 序列化不可失败;防御性兜底按 NULL(不限)处理
+	if err != nil { // []string 序列化不可失败；防御性兜底按 NULL 处理，即不限。
 		return nil
 	}
 	return string(b)
 }
 
-// ErrNotFound 查无此行(哨兵,调用方 errors.Is 判定)。
+// ErrNotFound 查无此行的哨兵错误，调用方以 errors.Is 判定。
 var ErrNotFound = errors.New("store: 未找到")
 
-// TenantIDByName 按租户名取 id(签发与管理命令解析 --tenant 用)。
+// TenantIDByName 按租户名取 id，签发与管理命令解析 --tenant 用。
 func TenantIDByName(db *sql.DB, name string) (string, error) {
 	var id string
 	err := db.QueryRow(`SELECT id FROM tenants WHERE name = ?`, name).Scan(&id)
@@ -207,8 +207,8 @@ func TenantIDByName(db *sql.DB, name string) (string, error) {
 	return id, nil
 }
 
-// GetAPIKeyByHash 按 sha256 hex 查 key;吊销行也返回,启用与否由调用方按 Status/TenantStatus 判定。
-// expires_at 列损坏(非 RFC3339)按查询错误返回——宁可拒绝该 key,不放行时间语义不明的凭据。
+// GetAPIKeyByHash 按 sha256 hex 查 key；吊销行也返回，启用与否由调用方按 Status/TenantStatus 判定。
+// expires_at 列损坏即非 RFC3339 时按查询错误返回，宁可拒绝该 key，不放行时间语义不明的凭据。
 func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
 	row := db.QueryRow(`SELECT k.id, k.tenant_id, k.name, k.key_hash, k.prefix, k.status,
 		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at, k.disabled_at,
@@ -248,9 +248,9 @@ func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
 	return &k, nil
 }
 
-// UsageRow usage_logs 单行(计量落库消费;字段与 DDL 一一对应)。
+// UsageRow usage_logs 单行，计量落库消费，字段与 DDL 一一对应。
 type UsageRow struct {
-	ID                  string // UUIDv7 主键,重复投递由 INSERT OR IGNORE 兜底幂等
+	ID                  string // UUIDv7 主键，重复投递由 INSERT OR IGNORE 兜底幂等
 	RequestID           string
 	TenantID            string
 	APIKeyID            string
@@ -267,12 +267,12 @@ type UsageRow struct {
 	Estimated           bool
 	CostCredits         int64
 	Currency            string
-	LatencyFirstTokenMs *int64 // 可空(未过首 token 的失败请求)
+	LatencyFirstTokenMs *int64 // 可空，未过首 token 的失败请求。
 	LatencyTotalMs      int64
 	CreatedAt           time.Time // UTC 序列化为 RFC3339
 }
 
-// InsertUsageBatch 单事务批量落库;重复主键忽略(背压重投/幂等兜底,metering 契约)。
+// InsertUsageBatch 单事务批量落库；重复主键忽略，作为背压重投的幂等兜底。
 func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -319,9 +319,10 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 	return nil
 }
 
-// SumCostToday 当日已耗成本(credit)聚合,配额判定读侧:
-// 仅计 estimated=0 行(metering 对账口径);dayStartUTC 为当日零点(RFC3339 字符串序比较成立)。
-// tenantID/apiKeyID 传空串则该维度不过滤(Phase 3 租户聚合复用)。
+// SumCostToday 当日已耗成本(credit)聚合，配额判定读侧。
+// 仅计 estimated=0 行，与 metering 对账口径一致；dayStartUTC 为当日零点，
+// RFC3339 字符串序比较成立。
+// tenantID 或 apiKeyID 为空时不按该维度过滤。
 func SumCostToday(db *sql.DB, tenantID, apiKeyID, dayStartUTC string) (int64, error) {
 	q := `SELECT COALESCE(SUM(cost_credits),0) FROM usage_logs
 		WHERE estimated = 0 AND created_at >= ?`
@@ -341,7 +342,7 @@ func SumCostToday(db *sql.DB, tenantID, apiKeyID, dayStartUTC string) (int64, er
 	return total, nil
 }
 
-// nullIfEmpty 空串转 NULL(error_class 等可空 TEXT 列)。
+// nullIfEmpty 空串转 NULL，用于 error_class 等可空 TEXT 列。
 func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil

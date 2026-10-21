@@ -1,4 +1,4 @@
-// keys 子命令测试:create→list→revoke 全链(临时库),含明文一次性展示与吊销幂等语义。
+// keys 子命令测试覆盖创建、查询和吊销；明文只展示一次，重复吊销保持幂等。
 package main
 
 import (
@@ -44,7 +44,7 @@ func TestKeysCLI_create_list_revoke全链(t *testing.T) {
 	cfg := testConfig(t)
 
 	var out, errOut bytes.Buffer
-	// create:缺 name 报错
+	// create：缺 name 报错。
 	if code := keysMain(cfg, []string{"create"}, &out, &errOut); code != 2 {
 		t.Fatalf("缺 --name 应退出码 2,实际 %d", code)
 	}
@@ -61,7 +61,7 @@ func TestKeysCLI_create_list_revoke全链(t *testing.T) {
 		t.Fatalf("create 必须在 stderr 警示明文仅此一次: %s", errOut.String())
 	}
 
-	// list:能看到刚建的 key
+	// list：能看到刚建的 key。
 	out.Reset()
 	if code := keysMain(cfg, []string{"list"}, &out, &errOut); code != 0 {
 		t.Fatalf("list 失败: %d", code)
@@ -70,7 +70,7 @@ func TestKeysCLI_create_list_revoke全链(t *testing.T) {
 		t.Fatalf("list 未含新 key: %s", out.String())
 	}
 
-	// revoke:成功后再 revoke 同 prefix 返回 1(无 active 行)
+	// revoke：成功后重复 revoke 同 prefix 返回 1，此时已无 active 行。
 	out.Reset()
 	if code := keysMain(cfg, []string{"revoke", prefix}, &out, &errOut); code != 0 {
 		t.Fatalf("revoke 失败: %d %s", code, errOut.String())
@@ -101,7 +101,7 @@ func lineOf(s, field string) string {
 	return ""
 }
 
-// --allowed-models 签发与列表回显(key-model-allowlist);空白条目整单拒绝非零退出。
+// --allowed-models 签发与列表回显；空白条目整单拒绝并以非零退出。
 func TestKeysCLI_allowedModels签发与回显(t *testing.T) {
 	cfg := testConfig(t)
 
@@ -128,7 +128,7 @@ func TestKeysCLI_allowedModels签发与回显(t *testing.T) {
 	}
 }
 
-// 列表截断 rune 边界安全:多字节别名不产生非法 UTF-8 乱码,截断列以省略号收尾。
+// 列表截断 rune 边界安全：多字节别名不产生非法 UTF-8 乱码，截断列以省略号收尾。
 func TestKeysCLI_列表截断rune安全(t *testing.T) {
 	cfg := testConfig(t)
 

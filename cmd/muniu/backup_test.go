@@ -9,7 +9,7 @@ import (
 	"github.com/solvela/muniu/internal/config"
 )
 
-// TestDefaultBackupDirShape:缺省目录形态 <data>/backups/muniu-backup-<UTC>。
+// TestDefaultBackupDirShape 缺省目录形态 <data>/backups/muniu-backup-<UTC>。
 func TestDefaultBackupDirShape(t *testing.T) {
 	got := defaultBackupDir("/var/lib/muniu/data/muniu.db",
 		time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC))
@@ -19,7 +19,7 @@ func TestDefaultBackupDirShape(t *testing.T) {
 	}
 }
 
-// TestBackupSubArgs:子命令判定(容忍 -c 前置;位置参数非 backup 即否)。
+// TestBackupSubArgs 子命令判定，容忍 -c 前置；首个位置参数非 backup/restore 即否。
 func TestBackupSubArgs(t *testing.T) {
 	cases := []struct {
 		args []string
@@ -40,7 +40,7 @@ func TestBackupSubArgs(t *testing.T) {
 	}
 }
 
-// TestBackupMainUsage:无参与未知子命令均返 2(用法错误)。
+// TestBackupMainUsage 无参与未知子命令均返回退出码 2，表示用法错误。
 func TestBackupMainUsage(t *testing.T) {
 	var out, errOut strings.Builder
 	if code := backupMain(nil, nil, &out, &errOut); code != 2 {
@@ -54,13 +54,12 @@ func TestBackupMainUsage(t *testing.T) {
 	}
 }
 
-// TestRestoreCmdMixedOrder:位置参数与 --force/--target 任意混排都被接受
-// (flag 包遇位置参数即停的坑;分区逻辑回归钉子)。
+// TestRestoreCmdMixedOrder 验证位置参数与选项可以任意混排。
 func TestRestoreCmdMixedOrder(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "nonexistent-backup-dir")
 	cfg := &config.Config{}
-	// 混排 + 坏目录:参数解析须通过(失败只可能来自 restore 本体=目录不存在)
+	// 混排加坏目录：参数解析须通过，失败只可能来自 restore 本体的目录不存在。
 	var out, errOut strings.Builder
 	code := runRestoreCmd(cfg, []string{bad, "--target", filepath.Join(dir, "x.db"), "--force"},
 		&out, &errOut)
@@ -70,7 +69,7 @@ func TestRestoreCmdMixedOrder(t *testing.T) {
 	if !strings.Contains(errOut.String(), "manifest") {
 		t.Fatalf("应到达 restore 本体(缺 manifest),实际: %q", errOut.String())
 	}
-	// 两个位置参数仍须拒
+	// 两个位置参数仍须拒。
 	code = runRestoreCmd(cfg, []string{bad, "extra"}, &out, &errOut)
 	if code != 2 {
 		t.Fatalf("双位置参数 code = %d, want 2", code)

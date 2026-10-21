@@ -1,5 +1,4 @@
-// 模型发现 e2e 钉子(gateway-parity 2.2):配额耗尽的 key 仍可列模型(诊断链路不被
-// 成本闸阻断),而同一 key 的转发请求被 402 拒——证明模型链路确实在配额闸之外。
+// 验证配额耗尽的 key 仍可列出模型，但转发请求会被配额闸拒绝。
 package main
 
 import (
@@ -19,7 +18,7 @@ import (
 func TestE2E_配额耗尽仍可列模型(t *testing.T) {
 	ts, _, adb := newE2E(t, nil, 200, testkit.JSONOKBody)
 
-	// 签发日配额 50μ 的 key,并预插当日已耗成本 100μ(estimated=0,配额聚合口径)
+	// 签发日配额 50 credit 的 key，并预插当日已耗成本 100 credit，estimated=0 为配额聚合口径。
 	kdb := adb
 	plaintext, rec, err := auth.CreateKey(kdb, "default", "quota-pin", 60, auth.KeyOpts{DailyQuotaCredits: 50})
 	if err != nil {
@@ -47,11 +46,11 @@ func TestE2E_配额耗尽仍可列模型(t *testing.T) {
 		return resp.StatusCode, string(body)
 	}
 
-	// 同一 key:转发被 402(配额闸真实生效)
+	// 同一 key：转发被 402，配额闸真实生效。
 	if code, body := do(http.MethodPost, "/v1/chat/completions", plaintext); code != http.StatusPaymentRequired {
 		t.Fatalf("配额耗尽的转发应 402: %d %s", code, body)
 	}
-	// 列模型 200(诊断链路不被阻断)
+	// 列模型 200，确认诊断请求不被配额闸阻断。
 	code, body := do(http.MethodGet, "/v1/models", plaintext)
 	if code != http.StatusOK {
 		t.Fatalf("配额耗尽仍应可列模型: %d %s", code, body)
@@ -65,7 +64,7 @@ func TestE2E_配额耗尽仍可列模型(t *testing.T) {
 	if len(list.Data) != 1 || list.Data[0].ID != e2eAlias {
 		t.Fatalf("目录应含 %s: %v", e2eAlias, list.Data)
 	}
-	// 未鉴权 401(模型面鉴权同数据面)
+	// 未鉴权 401，模型面鉴权同数据面。
 	if code, _ := do(http.MethodGet, "/v1/models", "mk-invalid"); code != http.StatusUnauthorized {
 		t.Fatalf("未鉴权应 401: %d", code)
 	}

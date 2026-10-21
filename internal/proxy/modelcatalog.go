@@ -1,7 +1,5 @@
-// 模型发现(gateway-parity「model-discovery」):GET /v1/models 与 GET /v1/models/{model}。
-// 目录 = 拓扑快照 model_routes 别名键集——与转发严格同源(热替换同步可见,零漂移机制)。
-// 只读元数据面:零上游调用、零存储写路径、零计量、不接插件挂点;
-// 数据面鉴权在装配层负责,配额/限流刻意不挂(配额耗尽的客户端恰需列模型诊断)。
+// 模型目录提供 GET /v1/models 和单模型查询，别名来自当前拓扑快照。
+// 查询应用 key 白名单，不调用上游、不落库、不计量，也不受限流和配额拦截。
 package proxy
 
 import (
@@ -15,10 +13,10 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// ownedBy 目录归属标注:别名是多候选换道语义,标注单一 provider 归属即失真,恒为网关自身。
+// 别名可能路由到多个 provider，因此目录归属标记为网关自身。
 const ownedBy = "muniu"
 
-// modelEntry OpenAI /v1/models 条目形态;created = 快照加载时刻(进程内稳定,不承诺模型创建时间语义)。
+// modelEntry 是 OpenAI /v1/models 的条目形态；created 表示拓扑快照加载时间。
 type modelEntry struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
@@ -26,7 +24,7 @@ type modelEntry struct {
 	OwnedBy string `json:"owned_by"`
 }
 
-// ModelAliases 当前快照的别名目录(id 升序,输出确定)与快照加载时刻。
+// ModelAliases 返回按 ID 排序的当前模型别名和快照加载时间。
 func (p *Proxy) ModelAliases() ([]string, time.Time) {
 	s := p.topo.Load()
 	if s == nil {
@@ -40,11 +38,8 @@ func (p *Proxy) ModelAliases() ([]string, time.Time) {
 	return out, s.loadedAt
 }
 
-// HandlerModels 模型发现入口:路由注册为 GET /v1/models(列表)与 GET /v1/models/{model}(单查),
-// 同一 handler 以 PathValue 分流;未命中按别名(路由键)判定,不匹配上游模型名。
-// 列表 = 全局别名目录按请求 key 白名单过滤后的视图(无白名单 = 全量,现状等价);
-// 单查三分支:白名单内命中 200 / 在全局目录但白名单外 403 model_not_allowed(与转发同码)
-// / 不在全局目录 404(现状不变)。
+// HandlerModels 处理模型列表和单模型查询；单模型按路由别名查找。
+// 列表按请求 key 白名单过滤；单查对未配置别名返回 404，对白名单外别名返回 403。
 func (p *Proxy) HandlerModels() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		aliases, loadedAt := p.ModelAliases()
@@ -71,7 +66,7 @@ func (p *Proxy) HandlerModels() http.Handler {
 			writeModelsJSON(w, http.StatusOK, modelEntry{ID: id, Object: "model", Created: created, OwnedBy: ownedBy})
 			return
 		}
-		// 白名单过滤视图:交集保持 id 升序(全局目录本就升序,过滤保序)
+		// 白名单过滤视图：交集保持 id 升序，全局目录本就升序，过滤保序
 		view := aliases
 		if key != nil && len(key.AllowedModels) > 0 {
 			allowed := make(map[string]struct{}, len(key.AllowedModels))

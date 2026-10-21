@@ -1,32 +1,21 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
+# 可选：提供生成 OpenSpec 工件时使用的项目背景。
 #   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+#     技术栈、约定或领域信息
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
+# 可选：按工件类型定制规则。
 #   rules:
 #     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
+#       - 提案包含 Non-goals 部分
 #     tasks:
-#       - Break tasks into chunks of max 2 hours
+#       - 将任务拆分为可独立验收的步骤
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
+# 可选：为 apply 和 archive 操作提供指导。
 #   operations:
 #     apply:
 #       guidance:
-#         - Keep test summaries concise
+#         - 简要总结测试结果
 #     archive:
 #       guidance:
-#         - Summarize the archive outcome before finishing
+#         - 总结归档结果

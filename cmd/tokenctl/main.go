@@ -1,10 +1,10 @@
-// tokenctl 练手 CLI(Phase 0):复用 internal/metering 的计价换算,顺带预习 flag/标准库用法。
-// 子命令:
+// tokenctl 提供 token 成本换算和文本规模估算命令。
+// 子命令：
 //
-//	cost  —— 按「价目 × token 数」计算成本,各段与合计均以 credit(本币十亿分之一)整数运算后转人类可读;
-//	chars —— 统计 stdin 字节/字符/中文字符数,并给出粗估 token(非 BPE,仅供预算参考)。
+//	cost  —— 按输入/输出价格和 token 数计算成本；
+//	chars —— 统计 stdin 字符数并粗估 token，非 BPE。
 //
-// 金额展示一律由 credit 整数格式化,全程不经 float(conventions「金额整数」铁则)。
+// 成本使用 credit 整数计算，不经过浮点数。
 package main
 
 import (
@@ -47,7 +47,7 @@ func usage() {
 `)
 }
 
-// currencySymbol 常见币种的展示符号;未收录币种直接回显代码,避免臆造符号。
+// currencySymbol 返回常见币种的符号；未识别时返回币种代码。
 func currencySymbol(code string) string {
 	switch strings.ToUpper(code) {
 	case "CNY":
@@ -59,7 +59,7 @@ func currencySymbol(code string) string {
 	}
 }
 
-// formatCredits 与计费契约共用十亿分之一单位，不能再按旧 μ 单位放大金额。
+// formatCredits 将 credit 金额格式化为带九位小数的字符串。
 func formatCredits(credits int64) string {
 	return fmt.Sprintf("%d.%09d", credits/1_000_000_000, credits%1_000_000_000)
 }
@@ -84,7 +84,7 @@ func runCost(args []string) {
 		os.Exit(1)
 	}
 
-	// 分段展示复用 Cost 本身:把另一段 token 置 0 即得该段成本,保证口径与合计完全一致
+	// 分段展示复用 Cost，保证与合计采用相同的计价口径。
 	inCost := metering.Cost(*inTokens, 0, inMicroPerM, outMicroPerM)
 	outCost := metering.Cost(0, *outTokens, inMicroPerM, outMicroPerM)
 	total := metering.Cost(*inTokens, *outTokens, inMicroPerM, outMicroPerM)
@@ -100,8 +100,7 @@ func runCost(args []string) {
 	fmt.Printf("合计:   %d credit(%s%s)\n", total, sym, formatCredits(total))
 }
 
-// runChars 统计 stdin 文本规模并粗估 token。
-// 粗估口径(Phase 0 练手级,非 BPE):中文 ≈ 字符数×0.7,英文 ≈ 单词数×1.3;整数运算向上取整。
+// runChars 统计 stdin 文本规模，并按中文字符数和英文单词数粗估 token。
 func runChars(r io.Reader) {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -126,7 +125,7 @@ func runChars(r io.Reader) {
 		}
 	}
 	runes := utf8.RuneCount(data)
-	// ×0.7 / ×1.3 用整数放大后取整(×7/10、×13/10),不引入 float
+	// 用整数运算计算 0.7 和 1.3 倍的向上取整结果。
 	estimate := ceilDiv(int64(han)*7, 10) + ceilDiv(int64(words)*13, 10)
 
 	fmt.Printf("字节数:     %d\n", len(data))
@@ -136,7 +135,7 @@ func runChars(r io.Reader) {
 	fmt.Println("说明:     以上为粗估(中文≈字符数×0.7,英文≈单词数×1.3),非 BPE 精确计数,仅供预算参考。")
 }
 
-// ceilDiv 非负整数除法向上取整(与 metering 内部口径一致,CLI 侧不导出复用)。
+// ceilDiv 对非负整数除法向上取整。
 func ceilDiv(n, d int64) int64 {
 	q, rem := n/d, n%d
 	if rem > 0 {

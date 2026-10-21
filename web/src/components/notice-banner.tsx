@@ -3,8 +3,7 @@ import { AlertCircle } from "lucide-react";
 
 import { cn } from "../lib/utils";
 
-// 提示横幅(muniu 控制台特有件,三仓骨架词汇表中的 NoticeBanner,kongming/jinguan
-// 暂无消费方):warning 弱底提示条,与 ErrorAlert(role=alert,错误禁静默)语义分立。
+// 普通提示横幅；查询错误使用带 role=alert 的 ErrorAlert。
 function NoticeBanner({ className, children, ...props }: React.ComponentProps<"div">) {
   return (
     <div

@@ -1,13 +1,5 @@
-//! pii-masker:muniu 样例 WASM 插件(ABI v0,docs/design/plugin-abi.md)。
-//!
-//! 对入站请求载荷做正则 PII 脱敏:遍历 `messages[].content`(字符串或 content parts
-//! 数组的 `text` 段)与 embeddings 的 `input`(字符串或字符串数组),命中规则即替换为
-//! 占位符。规则经宿主 `get_config("rules")` 注入(JSON 数组
-//! `[{"pattern":..., "replacement":...}]`),未配置时用内置缺省规则(身份证/手机号/邮箱);
-//! 规则非法 → init Err → 注册即拒载(坏规则不允许静默降级)。
-//!
-//! ABI 导出、双 arena 代际回收、两段式配置读取等机制全部由 muniu-plugin-sdk 承接
-//! (本文件零 unsafe);构建:`plugins/build.sh`,产物 `pii_masker.wasm`。
+//! pii-masker 是 muniu 的 WASM 示例插件，用正则替换请求中的身份证号、手机号和邮箱。
+//! 规则可通过宿主配置提供；未配置时使用内置规则，非法规则会使插件初始化失败。
 
 use muniu_plugin_sdk as sdk;
 use regex::Regex;
@@ -19,11 +11,11 @@ struct RuleDef {
     replacement: String,
 }
 
-/// 编译后的规则集(init 产物,驻留 SDK 状态区,跨调用存活)。
+/// 初始化时编译的规则集。
 #[derive(Debug)]
 struct Rules(Vec<(Regex, String)>);
 
-// 宿主单测构建下 ABI 导出由 SDK 宏 cfg 出局,入口函数需 dead_code 豁免
+// 非 wasm 构建不生成 ABI 导出，入口函数仅由宏在 wasm 目标中引用。
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn init(config: &sdk::Config) -> Result<Rules, String> {
     let rules = match config.json::<Vec<RuleDef>>("rules")? {
@@ -36,7 +28,7 @@ fn init(config: &sdk::Config) -> Result<Rules, String> {
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn on_request_body(body: &[u8], rules: &Rules) -> sdk::Verdict {
-    // 非 JSON 理论不可达(宿主已在钩子前完成校验):保守放行
+    // 宿主已校验请求体；解析失败时保留原请求。
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return sdk::Verdict::Pass;
     };
@@ -57,20 +49,20 @@ muniu_plugin_sdk::plugin! {
     hook_request_body: on_request_body,
 }
 
-// ---- 脱敏逻辑(纯函数,宿主可单测) ----
+// ---- 脱敏逻辑 ----
 
 fn walk_value(v: &mut serde_json::Value, rules: &[(Regex, String)], modified: &mut bool) {
     match v {
         serde_json::Value::Object(map) => {
             for (k, val) in map.iter_mut() {
                 match k.as_str() {
-                    // chat:messages[].content 字符串,或 content parts 数组的 text 段(经 "text" 键)
+                    // chat 消息正文和 content part 的 text。
                     "content" | "text" => {
                         if let serde_json::Value::String(s) = val {
                             *modified |= mask_str(s, rules);
                         }
                     }
-                    // embeddings:input 字符串或字符串数组
+                    // embeddings 的 input。
                     "input" => match val {
                         serde_json::Value::String(s) => {
                             *modified |= mask_str(s, rules);
@@ -109,13 +101,8 @@ fn mask_str(s: &mut String, rules: &[(Regex, String)]) -> bool {
     changed
 }
 
-/// ASCII 词边界校验的替换引擎(2026-09-13 用户裁决的行为修复):
-/// 命中两侧不得紧邻 ASCII 字母数字——保住「不啃长串」的防截断性质(如手机号规则
-/// 不会咬进身份证数字串);CJK/标点/空白均视为边界——号码紧贴中文可命中。
-/// 不用 `\b` 锚点的原因:regex crate 的 `\b` 走 Unicode `\w` 语义,CJK 与数字同为
-/// 词字符,锚点方案在「电话139…」这类最高频中文形态上整体失明,且 crate 无
-/// lookaround 可补救;边界判定上收到引擎层是唯一同时满足两个性质的解。
-/// 占位符按字面拼接(等价恒久 NoExpand),永不做 $ 组引用展开。
+/// 只替换两侧不紧邻 ASCII 字母或数字的匹配项，中文字符可作为边界。
+/// 不使用 `\b`，因为正则引擎会将中文视为词字符；替换文本按字面量拼接。
 fn replace_bounded(text: &str, re: &Regex, repl: &str) -> Option<String> {
     let hits: Vec<_> = re
         .find_iter(text)
@@ -135,8 +122,7 @@ fn replace_bounded(text: &str, re: &Regex, repl: &str) -> Option<String> {
     Some(out)
 }
 
-/// 命中区间 [start, end) 两侧是否为 ASCII 词边界(串端或非 ASCII 字母数字)。
-/// 字节级检查安全:正则命中边界必为 UTF-8 字符边界,多字节续字节非 ASCII。
+/// 检查匹配区间两侧是否不是 ASCII 字母或数字。
 fn ascii_bounded(text: &str, start: usize, end: usize) -> bool {
     let b = text.as_bytes();
     let before = start == 0 || !b[start - 1].is_ascii_alphanumeric();
@@ -153,8 +139,7 @@ fn compile_rules(defs: Vec<RuleDef>) -> Result<Rules, String> {
     Ok(Rules(out))
 }
 
-/// 内置缺省规则:身份证 18 位 → 手机号 11 位 → 邮箱(先长后短,防短模式截断长串)。
-/// 模式不带 `\b`:词边界由引擎层 ascii_bounded 统一施加(见 mask_str 的裁决注释)。
+/// 返回内置的身份证号、手机号和邮箱规则，较长号码先匹配。
 fn default_rules() -> Vec<(Regex, String)> {
     let defs = [
         (
@@ -232,8 +217,7 @@ mod tests {
 
     #[test]
     fn mask_紧贴中文命中_修复unicode词边界缺陷() {
-        // 2026-09-13 用户裁决:\b 走 Unicode \w 语义致「电话139…」整体失明是缺陷,
-        // 引擎层 ASCII 词边界修复——紧贴中文必须命中(最高频中文形态)
+        // ASCII 词边界允许手机号紧贴中文命中。
         let mut s = String::from("证件11010119900307551X邮件a@b.com电话13912345678");
         assert!(mask_str(&mut s, &rules()));
         assert_eq!(s, "证件[ID]邮件[EMAIL]电话[PHONE]");
@@ -253,8 +237,8 @@ mod tests {
         assert!(!mask_str(&mut id_in_run, &rules()));
         assert_eq!(id_in_run, "911010119900307551X", "身份证前邻数字:拒绝截断");
 
-        // 行为变化记录:无边界自定义模式的「长 token 内部子串」命中由旧引擎的可命中
-        // 收敛为拒判;如确需子串语义,未来经配置显式加 boundary 开关(暂无消费者)
+        // 词边界同样约束自定义规则:长 token 内部的子串一律不命中;
+        // 如确需子串语义,应新增显式的 boundary 配置开关
         let custom = vec![(Regex::new(r"\d{4}").unwrap(), "[N]".to_string())];
         let mut s = String::from("ab1234cd");
         assert!(!mask_str(&mut s, &custom));

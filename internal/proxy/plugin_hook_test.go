@@ -1,6 +1,6 @@
-// 插件请求体钩子链路集成测试(任务 4.1,先红后绿):拒绝/改写/放行三态、
-// 改写产物非法拒绝、fail_open 放行、禁用态零开销基准探针。
-// fixture 复用 testkit 的手写 wat 字节装配器(与 internal/plugin 同源)。
+// 插件请求体钩子集成测试：拒绝/改写/放行三态、改写产物非法拒绝、
+// fail_open 放行、禁用态零开销基准探针。
+// fixture 复用 testkit 的手写 wat 字节装配器，与 internal/plugin 同源。
 package proxy
 
 import (
@@ -36,7 +36,7 @@ func newPluginTestProxy(t *testing.T, upstreamURL string, reg *plugin.Registry) 
 		Plugins: reg,
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	// 与生产装配同构:chat 与 embeddings 双端点(插件钩子两通道都有挂点)
+	// 与生产装配同构：chat 与 embeddings 双端点，插件钩子两通道都有挂点。
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/chat/completions", p.Handler())
 	mux.Handle("POST /v1/embeddings", p.HandlerEmbeddings())
@@ -45,7 +45,7 @@ func newPluginTestProxy(t *testing.T, upstreamURL string, reg *plugin.Registry) 
 	return ts
 }
 
-// manualRegistry 绕开 metrics 全局注册(Register 走 NewRegistry),测试内轻量构造。
+// manualRegistry 绕开 metrics 全局注册，Register 走 NewRegistry，测试内轻量构造。
 func manualRegistry(t *testing.T, name string, kind testkit.PluginFixtureKind, timeoutMs int64) *plugin.Registry {
 	t.Helper()
 	reg := plugin.NewRegistry()
@@ -61,7 +61,7 @@ func manualRegistry(t *testing.T, name string, kind testkit.PluginFixtureKind, t
 }
 
 func TestPluginHook_拒绝请求_不进上游(t *testing.T) {
-	up := testkit.StartJSONUpstream(t, 200, `{"id":"x"}`) // 上游若被请求则返回成功,便于反证
+	up := testkit.StartJSONUpstream(t, 200, `{"id":"x"}`) // 上游若被请求则返回成功，便于反证
 	reg := manualRegistry(t, "guard", testkit.FixtureReject, 200)
 	ts := newPluginTestProxy(t, up.URL(), reg)
 
@@ -89,7 +89,7 @@ func TestPluginHook_改写留痕_上游收到改写体(t *testing.T) {
 	if got := resp.Header.Get("X-Muniu-Plugin"); got != "masker" {
 		t.Fatalf("改写留痕头不符: %q", got)
 	}
-	// 出站体经 adapter.Prepare 规范化重建(messages 前置、model 换为上游模型别名)
+	// 出站体经 adapter.Prepare 规范化重建，messages 前置、model 换为上游模型别名。
 	const wantOut = `{"messages":[{"role":"user","content":"hi"}],"model":"upstream-a"}`
 	if got := string(up.LastBody()); got != wantOut {
 		t.Fatalf("上游应收到的改写后请求体不符:\n got=%q\nwant=%q", got, wantOut)
@@ -177,8 +177,8 @@ func TestPluginHook_fail_open_containment_放行(t *testing.T) {
 	}
 }
 
-// BenchmarkPluginHook_禁用态零开销探针:nil registry 与无插件代理逐项对照,
-// 断言禁用态不因插件设施引入任何额外分配(性能红线,proposal Impact)。
+// BenchmarkPluginHook_禁用态零开销探针：nil registry 与无插件代理逐项对照，
+// 断言禁用态不因插件设施引入任何额外分配。
 func BenchmarkPluginHook_禁用态零开销(b *testing.B) {
 	b.ReportAllocs()
 	up := testkit.StartJSONUpstream(b, 200, `{"id":"x","choices":[]}`)
@@ -209,8 +209,7 @@ func BenchmarkPluginHook_禁用态零开销(b *testing.B) {
 	}
 }
 
-// BenchmarkPluginHook_启用态对照:pass 插件启用形态(每请求一次 wasm 调用)。
-// 与禁用态探针同剧本,对照记录于 docs/benchmarks/。
+// BenchmarkPluginHook_启用态对照：pass 插件启用形态，每请求一次 wasm 调用，与禁用态探针同剧本。
 func BenchmarkPluginHook_启用态(b *testing.B) {
 	b.ReportAllocs()
 	up := testkit.StartJSONUpstream(b, 200, `{"id":"x","choices":[]}`)
@@ -251,7 +250,7 @@ func BenchmarkPluginHook_启用态(b *testing.B) {
 	}
 }
 
-// ---- embeddings 通道(与 chat 同链序,防回归缺口) ----
+// ---- embeddings 通道：与 chat 同链序，防回归缺口 ----
 
 const embedBody = `{"model":"alias-a","input":"hello"}`
 
@@ -300,8 +299,8 @@ func TestPluginHook_Embeddings_改写留痕(t *testing.T) {
 	}
 }
 
-// BenchmarkPluginHook_空注册表对照:生产恒建空 Registry 形态(对照 nil 禁用态),
-// 证实「禁用无可测量新增开销」对真实生产形态成立(spec 性能护栏)。
+// BenchmarkPluginHook_空注册表对照：生产恒建空 Registry 形态，对照 nil 禁用态，
+// 证实禁用无可测量新增开销对真实生产形态成立。
 func BenchmarkPluginHook_空注册表(b *testing.B) {
 	b.ReportAllocs()
 	up := testkit.StartJSONUpstream(b, 200, `{"id":"x","choices":[]}`)
@@ -316,7 +315,7 @@ func BenchmarkPluginHook_空注册表(b *testing.B) {
 		Pools: map[string]*keypool.Pool{
 			"fake": keypool.NewPool([]keypool.KeyInput{{ID: "K", Value: "sk-test", Weight: 1}}),
 		},
-		Plugins: plugin.NewRegistry(), // 生产形态:恒建但为空
+		Plugins: plugin.NewRegistry(), // 生产形态：恒建但为空
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	ts := httptest.NewServer(p.Handler())

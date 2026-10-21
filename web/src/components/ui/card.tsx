@@ -2,9 +2,7 @@ import * as React from "react";
 
 import { cn } from "../../lib/utils";
 
-// 本地标准件,API 对齐 kongming;配方逐类对齐 kongming/apps/web 同位文件。
-// 密度档原登记「muniu 刻意区分(rounded-xl + shadow-xs + p-4 + 卡题 text-base)」,
-// 2026-10-02 owner 裁决全面视觉收敛,自此三仓同配方:rounded-2xl + shadow-xl + p-6 + 卡题 text-lg。
+// 本地标准件，API 和默认配方对齐 kongming。
 function Card({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -25,10 +23,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-/* 多态标题元素(API 对齐 kongming change 2026-10-02-card-title-heading-semantics):卡片标题
-   MUST 以真实标题元素渲染(读屏大纲的卡片级),默认 h3 恒低于页面标题;认证入口等
-   「卡题即页内最高级」处传 as="h2"。as 只收标题三档:不收 h1(防页题层级漂移)、
-   不收 div(缺陷本体)。 */
+/* CardTitle 默认渲染 h3；仅允许 h2、h3、h4，以保持标题层级。 */
 function CardTitle({
   as: Component = "h3",
   className,
@@ -37,7 +32,6 @@ function CardTitle({
   return (
     <Component
       data-slot="card-title"
-      /* text-lg 为 shadcn 默认:页面标题(h2 text-lg/xl)层级必须 ≥ 卡片标题(宪法 Article 7) */
       className={cn("text-lg font-semibold leading-none tracking-tight", className)}
       {...props}
     />

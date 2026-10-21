@@ -1,12 +1,12 @@
-// 错误信封(conventions 对外契约,改格式=契约级):统一出站错误形态与 HTTP 状态映射。
+// 统一出站错误信封形态与 HTTP 状态映射。
 package protocol
 
-// 错误类型常量(信封 error.type 取值,conventions 表)。
+// 信封 error.type 的取值常量。
 const (
 	TypeBadRequest    = "bad_request"
 	TypeAuthFailed    = "auth_failed"
 	TypeQuotaExceeded = "quota_exceeded"
-	TypeForbidden     = "forbidden" // 访问拒绝(key 级模型白名单等治理语义;与 400 请求畸形可区分)
+	TypeForbidden     = "forbidden" // 访问拒绝，key 级模型白名单等治理语义，与 400 的请求畸形可区分
 	TypeRateLimited   = "rate_limited"
 	TypeNotFound      = "not_found"
 	TypeTimeout       = "timeout"
@@ -14,12 +14,12 @@ const (
 	TypeInternal      = "internal"
 )
 
-// ErrorEnvelope 对外错误信封:唯一合法形态,message 不得裸露顶层。
+// ErrorEnvelope 对外错误信封：唯一合法形态，message 不得裸露顶层。
 type ErrorEnvelope struct {
 	Error ErrorBody `json:"error"`
 }
 
-// ErrorBody 信封载荷:用户可读 message(中文优先)+ 机器码 code(snake_case)。
+// ErrorBody 信封载荷：用户可读 message 中文优先，机器码 code 为 snake_case。
 type ErrorBody struct {
 	Message   string `json:"message"`
 	Type      string `json:"type"`
@@ -27,7 +27,7 @@ type ErrorBody struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
-// NewErrorEnvelope 构造信封;type 取上方 Type* 常量。
+// NewErrorEnvelope 构造信封；type 取上方 Type* 常量。
 func NewErrorEnvelope(typ, code, message, requestID string) *ErrorEnvelope {
 	return &ErrorEnvelope{Error: ErrorBody{
 		Message:   message,
@@ -37,7 +37,7 @@ func NewErrorEnvelope(typ, code, message, requestID string) *ErrorEnvelope {
 	}}
 }
 
-// statusByType conventions 错误类型 → HTTP 状态映射表(契约,禁止散落硬编码)。
+// statusByType 错误类型到 HTTP 状态的映射表，禁止散落硬编码。
 var statusByType = map[string]int{
 	TypeBadRequest:    400,
 	TypeAuthFailed:    401,
@@ -50,7 +50,7 @@ var statusByType = map[string]int{
 	TypeInternal:      500,
 }
 
-// StatusForType 返回错误类型对应的 HTTP 状态;未知类型按 internal(500)兜底。
+// StatusForType 返回错误类型对应的 HTTP 状态；未知类型按 internal(500) 兜底。
 func StatusForType(typ string) int {
 	if s, ok := statusByType[typ]; ok {
 		return s

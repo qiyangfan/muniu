@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T5.4 SSE 压测执行器(oha):并发 100/500/1000/5000 四档。
+# 使用 oha 以四种并发度压测 SSE 转发。
 # 前置:make build && ./bin/muniu -c <压测配置> &;python3 scripts/bench/fake_upstream.py 59990 20 0.01 &
 # 产物:原始数字贴入 docs/benchmarks/<日期>.md
 set -euo pipefail

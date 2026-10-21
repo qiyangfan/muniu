@@ -1,5 +1,4 @@
-// TPM 滑动窗口契约测试(测试先行域):跨窗滑动、边界、tpm=0 不限、并发 -race。
-// 时间注入,完全确定。
+// TPM 滑动窗口测试：跨窗滑动、边界、tpm=0 不限、并发 -race；时间注入，完全确定。
 package ratelimit
 
 import (
@@ -12,11 +11,11 @@ func TestTPM_跨窗滑动(t *testing.T) {
 	w := NewTPM()
 	now := time.Unix(3_000_000, 0)
 	w.Record("k", 100, now)
-	// 窗口内:总量已达 100/100 → 拒
+	// 窗口内：总量已达 100/100 → 拒
 	if w.Allow("k", 100, now.Add(30*time.Second)) {
 		t.Fatal("窗口总量达上限应拒绝")
 	}
-	// 跨过 60s:t0 桶滑出窗口 → 恢复
+	// 跨过 60s：t0 桶滑出窗口 → 恢复
 	if !w.Allow("k", 100, now.Add(61*time.Second)) {
 		t.Fatal("t0 桶滑出后应放行")
 	}

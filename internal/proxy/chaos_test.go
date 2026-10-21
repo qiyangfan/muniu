@@ -1,8 +1,8 @@
 //go:build chaos
 
-// 故障演练(chaos,phase-3 T3.9,手动档 make chaos):
+// 故障演练需通过 make chaos 手动运行：
 // 剧本「provider A 全部 key 连续 429 → 冷却 → 降级 priority 1 的 B 成功 → A 冷却到期恢复被重新选中」。
-// 断言事件序列:usage 行序列 + key 池状态 + 降级期间的日志证据。
+// 断言事件序列：usage 行序列 + key 池状态 + 降级期间的日志证据。
 package proxy_test
 
 import (
@@ -35,7 +35,7 @@ func TestChaos_429冷却降级与恢复(t *testing.T) {
 		t.Skip("设置 MUNIU_CHAOS=1 以运行故障演练(make chaos)")
 	}
 
-	// 上游 A:恒 429,带 Retry-After: 1(短冷却便于演练)
+	// 上游 A：恒 429，带 Retry-After: 1，短冷却便于演练。
 	upA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", "1")
 		w.Header().Set("Content-Type", "application/json")
@@ -43,7 +43,7 @@ func TestChaos_429冷却降级与恢复(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"rate limited"}}`))
 	}))
 	t.Cleanup(upA.Close)
-	// 上游 B:恒成功
+	// 上游 B：恒成功。
 	upB := testkitJSON(t, testkitJSONOKBody())
 	t.Cleanup(upB.Close)
 
@@ -91,7 +91,7 @@ func TestChaos_429冷却降级与恢复(t *testing.T) {
 		return resp.StatusCode, string(b)
 	}
 
-	// 第一轮:A 429(冷却 1s)→ 换道 B 成功
+	// 第一轮：A 429 后冷却 1s，换道 B 成功。
 	if code, body := post(); code != 200 || !strings.Contains(body, "完整回答") {
 		t.Fatalf("第一轮应降级 B 成功: %d %s", code, body)
 	}
@@ -100,25 +100,25 @@ func TestChaos_429冷却降级与恢复(t *testing.T) {
 		t.Fatalf("第一轮后 A 应冷却: %s", st)
 	}
 
-	// 第二轮:A 仍在冷却,直接 B(无 A 错误行)
+	// 第二轮：A 仍在冷却，直接选 B，无 A 错误行。
 	if code, _ := post(); code != 200 {
 		t.Fatal("第二轮应 B 成功")
 	}
 
-	// 等 A 冷却到期(1s)+ 余量
+	// 等 A 冷却到期 1s 加余量。
 	time.Sleep(1200 * time.Millisecond)
 	if st := poolA.StateOf("KA", time.Now()); st != "healthy" {
 		t.Fatalf("A 冷却应到期恢复: %s", st)
 	}
 
-	// 第三轮:恢复后的 A 被**重新选中**(priority 0 优先)→ 再次 429 → B 兜底
+	// 第三轮：恢复后的 A 按 priority 0 被重新选中，再次 429 后由 B 兜底。
 	if code, _ := post(); code != 200 {
 		t.Fatal("第三轮应 B 兜底成功")
 	}
 
 	_ = pipeline.Close()
 
-	// 断言 usage 行序列:A、B / B / A、B
+	// 断言 usage 行序列：A、B / B / A、B。
 	rows := queryAll(t, db)
 	var seq []string
 	for _, r := range rows {
@@ -130,13 +130,13 @@ func TestChaos_429冷却降级与恢复(t *testing.T) {
 			t.Fatalf("事件序列不符: %v (期望 %s)", seq, want)
 		}
 	}
-	// 日志证据:降级期间应有「key 池不可用跳过候选」
+	// 日志证据：降级期间应出现「key 池不可用」日志。
 	if !strings.Contains(logBuf.String(), "key 池不可用") {
 		t.Fatalf("缺少降级日志证据: %s", logBuf.String())
 	}
 }
 
-// ---- 辅助(避免 chaos 构建标签依赖 testkit 的测试文件) ----
+// ---- 辅助：避免 chaos 构建标签依赖 testkit 的测试文件 ----
 
 func testkitJSON(t *testing.T, body string) *httptest.Server {
 	t.Helper()

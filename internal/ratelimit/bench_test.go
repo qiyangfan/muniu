@@ -1,4 +1,4 @@
-// 限流基准(phase-2 T2.10):单 key 高频 Allow 判定开销。
+// BenchmarkRateLimitAllow 测量单 key 的限流判定开销。
 package ratelimit
 
 import "testing"

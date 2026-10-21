@@ -1,4 +1,4 @@
-// 预设目录端点契约:鉴权同管理面其余端点;响应 = 目录整表(presets 包装键)。
+// 预设目录端点契约：鉴权同管理面其余端点，响应为目录整表并以 presets 为包装键。
 package admin_test
 
 import (
@@ -12,7 +12,7 @@ import (
 func TestProviderPresets_契约(t *testing.T) {
 	h := newAdmin(t, openDB(t), "tok", nil)
 
-	// 未鉴权 → 401(与管理面统一门禁一致)
+	// 未鉴权 → 401，与管理面统一门禁一致
 	if code, _ := call(t, h, http.MethodGet, "/admin/v1/provider-presets", "", ""); code != http.StatusUnauthorized {
 		t.Fatalf("未鉴权应 401,实际 %d", code)
 	}

@@ -1,5 +1,5 @@
-// Anthropic Messages 入站翻译契约测试(ADR-0013):请求映射表逐格、显式拒绝清单、
-// 非流式对象映射、流式事件顺序不变式(message_start 首帧/message_stop 终帧)。
+// Anthropic Messages 入站翻译测试：请求映射、显式拒绝清单、非流式对象映射，
+// 流式事件顺序不变式为 message_start 首帧、message_stop 终帧。
 package protocol
 
 import (
@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// TestTranslateMessages_基础映射 请求侧映射表核心格:system 提升、字符串快捷、
+// TestTranslateMessages_基础映射 请求侧映射核心格：system 提升、字符串快捷、
 // max_tokens/temperature/top_p/stop 透传。
 func TestTranslateMessages_基础映射(t *testing.T) {
 	body := `{
@@ -45,8 +45,8 @@ func TestTranslateMessages_基础映射(t *testing.T) {
 	}
 }
 
-// TestTranslateMessages_工具全链 tool 声明(input_schema→parameters)、assistant
-// tool_use(input→arguments 字符串)、user tool_result(tool_use_id→tool_call_id)。
+// TestTranslateMessages_工具全链 tool 声明(input_schema→parameters)、assistant 的
+// tool_use 映射为 arguments 字符串、user tool_result(tool_use_id→tool_call_id)。
 func TestTranslateMessages_工具全链(t *testing.T) {
 	body := `{
 		"model":"alias-a","max_tokens":512,
@@ -96,7 +96,7 @@ func TestTranslateMessages_工具全链(t *testing.T) {
 	}
 }
 
-// TestTranslateMessages_拒绝与丢弃清单 image 块/未知块显式拒绝;thinking 块丢弃;
+// TestTranslateMessages_拒绝与丢弃清单 image 块/未知块显式拒绝；thinking 块丢弃；
 // tool_choice any→required。
 func TestTranslateMessages_拒绝与丢弃清单(t *testing.T) {
 	cases := []struct {
@@ -132,8 +132,8 @@ func TestTranslateMessages_拒绝与丢弃清单(t *testing.T) {
 	}
 }
 
-// TestMessageFromChat_映射 非流式:reasoning→thinking、text、tool_calls(arguments 解析为
-// input 对象)、stop_reason 三格、usage(cached)。
+// TestMessageFromChat_映射 非流式：reasoning→thinking、text、tool_calls 的 arguments
+// 解析为 input 对象、stop_reason 三格、usage(cached)。
 func TestMessageFromChat_映射(t *testing.T) {
 	chat := `{"model":"up-a","choices":[{"message":{
 		"role":"assistant","content":"答案","reasoning_content":"思考过程",
@@ -180,7 +180,7 @@ func TestMessageFromChat_映射(t *testing.T) {
 	}
 }
 
-// TestMessagesStreamEncoder_事件序列 流式不变式:message_start 首帧、message_stop 终帧、
+// TestMessagesStreamEncoder_事件序列 流式不变式：message_start 首帧、message_stop 终帧、
 // 块切换先 stop 后 start、tool_use 并行块独立、[DONE] 前两连发(message_delta+message_stop)。
 func TestMessagesStreamEncoder_事件序列(t *testing.T) {
 	enc := NewMessagesStreamEncoder("msg_x", "alias-a")
@@ -217,7 +217,7 @@ func TestMessagesStreamEncoder_事件序列(t *testing.T) {
 			t.Fatalf("delta 不得为首/终帧: %v", types)
 		}
 	}
-	// thinking→text→tool_use 切换:每次切换前必须有 content_block_stop
+	// thinking→text→tool_use 切换：每次切换前必须有 content_block_stop
 	open := 0
 	for _, ty := range types {
 		switch ty {
@@ -258,11 +258,11 @@ func TestMessagesStreamEncoder_空内容流(t *testing.T) {
 	}
 }
 
-// TestTranslateMessages_原始体保留与失格标记 直通双形态(protocol-native-passthrough):
-// 翻译失格(image 等)降级为失格标记而非 error,原始体逐字节保留;可翻译扩展字段
-// (thinking 回传/cache_control/stop_sequences/top_k/metadata)翻译成功且原始体零丢失。
+// TestTranslateMessages_原始体保留与失格标记 直通双形态：翻译失格如 image 块降级为
+// 失格标记而非 error，原始体逐字节保留；可翻译扩展字段 thinking 回传、cache_control、
+// stop_sequences、top_k、metadata 翻译成功且原始体零丢失。
 func TestTranslateMessages_原始体保留与失格标记(t *testing.T) {
-	// 失格:image 块 → Ineligible(含机器码),原始体逐字节保留,路由信息仍可得
+	// 失格：image 块 → 携带机器码的 Ineligible，原始体逐字节保留，路由信息仍可得
 	raw := []byte(`{"model":"claude-x","max_tokens":64,"stream":true,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGk="}}]}]}`)
 	res := TranslateMessagesRequestEx(raw)
 	if res.Chat != nil || res.Ineligible == nil {
@@ -279,7 +279,7 @@ func TestTranslateMessages_原始体保留与失格标记(t *testing.T) {
 		t.Fatalf("失格请求的路由信息不符: %+v", res)
 	}
 
-	// 可翻译扩展字段:翻译成功 + 原始体逐字节保留(直通保真的协议层前提)
+	// 可翻译扩展字段：翻译成功且原始体逐字节保留，这是直通保真的协议层前提
 	raw2 := []byte(`{"model":"m","max_tokens":32,"top_k":3,"metadata":{"user_id":"u"},"stop_sequences":["END"],` +
 		`"messages":[{"role":"user","content":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]},` +
 		`{"role":"assistant","content":[{"type":"thinking","thinking":"...","signature":"sig"}]},` +
@@ -295,7 +295,7 @@ func TestTranslateMessages_原始体保留与失格标记(t *testing.T) {
 		t.Fatalf("路由信息不符: %+v", res2)
 	}
 
-	// 结构性非法仍是 Fatal(恒 400,与现状一致)
+	// 结构性非法仍是 Fatal，恒 400
 	if r := TranslateMessagesRequestEx([]byte(`{"model":"","messages":[]}`)); r.Fatal == nil || r.Ineligible != nil {
 		t.Fatalf("结构性非法应为 Fatal: %+v", r)
 	}

@@ -1,5 +1,4 @@
-// 治理纯函数契约测试(ADR-0010;specs/model-capability-governance 五类负面场景逐条钉死)。
-// 测试先行域:先红后绿;换道重治理在纯函数层即断言「原件不动」(每次 attempt 从原始请求出发)。
+// 覆盖模型能力治理的负面场景，并验证换道时从未修改的原始请求重新处理。
 package proxy
 
 import (
@@ -21,7 +20,6 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// governReq 测试辅助:构造入站请求。
 func governReq(t *testing.T, body string) *protocol.ChatRequest {
 	t.Helper()
 	req, err := protocol.ParseChatRequest([]byte(body))
@@ -31,7 +29,7 @@ func governReq(t *testing.T, body string) *protocol.ChatRequest {
 	return req
 }
 
-// TestGovernChat_未声明模型零干预 specs:未声明模型零干预(透传字节不变)。
+// TestGovernChat_未声明模型零干预 验证未声明模型时透传字节不变、零变更零拒绝。
 func TestGovernChat_未声明模型零干预(t *testing.T) {
 	raw := `{"model":"alias","messages":[{"role":"user","content":"hi"}],"temperature":0.7,"frequency_penalty":0.5}`
 	req := governReq(t, raw)
@@ -48,7 +46,7 @@ func TestGovernChat_未声明模型零干预(t *testing.T) {
 	}
 }
 
-// TestGovernChat_仅干预声明覆盖的参数 specs:已声明模型仅干预声明覆盖的参数。
+// TestGovernChat_仅干预声明覆盖的参数 验证已声明模型仅干预声明覆盖的参数。
 func TestGovernChat_仅干预声明覆盖的参数(t *testing.T) {
 	req := governReq(t, `{"model":"a","messages":[{"role":"user","content":"hi"}],"temperature":0.7,"frequency_penalty":0.5}`)
 
@@ -70,12 +68,12 @@ func TestGovernChat_仅干预声明覆盖的参数(t *testing.T) {
 		t.Fatalf("变更记录不符: %+v", changes)
 	}
 	if governed.Temperature != nil {
-		// 结构字段同步是桥接型供应商 drop 生效的唯一通道(anthropic 消费 in.Temperature)
+		// 结构字段同步是桥接型供应商 drop 生效的唯一通道，anthropic 消费 in.Temperature。
 		t.Fatalf("副本结构字段必须同步删除,实际 %+v", governed.Temperature)
 	}
 }
 
-// TestGovernChat_drop界内与缺参零变更 specs:声明了 drop 但请求未携带该参数 → 零变更。
+// TestGovernChat_drop缺参零变更 验证声明了 drop 但请求未携带该参数时零变更。
 func TestGovernChat_drop缺参零变更(t *testing.T) {
 	req := governReq(t, `{"model":"a","messages":[{"role":"user","content":"hi"}]}`)
 	governed, changes, _ := governChat(req, config.ModelCapability{Provider: "p", Model: "m", DropParams: []string{"temperature"}}, false)
@@ -84,7 +82,7 @@ func TestGovernChat_drop缺参零变更(t *testing.T) {
 	}
 }
 
-// TestGovernChat_clamp收敛与界内不变 specs:输出上限收敛 / 界内值不变。
+// TestGovernChat_clamp收敛与界内不变 验证越界上限收敛、界内值不变。
 func TestGovernChat_clamp收敛与界内不变(t *testing.T) {
 	capability := config.ModelCapability{Provider: "p", Model: "m", MaxOutputTokens: 4096}
 
@@ -116,7 +114,7 @@ func TestGovernChat_clamp收敛与界内不变(t *testing.T) {
 	}
 }
 
-// TestGovernChat_思考锁宽松归一 specs:思考锁宽松模式归一(移除关闭思考指令)。
+// TestGovernChat_思考锁宽松归一 验证宽松模式归一移除关闭思考指令。
 func TestGovernChat_思考锁宽松归一(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -146,7 +144,7 @@ func TestGovernChat_思考锁宽松归一(t *testing.T) {
 			}
 		})
 	}
-	// 思考开启意图不受影响:enable_thinking=true 不算「关闭思考」
+	// 思考开启意图不受影响：enable_thinking=true 不算关闭思考。
 	req := governReq(t, `{"model":"a","messages":[{"role":"user","content":"hi"}],"enable_thinking":true}`)
 	governed, changes, _ := governChat(req, config.ModelCapability{Provider: "p", Model: "m", ThinkingLock: true}, false)
 	if !bytes.Equal(governed.Raw, req.Raw) || len(changes) != 0 {
@@ -154,7 +152,7 @@ func TestGovernChat_思考锁宽松归一(t *testing.T) {
 	}
 }
 
-// TestGovernChat_strict模式拒绝 specs:strict 下一切本应发生的干预升级为 400 拒绝;未命中放行。
+// TestGovernChat_strict模式拒绝 验证 strict 下本应发生的干预升级为 400 拒绝，未命中放行。
 func TestGovernChat_strict模式拒绝(t *testing.T) {
 	req := governReq(t, `{"model":"a","messages":[{"role":"user","content":"hi"}],"temperature":0.7}`)
 	governed, _, reject := governChat(req, config.ModelCapability{Provider: "p", Model: "m", DropParams: []string{"temperature"}}, true)
@@ -171,7 +169,7 @@ func TestGovernChat_strict模式拒绝(t *testing.T) {
 		t.Fatalf("拒绝消息必须指明目标模型(spec strict 场景): %q", reject)
 	}
 
-	// 声明了约束但请求未命中 → 放行
+	// 声明了约束但请求未命中则放行。
 	clean := governReq(t, `{"model":"a","messages":[{"role":"user","content":"hi"}]}`)
 	governedClean, _, rejectClean := governChat(clean, config.ModelCapability{Provider: "p", Model: "m", DropParams: []string{"temperature"}}, true)
 	if rejectClean != "" {
@@ -181,18 +179,18 @@ func TestGovernChat_strict模式拒绝(t *testing.T) {
 		t.Fatal("放行路径字节不变")
 	}
 
-	// 思考锁 strict:关闭意图被拒
+	// 思考锁 strict：关闭意图被拒。
 	lock := governReq(t, `{"model":"a","messages":[{"role":"user","content":"hi"}],"enable_thinking":false}`)
 	if _, _, r := governChat(lock, config.ModelCapability{Provider: "p", Model: "m", ThinkingLock: true}, true); r == "" {
 		t.Fatal("strict 下思考锁命中必须拒绝")
 	}
 }
 
-// TestGovernChat_换道重治理与幂等 specs:换道后按新模型重新治理(不沿用首选收敛结果);治理幂等。
+// TestGovernChat_换道重治理与幂等 验证换道后按新模型重新治理，不沿用首选收敛结果，且治理幂等。
 func TestGovernChat_换道重治理与幂等(t *testing.T) {
 	original := governReq(t, `{"model":"alias","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"temperature":0.7}`)
 
-	// 首选模型:上限 4096 + temperature 黑名单
+	// 首选模型：上限 4096 加 temperature 黑名单。
 	capA := config.ModelCapability{Provider: "pa", Model: "ma", MaxOutputTokens: 4096, DropParams: []string{"temperature"}}
 	first, _, _ := governChat(original, capA, false)
 	var firstOut struct {
@@ -203,7 +201,7 @@ func TestGovernChat_换道重治理与幂等(t *testing.T) {
 		t.Fatalf("首选模型治理不符: %+v", firstOut.MaxTokens)
 	}
 
-	// 备选模型:仅上限 8192——治理对象仍是「原始请求」,不沿用首选收敛结果
+	// 备选模型仅上限 8192，治理对象仍是原始请求，不沿用首选收敛结果。
 	capB := config.ModelCapability{Provider: "pb", Model: "mb", MaxOutputTokens: 8192}
 	second, changesB, _ := governChat(original, capB, false)
 	var secondOut struct {
@@ -217,15 +215,15 @@ func TestGovernChat_换道重治理与幂等(t *testing.T) {
 		t.Fatalf("换道后界内零变更: %+v", changesB)
 	}
 
-	// 幂等:对治理结果再治理一次,无新变更且结果一致
+	// 幂等：对治理结果再治理一次，无新变更且结果一致。
 	again, changesAgain, _ := governChat(first, capA, false)
 	if !bytes.Equal(again.Raw, first.Raw) || len(changesAgain) != 0 {
 		t.Fatalf("治理必须幂等: %+v %s", changesAgain, again.Raw)
 	}
 }
 
-// TestSummarize_多字节rune边界:32 字节切点落在中文多字节字符中间时必须回退到
-// rune 边界,产出合法 UTF-8(字节硬切经 json.Marshal 变 U+FFFD,日志乱码)。
+// TestSummarize_多字节rune边界 验证切点落在多字节字符中间时回退到 rune 边界，
+// 产出合法 UTF-8；字节硬切经 json.Marshal 会变 U+FFFD，日志乱码。
 func TestSummarize_多字节rune边界(t *testing.T) {
 	raw := json.RawMessage(`"` + strings.Repeat("木", 40) + `"`) // 40 个三字节字符 = 120 字节
 	out := summarize(raw)
@@ -237,11 +235,11 @@ func TestSummarize_多字节rune边界(t *testing.T) {
 	}
 }
 
-// govOKBody 最小合法非流式成功响应(fake 上游回包)。
+// govOKBody 最小合法非流式成功响应，fake 上游回包。
 const govOKBody = `{"id":"1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
 
-// newGovHarness 治理集成测试台:候选与能力目录可配;返回 server 与两个 fake 上游(记录收到的 body)。
-// 可选注入 logger(默认丢弃,留痕断言用例传 capture handler)。
+// newGovHarness 治理集成测试台：候选与能力目录可配，返回 server 与两个 fake 上游并记录收到的 body。
+// logger 可选注入，默认丢弃；留痕断言用例传 capture handler。
 func newGovHarness(t *testing.T, capabilities []config.ModelCapability, strict bool, routes map[string][]config.Candidate, statusA int, loggers ...*slog.Logger) (*httptest.Server, map[string]*testkit.Upstream) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -274,7 +272,7 @@ func newGovHarness(t *testing.T, capabilities []config.ModelCapability, strict b
 	return ts, ups
 }
 
-// govPost 发请求并返回 (状态码, body, 响应头值)——治理留痕断言需要响应头。
+// govPost 发请求并返回状态码、body、响应头值，治理留痕断言需要响应头。
 func govPost(t *testing.T, ts *httptest.Server, body string) (int, string, string) {
 	t.Helper()
 	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
@@ -286,9 +284,7 @@ func govPost(t *testing.T, ts *httptest.Server, body string) (int, string, strin
 	return resp.StatusCode, string(b), resp.Header.Get("X-Muniu-Normalized")
 }
 
-// TestGovernance_换道后按新模型重新治理 specs 集成钉子:首选(上限 4096+temperature 黑名单,恒 5xx)
-// → 备选(上限 8192,零其它约束):备选必须收到原始 max_tokens=8192(非首选收敛的 4096)且
-// temperature 保留(备选未声明 drop);换道成功后客户端响应无干预头残留。
+// TestGovernance_换道后按新模型重新治理 验证每个候选按自身能力处理原始请求。
 func TestGovernance_换道后按新模型重新治理(t *testing.T) {
 	ts, ups := newGovHarness(t,
 		[]config.ModelCapability{
@@ -308,7 +304,7 @@ func TestGovernance_换道后按新模型重新治理(t *testing.T) {
 		t.Fatalf("换道后应成功: %d", status)
 	}
 	if hdr != "" {
-		// 首选(prov-a)已留痕设头,换道到零干预的备选后必须清除,不得残留误导客户端
+		// 首选 prov-a 已留痕设头，换道到零干预的备选后必须清除，不得残留误导客户端。
 		t.Fatalf("换道到零干预目标后不得残留干预头: %q", hdr)
 	}
 	var got map[string]json.RawMessage
@@ -325,9 +321,7 @@ func TestGovernance_换道后按新模型重新治理(t *testing.T) {
 	}
 }
 
-// TestGovernance_干预留痕与出站改写 specs 集成钉子:单目标命中 drop+clamp →
-// 上游收到改写后 body;客户端成功响应携带 X-Muniu-Normalized 参数清单;
-// 结构化日志逐条留痕(request_id/provider/model/param/action 字段齐全)。
+// TestGovernance_干预留痕与出站改写 验证参数治理同时反映在上游请求、响应头和日志中。
 func TestGovernance_干预留痕与出站改写(t *testing.T) {
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
@@ -374,8 +368,7 @@ func TestGovernance_干预留痕与出站改写(t *testing.T) {
 	}
 }
 
-// TestGovernance_strict命中即400 specs 集成钉子:strict 下命中约束 → 400 param_rejected
-// 信封指明参数,上游零调用;未命中参数的正常请求不受影响。
+// TestGovernance_strict命中即400 验证 strict 模式在命中约束时返回 400 且不调用上游。
 func TestGovernance_strict命中即400(t *testing.T) {
 	ts, ups := newGovHarness(t,
 		[]config.ModelCapability{

@@ -1,6 +1,5 @@
-// keypool 契约测试(测试先行域):平滑加权轮询分布、三态状态机全迁移
-// (429 指数冷却/5xx 连续三次/401 禁用)、EMA 健康度衰减、并发对抗 -race。
-// 时间一律外部注入,测试完全确定。
+// keypool 测试：平滑加权轮询分布、三态状态机全迁移（429 指数冷却/5xx 连续三次/401 禁用）、
+// EMA 健康度衰减、并发对抗 -race；时间一律外部注入，完全确定。
 package keypool
 
 import (
@@ -43,7 +42,7 @@ func Test状态机_429冷却指数退避与上限(t *testing.T) {
 	ka := &Key{ID: "a"}
 	now := base
 
-	// 第一次 429:无 Retry-After → 基础 60s
+	// 第一次 429：无 Retry-After → 基础 60s
 	p.Report(ka, OutcomeRateLimited, now, 0)
 	if st := p.StateOf("a", now); st != "cooldown" {
 		t.Fatalf("429 后应冷却,实际 %s", st)
@@ -55,13 +54,13 @@ func Test状态机_429冷却指数退避与上限(t *testing.T) {
 	if k := p.Pick(now); k != nil && k.ID == "a" {
 		t.Fatal("冷却中的键不得被选中")
 	}
-	// 到期恢复后再次 429:指数 ×2 → 120s
+	// 到期恢复后再次 429：指数 ×2 → 120s
 	now2 := now.Add(61 * time.Second)
 	p.Report(ka, OutcomeRateLimited, now2, 0)
 	if d := p.CooldownRemain("a", now2); d != 120*time.Second {
 		t.Fatalf("连续第二次应 120s,实际 %v", d)
 	}
-	// 大量连续 429:封顶 30min
+	// 大量连续 429：封顶 30min
 	n := now2
 	for i := 0; i < 10; i++ {
 		n = n.Add(31 * time.Minute)
@@ -95,7 +94,7 @@ func Test状态机_5xx连续三次冷却30秒(t *testing.T) {
 	if d := p.CooldownRemain("a", now); d != 30*time.Second {
 		t.Fatalf("5xx 冷却应 30s,实际 %v", d)
 	}
-	// 成功重置连续计数:冷却到期后,两次失败+一次成功+两次失败 → 不再触发冷却
+	// 成功重置连续计数：冷却到期后，两次失败+一次成功+两次失败 → 不再触发冷却
 	p.Report(ka, OutcomeServerError, now, 0)
 	p.Report(ka, OutcomeServerError, now, 0)
 	p.Report(ka, OutcomeSuccess, now, 0)
@@ -115,7 +114,7 @@ func Test状态机_401禁用不可恢复(t *testing.T) {
 	if st := p.StateOf("a", now.Add(time.Hour)); st != "disabled" {
 		t.Fatalf("401 应禁用,实际 %s", st)
 	}
-	// 禁用永久生效:时间推进也不恢复
+	// 禁用永久生效：时间推进也不恢复
 	for i := 0; i < 100; i++ {
 		if k := p.Pick(now.Add(time.Duration(i) * time.Hour)); k != nil && k.ID == "a" {
 			t.Fatal("禁用键不得被选中")
@@ -140,7 +139,7 @@ func TestEMA_健康度衰减与下限(t *testing.T) {
 	p := mkPool()
 	ka := &Key{ID: "a"}
 	now := base
-	// a 连续 20 次失败(穿插成功避免触发 5xx 连续冷却)
+	// a 连续 20 次失败（穿插成功避免触发 5xx 连续冷却）
 	for i := 0; i < 10; i++ {
 		p.Report(ka, OutcomeServerError, now, 0)
 		p.Report(ka, OutcomeSuccess, now, 0)
@@ -148,22 +147,22 @@ func TestEMA_健康度衰减与下限(t *testing.T) {
 	if r := p.EMARate("a"); r > 0.55 || r < 0.45 {
 		t.Fatalf("EMA 成功率应约 0.5,实际 %v", r)
 	}
-	// 有效权重 = 70×0.5=35,b=30×1.0=30 → 选中分布应从 70/30 移向接近 35/30
+	// 有效权重 = 70×0.5=35，b=30×1.0=30 → 选中分布应从 70/30 移向接近 35/30
 	count := map[string]int{}
 	for i := 0; i < 6500; i++ {
 		k := p.Pick(now)
 		count[k.ID]++
 	}
-	if count["a"]-count["b"] > 1300 { // 35:30 → 差约 500/6500,给边界余量
+	if count["a"]-count["b"] > 1300 { // 35:30 → 差约 500/6500，给边界余量
 		t.Fatalf("EMA 衰减未生效,分布仍偏向 a: %v", count)
 	}
 
-	// 下限 0.1:成功率趋近 0 也不得饿死(仍按 10% 权重被选中)
+	// 下限 0.1：成功率趋近 0 也不得饿死（仍按 10% 权重被选中）
 	p2 := NewPool([]KeyInput{{ID: "x", Value: "v1", Weight: 100}, {ID: "y", Value: "v2", Weight: 100}})
 	kx := &Key{ID: "x"}
 	ky := &Key{ID: "y"}
 	n := base
-	for i := 0; i < 200; i++ { // 交替成功/失败会让 EMA≈0.5;改为大量失败+极少成功
+	for i := 0; i < 200; i++ { // 交替成功/失败会让 EMA≈0.5，改为大量失败+极少成功
 		p2.Report(kx, OutcomeServerError, n, 0)
 		if i%10 == 0 {
 			p2.Report(kx, OutcomeSuccess, n, 0) // 打断连续 5xx
@@ -171,7 +170,7 @@ func TestEMA_健康度衰减与下限(t *testing.T) {
 		p2.Report(ky, OutcomeSuccess, n, 0)
 	}
 	pickedX := 0
-	later := n.Add(time.Hour) // 读取时刻晚于可能存在的 30s 冷却,专测 EMA 衰减而非冷却
+	later := n.Add(time.Hour) // 读取时刻晚于可能存在的 30s 冷却，专测 EMA 衰减而非冷却
 	for i := 0; i < 2000; i++ {
 		if k := p2.Pick(later); k.ID == "x" {
 			pickedX++

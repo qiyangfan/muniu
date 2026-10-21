@@ -10,7 +10,7 @@ import (
 	"github.com/solvela/muniu/internal/keypool"
 )
 
-// 拓扑热替换管道测试(3.1):池保留语义 + 校验拒绝 + 替换生效 + 构建失败回滚。
+// 拓扑热替换管道测试：池保留语义、校验拒绝、替换生效、构建失败回滚。
 
 func topoConfig(name, baseURL string) Config {
 	prov := config.Provider{
@@ -54,7 +54,7 @@ func TestTopology_Replace_CreatedAndReplaced(t *testing.T) {
 	p := New(cfg)
 	oldPool := func() *keypool.Pool { s := p.topo.Load(); return s.pools["alpha"] }()
 
-	// 替换:alpha 换 base_url(配置变更→池与适配器重建) + 新增 beta
+	// 替换：alpha 换 base_url，配置变更导致池与适配器重建，并新增 beta。
 	next := topoConfig("alpha", "http://alpha-v2")
 	beta := topoConfig("beta", "http://beta")
 	next.Providers = append(next.Providers, beta.Providers...)
@@ -81,7 +81,7 @@ func TestTopology_Replace_UnchangedProviderKeepsRuntimePool(t *testing.T) {
 	p := New(cfg)
 	oldPool := func() *keypool.Pool { s := p.topo.Load(); return s.pools["alpha"] }()
 
-	// alpha 配置逐字未变(仅追加一个新路由):池必须复用(冷却/EMA 运行态无损)
+	// alpha 配置逐字未变，仅追加一个新路由：池必须复用，冷却与 EMA 运行态无损。
 	next := topoConfig("alpha", "http://alpha")
 	next.Routes["m2"] = []config.Candidate{{Provider: "alpha", Model: "model-y", Priority: 2}}
 	stats, err := p.ReplaceTopology(next, buildOK)
@@ -129,7 +129,7 @@ func TestTopology_Replace_RejectInvalid(t *testing.T) {
 	if _, err := p.ReplaceTopology(bad, buildOK); err == nil {
 		t.Fatal("候选引用未定义 provider 应被拒绝")
 	}
-	// 池构建失败拒绝(buildPool 报错→整体回滚)
+	// 池构建失败拒绝：buildPool 报错则整体回滚。
 	failing := topoConfig("alpha", "http://alpha-v3")
 	beta := topoConfig("beta", "http://beta")
 	failing.Providers = append(failing.Providers, beta.Providers...)
@@ -142,15 +142,15 @@ func TestTopology_Replace_RejectInvalid(t *testing.T) {
 	}); err == nil {
 		t.Fatal("池构建失败应整体拒绝替换")
 	}
-	// 上述拒绝后旧快照原封不动(含 alpha 运行态)
+	// 上述拒绝后旧快照原封不动，含 alpha 运行态。
 	s := p.topo.Load()
 	if _, ok := s.routes["m1"]; !ok || s.pools["alpha"] == nil {
 		t.Fatal("拒绝替换后旧快照必须保持")
 	}
 }
 
-// TestTopology_Replace_RejectsOutOfIntDomain 数值域守门:weight/priority 超出数据面 int 域
-// (failover 加权累加为 int 运算,超域巨值溢出为负使加权随机失效)必须整体拒绝且旧快照保持。
+// TestTopology_Replace_RejectsOutOfIntDomain 数值域守门：weight/priority 超出数据面 int 域时
+// 必须整体拒绝且旧快照保持，failover 加权累加为 int 运算，超域巨值溢出为负会使加权随机失效。
 func TestTopology_Replace_RejectsOutOfIntDomain(t *testing.T) {
 	cfg := topoConfig("alpha", "http://alpha")
 	p := New(cfg)

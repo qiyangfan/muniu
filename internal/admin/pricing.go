@@ -1,6 +1,6 @@
-// 动态价目管理端点(metering.md「动态价目」):GET 列表(db 来源 + yaml 兜底来源)、
-// PUT 运行态覆盖(先校验后持久化再刷新目录,改价即时生效零重启)、DELETE 撤销覆盖(回落 YAML)。
-// 价目是运营态数据(ADR-0004 分工边界):厂商改价走本接口/控制台,不碰配置中心。
+// 动态价目管理端点：GET 列表含 db 来源与 yaml 兜底来源，PUT 运行态覆盖先校验后持久化再刷新目录，
+// 改价即时生效零重启，DELETE 撤销覆盖回落 YAML。
+// 价目是运营态数据：厂商改价走本接口或控制台，不碰配置中心。
 package admin
 
 import (
@@ -15,8 +15,8 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
-// PricingView 价目条目(GET 输出/PUT 输入的人类可读形态;金额与倍率均为字符串,禁 float)。
-// 导出供控制面拉取循环复用同一校验与落库路径(跨仓契约的同构解析)。
+// PricingView 价目条目，GET 输出与 PUT 输入的人类可读形态；金额与倍率均为字符串，禁 float。
+// 导出供控制面拉取循环复用同一校验与落库路径。
 type PricingView struct {
 	Alias       string              `json:"alias"`
 	Source      string              `json:"source"` // db=运营覆盖 | yaml=静态兜底
@@ -35,8 +35,8 @@ type PricingWindowView struct {
 	Multiplier string `json:"multiplier"`
 }
 
-// pricingList GET /admin/v1/pricing:DB 运行态(含窗口)优先列出,YAML 兜底别名补齐
-// (yaml 行仅展示缺省价——窗口细节以配置文件为准;对其 PUT 即建 DB 覆盖)。
+// pricingList GET /admin/v1/pricing：DB 运行态含窗口优先列出，YAML 兜底别名补齐。
+// yaml 行仅展示缺省价，窗口细节以配置文件为准；对其 PUT 即建 DB 覆盖。
 func pricingList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		rows, err := store.ListPricing(d.DB)
@@ -71,7 +71,7 @@ func pricingList(d Deps) http.HandlerFunc {
 				TimeWindows: entry.TimeWindows,
 			})
 		}
-		// 稳定输出:alias 升序(插入排序,列表极短)
+		// 稳定输出：alias 升序；插入排序，列表极短
 		for i := 1; i < len(items); i++ {
 			for j := i; j > 0 && items[j].Alias < items[j-1].Alias; j-- {
 				items[j], items[j-1] = items[j-1], items[j]
@@ -81,8 +81,8 @@ func pricingList(d Deps) http.HandlerFunc {
 	}
 }
 
-// pricingPut PUT /admin/v1/pricing/{alias}:先校验(同 config/metering 解析器,零 float)→
-// 持久化 → 刷新目录。三步任一失败即整单失败;刷新失败时持久化已生效(下次启动/刷新收敛)。
+// pricingPut PUT /admin/v1/pricing/{alias}：先校验再持久化再刷新目录，校验复用 config/metering 解析器，零 float。
+// 三步任一失败即整单失败；刷新失败时持久化已生效，待下次启动或刷新收敛。
 func pricingPut(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		alias := strings.TrimSpace(r.PathValue("alias"))
@@ -100,7 +100,7 @@ func pricingPut(d Deps) http.HandlerFunc {
 			return
 		}
 		req.Alias = alias
-		// 校验收敛到 ParsePricingRecord(与管理面/控制面拉取同一套解析器,杜绝双实现漂移)
+		// 校验收敛到 ParsePricingRecord，与管理面、控制面拉取同一套解析器，杜绝双实现漂移
 		rec, verr := ParsePricingRecord(alias, req, time.Now())
 		if verr != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", verr.Error())
@@ -111,7 +111,7 @@ func pricingPut(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.RefreshPricing == nil {
-			// 无刷新闭包 = 目录不会更新,「成功」是假象——显式失败优于静默不生效
+			// 无刷新闭包 = 目录不会更新，「成功」是假象，显式失败优于静默不生效
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "价目目录刷新未装配")
 			return
 		}
@@ -130,7 +130,7 @@ func pricingPut(d Deps) http.HandlerFunc {
 	}
 }
 
-// pricingDelete DELETE /admin/v1/pricing/{alias}:撤销运行态覆盖,该别名回落 YAML 静态兜底。
+// pricingDelete DELETE /admin/v1/pricing/{alias}：撤销运行态覆盖，该别名回落 YAML 静态兜底。
 func pricingDelete(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		alias := r.PathValue("alias")
@@ -157,7 +157,7 @@ func pricingDelete(d Deps) http.HandlerFunc {
 	}
 }
 
-// windowsView 持久化窗 → 视图(基点 → 人类可读倍率)。
+// windowsView 持久化窗转视图，基点转人类可读倍率。
 func windowsView(windows []store.PricingWindowRecord) []PricingWindowView {
 	out := make([]PricingWindowView, 0, len(windows))
 	for _, w := range windows {
@@ -166,7 +166,7 @@ func windowsView(windows []store.PricingWindowRecord) []PricingWindowView {
 	return out
 }
 
-// ParsePricingRecord 人类可读价目视图 → 运行态记录(完整校验;控制面拉取与管理面 PUT 共用)。
+// ParsePricingRecord 人类可读价目视图转运行态记录，含完整校验；控制面拉取与管理面 PUT 共用。
 func ParsePricingRecord(alias string, v PricingView, now time.Time) (store.PricingRecord, error) {
 	alias = strings.TrimSpace(alias)
 	if alias == "" {

@@ -9,7 +9,7 @@ function toDate(v: string | Date | null | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** 本地时区 "2026-09-12 16:30"(分钟精度);seconds 补秒;空/非法值返回 "—" */
+/** 按本地时区格式化为 YYYY-MM-DD HH:mm；可选显示秒，空值或非法值返回 "—"。 */
 export function formatDateTime(
   v: string | Date | null | undefined,
   opts?: { seconds?: boolean },
@@ -20,7 +20,7 @@ export function formatDateTime(
   return opts?.seconds ? `${base}:${pad(d.getSeconds())}` : base;
 }
 
-/** 本地时区 "2026-09-12";空/非法值返回 "—" */
+/** 按本地时区格式化为 YYYY-MM-DD；空值或非法值返回 "—"。 */
 export function formatDate(v: string | Date | null | undefined): string {
   const d = toDate(v);
   return d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : "—";

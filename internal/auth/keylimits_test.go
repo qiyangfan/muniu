@@ -1,6 +1,5 @@
-// key 生命周期契约测试(gateway-parity「api-key-lifecycle」):
-// 签发粒度(全字段/缺省零回归/负值拒绝)、PATCH 局部更新(null 清过期/未知 key)、
-// 过期判定(查库与缓存命中两路径、时钟注入、message 可区分)。
+// key 生命周期测试：签发粒度含全字段、缺省与负值拒绝，PATCH 局部更新含 null 清过期与未知 key，
+// 过期判定覆盖查库与缓存命中两路径、时钟注入与 message 可区分。
 package auth
 
 import (
@@ -27,7 +26,7 @@ func TestCreateKey_全字段签发落库与回执(t *testing.T) {
 	if rec.TPMLimit != 1000 || rec.DailyQuotaCredits != 5_000_000 || rec.ExpiresAt == nil {
 		t.Fatalf("回执字段不符: %+v", rec)
 	}
-	// 列表回显(管理面可见性契约)
+	// 列表回显，管理面可见性
 	keys, err := ListKeys(db)
 	if err != nil || len(keys) != 1 {
 		t.Fatalf("列表失败: %v %v", keys, err)
@@ -35,7 +34,7 @@ func TestCreateKey_全字段签发落库与回执(t *testing.T) {
 	if keys[0].TPMLimit != 1000 || keys[0].DailyQuotaCredits != 5_000_000 || keys[0].ExpiresAt == nil {
 		t.Fatalf("列表字段不符: %+v", keys[0])
 	}
-	// 查库路径带出过期(鉴权消费面)
+	// 查库路径带出过期，鉴权消费
 	k, err := store.GetAPIKeyByHash(db, Hash(plaintext))
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +88,7 @@ func TestUpdateKeyLimits_局部更新与null清除(t *testing.T) {
 	if got.ExpiresAt != nil {
 		t.Fatalf("null 清除后应永不过期: %+v", got)
 	}
-	// 未知 key → ErrNotFound(管理面 404)
+	// 未知 key 返回 ErrNotFound，管理面映射 404
 	if _, err := UpdateKeyLimits(db, "no-such-id", LimitsPatch{ClearExpires: true}); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("未知 key 应 ErrNotFound: %v", err)
 	}
@@ -100,7 +99,7 @@ func TestUpdateKeyLimits_局部更新与null清除(t *testing.T) {
 	}
 }
 
-// 过期判定收口在 verify 单点:缓存命中路径同样以当前时钟判定(时钟注入证明)。
+// 过期判定收口在 verify 单点：缓存命中路径同样以当前时钟判定，由时钟注入证明。
 func TestVerify_过期判定含缓存命中路径(t *testing.T) {
 	db := openDB(t)
 	exp := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
@@ -112,17 +111,17 @@ func TestVerify_过期判定含缓存命中路径(t *testing.T) {
 	cur := time.Now()
 	v.now = func() time.Time { return cur }
 
-	// 未过期:放行并写入缓存
+	// 未过期：放行并写入缓存
 	if _, err := v.verify(bearerReq(plaintext)); err != nil {
 		t.Fatalf("未过期应放行: %v", err)
 	}
-	// 时钟推进越过过期时刻:缓存命中路径同样拒绝(过期生效不因缓存漂移)
+	// 时钟推进越过过期时刻：缓存命中路径同样拒绝，过期生效不因缓存漂移
 	cur = exp.Add(time.Minute)
 	_, err = v.verify(bearerReq(plaintext))
 	if !errors.Is(err, errKeyExpired) {
 		t.Fatalf("过期后应 errKeyExpired(含缓存命中): %v", err)
 	}
-	// 首次校验即已过期(查库路径)
+	// 首次校验即已过期，查库路径
 	exp2 := time.Now().Add(-time.Minute).UTC()
 	plaintext2, _, _ := CreateKey(db, "default", "已过期", 60, KeyOpts{ExpiresAt: &exp2})
 	if _, err := v.verify(bearerReq(plaintext2)); !errors.Is(err, errKeyExpired) {
@@ -130,7 +129,7 @@ func TestVerify_过期判定含缓存命中路径(t *testing.T) {
 	}
 }
 
-// 过期与无效/吊销同归 401 auth_failed,message 可区分(用户动作不同:重签 vs 找管理员)。
+// 过期与无效、吊销同归 401 auth_failed，message 可区分：过期重签，吊销找管理员。
 func TestMiddleware_过期message可区分(t *testing.T) {
 	db := openDB(t)
 	exp := time.Now().Add(-time.Hour).UTC()
@@ -159,16 +158,16 @@ func TestMiddleware_过期message可区分(t *testing.T) {
 	}
 }
 
-// bearerReq 构造带 Bearer 明文的请求(过期/鉴权测试共用)。
+// bearerReq 构造带 Bearer 明文的请求，过期与鉴权测试共用。
 func bearerReq(plaintext string) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	r.Header.Set("Authorization", "Bearer "+plaintext)
 	return r
 }
 
-// ---- 启停(可逆禁用,key-disable-toggle)----
+// ---- 启停：可逆禁用 ----
 
-// 停用/恢复全链:PATCH 语义、查库与缓存命中两路径拒绝、恢复字段无损、列表回显。
+// 停用与恢复全链：PATCH 语义、查库与缓存命中两路径拒绝、恢复字段无损、列表回显。
 func TestUpdateKeyLimits_停用与恢复(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec, err := CreateKey(db, "default", "启停", 10, KeyOpts{TPMLimit: 100})
@@ -176,7 +175,7 @@ func TestUpdateKeyLimits_停用与恢复(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := NewVerifier(db, Options{}, testLogger())
-	// 放行一次写入鉴权缓存(停用生效必须经 Invalidate 即时达成,不等 TTL)
+	// 放行一次写入鉴权缓存；停用生效必须经 Invalidate 即时达成，不等 TTL
 	if _, err := v.verify(bearerReq(plaintext)); err != nil {
 		t.Fatalf("停用前应放行: %v", err)
 	}
@@ -185,11 +184,11 @@ func TestUpdateKeyLimits_停用与恢复(t *testing.T) {
 	if err != nil || !got.Disabled {
 		t.Fatalf("停用后回执应 Disabled=true: %+v err=%v", got, err)
 	}
-	v.Invalidate() // 管理路径失效协议(与 admin patchKey 同款)
+	v.Invalidate() // 管理路径失效协议，与 admin patchKey 同款
 	if _, err := v.verify(bearerReq(plaintext)); !errors.Is(err, errKeyDisabled) {
 		t.Fatalf("停用后应 errKeyDisabled(含缓存命中后路径): %v", err)
 	}
-	// 恢复:其余字段无损
+	// 恢复：其余字段无损
 	got, err = UpdateKeyLimits(db, rec.ID, LimitsPatch{Disabled: &no})
 	if err != nil || got.Disabled {
 		t.Fatalf("恢复后回执应 Disabled=false: %+v err=%v", got, err)
@@ -214,7 +213,7 @@ func TestUpdateKeyLimits_停用与恢复(t *testing.T) {
 	}
 }
 
-// 停用与无效/吊销/过期同归 401 auth_failed,message 可区分(用户动作:找管理员启用)。
+// 停用与无效、吊销、过期同归 401 auth_failed，message 可区分，用户动作为找管理员启用。
 func TestMiddleware_停用message可区分(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec, _ := CreateKey(db, "default", "停用msg", 60, KeyOpts{})
@@ -246,7 +245,7 @@ func TestMiddleware_停用message可区分(t *testing.T) {
 	}
 }
 
-// 吊销是终态:恢复操作不得复活吊销 key。
+// 吊销是终态：恢复操作不得复活吊销 key。
 func TestVerify_吊销key恢复操作不复活(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec, _ := CreateKey(db, "default", "吊销不复活", 60, KeyOpts{})
@@ -263,7 +262,7 @@ func TestVerify_吊销key恢复操作不复活(t *testing.T) {
 	}
 }
 
-// 请求级成本预算:签发粒度、PATCH 修改、鉴权链路携带、负值拒绝(热路径全链)。
+// 请求级成本预算：签发粒度、PATCH 修改、鉴权路径携带与负值拒绝。
 func TestKeyBudget_签发PATCH与鉴权携带(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec, err := CreateKey(db, "default", "预算", 60, KeyOpts{MaxRequestCostCredits: 500})
@@ -278,7 +277,7 @@ func TestKeyBudget_签发PATCH与鉴权携带(t *testing.T) {
 	if err != nil || info.MaxRequestCostCredits != 500 {
 		t.Fatalf("鉴权应携带预算进热路径: %+v err=%v", info, err)
 	}
-	// PATCH 清零(=不限)
+	// PATCH 清零即不限
 	zero := int64(0)
 	got, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{MaxRequestCostCredits: &zero})
 	if err != nil || got.MaxRequestCostCredits != 0 {
@@ -289,7 +288,7 @@ func TestKeyBudget_签发PATCH与鉴权携带(t *testing.T) {
 	if err != nil || info.MaxRequestCostCredits != 0 {
 		t.Fatalf("清零后鉴权应为不限: %+v err=%v", info, err)
 	}
-	// 负值拒绝(负数会被执行链解释为「不限」,与收紧意图相反)
+	// 负值拒绝：负数会被执行链解释为不限，与收紧意图相反
 	neg := int64(-1)
 	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{MaxRequestCostCredits: &neg}); !store.IsBusiness(err) {
 		t.Fatalf("负预算应业务错: %v", err)
@@ -299,7 +298,7 @@ func TestKeyBudget_签发PATCH与鉴权携带(t *testing.T) {
 	}
 }
 
-// 缺省零回归:不携带 Disabled 字段的 PATCH 行为与既有语义一致。
+// 缺省语义：不携带 Disabled 字段的 PATCH 不得改变停用态。
 func TestUpdateKeyLimits_停用字段缺省零回归(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec, err := CreateKey(db, "default", "缺省", 10, KeyOpts{})

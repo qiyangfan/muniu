@@ -1,5 +1,4 @@
-// embeddings 入站通道(T4.3):POST /v1/embeddings 经基座透传。
-// 语义缓存的嵌入依赖此通道;计量与 chat 同链路(embedding 计价仅 input 段,pricing output=0)。
+// embeddings 入站通道将请求转发给支持 embeddings 的适配器，并沿用 chat 的计量流程。
 package proxy
 
 import (
@@ -16,7 +15,7 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// maxEmbeddingBody embeddings 请求体上限(16MB:批量嵌入可较大)。
+// maxEmbeddingBody embeddings 请求体上限 16MB，批量嵌入体积可较大。
 const maxEmbeddingBody = 16 << 20
 
 // HandlerEmbeddings 挂载到 mux 的 embeddings 入口。
@@ -24,9 +23,9 @@ func (p *Proxy) HandlerEmbeddings() http.Handler {
 	return http.HandlerFunc(p.handleEmbeddings)
 }
 
-// handleEmbeddings 解析→路由→取 key→透传→计量(非流式单形态,无流式分支)。
+// handleEmbeddings 解析、路由、取 key、透传、计量；非流式单形态，无流式分支。
 func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
-	tw := &trackWriter{ResponseWriter: w} // 提交追踪:已写出的响应绝不二次写出/换道
+	tw := &trackWriter{ResponseWriter: w} // 提交追踪：已写出的响应绝不二次写出或换道
 	body, err := io.ReadAll(http.MaxBytesReader(tw, r.Body, maxEmbeddingBody))
 	if err != nil {
 		p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求体过大或不可读")
@@ -37,18 +36,18 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求不符合 OpenAI embeddings 格式")
 		return
 	}
-	topo := p.topo.Load() // 请求入口加载一次:全程同快照
+	topo := p.topo.Load() // 请求入口加载一次，全程同一快照
 	cands, ok := topo.routes[req.Model]
 	if !ok || len(cands) == 0 {
 		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 		return
 	}
-	// key 级模型白名单闸(一):先于插件钩子——被拒请求不产生插件副作用
+	// key 级模型白名单闸之一：先于插件钩子，被拒请求不产生插件副作用
 	if !p.enforceModelAllowlist(tw, r, req.Model) {
 		return
 	}
-	// 插件请求体钩子(ADR-0011):与 chat 同链序(限流后、候选循环前,单次执行);
-	// embeddings 输入同样承载业务载荷,脱敏必须在出站与计量之前
+	// 插件请求体钩子与 chat 同链序：限流后、候选循环前，单次执行；
+	// embeddings 输入同样承载业务载荷，脱敏必须在出站与计量之前
 	if p.plugins != nil {
 		res, done := p.applyPlugins(tw, r, body)
 		if done {
@@ -65,7 +64,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 				p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
 				return
 			}
-			// key 级模型白名单闸(二):插件改写 model 后以最终出站别名为准再校验
+			// key 级模型白名单闸之二：插件改写 model 后以最终出站别名为准再校验
 			if !p.enforceModelAllowlist(tw, r, req.Model) {
 				return
 			}
@@ -107,7 +106,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		if class == "" {
 			return
 		}
-		// attempt 已对客户端产出(早退信封):请求终结,绝不换道重写
+		// attempt 已对客户端产出早退信封：请求终结，绝不换道重写
 		if tw.committed {
 			return
 		}
@@ -124,7 +123,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// attemptEmbeddings 单候选非流式透传:2xx 整包回写 + usage 计量,非 2xx 归类不写信封(耗尽路径出)。
+// attemptEmbeddings 单候选非流式透传：2xx 整包回写并计量 usage；非 2xx 只归类不写信封，交耗尽路径输出。
 func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand failover.Candidate, key *keypool.Key, req *protocol.EmbeddingRequest, m *meterState) (bool, failover.ErrorClass) {
 	m.stream = false
 	adI, ok := p.topo.Load().adapters[cand.Provider]
@@ -133,7 +132,7 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 	}
 	prep, ok := adI.(adapter.EmbeddingPreparer)
 	if !ok {
-		// 桥接型适配器无 embeddings 能力:参数级问题,不换道(信封已写,候选循环按 committed 终结)
+		// 适配器不支持 embeddings 时直接返回参数错误，不尝试换道。
 		p.writeError(w, r, protocol.TypeBadRequest, "embeddings_not_supported", "该供应商适配器不支持 embeddings")
 		return true, failover.ClassBadRequest
 	}
@@ -145,7 +144,7 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 		p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "出站请求构造失败")
 		return true, failover.ClassBadRequest
 	}
-	// 首 token 超时与非流式 chat 同模型(embeddings 即非流式单形态;僵死上游不可无限悬挂)
+	// 首 token 超时复用非流式 chat 的 FirstToken 档：embeddings 为非流式单形态，僵死上游不可无限悬挂
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
 	var firstTokFired atomic.Bool
@@ -181,7 +180,7 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 
 	outBody, usageRaw, rerr := readAndRewrite(adI, resp)
 	if rerr != nil {
-		// 未向客户端写过任何字节:不写头直接归类,交候选循环统一出口(同 chat 非流式)
+		// 未向客户端写过任何字节：不写头直接归类，交候选循环统一出口，与 chat 非流式一致。
 		m.status, m.class = "error", failover.ClassMidStreamFail
 		p.logger.Warn("embeddings 响应读取失败", "request_id", loggingRequestID(r.Context()), "error_detail", rerr.Error())
 		return true, failover.ClassMidStreamFail

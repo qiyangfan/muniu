@@ -1,5 +1,4 @@
-// 管理 API 读侧 repo(T4.1):租户 CRUD、usage 多维聚合。
-// 依赖方向:store 只被 admin/auth/metering/tenant 消费,只出不进。
+// 管理 API 使用的租户与用量存取方法。
 package store
 
 import (
@@ -11,7 +10,7 @@ import (
 	"uuid"
 )
 
-// Tenant 租户行(管理侧形态;JSON 字段 snake_case 供管理 API 输出)。
+// Tenant 租户行，管理侧形态；JSON 字段 snake_case 供管理 API 输出。
 type Tenant struct {
 	ID                  string `json:"id"`
 	Name                string `json:"name"`
@@ -22,7 +21,7 @@ type Tenant struct {
 	CreatedAt           string `json:"created_at"`
 }
 
-// ListTenants 租户列表(创建时间升序)。
+// ListTenants 租户列表，创建时间升序。
 func ListTenants(db *sql.DB) ([]Tenant, error) {
 	rows, err := db.Query(`SELECT id, name, status, daily_quota_credits, tpm_limit,
 		semantic_cache_enabled, created_at FROM tenants ORDER BY created_at`)
@@ -43,7 +42,7 @@ func ListTenants(db *sql.DB) ([]Tenant, error) {
 	return out, rows.Err()
 }
 
-// CreateTenant 创建租户(名称唯一)。
+// CreateTenant 创建租户，名称唯一。
 func CreateTenant(db *sql.DB, name string) (string, error) {
 	id := uuid.NewV7().String()
 	_, err := db.Exec(`INSERT INTO tenants (id, name, created_at) VALUES (?,?,?)`,
@@ -57,7 +56,7 @@ func CreateTenant(db *sql.DB, name string) (string, error) {
 	return id, nil
 }
 
-// UpdateTenantPatch 可更新字段(零值=不动)。
+// UpdateTenantPatch 可更新字段，零值表示不动。
 type UpdateTenantPatch struct {
 	Status              string // active | disabled
 	DailyQuotaCredits   *int64
@@ -65,7 +64,7 @@ type UpdateTenantPatch struct {
 	SemanticCacheEnable *bool
 }
 
-// UpdateTenant 按 id 更新租户;返回是否命中行。
+// UpdateTenant 按 id 更新租户；返回是否命中行。
 func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 	sets, args := []string{}, []any{}
 	if p.Status != "" {
@@ -92,8 +91,8 @@ func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 		args = append(args, v)
 	}
 	if len(sets) == 0 {
-		// 空 patch = no-op:自引用赋值保持行值不变,仍以命中行数区分 200/404
-		// (与 auth.UpdateKeyLimits 的 no-op 语义对齐,避免「空 body 对存在租户误报 404」)
+		// 空 patch 等价 no-op：自引用赋值保持行值不变，仍以命中行数区分 200/404，
+		// 与 auth.UpdateKeyLimits 的 no-op 语义对齐，避免空 body 对存在租户误报 404。
 		sets = append(sets, "status = status")
 	}
 	args = append(args, id)
@@ -108,14 +107,14 @@ func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 // UsageDim 聚合维度。
 type UsageDim string
 
-// businessError 业务类错误标记(校验/冲突/不存在等可对管理员原样呈现的错误)。
-// 消息文本保持原样,仅供 admin 层区分「400+可读」与「500+内部错误」(conventions 错误纪律)。
+// businessError 业务类错误标记，校验、冲突、不存在等可对管理员原样呈现的错误。
+// 消息文本保持原样，仅供 admin 层区分 400 可读错误与 500 内部错误。
 type businessError struct{ err error }
 
 func (b businessError) Error() string { return b.err.Error() }
 func (b businessError) Unwrap() error { return b.err }
 
-// MarkBusiness 将错误标记为业务类(消息不变;导出供 auth 等同层包标记)。
+// MarkBusiness 将错误标记为业务类，消息不变；导出供 auth 等同层包标记。
 func MarkBusiness(err error) error { return businessError{err} }
 
 // IsBusiness 判定是否业务类错误。
@@ -132,8 +131,8 @@ const (
 	DimProvider UsageDim = "provider"
 )
 
-// UsagePoint 一个聚合桶:维度值 + token/成本/次数(json tag 为管理 API 对外契约,
-// 缺失会以 Go 字段名输出 PascalCase,控制台/脚本全部读不到)。
+// UsagePoint 一个聚合桶：维度值与 token、成本、次数。json tag 是管理 API 对外契约，
+// 缺失会以 Go 字段名输出 PascalCase，控制台与脚本全部读不到。
 type UsagePoint struct {
 	Dim              string `json:"dim"` // 天(YYYY-MM-DD)/ api_key_id / model_alias / provider
 	Requests         int64  `json:"requests"`
@@ -143,8 +142,8 @@ type UsagePoint struct {
 	CostCredits      int64  `json:"cost_credits"`
 }
 
-// UsageAggregate 按维度与时间范围聚合 usage_logs(管理 API 用)。
-// from/to 为 RFC3339 UTC;estimated 行不参与成本口径(metering 契约),但计入请求数。
+// UsageAggregate 按维度与时间范围聚合 usage_logs，管理 API 用。
+// from/to 为 RFC3339 UTC；estimated 行不参与成本口径，但计入请求数。
 func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) ([]UsagePoint, error) {
 	var expr string
 	switch dim {

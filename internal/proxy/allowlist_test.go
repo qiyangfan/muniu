@@ -1,5 +1,4 @@
-// key 级模型白名单数据面契约测试(测试先行域,先红后绿):
-// chat 白名单外 403(上游零调用)、白名单内放行、空白名单恒放行、
+// key 级模型白名单行为：白名单外 403 且上游零调用、白名单内放行、空白名单恒放行、
 // 白名单外不吃语义缓存命中、插件改写 model 后再校验、六 lane 同规、
 // 模型发现列表过滤与单查 403/404 分支。
 package proxy
@@ -22,8 +21,8 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// newAllowProxy 组装带白名单注入的网关:两别名同指一个假上游;KeyInfo.AllowedModels
-// 由包装层注入(生产路径由鉴权中间件挂 ctx,语义一致;六 lane + 模型发现同挂)。
+// newAllowProxy 组装带白名单注入的网关：两别名同指同一假上游，KeyInfo.AllowedModels
+// 由包装层挂入请求 ctx，与生产路径鉴权中间件的挂载语义一致，六 lane 与模型发现同挂。
 func newAllowProxy(t *testing.T, up *testkit.Upstream, allow []string, reg *plugin.Registry) *httptest.Server {
 	t.Helper()
 	adreg := adapter.NewRegistry()
@@ -62,7 +61,7 @@ func newAllowProxy(t *testing.T, up *testkit.Upstream, allow []string, reg *plug
 	return ts
 }
 
-// doPost 通用 lane 请求助手(JSON POST,读全响应体)。
+// doPost 通用 lane 请求助手：JSON POST，读全响应体。
 func doPost(t *testing.T, baseURL, path, body string) (*http.Response, string) {
 	t.Helper()
 	resp, err := http.Post(baseURL+path, "application/json", strings.NewReader(body))
@@ -77,7 +76,7 @@ func doPost(t *testing.T, baseURL, path, body string) (*http.Response, string) {
 	return resp, string(raw)
 }
 
-// assertForbidden 断言 403 信封:类型 forbidden、code model_not_allowed、上游零调用。
+// assertForbidden 断言 403 信封：类型 forbidden、code model_not_allowed、上游零调用。
 func assertForbidden(t *testing.T, resp *http.Response, body string, up *testkit.Upstream) {
 	t.Helper()
 	if resp.StatusCode != http.StatusForbidden {
@@ -91,7 +90,7 @@ func assertForbidden(t *testing.T, resp *http.Response, body string, up *testkit
 	}
 }
 
-// chat 主路径:白名单外 403,上游零调用,message 可读。
+// chat 主路径：白名单外 403，上游零调用，message 可读。
 func TestAllowlist_chat_白名单外403零上游(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
@@ -102,7 +101,7 @@ func TestAllowlist_chat_白名单外403零上游(t *testing.T) {
 	}
 }
 
-// 白名单内正常放行;空白名单 = 不限,与现状一致。
+// 白名单内正常放行；空白名单视为不限。
 func TestAllowlist_chat_白名单内放行与空白名单恒放行(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
@@ -120,7 +119,7 @@ func TestAllowlist_chat_白名单内放行与空白名单恒放行(t *testing.T)
 	}
 }
 
-// 白名单外请求即使存在可命中的语义缓存条目也不得回放(校验先于缓存检索)。
+// 白名单外请求即使存在可命中的语义缓存条目也不得回放，校验先于缓存检索。
 func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200,
 		`{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
@@ -150,14 +149,14 @@ func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/chat/completions", p.Handler())
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// TenantID 须为播种租户(semantic_cache 外键);开关恒真使缓存通路参与
+		// TenantID 须为播种租户，作为 semantic_cache 外键；开关恒真使缓存通路参与。
 		info := &auth.KeyInfo{ID: "k1", TenantID: testTenant, AllowedModels: []string{"alias-a"}}
 		mux.ServeHTTP(w, r.WithContext(auth.WithKeyInfo(r.Context(), info)))
 	}))
 	t.Cleanup(ts.Close)
 
-	// 第一次 miss 出站入库,第二次命中回放(上游仍只 1 次)——先证缓存通路工作
-	// (temperature 显式 ≤0.3 是缓存准入条件,缺省请求恒 skip)
+	// 先证缓存通路工作：第一次 miss 出站入库，第二次命中回放，上游仍只 1 次。
+	// temperature 显式 ≤0.3 是缓存准入条件，缺省请求恒 skip。
 	for i := 0; i < 2; i++ {
 		resp, body := postChat(t, ts.URL, `{"model":"alias-a","temperature":0.1,"messages":[{"role":"user","content":"hi"}]}`)
 		if resp.StatusCode != http.StatusOK {
@@ -167,7 +166,7 @@ func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 	if got := up.RequestCount(); got != 1 {
 		t.Fatalf("第二次应吃语义缓存命中,上游实收 %d 次", got)
 	}
-	// 白名单外:可命中缓存存在仍 403,零上游(基线比较——命中请求已让上游计数为 1)
+	// 白名单外：可命中缓存存在仍 403，零上游；基线比较，命中请求已让上游计数为 1。
 	baseline := up.RequestCount()
 	resp, body := postChat(t, ts.URL, `{"model":"alias-b","temperature":0.1,"messages":[{"role":"user","content":"hi"}]}`)
 	if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "model_not_allowed") {
@@ -178,18 +177,18 @@ func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 	}
 }
 
-// 插件把白名单内的 model 改写为白名单外别名:重解析后再校验必须拦截(改写不得绕过白名单)。
+// 插件把白名单内的 model 改写为白名单外别名：重解析后再校验必须拦截，改写不得绕过白名单。
 func TestAllowlist_插件改写model后再校验(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	reg := manualRegistry(t, "model-rewriter", testkit.FixtureModifyModel, 200)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, reg)
-	// 请求本身是白名单内的 alias-a;插件把请求体改成含 alias-b 的合法 chat 体
+	// 请求本身是白名单内的 alias-a，插件把请求体改成含 alias-b 的合法 chat 体。
 	resp, body := postChat(t, ts.URL, `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
 	assertForbidden(t, resp, body, up)
 }
 
-// 六 lane 同规:messages/responses/gemini/embeddings/images 白名单外一律同形 403、零上游
-// (chat 主路径另有专项场景)。
+// 六 lane 同规：messages/responses/gemini/embeddings/images 白名单外一律同形 403、零上游，
+// chat 主路径另有专项场景。
 func TestAllowlist_多lane同规(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
@@ -205,8 +204,8 @@ func TestAllowlist_多lane同规(t *testing.T) {
 		{"images", "/v1/images/generations", `{"model":"alias-b","prompt":"a cat","n":1}`},
 	}
 	for _, tc := range cases {
-		// gemini lane 原生信封形态(ADR-0015):管道错误经 writer 改写为 Gemini 形态,
-		// 不携带 muniu code——gemini 只断言 403 + 访问拒绝语义,不强求 model_not_allowed 字面量
+		// gemini lane 返回原生信封形态：管道错误经 writer 改写为 Gemini 形态，不携带 muniu code，
+		// 故只断言 403 加访问拒绝语义，不强求 model_not_allowed 字面量。
 		resp, body := doPost(t, ts.URL, tc.path, tc.body)
 		if resp.StatusCode != http.StatusForbidden {
 			t.Fatalf("[%s] 应 403,实际 %d: %s", tc.name, resp.StatusCode, body)
@@ -220,8 +219,7 @@ func TestAllowlist_多lane同规(t *testing.T) {
 	}
 }
 
-// messages 流式白名单外 403:信封经 finish() 按管道错误类型映射为 Anthropic 原生类型
-// (forbidden→permission_error,与翻译期既有形态同缝)——本用例钉住状态码、类型映射与零上游。
+// messages 流式白名单外请求返回 Anthropic permission_error，且不触达上游。
 func TestAllowlist_messages流式403信封类型(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
@@ -241,7 +239,7 @@ func TestAllowlist_messages流式403信封类型(t *testing.T) {
 	}
 }
 
-// 模型发现:列表按 key 白名单过滤;单查白名单内 200、在目录但白名单外 403、不在目录 404。
+// 模型发现：列表按 key 白名单过滤；单查白名单内 200、在目录但白名单外 403、不在目录 404。
 func TestAllowlist_模型发现过滤与单查分支(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
@@ -264,7 +262,6 @@ func TestAllowlist_模型发现过滤与单查分支(t *testing.T) {
 	}
 }
 
-// doGet 发现面请求助手。
 func doGet(t *testing.T, baseURL, path string) (*http.Response, string) {
 	t.Helper()
 	resp, err := http.Get(baseURL + path)

@@ -1,5 +1,4 @@
-// 告警通知器契约测试(webhook-alerting;测试先行域):
-// 去重窗口内静默/窗口过期重新通知/退避重试后放弃/失败不波及调用方/payload 形态。
+// 契约覆盖：去重窗口内静默、窗口过期重新通知、退避重试后放弃、失败不波及调用方、payload 形态。
 package alerting
 
 import (
@@ -27,8 +26,8 @@ func TestAlerting_去重窗口(t *testing.T) {
 	n := New(Options{WebhookURL: srv.URL, DedupWindow: time.Minute, Backoff: []time.Duration{time.Millisecond}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: clk.Now})
 
 	n.Emit("keypool_exhausted:p1", "warning", "x")
-	n.Emit("keypool_exhausted:p1", "warning", "x") // 窗口内:静默
-	n.Emit("keypool_exhausted:p2", "warning", "y") // 不同键:通知
+	n.Emit("keypool_exhausted:p1", "warning", "x") // 窗口内：静默
+	n.Emit("keypool_exhausted:p2", "warning", "y") // 不同键：通知
 	waitFor(t, func() bool { return hits.Load() == 2 })
 
 	clk.t = clk.t.Add(2 * time.Minute) // 窗口过期
@@ -77,7 +76,7 @@ func TestAlerting_payload形态(t *testing.T) {
 
 func TestAlerting_nil零开销(t *testing.T) {
 	var n *Notifier
-	n.Emit("anything", "warning", "x") // nil 接收者:不得 panic
+	n.Emit("anything", "warning", "x") // nil 接收者不得 panic
 }
 
 func waitFor(t *testing.T, cond func() bool) {

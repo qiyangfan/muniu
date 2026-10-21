@@ -1,6 +1,5 @@
-// Responses 入站翻译契约测试(responses-api-inbound;测试先行域:协议适配)。
-// 依据 docs/design/proxy-and-streaming.md「Responses 入站翻译」映射表:
-// 合法映射逐格、危险字段显式拒绝、非流式对象形态、流式事件顺序不变式、usage 映射。
+// Responses 入站翻译测试：合法映射逐格、危险字段显式拒绝、非流式对象形态、
+// 流式事件顺序不变式与 usage 映射。
 package protocol
 
 import (
@@ -14,7 +13,7 @@ import (
 //go:embed testdata/responses/*.json
 var testdataFS embed.FS
 
-// respReq 构造合法基线请求,测试按字段覆盖。
+// respReq 构造合法基线请求，测试按字段覆盖。
 func respReq(t *testing.T, patch string) []byte {
 	t.Helper()
 	base := `{"model":"alias-a","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],"stream":false}`
@@ -28,7 +27,7 @@ func TestTranslateResponsesRequest_合法映射(t *testing.T) {
 	cases := []struct {
 		name  string
 		patch string
-		want  string // 期望翻译后 chat JSON 的 messages/tools 片段(子串断言)
+		want  string // 期望翻译后 chat JSON 的 messages/tools 片段，子串断言
 	}{
 		{"instructions置前", `"instructions":"be nice"`, `"role":"system","content":"be nice"`},
 		{"input字符串快捷形态", `"input":"hello"`, `"content":"hello"`},
@@ -54,9 +53,9 @@ func TestTranslateResponsesRequest_合法映射(t *testing.T) {
 	}
 }
 
-// TestTranslateResponsesRequest_官方快捷形态 官方规范内合法形态放行与缺省判定边界
-// (fix-responses-input-forms;kongming e2e 实证的两处误拒:省略 type、字符串 content)。
-// 对拍断言快捷与显式形态 canonical 逐字节一致——缓存指纹/计量同构的漂移探测器。
+// TestTranslateResponsesRequest_官方快捷形态 官方规范内的快捷形态放行与缺省判定边界：
+// 省略 type、字符串 content 均为合法形态。对拍断言快捷与显式形态 canonical 逐字节一致，
+// 是缓存指纹与计量同构的漂移探测器。
 func TestTranslateResponsesRequest_官方快捷形态(t *testing.T) {
 	shortcut := `{"model":"alias-a","input":[{"role":"user","content":"你好"}],"stream":false}`
 	typed := `{"model":"alias-a","input":[{"type":"message","role":"user","content":"你好"}],"stream":false}`
@@ -70,7 +69,7 @@ func TestTranslateResponsesRequest_官方快捷形态(t *testing.T) {
 			t.Fatalf("字符串 content 应折叠为文本消息: %s", req.Raw)
 		}
 	}
-	// 对拍:快捷/显式 type/部件数组三形态 canonical 逐字节一致
+	// 对拍：快捷/显式 type/部件数组三形态 canonical 逐字节一致
 	reqS, errS := TranslateResponsesRequest([]byte(shortcut))
 	reqT, errT := TranslateResponsesRequest([]byte(typed))
 	reqP, errP := TranslateResponsesRequest([]byte(parts))
@@ -197,7 +196,7 @@ func TestResponsesObjectFromChat_非流式映射(t *testing.T) {
 	}
 }
 
-// 流式事件顺序不变式:created 首帧、completed 终帧、delta 仅出现于两者之间、completed 带 usage。
+// 流式事件顺序不变式：created 首帧、completed 终帧、delta 仅出现于两者之间、completed 带 usage。
 func TestResponsesStreamEncoder_事件序列不变式(t *testing.T) {
 	e := NewResponsesStreamEncoder("resp_r1", "alias-a")
 	first := e.Init()
@@ -281,7 +280,7 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// fixture 消费:翻译样例(testdata)作为可执行资产——非流式映射/流式序列的独立对照源。
+// fixture 消费：翻译样例(testdata)作为可执行资产，是非流式映射与流式序列的独立对照源。
 func TestResponsesFixtures_翻译样例(t *testing.T) {
 	raw, err := testdataFS.ReadFile("testdata/responses/request-translation.json")
 	if err != nil {
@@ -320,7 +319,7 @@ func TestResponsesFixtures_翻译样例(t *testing.T) {
 }
 
 func TestTranslateResponsesRequest_toolChoice具名与instructions置前(t *testing.T) {
-	// 具名形态(域A 审查:{"type":"function","name"} 的 type 恒存在,旧条件永不命中)
+	// 具名形态中的 type 字段始终存在。
 	req, err := TranslateResponsesRequest(respReq(t, `"tool_choice":{"type":"function","name":"f"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -329,11 +328,11 @@ func TestTranslateResponsesRequest_toolChoice具名与instructions置前(t *test
 		strings.Contains(string(req.Raw), `"name":"f","type"`) {
 		t.Fatalf("具名 tool_choice 应移入 function: %s", req.Raw)
 	}
-	// 不支持的 tool_choice 对象形态显式拒绝(非静默透传)
+	// 不支持的 tool_choice 对象形态显式拒绝，非静默透传
 	if _, err := TranslateResponsesRequest(respReq(t, `"tool_choice":{"type":"allowed_tools","mode":"auto"}`)); err == nil {
 		t.Fatal("allowed_tools 应显式拒绝")
 	}
-	// instructions 置前:system 必须是 messages 首元素(顺序断言,非仅存在性)
+	// instructions 置前：system 必须是 messages 首元素，顺序断言而非仅存在性
 	req, err = TranslateResponsesRequest(respReq(t, `"instructions":"be nice"`))
 	if err != nil {
 		t.Fatal(err)
@@ -351,7 +350,7 @@ func TestTranslateResponsesRequest_toolChoice具名与instructions置前(t *test
 	}
 }
 
-// 并行多 tool calls:按内层 index 独立跟踪,added/args/done 不串号(域B 审查 A 项钉子)。
+// 并行工具调用按各自的 index 跟踪，事件不得串号。
 func TestResponsesStreamEncoder_并行工具项(t *testing.T) {
 	e := NewResponsesStreamEncoder("resp_p1", "alias-a")
 	e.Init()
@@ -400,9 +399,9 @@ func TestResponsesStreamEncoder_并行工具项(t *testing.T) {
 	}
 }
 
-// TestTranslateResponsesRequest_原始体保留与状态提取 直通双形态(protocol-native-passthrough):
-// 失格(input_image 等)降级为失格标记而非 error;previous_response_id 改为提取供粘性路由
-// 判定(翻译路径拒绝语义由 legacy wrapper 维持);原始体逐字节保留。
+// TestTranslateResponsesRequest_原始体保留与状态提取 直通双形态：失格如 input_image
+// 降级为失格标记而非 error；previous_response_id 改为提取供粘性路由判定，
+// 翻译路径的拒绝语义由 legacy wrapper 维持；原始体逐字节保留。
 func TestTranslateResponsesRequest_原始体保留与状态提取(t *testing.T) {
 	raw := []byte(`{"model":"gpt-x","stream":true,"previous_response_id":"resp_1",` +
 		`"input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,xx"}]}]}`)
@@ -421,7 +420,7 @@ func TestTranslateResponsesRequest_原始体保留与状态提取(t *testing.T) 
 		t.Fatalf("失格请求的路由/状态信息不符: %+v", res)
 	}
 
-	// 状态请求(previous_response_id)在 Ex 不再拒绝:canonical 照算,拒绝判定移交路径决策
+	// 状态请求(previous_response_id)在 Ex 不再拒绝：canonical 照算，拒绝判定移交路径决策
 	rawPrev := []byte(`{"model":"m","previous_response_id":"resp_9","input":"你好"}`)
 	resPrev := TranslateResponsesRequestEx(rawPrev)
 	if resPrev.Fatal != nil || resPrev.Ineligible != nil || resPrev.Chat == nil {
@@ -434,7 +433,7 @@ func TestTranslateResponsesRequest_原始体保留与状态提取(t *testing.T) 
 		t.Fatalf("原始体必须逐字节保留: %s", resPrev.Raw)
 	}
 
-	// legacy wrapper(翻译路径契约)维持拒绝清单零改动
+	// legacy wrapper 维持拒绝清单零改动
 	if _, err := TranslateResponsesRequest(raw); err == nil {
 		t.Fatal("legacy: 失格应报错")
 	}
@@ -448,8 +447,8 @@ func TestTranslateResponsesRequest_原始体保留与状态提取(t *testing.T) 
 	}
 }
 
-// TestChatFromResponsesObject_reasoning摘要 canonical 侧 reasoning 双形态兼容:
-// 官方 summary[]（summary_text）与简化实现的顶层 text 皆入 reasoning_content。
+// TestChatFromResponsesObject_reasoning摘要 canonical 侧 reasoning 双形态兼容：
+// 官方 summary[](summary_text) 与简化实现的顶层 text 皆入 reasoning_content。
 func TestChatFromResponsesObject_reasoning摘要(t *testing.T) {
 	out, err := ChatFromResponsesObject([]byte(
 		`{"id":"resp_1","status":"completed","output":[` +
@@ -473,8 +472,8 @@ func TestChatFromResponsesObject_reasoning摘要(t *testing.T) {
 	}
 }
 
-// TestChatFromResponsesObject_status保真 canonical 侧 finish_reason 按对象 status 保真:
-// incomplete 不得伪造 stop(伪造会让未完成响应经缓存准入流入跨协议回放)。
+// TestChatFromResponsesObject_status保真 canonical 侧 finish_reason 按对象 status 保真：
+// incomplete 不得伪造 stop，否则未完成响应会经缓存准入流入跨协议回放。
 func TestChatFromResponsesObject_status保真(t *testing.T) {
 	completed, err := ChatFromResponsesObject([]byte(
 		`{"id":"resp_1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":3,"output_tokens":2}}`))

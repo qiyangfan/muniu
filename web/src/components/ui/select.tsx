@@ -4,12 +4,7 @@ import { Select as SelectPrimitive } from "radix-ui";
 
 import { cn } from "../../lib/utils";
 
-// 本地标准件,API/配方逐类对齐 kongming(Radix Select 组合式:Root/Trigger/Value/Content/
-// Item/Group/Label/Separator/ScrollButton 全套同名同档,实现逐类对齐 kongming/apps/web
-// 同位文件)。owner 2026-09-26 插话废止旧「原生 select 收敛配方」:焦点圈定、键盘导航
-// (方向键/Home/End/首字母跳转)、portal 定位与 aria 语义均由 Radix 承担,禁再手搓。
-// 与 kongming 的差异仅一处:相对导入(本仓无 @ 别名);动画类已随 tw-animate-css
-// 入仓全量对齐(2026-10-02 视觉收敛)。
+// 本地标准件，API 和配方对齐 kongming；交互行为由 Radix Select 提供。
 function Select({ ...props }: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />;
 }

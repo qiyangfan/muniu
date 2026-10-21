@@ -1,9 +1,5 @@
-// 有状态粘性路由亲和表(protocol-native-passthrough;ADR-0014):
-// 成功响应 id → provider,进程内 TTL + LRU 容量上限。粘性是服务端状态定向单上游的
-// 显式语义(物理约束而非实现缺陷):粘性请求候选域收缩至亲和 provider——域内 key/
-// 候选 failover 照常,跨 provider 换道不发生;亲和未知(重启丢失/非本网关创建)走
-// 自解释降级,禁止盲发上游引发 404 换道级联。集群共享后端形态按 ADR-0008 复用登记,
-// 未配共享 = 实例内粘性(HANDOFF 登记)。
+// 亲和表将成功响应 ID 绑定到 provider 和创建请求的 key，条目保存在进程内并受 TTL、LRU 容量限制。
+// 有状态请求只在绑定的 provider 内换道；亲和未知或失效时返回自解释错误，不盲发上游。
 package proxy
 
 import (
@@ -17,24 +13,23 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// 亲和表运行参数(最小形态;容量/TTL 防无限增长,非配置面——契约常量)。
+// 亲和表的 TTL 和容量上限。
 const (
 	affinityTTL      = 24 * time.Hour
 	affinityCapacity = 4096
 )
 
-// responseAffinityLostCode 亲和未知自解释机器码(区别于 previous_response_id_unsupported:
-// 后者=别名无原生 lane,前者=lane 存在但绑定丢失)。
+// responseAffinityLostCode 表示响应 ID 的亲和关系未知或已失效。
 const responseAffinityLostCode = "response_affinity_lost"
 
 type affEntry struct {
 	id       string
 	provider string
-	apiKeyID string // 归属 key(responses-state-ownership):创建请求的鉴权 key 标识
+	apiKeyID string // 创建该响应的请求所用 key ID
 	at       time.Time
 }
 
-// affinityTable 进程内亲和表:map + LRU 链(命中/写入提升前端,容量淘汰尾端,TTL 读取侧过滤)。
+// affinityTable 保存响应 ID 的 provider 亲和关系。
 type affinityTable struct {
 	mu      sync.Mutex
 	entries map[string]*list.Element // respID → 元素
@@ -45,9 +40,7 @@ func newAffinityTable() *affinityTable {
 	return &affinityTable{entries: map[string]*list.Element{}, lru: list.New()}
 }
 
-// Put 记录/刷新响应 id → provider + 归属 key(成功响应回写;重复 id 覆盖并提升)。
-// apiKeyID 为创建请求的鉴权 key 标识(auth 中间件保证非空;测试直挂路径可能为空,
-// 空归属条目在 Get 侧永不匹配——fail-closed)。
+// Put 记录响应 ID 的 provider 和创建它的 key；相同 ID 会覆盖旧记录。
 func (a *affinityTable) Put(id, provider, apiKeyID string) {
 	if id == "" || provider == "" {
 		return
@@ -73,9 +66,7 @@ func (a *affinityTable) Put(id, provider, apiKeyID string) {
 	}
 }
 
-// Get 查亲和(命中提升位置;过期即删,视为未知)。归属判定在表内单点完成:
-// apiKeyID 为空(无鉴权信息,生产不可达)或与记录不符一律 !ok——三消费点对
-// 「未知/不匹配」不可区分处理,不泄露存在性(responses-state-ownership)。
+// Get 查询响应 ID 的亲和关系；过期、缺少或不匹配 key ID 都按未知处理，避免泄露 ID 是否存在。
 func (a *affinityTable) Get(id, apiKeyID string) (string, bool) {
 	if apiKeyID == "" {
 		return "", false
@@ -100,7 +91,7 @@ func (a *affinityTable) Get(id, apiKeyID string) (string, bool) {
 	return entry.provider, true
 }
 
-// apiKeyIDOf 当前请求的鉴权 key 标识(亲和归属判定;无鉴权信息返回空=永不匹配)。
+// apiKeyIDOf 返回当前请求的鉴权 key ID；缺少鉴权信息时返回空串。
 func apiKeyIDOf(r *http.Request) string {
 	if info := auth.KeyFrom(r.Context()); info != nil {
 		return info.ID
@@ -108,13 +99,10 @@ func apiKeyIDOf(r *http.Request) string {
 	return ""
 }
 
-// stickyError 粘性路由的即时终态错误(自解释信封;禁盲发上游)。
+// stickyError 保存粘性路由失败时返回的错误。
 type stickyError struct{ code, msg string }
 
-// stickyRoute 有状态请求的候选域收缩:
-// ①别名无原生 responses 候选 → 翻译路径维持既有拒绝(chat 上游无服务端状态);
-// ②亲和已知 → 候选收缩至亲和 provider(域内 failover 照常,跨 provider 不换道);
-// ③亲和未知/亲和 provider 已离开候选 → 自解释降级。
+// stickyRoute 将有状态请求限制在亲和 provider 的候选内；亲和未知或失效时返回错误。
 func (p *Proxy) stickyRoute(r *http.Request, nat *inboundNative, topo *topologySnapshot, cands []config.Candidate) ([]config.Candidate, *stickyError) {
 	if !aliasHasNative(topo, protocol.InboundResponses, cands) {
 		StickyRequestsTotal.Inc("unsupported")
@@ -141,7 +129,7 @@ func (p *Proxy) stickyRoute(r *http.Request, nat *inboundNative, topo *topologyS
 		}
 	}
 	if len(out) == 0 {
-		// 亲和 provider 已不在别名候选内(拓扑变更):同自解释降级,不盲发
+		// 拓扑变更后亲和 provider 不再可选，按亲和失效处理。
 		StickyRequestsTotal.Inc("lost")
 		return nil, &stickyError{
 			code: responseAffinityLostCode,

@@ -1,6 +1,4 @@
-// Anthropic Messages 入站端到端钉子(ADR-0013):canonical 等价性(翻译产物 ≡ 等价 chat
-// 请求字节,传递性钉死治理/缓存/计量同构)、非流式 message 对象改写、流式事件顺序不变式
-// ([DONE] 不透传)、不支持内容块 fail-fast 不触达上游、x-api-key 鉴权头适配。
+// 验证 Anthropic Messages 入站翻译、流式事件、错误边界和 x-api-key 适配。
 package proxy
 
 import (
@@ -47,8 +45,7 @@ func newMeteredProxyForMessages(t *testing.T, jsonBody string) *httptest.Server 
 	return ts
 }
 
-// 等价性钉子:Messages 请求与手工等价 chat 请求,到达上游的字节逐字节一致
-// (canonical 同构 → 治理/缓存/计量行为等价的传递性证明)。
+// 验证等价的 Messages 和 Chat 请求会生成相同的上游请求体。
 func TestMessagesE2E_与等价chat请求字节同构(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	reg := adapter.NewRegistry()
@@ -81,7 +78,7 @@ func TestMessagesE2E_与等价chat请求字节同构(t *testing.T) {
 	}
 }
 
-// 非流式:客户端收到 Anthropic message 对象(thinking/text/tool_use、stop_reason、usage)。
+// 非流式：客户端收到 Anthropic message 对象，含 thinking/text/tool_use、stop_reason 与 usage。
 func TestMessagesE2E_非流式对象与usage(t *testing.T) {
 	ts := newMeteredProxyForMessages(t, usageJSONBody)
 	resp, body := postChat(t, ts.URL, `{"model":"alias-a","max_tokens":100,"messages":[{"role":"user","content":"你好"}]}`)
@@ -118,7 +115,7 @@ func TestMessagesE2E_非流式对象与usage(t *testing.T) {
 	}
 }
 
-// 流式:事件顺序不变式(message_start 首帧/message_stop 终帧);chat 的 [DONE] 不得透传。
+// 流式：事件顺序不变式，message_start 首帧、message_stop 终帧；chat 的 [DONE] 不得透传。
 func TestMessagesE2E_流式事件序列(t *testing.T) {
 	up := testkit.StartStreamUpstream(t, testkit.NormalEvents())
 	reg := adapter.NewRegistry()
@@ -166,7 +163,7 @@ func TestMessagesE2E_流式事件序列(t *testing.T) {
 	}
 }
 
-// 不支持内容块:image 在入口 400(Anthropic error JSON),不触达上游。
+// 不支持内容块：image 在入口 400，返回 Anthropic error JSON，不触达上游。
 func TestMessagesE2E_不支持内容块拒绝(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	reg := adapter.NewRegistry()

@@ -5,14 +5,14 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** 读取设计 token 计算值(canvas/图表取色用)。全站单源,禁再各文件复制本函数(宪法 Article 3)。 */
+/** 读取设计 token 的计算值，canvas 和图表取色使用；统一走本函数，不要在各文件复制。 */
 export function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
 /**
- * credit 大数的人类可读缩写(万/亿;credit 模式下配额与成本常为亿级整数)。
- * ≥1亿 → "x.x亿";≥1万 → "x.x万";其余原值。负数与 0 原样。
+ * credit 大数的可读缩写（万/亿；credit 模式下配额与成本常为亿级整数）。
+ * ≥1亿 显示「x.x亿」，≥1万 显示「x.x万」，其余值、负数与 0 原样。
  */
 export function fmtCredits(n: number): string {
   const abs = Math.abs(n);
@@ -22,7 +22,7 @@ export function fmtCredits(n: number): string {
 }
 
 /**
- * RFC3339(UTC)→ datetime-local 输入值(本地时区,分钟精度);空串原样返回。
+ * RFC3339 UTC 时刻转 datetime-local 输入值（本地时区，分钟精度），空串原样返回。
  * 用于把后端过期时刻回填进 datetime-local 选择器。
  */
 export function rfc3339ToLocal(v: string): string {

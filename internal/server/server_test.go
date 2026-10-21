@@ -1,4 +1,4 @@
-// server 契约测试:中间件链行为(panic 兜底/request_id 回带/访问日志)与优雅退出(在途请求跑完)。
+// server 契约测试：中间件链行为含 panic 兜底、request_id 回带、访问日志，以及优雅退出让在途请求跑完。
 package server
 
 import (
@@ -50,7 +50,7 @@ func TestRequestID_回带响应头并写入ctx(t *testing.T) {
 	if got != seenInHandler {
 		t.Fatalf("ctx 中的 request_id(%q)与响应头(%q)不一致", seenInHandler, got)
 	}
-	// UUIDv7 形态粗校验:36 位、含连字符
+	// UUIDv7 形态粗校验：36 位、含连字符
 	if len(got) != 36 || strings.Count(got, "-") != 4 {
 		t.Fatalf("request_id 非 UUID 形态: %q", got)
 	}

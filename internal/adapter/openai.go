@@ -1,5 +1,4 @@
-// openai 兼容基座:覆盖所有「OpenAI 兼容端点」供应商(DeepSeek/Moonshot/GLM/Qwen/Doubao 等)。
-// 差异只进 quirks patch,禁止为兼容家复制整套适配器(ADR-0003)。
+// OpenAI 兼容基座供兼容 OpenAI API 的供应商复用；各家差异由 quirk 补丁处理。
 package adapter
 
 import (
@@ -13,18 +12,17 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// OpenAI 基座实例:一个 provider 一个(基址绑定;key 由 keypool 每请求提供)。
+// OpenAI 是 OpenAI 兼容适配器，保存 provider 的 API 基址。
 type OpenAI struct {
 	baseURL string
 }
 
-// NewOpenAI 构造基座适配器(apiKey 参数保留位:基座不再持有 key,兼容旧调用传空串)。
+// NewOpenAI 创建 OpenAI 兼容适配器。
 func NewOpenAI(baseURL, apiKey string) *OpenAI {
 	return &OpenAI{baseURL: baseURL}
 }
 
-// Prepare 组装出站请求:URL = base_url + /chat/completions(容忍基址尾斜杠);
-// body 经 protocol.RewriteModel 只换 model;鉴权 Bearer,key 由 keypool 每请求注入。
+// Prepare 构造 /chat/completions 请求，并改写 model 字段。
 func (o *OpenAI) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey string) (*Outbound, error) {
 	body, err := protocol.RewriteModel(in.Raw, upstreamModel)
 	if err != nil {
@@ -40,7 +38,7 @@ func (o *OpenAI) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey string)
 	}, nil
 }
 
-// Classify 按状态码粗分(Phase 1 粒度;body 细分留给 quirk 层需要时再启用)。
+// Classify 按 HTTP 状态码归类上游错误。
 func (o *OpenAI) Classify(status int, _ []byte) failover.ErrorClass {
 	switch {
 	case status == http.StatusBadRequest:
@@ -56,7 +54,7 @@ func (o *OpenAI) Classify(status int, _ []byte) failover.ErrorClass {
 	}
 }
 
-// openAIUsage OpenAI usage 原始形态(归一表的 OpenAI 列)。
+// openAIUsage 是 OpenAI 响应中的 usage 形态。
 type openAIUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
@@ -68,7 +66,7 @@ type openAIUsage struct {
 	} `json:"completion_tokens_details"`
 }
 
-// NormalizeUsage OpenAI 列 → 统一 Usage(缺失按 0,不猜)。
+// NormalizeUsage 将 OpenAI usage 转为统一形态；缺失字段按 0 处理。
 func (o *OpenAI) NormalizeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	var raw_ openAIUsage
 	if err := json.Unmarshal(raw, &raw_); err != nil {
@@ -82,7 +80,7 @@ func (o *OpenAI) NormalizeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	}, nil
 }
 
-// PrepareEmbeddings 组装 embeddings 出站请求(URL = base + /v1/embeddings,只换 model)。
+// PrepareEmbeddings 构造 /embeddings 请求，并改写 model 字段。
 func (o *OpenAI) PrepareEmbeddings(in *protocol.EmbeddingRequest, upstreamModel, apiKey string) (*Outbound, error) {
 	body, err := protocol.RewriteModel(in.Raw, upstreamModel)
 	if err != nil {
@@ -98,7 +96,7 @@ func (o *OpenAI) PrepareEmbeddings(in *protocol.EmbeddingRequest, upstreamModel,
 	}, nil
 }
 
-// RewriteResponse 基座非流式:原样透传,仅抽取 usage 原始字节供归一。
+// RewriteResponse 原样返回响应体，并提取 usage。
 func (o *OpenAI) RewriteResponse(body []byte) ([]byte, json.RawMessage, error) {
 	var resp struct {
 		Usage json.RawMessage `json:"usage"`
@@ -109,15 +107,15 @@ func (o *OpenAI) RewriteResponse(body []byte) ([]byte, json.RawMessage, error) {
 	return body, resp.Usage, nil
 }
 
-// StreamEvent 只读归一:passthrough 恒为原字节(字段改写白名单),meta 供首 token 判定与计量。
+// StreamEvent 不改写事件内容，passthrough 恒为原字节，meta 供首 token 判定与计量。
 func (o *OpenAI) StreamEvent(data []byte) ([]byte, EventMeta, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "[DONE]" {
 		return data, EventMeta{IsDone: true}, nil
 	}
 	if trimmed == "" || strings.HasPrefix(trimmed, ":") {
-		// 空 data / 纯注释事件(SSE 心跳):对客户端不可见且不报错——按解析失败处理会把
-		// 合法心跳误判为上游断流,长流在心跳点被随机切断
+		// 空 data 或纯注释事件是 SSE 心跳，对客户端不可见也不报错；若按解析失败处理，
+		// 合法心跳会被误判为上游断流，长流在心跳点被随机切断
 		return nil, EventMeta{}, nil
 	}
 	chunk, err := protocol.ParseStreamChunk(data)
@@ -126,19 +124,19 @@ func (o *OpenAI) StreamEvent(data []byte) ([]byte, EventMeta, error) {
 	}
 	return data, EventMeta{
 		HasContent: chunk.HasContent(),
-		// 帧携带 usage 即为 usage 帧(Doubao 等家挂在 finish 帧上,choices 非空);
-		// 纯 usage 终帧(empty choices)同样命中
+		// 帧携带 usage 即视为 usage 帧；Doubao 等供应商挂在 choices 非空的 finish 帧上，
+		// choices 为空的纯 usage 终帧同样命中
 		IsUsage: chunk.Usage != nil,
 	}, nil
 }
 
-// ---- 同构直通能力(adapter.NativePreparer/NativeFetcher;protocol-native-passthrough) ----
+// ---- 原生协议直通能力 ----
 
-// NativeProto 基座原生协议 = OpenAI Responses(声明制 native_responses 门控在 proxy 判定)。
+// NativeProto 返回 OpenAI Responses；native_responses 声明的门控由 proxy 判定。
 func (o *OpenAI) NativeProto() protocol.InboundProtocol { return protocol.InboundResponses }
 
-// PrepareNative Responses 原始体直通出站:<base>/responses,仅 model 原位手术 + Bearer 注入。
-// 声明制(native_responses)由 provider 配置门控,本方法只对入站标签做能力边界校验。
+// PrepareNative 构造 <base>/responses 直通出站请求，仅改写 model 字段并注入 Bearer；
+// native_responses 门控由 provider 配置决定，本方法只校验入站协议匹配。
 func (o *OpenAI) PrepareNative(in *protocol.NativeRequest, upstreamModel, apiKey string) (*Outbound, error) {
 	if in.Proto != protocol.InboundResponses {
 		return nil, fmt.Errorf("adapter: 基座直通仅服务 responses 入站,得到 %q", in.Proto)
@@ -153,7 +151,7 @@ func (o *OpenAI) PrepareNative(in *protocol.NativeRequest, upstreamModel, apiKey
 	return &Outbound{URL: strings.TrimRight(o.baseURL, "/") + "/responses", Header: h, Body: body}, nil
 }
 
-// responsesStreamEvent Responses SSE 事件读侧形态(公开契约最小集;未知事件类型前向兼容不可见)。
+// responsesStreamEvent 是 Responses SSE 事件的最小解析形态，未知事件类型前向兼容、对计量不可见。
 type responsesStreamEvent struct {
 	Type     string `json:"type"`
 	Delta    string `json:"delta"`
@@ -164,13 +162,12 @@ type responsesStreamEvent struct {
 	} `json:"response"`
 }
 
-// NativeStreamEvent Responses SSE meta-only 读侧:delta 事件产出内部统一 chunk(计量
-// 拼包与翻译路径同缝),completed 终帧携带 finish_reason 与原生 usage(经
-// NormalizeNativeUsage 归一);failed 诚实报错。客户端恒收上游原字节。
+// NativeStreamEvent 解析 Responses SSE 事件产出内部 chunk 供计量使用，客户端恒收上游原字节。
+// delta 产出内容 chunk；completed 与 incomplete 终帧携带 finish_reason 与原生 usage；failed 报错。
 func (o *OpenAI) NativeStreamEvent(data []byte) ([]byte, EventMeta, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" || strings.HasPrefix(trimmed, ":") {
-		return nil, EventMeta{}, nil // 心跳/注释:不可见
+		return nil, EventMeta{}, nil // 心跳/注释帧，不可见
 	}
 	var ev responsesStreamEvent
 	if err := json.Unmarshal(data, &ev); err != nil {
@@ -186,7 +183,7 @@ func (o *OpenAI) NativeStreamEvent(data []byte) ([]byte, EventMeta, error) {
 		if ev.Delta == "" {
 			return nil, EventMeta{}, nil
 		}
-		// 参数增量按 item_id 透传进内部 chunk 的 index 语义:计量仅累计字节数,不消费 index
+		// 参数增量按 item_id 透传进内部 chunk，计量仅累计字节数，不消费 index
 		return chunkBytes2(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":` + mustJSON2(ev.Delta) + `}}]}}]}`), EventMeta{HasContent: true}, nil
 	case "response.completed":
 		b := `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]`
@@ -203,12 +200,12 @@ func (o *OpenAI) NativeStreamEvent(data []byte) ([]byte, EventMeta, error) {
 	case "response.failed", "error":
 		return nil, EventMeta{}, fmt.Errorf("adapter: responses 流内失败事件 %q", ev.Type)
 	default:
-		// created/in_progress/output_item.*/content_part.* 等:对计量不可见,前向兼容
+		// created/in_progress/output_item.*/content_part.* 等事件对计量不可见，前向兼容
 		return nil, EventMeta{}, nil
 	}
 }
 
-// responsesUsageForm Responses usage 原生形态(归一表的 responses 列)。
+// responsesUsageForm 是 Responses usage 的原生形态。
 type responsesUsageForm struct {
 	InputTokens        int64 `json:"input_tokens"`
 	OutputTokens       int64 `json:"output_tokens"`
@@ -220,8 +217,8 @@ type responsesUsageForm struct {
 	} `json:"output_tokens_details"`
 }
 
-// NormalizeNativeUsage Responses usage → 统一 Usage(与 chat 路径计量口径一致:
-// reasoning 为 output 子集只入细节,不与 output 相加)。
+// NormalizeNativeUsage 将 Responses usage 转为统一形态，与 chat 路径计量口径一致：
+// reasoning 是 output 的子集，只计入细节，不与 output 相加。
 func (o *OpenAI) NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	var f responsesUsageForm
 	if err := json.Unmarshal(raw, &f); err != nil {
@@ -235,8 +232,8 @@ func (o *OpenAI) NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, erro
 	}, nil
 }
 
-// PrepareNativeFetch 状态 lane 读删代理出站:<base>/responses/{id},无请求体,Bearer。
-// verb 为 HTTP 动词字面量(GET|DELETE),经 http.NewRequest 透传,非 GET/DELETE 由调用方拒绝。
+// PrepareNativeFetch 构造 <base>/responses/{id} 的读删代理请求，无请求体，Bearer 鉴权。
+// verb 为 HTTP 动词字面量（GET|DELETE），经 http.NewRequest 透传，非这两种动词由调用方拒绝。
 func (o *OpenAI) PrepareNativeFetch(verb, respID, apiKey string) (*Outbound, error) {
 	h := http.Header{}
 	h.Set("Authorization", "Bearer "+apiKey)
@@ -246,7 +243,7 @@ func (o *OpenAI) PrepareNativeFetch(verb, respID, apiKey string) (*Outbound, err
 	}, nil
 }
 
-// chunkBytes2 / mustJSON2:与 bridge 包同款极小封装(包内独立,避免引依赖)。
+// chunkBytes2 与 mustJSON2 为极小封装，与 bridge 包各自持有一份以避免引依赖。
 func chunkBytes2(payload string) []byte {
 	if payload == "" {
 		return nil

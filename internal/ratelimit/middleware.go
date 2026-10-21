@@ -1,4 +1,4 @@
-// 限流/配额中间件(architecture 中间件链:auth → quota → ratelimit → handler)。
+// 限流和配额中间件遵循 auth → quota → ratelimit → handler 顺序。
 package ratelimit
 
 import (
@@ -12,8 +12,8 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// Middleware RPM 限流中间件:按 ctx 中的 apikey 限额判定。
-// 无鉴权信息的链路(内部探活/无鉴权测试)直接放行——限流维度是 per apikey。
+// Middleware RPM 限流中间件，按 ctx 中的 apikey 限额判定。
+// 无鉴权信息的请求（内部探活/无鉴权测试）直接放行——限流维度是 per apikey。
 func (l *Limiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := auth.KeyFrom(r.Context())
@@ -37,8 +37,7 @@ func (l *Limiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// QuotaPlaceholder 日配额占位中间件(Phase 3 落地硬闸:已耗成本 ≥ daily_quota_credits → 402)。
-// 当前永放行——占位是为了把中间件链顺序先钉死(顺序即契约)。
+// QuotaPlaceholder 保留日配额检查在中间件链中的位置；当前始终放行。
 func QuotaPlaceholder(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)

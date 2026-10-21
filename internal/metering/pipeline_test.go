@@ -1,4 +1,4 @@
-// metering 落库链契约测试(测试先行域):批量落库、攒满即刷、背压阻塞不丢、
+// metering 落库链测试：批量落库、攒满即刷、背压阻塞不丢、
 // 优雅排干、tiktoken 离线估算路径。
 package metering
 
@@ -50,17 +50,17 @@ func countRows(t *testing.T, db *sql.DB) int {
 
 func TestPipeline_批量落库与优雅排干(t *testing.T) {
 	db := openStore(t)
-	p := NewPipeline(db, Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64}, testLogger()) // 不靠定时/批量阈值触发
+	p := NewPipeline(db, Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64}, testLogger()) // 不靠定时/批量阈值触发。
 	for i := 0; i < 5; i++ {
 		p.Submit(mkRow(string(rune('a' + i))))
 	}
-	if err := p.Close(); err != nil { // Close 必须排干存量后返回
+	if err := p.Close(); err != nil { // Close 必须排干存量后返回。
 		t.Fatalf("Close: %v", err)
 	}
 	if got := countRows(t, db); got != 5 {
 		t.Fatalf("排干后应 5 行,实际 %d", got)
 	}
-	p.Submit(mkRow("z")) // 关闭后提交:静默丢弃并告警,绝不 panic
+	p.Submit(mkRow("z")) // 关闭后提交：静默丢弃并告警，绝不 panic。
 }
 
 func TestPipeline_攒满Batch即刷不等定时(t *testing.T) {
@@ -69,7 +69,7 @@ func TestPipeline_攒满Batch即刷不等定时(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		p.Submit(mkRow(string(rune('a' + i))))
 	}
-	// Batch=8,攒满即触发一次落库;给 flusher 一拍调度时间
+	// Batch=8，攒满即触发一次落库；给 flusher 一拍调度时间。
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if countRows(t, db) == 8 {
@@ -82,10 +82,10 @@ func TestPipeline_攒满Batch即刷不等定时(t *testing.T) {
 
 func TestPipeline_背压阻塞不丢单(t *testing.T) {
 	db := openStore(t)
-	// Batch=1:flusher 每行都落库;占住唯一连接使落库阻塞 → channel 必然充满 → Submit 阻塞
+	// Batch=1 时 flusher 每行都落库；占住唯一连接使落库阻塞 → channel 必然充满 → Submit 阻塞。
 	p := NewPipeline(db, Options{Interval: time.Hour, Batch: 1, Capacity: 2}, testLogger())
 
-	held, err := db.Begin() // 占住 MaxOpenConns(1) 的唯一连接,模拟慢盘
+	held, err := db.Begin() // 占住 MaxOpenConns(1) 的唯一连接，模拟慢盘。
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,9 +100,9 @@ func TestPipeline_背压阻塞不丢单(t *testing.T) {
 	case <-done:
 		t.Fatal("上游落库阻塞时,提交应当阻塞(背压语义失效)")
 	case <-time.After(150 * time.Millisecond):
-		// 预期:仍在阻塞
+		// 预期：仍在阻塞。
 	}
-	_ = held.Rollback() // 释放连接:flusher 恢复排干
+	_ = held.Rollback() // 释放连接，flusher 恢复排干。
 	if err := p.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestTiktoken_离线词表与前缀映射(t *testing.T) {
 	if err != nil || n2 <= 0 {
 		t.Fatalf("cl100k 前缀计数失败: n=%d err=%v", n2, err)
 	}
-	n3, err := CountTokens("你好世界", "deepseek-chat") // 未知模型 → 缺省 o200k_base
+	n3, err := CountTokens("你好世界", "deepseek-chat") // 未知模型 → 缺省 o200k_base。
 	if err != nil || n3 <= 0 {
 		t.Fatalf("未知模型缺省编码失败: n=%d err=%v", n3, err)
 	}
@@ -146,7 +146,7 @@ func TestEstimate_请求输入与输出增量(t *testing.T) {
 }
 
 func TestEstimate_usuage缺失走估算并置位(t *testing.T) {
-	// 计量语义:上游 usage 缺失 → 本地估算,estimated=true
+	// 上游 usage 缺失时走本地估算并置 estimated=true。
 	in := estimateInputTokens([]map[string]any{{"role": "user", "content": "hi"}}, "m")
 	out := EstimateOutputTokens("hello", "m")
 	row := NewRow(RowParams{

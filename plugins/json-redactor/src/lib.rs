@@ -1,22 +1,12 @@
-//! json-redactor:muniu 样例 WASM 插件(ABI v0,docs/design/plugin-abi.md)。
-//!
-//! JSON Pointer 字段级脱敏——与 pii-masker 的「内容扫描」正交的「结构定向」机制:
-//! 按 RFC 6901 指针(`~1`→`/`、`~0`→`~`)+ `*` 通配段(匹配数组任意下标或对象
-//! 任意键)定位目标值,执行 `remove`(删字段)或 `replace`(整值替换)。规则经宿主
-//! `get_config("rules")` 注入(JSON 数组):
+//! json-redactor 是 muniu 的 WASM 示例插件，按 JSON Pointer 定位并修改字段。
+//! 指针遵循 RFC 6901，支持 `*` 匹配任意对象键或数组下标；规则由宿主通过 `rules` 配置传入：
 //!
 //! ```json
 //! [{"pointer": "/messages/*/name", "op": "remove"},
 //!  {"pointer": "/metadata/user_id", "op": "replace", "value": "[REDACTED]"}]
 //! ```
 //!
-//! 语义约定:中途不可解(键不存在/数组越界/类型不匹配)= 该路径静默跳过——结构
-//! 定向的本性是「目标字段存在才动手」;`modified` 只记真实发生的改动,零命中零改写。
-//! 配置非法(指针不以 `/` 开头、op 非 remove/replace、replace 缺 value、`~` 转义
-//! 非法)→ init Err → 注册即拒载,与 pii-masker 坏规则同纪律。
-//!
-//! ABI 导出与内存策略由 muniu-plugin-sdk 承接(本文件零 unsafe);构建:
-//! `plugins/build.sh`,产物 `json_redactor.wasm`。
+//! 不存在、不匹配或越界的路径会跳过；非法规则会使插件初始化失败。
 
 use muniu_plugin_sdk as sdk;
 use serde::Deserialize;
@@ -29,7 +19,7 @@ struct RuleDef {
     value: Option<Value>,
 }
 
-/// 编译后的规则(init 产物,驻留 SDK 状态区,跨调用存活)。
+/// 初始化时编译的规则集。
 struct Rules(Vec<Rule>);
 
 struct Rule {
@@ -42,14 +32,14 @@ enum Op {
     Replace(Value),
 }
 
-/// 指针段:对象键 / 数组下标(运行期按容器类型解释)/ `*` 通配。
+/// 指针中的对象键、数组下标或通配段。
 #[derive(Debug, PartialEq)]
 enum Seg {
     Token(String),
     Any,
 }
 
-// 宿主单测构建下 ABI 导出由 SDK 宏 cfg 出局,入口函数需 dead_code 豁免
+// 非 wasm 构建不生成 ABI 导出，入口函数仅由宏在 wasm 目标中引用。
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn init(config: &sdk::Config) -> Result<Rules, String> {
     let defs: Vec<RuleDef> = config
@@ -62,7 +52,7 @@ fn init(config: &sdk::Config) -> Result<Rules, String> {
 
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 fn on_request_body(body: &[u8], rules: &Rules) -> sdk::Verdict {
-    // 非 JSON 理论不可达(宿主已在钩子前完成校验):保守放行
+    // 宿主已校验请求体；解析失败时保留原请求。
     let Ok(mut value) = serde_json::from_slice::<Value>(body) else {
         return sdk::Verdict::Pass;
     };
@@ -85,10 +75,9 @@ muniu_plugin_sdk::plugin! {
     hook_request_body: on_request_body,
 }
 
-// ---- 指针解析与树操作(纯函数,宿主可单测) ----
+// ---- JSON Pointer 解析与树操作 ----
 
-/// RFC 6901 指针解析:`/a~1b/* /c` → [Token("a/b"), Any, Token("c")]。
-/// `~` 后必须跟 0 或 1,其余为非法指针。
+/// 解析 RFC 6901 指针，并将 `~0`、`~1` 解码为 `~`、`/`。
 fn parse_pointer(pointer: &str) -> Result<Vec<Seg>, String> {
     if !pointer.starts_with('/') {
         return Err(format!("指针非法 {pointer:?}:必须以 / 开头"));
@@ -143,9 +132,7 @@ fn compile_rules(defs: Vec<RuleDef>) -> Result<Rules, String> {
     Ok(Rules(out))
 }
 
-/// RFC 6901 数组下标解析:仅接受规范十进制(无前导零、无符号、非空)。
-/// 裸 `str::parse` 会把 "01"/"+1" 洗成合法下标——RFC 语义下二者不命名任何数组
-/// 元素,放行会让规则命中契约上不存在的目标(评审实钉,2026-09-13)。
+/// 只接受规范十进制数组下标，不接受前导零或正号。
 fn parse_array_index(token: &str) -> Option<usize> {
     if token.is_empty() || (token.len() > 1 && token.starts_with('0')) {
         return None;
@@ -156,8 +143,7 @@ fn parse_array_index(token: &str) -> Option<usize> {
     token.parse().ok()
 }
 
-/// 递归应用单条规则;不可解路径静默跳过,真实改动才置 modified。
-/// 前缀段逐层下行,最后一段以容器视角执行操作(remove 需要键名/下标所属容器)。
+/// 递归应用一条规则；目标路径不存在时跳过，实际修改时设置 modified。
 fn apply_rule(v: &mut Value, segs: &[Seg], op: &Op, modified: &mut bool) {
     let Some(seg) = segs.first() else {
         return; // 空指针已在编译期拒绝,防御
@@ -194,8 +180,8 @@ fn apply_rule(v: &mut Value, segs: &[Seg], op: &Op, modified: &mut bool) {
     }
 }
 
-/// 最后一段的容器视角操作:键/下标存在才动手(replace 只覆盖既有字段,不新增)。
-/// `*` 通配最后一段 = 对容器的全部成员执行操作(对象通配会清/换全部键,README 明示)。
+/// 对路径最后一段执行操作；replace 只修改已存在的值。
+/// 最后一段为 `*` 时操作容器中的全部成员。
 fn apply_on_container(container: &mut Value, seg: &Seg, op: &Op, modified: &mut bool) {
     match (container, seg) {
         (Value::Object(map), Seg::Token(key)) => match op {
@@ -405,7 +391,7 @@ mod tests {
     #[test]
     fn 数组下标_非规范形式不命中_rfc6901() {
         // RFC 6901:数组下标须为规范十进制;"01"/"+1" 不命名任何元素,
-        // 裸 parse 会把它们洗成 1 而误伤(评审修复钉子)
+        // 裸 parse 会将 "01" 或 "+1" 解析为下标 1，导致误删字段。
         for bad in ["/tags/01", "/tags/+1", "/tags/ 1", "/tags/-1", "/tags/"] {
             let v = json!({"tags": ["a", "b"]});
             let (out, modified) = apply(v, &rule(bad, "remove", None));

@@ -1,7 +1,4 @@
-// Responses 入站端到端钉子(responses-api-inbound 3.1):
-// canonical 等价性(Responses 翻译产物 ≡ 等价 chat 请求字节,传递性钉死治理/缓存/计量同构)、
-// 非流式对象改写、流式事件顺序不变式([DONE] 不透传)、危险字段 fail-fast 不触达上游、
-// usage 计量与等价 chat 一致。
+// 验证 Responses 入站翻译、流式事件、危险字段拒绝和 usage 计量。
 package proxy
 
 import (
@@ -51,8 +48,7 @@ func newMeteredProxyForResponses(t *testing.T, jsonBody string) *httptest.Server
 
 const usageJSONBody = `{"choices":[{"index":0,"message":{"role":"assistant","content":"你好"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":8}}`
 
-// 等价性钉子:Responses 请求与手工等价 chat 请求,到达上游的字节逐字节一致
-// (canonical 同构 → 治理/缓存/计量行为等价的传递性证明)。
+// 验证等价的 Responses 和 Chat 请求会生成相同的上游请求体。
 func TestResponsesE2E_与等价chat请求字节同构(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	reg := adapter.NewRegistry()
@@ -85,7 +81,7 @@ func TestResponsesE2E_与等价chat请求字节同构(t *testing.T) {
 	}
 }
 
-// 非流式:客户端收到 Responses 对象(message/output_text/usage)。
+// 非流式：客户端收到 Responses 对象，含 message/output_text/usage。
 func TestResponsesE2E_非流式对象与usage(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1/chat/completions", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,7 +126,7 @@ func TestResponsesE2E_非流式对象与usage(t *testing.T) {
 	}
 }
 
-// 流式:事件顺序不变式;chat 的 [DONE] 不得透传(Responses 以 completed 收尾)。
+// 流式：事件顺序不变式；chat 的 [DONE] 不得透传，Responses 以 completed 收尾。
 func TestResponsesE2E_流式事件序列(t *testing.T) {
 	up := testkit.StartStreamUpstream(t, testkit.NormalEvents())
 	reg := adapter.NewRegistry()
@@ -180,7 +176,7 @@ func TestResponsesE2E_流式事件序列(t *testing.T) {
 	}
 }
 
-// 危险字段:previous_response_id 在入口 400 拒绝,不触达上游。
+// 危险字段：previous_response_id 在入口 400 拒绝，不触达上游。
 func TestResponsesE2E_危险字段拒绝(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	reg := adapter.NewRegistry()

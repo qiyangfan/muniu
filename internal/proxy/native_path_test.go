@@ -1,6 +1,5 @@
-// 同构直通路径判定表驱动测试(protocol-native-passthrough;测试先行域):
-// 每 attempt 判定为纯函数——入站标签 × 候选能力声明 × 回落信号(native/translated/
-// 失格升格)全格枚举;判定派生自显式声明,禁止请求体协议探测。
+// 同构直通路径判定表驱动测试：每 attempt 判定为纯函数，入站标签、候选能力声明、
+// native/translated/失格升格回落信号全格枚举；判定派生自显式声明，禁止请求体协议探测。
 package proxy
 
 import (
@@ -13,7 +12,7 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// stubPlain 最小适配器桩(仅 Adapter 五方法,无任何可选能力):直通无能力格的对照物。
+// stubPlain 最小适配器桩，仅 Adapter 五方法、无任何可选能力，作直通无能力格的对照物。
 type stubPlain struct{}
 
 func (stubPlain) Prepare(*protocol.ChatRequest, string, string) (*adapter.Outbound, error) {
@@ -30,7 +29,7 @@ func (stubPlain) RewriteResponse([]byte) ([]byte, json.RawMessage, error) {
 	return nil, nil, nil
 }
 
-// stubNative 直通能力桩(协议身份可注入,声明表另行门控)。
+// stubNative 直通能力桩，协议身份可注入，声明表另行门控。
 type stubNative struct {
 	stubPlain
 	proto protocol.InboundProtocol
@@ -47,7 +46,7 @@ func (stubNative) NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, err
 	return protocol.Usage{}, nil
 }
 
-// TestDecideNativePath 判定表:每格 = (入站标签, 候选适配器能力, native_responses 声明, 插件改写) → 路径。
+// TestDecideNativePath 判定表：每格由入站标签、候选适配器能力、native_responses 声明、插件改写决定路径。
 func TestDecideNativePath(t *testing.T) {
 	cand := failover.Candidate{Provider: "p1", Model: "m1"}
 
@@ -79,7 +78,7 @@ func TestDecideNativePath(t *testing.T) {
 			}
 		})
 	}
-	// 失格请求不影响判定本身(升格在 attempt 出站前,属路径执行而非判定)
+	// 失格请求不影响判定本身，升格在 attempt 出站前，属路径执行而非判定。
 	got := decideNativePath(&inboundNative{proto: protocol.InboundMessages, ineligCode: protocol.CodeContentBlockUnsupported},
 		map[string]adapter.Adapter{"p1": stubNative{proto: protocol.InboundMessages}}, nil, cand, false)
 	if !got.native {
@@ -87,7 +86,7 @@ func TestDecideNativePath(t *testing.T) {
 	}
 }
 
-// TestBuildNativeResps 声明随快照:native_responses 声明驱动 responses 直通资格。
+// TestBuildNativeResps 验证声明随快照：native_responses 声明驱动 responses 直通资格。
 func TestBuildNativeResps(t *testing.T) {
 	m := buildNativeResps([]config.Provider{
 		{Name: "declared", NativeResponses: true},
@@ -98,7 +97,7 @@ func TestBuildNativeResps(t *testing.T) {
 	}
 }
 
-// TestAliasHasNative 别名级预判(惰性拒绝的即时 400 判据)。
+// TestAliasHasNative 验证别名级预判，即惰性拒绝的即时 400 判据。
 func TestAliasHasNative(t *testing.T) {
 	snap := &topologySnapshot{
 		adapters: map[string]adapter.Adapter{

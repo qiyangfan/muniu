@@ -1,4 +1,4 @@
-// 供应商页:已接入拓扑健康(只读)+ 官方端点预设目录(复制 YAML 片段填入 muniu.yaml 即可接入)。
+// 查看已接入供应商状态并复制官方端点配置。
 import { useEffect, useState } from "react";
 import { api, type ProviderInfo, type ProviderPreset } from "../lib/api";
 import { Badge } from "../components/ui/badge";
@@ -17,7 +17,7 @@ import { DataList, type DataCol } from "../components/data-list";
 import { EmptyState } from "../components/empty-state";
 import { Skeleton } from "../components/ui/skeleton";
 
-// key 池状态 → 状态徽章映射(宪法 Article 6:状态渲染统一走 StatusBadge,禁三元拼 Badge)
+// key 池状态统一使用 StatusBadge 展示。
 const STATE_META: StatusMeta = {
   healthy: { label: "正常", variant: "success" },
   cooldown: { label: "冷却中", variant: "warning" },
@@ -25,7 +25,7 @@ const STATE_META: StatusMeta = {
   unknown: { label: "未知", variant: "secondary" },
 };
 
-// 适配器 → 展示名;与 config 白名单/adapter.For 已实现集合同轴(azure/ollama 并非可配置适配器)
+// 可配置适配器的展示名。
 const ADAPTER_LABELS: Record<string, string> = {
   openai: "OpenAI",
   deepseek: "DeepSeek",
@@ -41,20 +41,20 @@ const adapterLabel = (adapter: string | undefined): string => {
   return ADAPTER_LABELS[key] ?? adapter ?? "—";
 };
 
-// 预设分组 → 中文;键与后端 openapi enum(domestic|global|local)同轴
+// 预设分组的中文名称。
 const GROUP_LABELS: Record<string, string> = {
   domestic: "国内官方",
   global: "国际官方",
   local: "本地运行时",
 };
 
-// 预设 → 可粘贴的 providers 段 YAML 片段(与 config.Provider 字段同轴)
+// 将预设转换为可粘贴到 providers 的 YAML 片段。
 const presetYAML = (p: ProviderPreset): string =>
   [
     `  - name: ${p.alias}`,
     `    adapter: ${p.adapter}`,
     `    base_url: "${p.base_url}"`,
-    // 鉴权形态声明:国内 Anthropic 分支按其官方文档口径声明 Bearer;官方 Anthropic 缺省 x-api-key
+    // 按预设声明设置鉴权方式。
     ...(p.auth ? [`    auth: ${p.auth}`] : []),
     `    keys:`,
     `      - env: ${p.env}   # 密钥明文只放环境变量`,
@@ -79,7 +79,7 @@ function PresetCatalog() {
       .finally(() => setLoaded(true));
   }, []);
 
-  // 列定义单源:桌面表格与移动预设卡片共用;厂商列同格承载 display+alias
+  // 同一列定义驱动桌面表格和移动卡片。
   const presetColumns: DataCol<ProviderPreset>[] = [
     {
       key: "vendor",
@@ -159,12 +159,10 @@ function PresetCatalog() {
   }
   const shown = presets.filter((p) => group === "all" || p.group === group);
   return (
-    // 卡头走 CardHeader/CardDescription/CardContent 标准件(与 Overview 同构)
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          {/* 卡题即本页最高级标题:CardTitle as="h2" 渲染真实标题元素
-              (kongming 标题语义对齐;此前原生 h2 手搓配方的过渡方案随 ui/ 收敛废止) */}
+          {/* 该卡片标题是本页二级标题。 */}
           <CardTitle as="h2">官方端点预设目录</CardTitle>
           <div className="ml-auto w-full sm:w-40">
             <Select value={group} onValueChange={setGroup}>
@@ -189,7 +187,7 @@ function PresetCatalog() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {/* 列定义单源:桌面表格(min-w 横向滚动)+ 移动端预设卡片堆叠 */}
+        {/* 响应式供应商列表。 */}
         <DataList
           tableClassName="min-w-[1000px]"
           columns={presetColumns}
@@ -207,7 +205,7 @@ function PresetCatalog() {
 export default function Providers() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [err, setErr] = useState("");
-  // 加载中 ≠ 空数据:无 loaded 标志会在请求在途时闪现「暂无供应商」假事实(评审 P2 修复)
+  // 区分加载中与空数据，避免请求完成前显示空状态。
   const [loaded, setLoaded] = useState(false);
   useEffect(() => {
     api
@@ -220,11 +218,9 @@ export default function Providers() {
       .finally(() => setLoaded(true));
   }, []);
   return (
-    // 页面顶层块间距全站一档 space-y-4(与表格/卡片密度档一致,宪法 Article 2)
     <div className="space-y-4">
       <section className="space-y-3">
-        {/* 区块标题(非卡题):多卡区域的组标签,层级语义「区块 ≥ 卡片标题」(宪法 Article 7);
-            经 CardTitle as="h2" 复用标题配方,不再原生 h2 手搓 */}
+        {/* 供应商状态区块标题。 */}
         <CardTitle as="h2">已接入供应商</CardTitle>
         {err ? (
           <ErrorAlert text={`加载失败:${err}`} />

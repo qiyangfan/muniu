@@ -1,5 +1,4 @@
-// 计价换算的表驱动测试:字符串解析(禁 float)与逐段向上取整求和。
-// 契约依据 docs/design/metering.md「计价」;负面用例必须先于实现存在(测试先行域)。
+// 计价换算的表驱动测试：字符串解析禁 float，逐段向上取整求和。
 package metering
 
 import (
@@ -40,7 +39,7 @@ func TestParsePrice(t *testing.T) {
 }
 
 func TestParsePrice_非法字串(t *testing.T) {
-	// 全部必须返回 ErrInvalidPrice 哨兵,便于加载期 errors.Is 统一归类
+	// 全部必须返回 ErrInvalidPrice 哨兵，便于加载期 errors.Is 统一归类。
 	cases := []string{
 		"",                           // 空串
 		"   ",                        // 纯空白
@@ -48,13 +47,13 @@ func TestParsePrice_非法字串(t *testing.T) {
 		"1.2.3",                      // 多个小数点
 		"-1.00",                      // 负价无意义
 		"+1.00",                      // 显式符号不接受
-		"1e6",                        // 科学计数法:必须逐位十进制
+		"1e6",                        // 科学计数法：必须逐位十进制。
 		"0x10",                       // 十六进制
 		" 2.00",                      // 前导空白
 		"2.00 ",                      // 尾随空白
 		".5",                         // 缺整数部分
 		"2.",                         // 缺小数部分
-		"0.0000000001",               // 10 位小数,超出 credit 精度
+		"0.0000000001",               // 10 位小数，超出 credit 精度。
 		"99999999999999999999999999", // 解析溢出 int64
 	}
 	for _, in := range cases {
@@ -68,8 +67,8 @@ func TestParsePrice_非法字串(t *testing.T) {
 }
 
 func TestParsePrice_换算溢出(t *testing.T) {
-	// ParseInt 能容纳但 ×1e8 换算会翻转成负数的整数部分:负价会静默毒化 SUM(cost_credits)
-	// 上界 = MaxInt64/1e9 = 9223372036 元(≈92 亿)
+	// ParseInt 能容纳但 ×1e9 换算会翻转成负数的整数部分：负价会静默毒化 SUM(cost_credits)。
+	// 上界 = MaxInt64/1e9 = 9223372036 元，约 92 亿。
 	for _, in := range []string{"9223372037", "100000000000000"} {
 		got, err := ParsePrice(in)
 		if !errors.Is(err, ErrInvalidPrice) {
@@ -105,7 +104,7 @@ func TestCost(t *testing.T) {
 }
 
 func TestCost_向上取整(t *testing.T) {
-	// 契约:cost_credits = ceil(in×p_in/1e6) + ceil(out×p_out/1e6),逐段独立取整
+	// cost_credits = ceil(in×p_in/1e6) + ceil(out×p_out/1e6)，逐段独立取整。
 	cases := []struct {
 		name              string
 		tokens, microPerM int64
@@ -127,16 +126,16 @@ func TestCost_向上取整(t *testing.T) {
 }
 
 func TestCostWithCached_基本语义(t *testing.T) {
-	// cached=0:与两段 Cost 完全等价
+	// cached=0 时与两段 Cost 完全等价。
 	if got := CostWithCached(1200, 0, 800, 2_000_000_000, 0, 8_000_000_000); got != Cost(1200, 800, 2_000_000_000, 8_000_000_000) {
 		t.Fatalf("cached=0 应等价两段: %d vs %d", got, Cost(1200, 800, 2_000_000_000, 8_000_000_000))
 	}
-	// 三段独立取整:miss=400 未命中 ×2000/token + cached=600 ×1000/token + out=500 ×8000/token
+	// 三段独立取整：miss=400 未命中 ×2000/token + cached=600 ×1000/token + out=500 ×8000/token。
 	if got := CostWithCached(1000, 600, 500, 2_000_000_000, 1_000_000_000, 8_000_000_000); got != 800_000+600_000+4_000_000 {
 		t.Fatalf("三段求和不符: %d", got)
 	}
-	// cached 超过 prompt:钳制到 prompt(防御脏数据)
-	// 钳制后 = prompt(100)×price(1e3 credit/M) = 0.1 credit → ceil 1(逐段取整口径)
+	// cached 超过 prompt 时钳制到 prompt，防御脏数据。
+	// 钳制后 = prompt(100)×price(1e3 credit/M) = 0.1 credit → ceil 1，逐段取整口径。
 	if got := CostWithCached(100, 500, 0, 1_000, 0, 1_000); got != 1 {
 		t.Fatalf("cached 钳制后应只剩输入段(ceil 后 1 credit): %d", got)
 	}

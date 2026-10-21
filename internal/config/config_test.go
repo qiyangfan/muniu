@@ -1,5 +1,5 @@
-// config 契约测试:定位顺序、${VAR} 展开(fail-fast 一次报全)、结构校验一次报全。
-// 校验属测试先行域;`muniu.example.yaml` 是合法样例 fixture,必须永远通过。
+// config 测试：定位顺序、${VAR} 展开 fail-fast 一次报全、结构校验一次报全。
+// muniu.example.yaml 是合法样例 fixture，必须永远通过。
 package config
 
 import (
@@ -12,7 +12,6 @@ import (
 	"github.com/solvela/muniu/internal/adapter"
 )
 
-// writeTemp 辅助:写临时配置文件并返回路径。
 func writeTemp(t *testing.T, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "muniu.yaml")
@@ -22,7 +21,7 @@ func writeTemp(t *testing.T, content string) string {
 	return p
 }
 
-// minimalYAML 最小合法配置(仅改 log.level),定位顺序测试用。
+// minimalYAML 最小合法配置，仅 log.level 可变，定位顺序测试用。
 func minimalYAML(level string) string {
 	return `
 log:
@@ -183,7 +182,7 @@ pricing:
 	if err == nil {
 		t.Fatal("多项问题必须报错")
 	}
-	// 一次性报全:以下每条问题都必须出现在同一次错误里
+	// 一次性报全：以下每条问题都必须出现在同一次错误里
 	for _, want := range []string{
 		"not-a-url",        // 坏 URL
 		"unknown-adapter",  // 适配器枚举
@@ -346,7 +345,7 @@ model_routes:
 	}
 }
 
-// loadOK 加载合法配置的测试助手(失败即 Fatal)。
+// loadOK 加载合法配置的测试助手，失败即 Fatal。
 func loadOK(t *testing.T, y string) *Config {
 	t.Helper()
 	cfg, err := Load(writeTemp(t, y))
@@ -356,8 +355,8 @@ func loadOK(t *testing.T, y string) *Config {
 	return cfg
 }
 
-// TestLoad_拓扑数值域守门:weight/priority 超出数据面 int 域(MaxTopologyInt)必须在
-// YAML 入口拒绝——超域巨值下发进 failover 加权累加会溢出为负,加权随机失效。
+// TestLoad_拓扑数值域守门：weight/priority 超出数据面 int 域(MaxTopologyInt)必须在
+// YAML 入口拒绝，超域巨值进 failover 加权累加会溢出为负，加权随机失效。
 func TestLoad_拓扑数值域守门(t *testing.T) {
 	p := writeTemp(t, `
 providers:
@@ -388,9 +387,8 @@ model_routes:
 	}
 }
 
-// TestLoad_适配器值域单源 config 不得手抄适配器清单:合法取值必须来自 adapter.Types(),
-// 无实现的形态(如 cohere——文档中出现但 For 无构造分支)在加载期即拒,而不是拖到装配期才炸。
-// gemini 曾因无实现被退役(gemini-native-protocol 已以真实实现回归值域,装配测试见 adapter 包)。
+// TestLoad_适配器值域单源：合法取值必须来自 adapter.Types()，config 不得手抄适配器清单。
+// 无实现的形态如 cohere，文档中出现但 For 无构造分支，须在加载期即拒而非拖到装配期。
 func TestLoad_适配器值域单源(t *testing.T) {
 	wantDomain := strings.Join(adapter.Types(), "|")
 
@@ -416,8 +414,8 @@ providers:
 	}
 }
 
-// TestLoad_native_responses声明 配置声明面(protocol-native-passthrough):
-// openai 系声明生效;anthropic 适配器声明即配置错误(其直通由适配器类型本身声明)。
+// TestLoad_native_responses声明：openai 系声明生效；anthropic 适配器声明即配置错误，
+// 其直通由适配器类型本身声明。
 func TestLoad_native_responses声明(t *testing.T) {
 	p := writeTemp(t, `
 providers:
@@ -458,7 +456,7 @@ model_routes:
 		t.Fatalf("anthropic 声明应拒绝: %v", err)
 	}
 
-	// gemini 桥接翻译型(无原生直通 lane)同样拒绝:静默 no-op 会伪装成「已生效」
+	// gemini 桥接翻译型无原生直通 lane，同样拒绝：静默 no-op 会伪装成已生效
 	p3 := writeTemp(t, `
 providers:
   - name: g
@@ -478,7 +476,7 @@ model_routes:
 	}
 }
 
-// TestLoad_alerts配置面 webhook-alerting:URL 形态校验与窗口非负。
+// TestLoad_alerts配置面：URL 形态校验与窗口非负。
 func TestLoad_alerts配置面(t *testing.T) {
 	write := func(alerts string) string {
 		return writeTemp(t, `

@@ -1,10 +1,4 @@
-// backup 管理子命令(openspec 2026-09-30-state-backup-restore,spec state-backup):
-//
-//	muniu backup [--output DIR]        # 在线一致快照(运行中亦可执行)
-//	muniu restore <backup-dir> [--force]  # 离线恢复(实例须未运行)
-//
-// 数据库路径取自配置(与网关/keys 子命令同一 store)。快照含 key 哈希与用量
-// 账本,目录权限 0700;恢复是离线运维动作,目标被实例持锁时拒绝(不热切换)。
+// backup 和 restore 子命令管理 SQLite 状态备份。
 package main
 
 import (
@@ -34,25 +28,24 @@ const backupUsage = `muniu backup —— standalone 状态备份与恢复
   现场,恢复后复校验,不符自动回滚)。
 `
 
-// backupSubArgs 判定是否为 backup/restore 子命令调用,返回其后的参数
-// (容忍 -c <path> 出现在子命令前的任意位置;与 keysSubArgs 同构)。
+// backupSubArgs 判定是否为 backup/restore 子命令调用并返回其后参数，
+// 容忍 -c <path> 出现在子命令前的任意位置。
 func backupSubArgs(args []string) ([]string, bool) {
 	for i := 1; i < len(args); i++ {
 		switch {
 		case args[i] == "-c":
-			i++ // 跳过其参数值
+			i++
 		case args[i] == "backup" || args[i] == "restore":
 			return args[i:], true
 		case strings.HasPrefix(args[i], "-"):
-			// 其他全局 flag:继续扫
 		default:
-			return nil, false // 首个位置参数即其他子命令
+			return nil, false
 		}
 	}
 	return nil, false
 }
 
-// runBackup 加载配置并执行 backup/restore 子命令(进程退出码语义)。
+// runBackup 加载配置并执行 backup/restore 子命令，返回进程退出码。
 func runBackup(flagConf string, args []string) int {
 	cfg, err := config.Load(flagConf)
 	if err != nil {
@@ -78,7 +71,7 @@ func backupMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int
 	}
 }
 
-// defaultBackupDir 缺省备份目录:<data>/backups/muniu-backup-<UTC 紧凑时刻>。
+// defaultBackupDir 缺省备份目录：<data>/backups/muniu-backup-<UTC 紧凑时刻>。
 func defaultBackupDir(dbPath string, now time.Time) string {
 	return filepath.Join(filepath.Dir(dbPath), "backups",
 		"muniu-backup-"+now.UTC().Format("20060102T150405Z"))
@@ -118,9 +111,9 @@ func runBackupCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) i
 }
 
 func runRestoreCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
-	// flag 包在首个位置参数后停止解析——目录参数与 --force/--target 混排是
-	// 自然用法,故先分区再解析。分区显式感知 -target 带走一个值(否则它的
-	// 值会被误当位置参数);-- 之后全视为位置参数;未知 flag 原样交 flag 包报错。
+	// flag 包在首个位置参数后停止解析，而目录与 --force/--target 混排是自然用法，
+	// 故先手工分区再解析；-target 须显式带走一个值，否则其值会被误当位置参数，
+	// -- 之后全视为位置参数。
 	var flags, pos []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]

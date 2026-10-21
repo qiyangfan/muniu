@@ -1,4 +1,4 @@
-// wasm 二进制装配原语(LEB128/段封装;仅测试 fixture 消费)。
+// wasm 二进制装配原语，提供 LEB128 编码与段封装，仅供测试 fixture 消费。
 package testkit
 
 type wasmBin struct{ b []byte }
@@ -38,7 +38,7 @@ func (w *wasmBin) name(s string) { w.uleb(uint64(len(s))); w.b = append(w.b, s..
 func (w *wasmBin) i32const(v int32) { w.u8(0x41); w.sleb(int64(v)) }
 func (w *wasmBin) i64const(v int64) { w.u8(0x42); w.sleb(v) }
 
-// section 封装一个 wasm 段(id + 长度前缀 + 载荷)。
+// section 封装一个 wasm 段，写入 id、长度前缀与载荷。
 func section(out *wasmBin, id byte, payload *wasmBin) {
 	out.u8(id)
 	out.uleb(uint64(len(payload.b)))

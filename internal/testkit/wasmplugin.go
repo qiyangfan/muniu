@@ -1,5 +1,5 @@
-// WASM 插件测试 fixture:手写 wat 等价的字节级装配器(无 wat2wasm 工具链依赖,CI 稳定)。
-// 覆盖 ABI v0 全部行为分支:pass/modify/reject/回显改写/start 失败/ABI 不匹配/缺导出/
+// WASM 插件测试 fixture：手写 wat 等价的字节级装配器，不依赖 wat2wasm 工具链，CI 稳定。
+// 覆盖 ABI v0 全部行为分支：pass/modify/reject/回显改写/start 失败/ABI 不匹配/缺导出/
 // 死循环/trap/越界写/proc_exit/get_config+log 宿主导入联调。
 package testkit
 
@@ -9,40 +9,40 @@ type PluginFixtureKind int
 const (
 	// FixturePass hook 恒放行。
 	FixturePass PluginFixtureKind = iota
-	// FixtureModify hook 恒改写,结果为常量 "MASKED"(非 JSON,用于改写产物校验路径)。
+	// FixtureModify hook 恒改写，结果为常量 "MASKED"，非 JSON，用于改写产物校验路径。
 	FixtureModify
-	// FixtureReject hook 恒拒绝,理由 "pii detected"。
+	// FixtureReject hook 恒拒绝，理由 "pii detected"。
 	FixtureReject
-	// FixtureModifyEcho hook 恒改写为原请求体(合法 JSON 回显,走通改写全链)。
+	// FixtureModifyEcho hook 恒改写为原请求体，合法 JSON 回显，走通改写全链。
 	FixtureModifyEcho
-	// FixtureModifyModel hook 恒改写为常量合法 chat 体(model=alias-b):
-	// 验证「插件改写 model 后白名单再校验」路径(key-model-allowlist)。
+	// FixtureModifyModel hook 恒改写为常量合法 chat 体，model 为白名单外别名 alias-b，
+	// 验证插件改写 model 后白名单再校验的路径。
 	FixtureModifyModel
-	// FixtureStartFail plugin_start 返回 7(注册拒载)。
+	// FixtureStartFail plugin_start 返回 7，注册期拒载。
 	FixtureStartFail
-	// FixtureAbiMismatch muniu_abi_version 返回 99(ABI 不匹配拒载)。
+	// FixtureAbiMismatch muniu_abi_version 返回 99，ABI 不匹配拒载。
 	FixtureAbiMismatch
-	// FixtureLoop hook 死循环(超时 containment)。
+	// FixtureLoop hook 死循环，触发超时 containment。
 	FixtureLoop
-	// FixtureTrap hook unreachable(trap 隔离)。
+	// FixtureTrap hook 执行 unreachable，触发 trap 隔离。
 	FixtureTrap
-	// FixtureOOM hook 越界写(超内存 containment)。
+	// FixtureOOM hook 越界写，触发超内存 containment。
 	FixtureOOM
-	// FixtureExit hook 调 wasi proc_exit(3)(ExitError 隔离 + WASI 导入联调)。
+	// FixtureExit hook 调 wasi proc_exit(3)，验证 ExitError 隔离与 WASI 导入联调。
 	FixtureExit
-	// FixtureCfg get_config/log 宿主导入联调:读 config["greeting"] 读到即改写为配置值,
-	// plugin_start 经 muniu.log 上报 "cfg-plugin-started"。
+	// FixtureCfg 联调 get_config/log 宿主导入：读 config["greeting"]，读到即改写为
+	// 配置值，plugin_start 经 muniu.log 上报 "cfg-plugin-started"。
 	FixtureCfg
-	// FixtureMissingExport 缺 plugin_result 导出(拒载)。
+	// FixtureMissingExport 缺 plugin_result 导出，注册期拒载。
 	FixtureMissingExport
-	// FixtureStartLoop plugin_start 死循环(注册探测超时测试)。
+	// FixtureStartLoop plugin_start 死循环，用于注册探测超时测试。
 	FixtureStartLoop
-	// FixtureFreeLoop free 中死循环(free 超时守卫测试:宿主必须有界中断并丢弃实例)。
+	// FixtureFreeLoop free 中死循环，用于 free 超时守卫测试：宿主必须有界中断并丢弃实例。
 	FixtureFreeLoop
 )
 
-// ABI 常量与宿主实现的 plugin 包单向对齐;此处仅复制 fixture 所需字面量,
-// 避免 testkit 反向依赖业务包(conventions)。
+// ABI 常量与宿主实现的 plugin 包单向对齐，此处仅复制 fixture 所需字面量，
+// 避免 testkit 反向依赖业务包。
 const (
 	fxVerdictPass     = 0
 	fxVerdictModified = 1
@@ -51,16 +51,16 @@ const (
 )
 
 const (
-	fxResultOff  = 8192 // 改写结果固定落点
+	fxResultOff  = 8192 // 改写结果固定落点。
 	fxCfgKeyOff  = 4096
 	fxCfgValOff  = 8192
 	fxCfgMsgOff  = 4352
 	fxCfgValCap  = 256
-	fxMallocBase = 1024 // offset 0 保留为 malloc 失败哨兵
+	fxMallocBase = 1024 // offset 0 保留为 malloc 失败哨兵。
 )
 
-// fxModelBody FixtureModifyModel 的常量改写产物(合法 chat 体,model 为白名单外别名——
-// 与 proxy 白名单测试的别名约定耦合,属测试设施内契约)。
+// fxModelBody FixtureModifyModel 的常量改写产物，合法 chat 体；model 为白名单外
+// 别名 alias-b，与 proxy 白名单测试的别名约定耦合，属测试设施内契约。
 const fxModelBody = `{"model":"alias-b","messages":[{"role":"user","content":"hi"}]}`
 
 // FixturePlugin 装配一个最小插件二进制。
@@ -76,7 +76,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		importCount = 1 // wasi_snapshot_preview1.proc_exit=0
 	}
 	localBase := importCount
-	// 局部函数序:version, start, malloc, free, hook, result(类型 0,0,1,2,3,4)
+	// 局部函数序：version, start, malloc, free, hook, result，类型 0,0,1,2,3,4。
 	fVersion := localBase
 	fStart := localBase + 1
 	fMalloc := localBase + 2
@@ -84,7 +84,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	fHook := localBase + 4
 	fResult := localBase + 5
 
-	// global 布局:0 = malloc 游标;cfg 加 1 = get_config 返回长度;echo 加 1/2 = 回显 off/len
+	// global 布局：0 为 malloc 游标；cfg 加 1 为 get_config 返回长度；echo 加 1/2 为回显 off/len。
 	echoOffIdx, echoLenIdx := int64(1), int64(2)
 	globalCount := 1
 	if hasCfg {
@@ -92,7 +92,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	}
 	if hasEcho {
 		globalCount = 3
-		if hasCfg { // 互斥用法,防御性兜底:cfg 占 1 时 echo 顺延
+		if hasCfg { // 互斥用法的防御性兜底，cfg 占 1 时 echo 顺延。
 			echoOffIdx, echoLenIdx = 2, 3
 		}
 	}
@@ -158,7 +158,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 
 	globals := &wasmBin{}
 	globals.uleb(uint64(globalCount))
-	globals.raw(0x7f, 0x01) // global0: mut i32 游标
+	globals.raw(0x7f, 0x01) // global0 为 mut i32 游标。
 	globals.i32const(fxMallocBase)
 	globals.u8(0x0b)
 	if hasCfg {
@@ -167,7 +167,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		globals.u8(0x0b)
 	}
 	if hasEcho {
-		for i := 0; i < 2; i++ { // 回显 off/len(echoOffIdx/echoLenIdx)
+		for i := 0; i < 2; i++ { // 回显 off/len(echoOffIdx/echoLenIdx)。
 			globals.raw(0x7f, 0x01)
 			globals.i32const(0)
 			globals.u8(0x0b)
@@ -205,7 +205,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	}
 	section(out, 7, exports)
 
-	// code 段:6 个函数体
+	// code 段：6 个函数体。
 	code := &wasmBin{}
 	code.uleb(6)
 
@@ -240,7 +240,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		b.u8(0x00)
 		b.i32const(7)
 	} else if kind == FixtureStartLoop {
-		// plugin_start 死循环(loop br 0 + unreachable 尾;函数末 end 由外层统一补)
+		// plugin_start 死循环，loop br 0 加 unreachable 尾；函数末 end 由外层统一补。
 		b.raw(0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x00)
 	} else {
 		b.u8(0x00)
@@ -249,9 +249,9 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	b.u8(0x0b)
 	emitFunc(code, b)
 
-	// malloc:bump 游标(old = global0; global0 = old + len; return old)
+	// malloc 用 bump 游标：old = global0; global0 = old + len; return old。
 	b = &wasmBin{}
-	b.raw(0x01, 0x01, 0x7f) // 1 个 i32 局部
+	b.raw(0x01, 0x01, 0x7f) // 1 个 i32 局部。
 	b.raw(0x23, 0x00)       // global.get 0
 	b.raw(0x21, 0x01)       // local.set 1
 	b.raw(0x20, 0x01)       // local.get 1
@@ -262,7 +262,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	b.u8(0x0b)
 	emitFunc(code, b)
 
-	// free:pass/nop,FreeLoop 变体为死循环(loop br 0 + unreachable 尾)
+	// free 为 pass/nop，FreeLoop 变体为死循环，loop br 0 加 unreachable 尾。
 	b = &wasmBin{}
 	if kind == FixtureFreeLoop {
 		b.raw(0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x00, 0x0b)
@@ -279,7 +279,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		b.i32const(fxVerdictModified)
 		b.u8(0x0b)
 	case FixtureModifyEcho:
-		// global[echoOff] = off; global[echoLen] = len; return 1(回显:结果=入参 buffer 本体)
+		// global[echoOff] = off; global[echoLen] = len; return 1，回显时结果即入参 buffer 本体。
 		b.u8(0x00)
 		b.raw(0x20, 0x00) // local.get 0 (off)
 		b.raw(0x24)
@@ -294,12 +294,12 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		b.i32const(fxVerdictReject)
 		b.u8(0x0b)
 	case FixtureLoop:
-		// (loop $l (br $l)) unreachable — 死循环;尾部 unreachable 满足校验器的结果型栈要求
+		// (loop $l (br $l)) unreachable，死循环；尾部 unreachable 满足校验器的结果型栈要求。
 		b.raw(0x00, 0x03, 0x40, 0x0c, 0x00, 0x0b, 0x00, 0x0b)
 	case FixtureTrap:
 		b.raw(0x00, 0x00, 0x0b) // unreachable
 	case FixtureOOM:
-		// i32.const 0x7fffffff 处 store → 越界写 trap(超内存形态)
+		// i32.const 0x7fffffff 处 store，越界写 trap，超内存形态。
 		b.u8(0x00)
 		b.i32const(0x7fffffff)
 		b.i32const(1)
@@ -310,9 +310,9 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		b.i32const(3)
 		b.raw(0x10, 0x00, 0x00, 0x0b)
 	case FixtureCfg:
-		// return global1 > 0(配置读到值即改写,verdict 1/0)
+		// return global1 > 0，配置读到值即改写，verdict 1/0。
 		b.raw(0x00, 0x23, 0x01, 0x41, 0x00, 0x4a, 0x0b)
-	default: // FixturePass 等
+	default: // FixturePass 等。
 		b.u8(0x00)
 		b.i32const(fxVerdictPass)
 		b.u8(0x0b)
@@ -326,7 +326,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	case FixtureModify:
 		b.i64const(int64(fxResultOff)<<32 | 6) // "MASKED"
 	case FixtureModifyModel:
-		b.i64const(int64(fxResultOff)<<32 | int64(len(fxModelBody))) // 常量合法 chat 体(model=alias-b)
+		b.i64const(int64(fxResultOff)<<32 | int64(len(fxModelBody))) // 常量合法 chat 体，model=alias-b。
 	case FixtureReject:
 		b.i64const(int64(fxResultOff)<<32 | 12) // "pii detected"
 	case FixtureModifyEcho:
@@ -354,7 +354,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	emitFunc(code, b)
 	section(out, 10, code)
 
-	// data 段(活动段,memory 0)
+	// data 段为活动段，memory 0。
 	var segs [][2]any
 	switch kind {
 	case FixtureModify:
@@ -382,7 +382,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	return out.b
 }
 
-// emitFunc 追加一个函数体(len + bytes)。
+// emitFunc 追加一个函数体，先写长度前缀再写字节。
 func emitFunc(code, body *wasmBin) {
 	code.uleb(uint64(len(body.b)))
 	code.b = append(code.b, body.b...)

@@ -1,7 +1,6 @@
-// 桥接工具多轮显式边界(upstream-egress-batch「anthropic-bridge」):
-// 请求含 role=tool 或 assistant.tool_calls(多轮中途标记)时,桥接候选按适配性豁免
-// 处理——多候选别名换道跳过,仅桥接可达时返回自解释 400 信封,消除「透传让上游
-// 400 再以 upstream_error 冒出」的不诚实失败。首轮 tools 声明不触发(响应侧翻译完整)。
+// 请求含 role=tool 或 assistant.tool_calls 时已处于多轮工具调用中途：桥接候选按适配性
+// 豁免，多候选别名换道跳过，仅桥接可达时返回自解释 400 信封，避免透传到上游才报 400
+// 再以 upstream_error 冒出。首轮仅声明 tools 不触发，响应侧翻译完整。
 package proxy
 
 import (
@@ -14,9 +13,9 @@ import (
 // bridgeToolUnsupportedCode 桥接工具多轮不可服务的专用机器码。
 const bridgeToolUnsupportedCode = "bridge_tool_roundtrip_unsupported"
 
-// chatToolLoopInflight 多轮中途标记检测:messages 含 role=tool,或任一 assistant
-// 消息带非空 tool_calls。仅声明 tools 参数(无中途标记)不触发——响应侧 tool_use
-// 翻译完整,首轮合法。解析失败按 false(入站校验已拒非法体,此处宁放行不误伤)。
+// chatToolLoopInflight 检测多轮中途标记：messages 含 role=tool，或任一 assistant 消息
+// 带非空 tool_calls。仅声明 tools 参数不触发，响应侧 tool_use 翻译完整，首轮合法。
+// 解析失败按 false 处理：入站校验已拒非法体，此处宁放行不误伤。
 func chatToolLoopInflight(req *protocol.ChatRequest) bool {
 	var envelope struct {
 		Messages []struct {
@@ -38,12 +37,11 @@ func chatToolLoopInflight(req *protocol.ChatRequest) bool {
 	return false
 }
 
-// bridgeExempted 桥接候选适配性豁免判定:多轮中途流量 × 桥接型 × 翻译缺口。
-// (protocol-native-passthrough 收窄:直通路径不进入本判定——调用方以 !path.native 门控;
-// gemini-native-protocol 升级:声明式缺口——ToolRoundtripComplete()=true 的桥接型
-// (gemini,翻译完整)不豁免,anthropic 桥接维持现状豁免行为逐字节不变。)
-// 豁免发生在取 key 之前——不消耗冷却/EMA(适配性不匹配不是上游故障,
-// 与 adapter_missing 早退、strict 治理拒绝同一裁决口径)。
+// bridgeExempted 判定桥接候选是否适配性豁免：多轮中途流量 × 桥接型 × 翻译缺口。
+// 直通路径不进入本判定，由调用方以 !path.native 门控；ToolRoundtripComplete() 为 true
+// 的桥接型（gemini）翻译完整，不豁免；anthropic 桥接维持豁免。
+// 豁免发生在取 key 之前，不消耗冷却/EMA：适配性不匹配不是上游故障，与 adapter_missing
+// 早退、strict 治理拒绝同一裁决口径。
 func bridgeExempted(ad adapter.Adapter, midLoop bool) bool {
 	if !midLoop {
 		return false

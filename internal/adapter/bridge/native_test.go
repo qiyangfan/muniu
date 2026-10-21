@@ -1,6 +1,6 @@
-// 同构直通出站契约测试(protocol-native-passthrough;测试先行域):
-// PrepareNative wire 保真(仅 model 原位手术,其余逐字节)、NativeStreamEvent meta-only
-// 读侧(meta 与翻译字节解耦,客户端恒收原字节)、NormalizeNativeUsage 计量同口径。
+// 原生直通出站契约测试：PrepareNative 的 wire 保真，仅改写 model 字段，其余逐字节；
+// NativeStreamEvent 的 meta 读侧，meta 与翻译字节解耦，客户端恒收原字节；
+// NormalizeNativeUsage 与翻译路径计量同口径。
 package bridge_test
 
 import (
@@ -14,8 +14,8 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// TestAnthropic_PrepareNative_wire保真 原始体含多模态/扩展字段:出站除 model 值外逐字节相等,
-// 鉴权头按声明形态(x-api-key 缺省 / bearer 分支),URL 拼 /v1/messages。
+// TestAnthropic_PrepareNative_wire保真 验证原始体含多模态和扩展字段时，出站除 model 值外逐字节相等，
+// 鉴权头按声明形态，缺省 x-api-key、bearer 分支；URL 拼 /v1/messages。
 func TestAnthropic_PrepareNative_wire保真(t *testing.T) {
 	raw := []byte(`{"model":"alias-a","max_tokens":64,"top_k":3,"metadata":{"user_id":"u"},"stop_sequences":["END"],` +
 		`"system":[{"type":"text","text":"be nice","cache_control":{"type":"ephemeral"}}],` +
@@ -66,8 +66,8 @@ func TestAnthropic_PrepareNative_wire保真(t *testing.T) {
 	})
 }
 
-// TestAnthropic_NativeStreamEvent_meta读侧 事件序列 meta 对照 + 内部 chunk 与 wire 解耦
-// (翻译字节仅供计量/拼包,客户端恒收上游原字节——passthrough 语义由 proxy 保证)。
+// TestAnthropic_NativeStreamEvent_meta读侧 验证事件序列 meta 对照与内部 chunk 和 wire 解耦，
+// 翻译字节仅供计量和拼包，客户端恒收上游原字节，passthrough 语义由 proxy 保证。
 func TestAnthropic_NativeStreamEvent_meta读侧(t *testing.T) {
 	ad := bridge.NewAnthropic("https://up.invalid", adapter.Options{})
 	events := []struct {
@@ -90,24 +90,24 @@ func TestAnthropic_NativeStreamEvent_meta读侧(t *testing.T) {
 		if meta != e.want {
 			t.Fatalf("事件 %d meta 不符: got=%+v want=%+v", i, meta, e.want)
 		}
-		// 读侧契约:meta 与翻译字节解耦——内部 chunk 不得被误当作 wire(此处仅断言形状可解析)
+		// 读侧契约：meta 与翻译字节解耦，内部 chunk 不得被误当作 wire；此处仅断言形状可解析
 		if meta.HasContent && len(internal) == 0 {
 			t.Fatalf("事件 %d 有内容但内部 chunk 为空(计量拼包将静默归零)", i)
 		}
 	}
-	// 流内 error 事件:诚实报错(与翻译路径同判定)
+	// 流内 error 事件诚实报错，与翻译路径同判定
 	if _, _, err := ad.NativeStreamEvent([]byte(`{"type":"error","error":{"message":"boom"}}`)); err == nil {
 		t.Fatal("error 事件应报错")
 	}
-	// usage 归一同口径(anthropic 形态)
+	// usage 归一同口径，anthropic 形态
 	u, err := ad.NormalizeNativeUsage(json.RawMessage(`{"input_tokens":21,"output_tokens":5,"cache_read_input_tokens":3}`))
 	if err != nil || u.PromptTokens != 21 || u.CompletionTokens != 5 || u.CachedTokens != 3 {
 		t.Fatalf("NormalizeNativeUsage 不符: %+v %v", u, err)
 	}
 }
 
-// TestAnthropic_NativeFixture_conformance 语料冻结(conformance/anthropic/native/):
-// 原始体含多模态/扩展字段的出站 wire 逐字节断言 + 事件序列 meta 对照,单源消费。
+// TestAnthropic_NativeFixture_conformance 冻结 conformance/anthropic/native/ 语料：
+// 原始体含多模态和扩展字段的出站 wire 逐字节断言，事件序列 meta 对照。
 func TestAnthropic_NativeFixture_conformance(t *testing.T) {
 	raw, err := os.ReadFile("../../../conformance/anthropic/native/messages-passthrough.json")
 	if err != nil {
@@ -116,7 +116,7 @@ func TestAnthropic_NativeFixture_conformance(t *testing.T) {
 	var f struct {
 		SourceURL string `json:"source_url"`
 		NativeIn  struct {
-			Raw string `json:"raw"` // 紧凑 JSON 字符串:字节级断言要求(嵌套对象经格式化会破坏逐字节比对)
+			Raw string `json:"raw"` // 紧凑 JSON 字符串，字节级断言要求，嵌套对象经格式化会破坏逐字节比对
 		} `json:"native_in"`
 		UpstreamModel string `json:"upstream_model"`
 		Stream        []struct {
@@ -151,5 +151,5 @@ func TestAnthropic_NativeFixture_conformance(t *testing.T) {
 	}
 }
 
-// 编译期契约断言:桥接实现直通能力接口。
+// 编译期断言：桥接实现直通能力接口。
 var _ adapter.NativePreparer = (*bridge.Anthropic)(nil)

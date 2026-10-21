@@ -2,7 +2,7 @@ package protocol
 
 import "testing"
 
-// 错误信封契约测试:类型→状态映射与未知类型兜底(conventions「错误信封」)。
+// 错误信封测试：类型到状态映射与未知类型兜底。
 func TestStatusForType(t *testing.T) {
 	cases := []struct {
 		typ  string
@@ -17,7 +17,7 @@ func TestStatusForType(t *testing.T) {
 		{TypeTimeout, 504},
 		{TypeUpstreamError, 502},
 		{TypeInternal, 500},
-		{"unknown_type", 500}, // 未知类型按 internal 兜底,不得 panic/零值
+		{"unknown_type", 500}, // 未知类型按 internal 兜底，不得 panic 或零值
 		{"", 500},
 	}
 	for _, c := range cases {
@@ -27,7 +27,7 @@ func TestStatusForType(t *testing.T) {
 	}
 }
 
-// not_found 信封形态:404 + code 透传 + request_id(模型发现 404 契约)。
+// not_found 信封形态：404、code 透传与 request_id，模型发现的 404 语义。
 func TestNewErrorEnvelope_NotFound(t *testing.T) {
 	env := NewErrorEnvelope(TypeNotFound, "model_not_found", "模型不存在", "req-1")
 	if env.Error.Type != "not_found" || env.Error.Code != "model_not_found" || env.Error.RequestID != "req-1" {

@@ -1,10 +1,9 @@
-// RedisBackend = SharedBackend 的 redis 实现(cluster 形态可选;ADR-0008 修订):
-// RPM = GCRA 令牌桶(Lua 原子,桶容=rpm、速率=rpm/分,与 inmem x/time/rate 同算法族);
-// TPM = 60×1s 槽 INCR+EXPIRE(Lua 单往返求和,窗口语义与 inmem 环形窗一致)。
-// 降级纪律(spec「redis 后端降级纪律」):任一操作失败即置 degraded,回退内嵌
-// inmem(RPM 令牌桶 + TPM 环窗)判定并告警一次;恢复探测 = 降级态下每
-// probeInterval 试一次 PING,成功即回共享视图。降级窗口内短时计数误差可接受,
-// 日配额由控制面 ingest 聚合兜底。
+// RedisBackend 为 SharedBackend 的 redis 实现（cluster 形态可选）：
+// RPM = GCRA 令牌桶，Lua 原子，桶容=rpm、速率=rpm/分，与 inmem x/time/rate 同算法族；
+// TPM = 60×1s 槽 INCR+EXPIRE，Lua 单往返求和，窗口语义与 inmem 环形窗一致。
+// 降级纪律：任一操作失败即置 degraded，回退内嵌 inmem（RPM 令牌桶 + TPM 环窗）
+// 判定并告警一次；恢复探测 = 降级态下每 probeInterval 试一次 PING，成功即回共享视图。
+// 降级窗口内短时计数误差可接受，日配额由控制面 ingest 聚合兜底。
 package ratelimit
 
 import (
@@ -17,9 +16,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// rpmGCRA GCRA 令牌桶:KEYS[1] 存 TAT(theoretical arrival time,秒浮点);
-// ARGV: now(秒浮点)、rpm。返回 {allow(0/1), retry_after(秒)}。
-// 与 x/time/rate 的 rate.Every(60s/rpm)+burst=rpm 语义对齐:1/rpm*60 秒一令牌。
+// rpmGCRA GCRA 令牌桶：KEYS[1] 存 TAT（theoretical arrival time，秒浮点），
+// ARGV 依次为 now（秒浮点）与 rpm，返回 allow(0/1) 与以秒计的 retry_after。
+// 与 x/time/rate 的 rate.Every(60s/rpm)+burst=rpm 语义对齐：1/rpm*60 秒一令牌。
 var rpmGCRA = redis.NewScript(`
 local key    = KEYS[1]
 local now    = tonumber(ARGV[1])
@@ -42,8 +41,8 @@ redis.call('SET', key, new_tat, 'PX', math.ceil(burst * 2 * 1000))
 return {1, 0}
 `)
 
-// tpmAllowLua 60 槽窗口求和:60 个槽键全部经 KEYS 显式声明(redis cluster 兼容,
-// 同 hash tag 前缀保证同槽),ARGV[1]=当前 unix 秒。返回窗口总量。
+// tpmAllowLua 60 槽窗口求和：60 个槽键全部经 KEYS 显式声明（redis cluster 兼容，
+// 同 hash tag 前缀保证同槽）；ARGV[1] 为当前 unix 秒，返回窗口总量。
 var tpmAllowLua = redis.NewScript(`
 local total = 0
 for i = 1, 60 do
@@ -54,10 +53,10 @@ return total
 `)
 
 const (
-	tpmKeyFmt      = "muniu:tpm:{%s}:%d" // 每秒槽(hash tag 保证 cluster 同槽)
+	tpmKeyFmt      = "muniu:tpm:{%s}:%d" // 每秒槽（hash tag 保证 cluster 同槽）
 	rpmKeyFmt      = "muniu:rpm:%s"
 	tpmKeyTTL      = 61 * time.Second
-	tpmSlotsWindow = 60              // 窗口槽数(与 inmem tpmSlots 同义)
+	tpmSlotsWindow = 60              // 窗口槽数（与 inmem tpmSlots 同义）
 	probeEvery     = 5 * time.Second // 降级态下 redis 探测间隔
 	probeTimeout   = 500 * time.Millisecond
 )
@@ -66,7 +65,7 @@ const (
 type RedisBackend struct {
 	rdb *redis.Client
 
-	fallbackRPM *Limiter // 降级兜底(进程内,恢复后不回迁——短窗口误差可接受)
+	fallbackRPM *Limiter // 降级兜底（进程内，恢复后不回迁——短窗口误差可接受）
 	fallbackTPM *TPM
 
 	degraded     atomic.Bool
@@ -75,7 +74,7 @@ type RedisBackend struct {
 	probeTimeout time.Duration
 }
 
-// NewRedisBackend 构造(addr 形态 host:port);连通性惰性验证(首操作失败即降级)。
+// NewRedisBackend 构造，addr 形态 host:port；连通性惰性验证，首操作失败即降级。
 func NewRedisBackend(addr string, logger *slog.Logger) *RedisBackend {
 	return &RedisBackend{
 		rdb:          redis.NewClient(&redis.Options{Addr: addr, DialTimeout: probeTimeout, ReadTimeout: probeTimeout, WriteTimeout: probeTimeout}),
@@ -92,7 +91,7 @@ func (b *RedisBackend) Degraded() bool { return b.degraded.Load() }
 // Close 释放 redis 连接。
 func (b *RedisBackend) Close() error { return b.rdb.Close() }
 
-// AllowRPM GCRA 判定;失败降级内嵌令牌桶。
+// AllowRPM GCRA 判定，失败降级内嵌令牌桶。
 func (b *RedisBackend) AllowRPM(keyID string, rpm int64, now time.Time) (bool, time.Duration) {
 	if b.degraded.Load() {
 		b.maybeProbe()
@@ -121,10 +120,10 @@ func (b *RedisBackend) AllowRPM(keyID string, rpm int64, now time.Time) (bool, t
 	return allow == 1, time.Duration(retrySec) * time.Second
 }
 
-// AllowTPM 60 槽窗口求和判定;失败降级内嵌环窗。
+// AllowTPM 60 槽窗口求和判定，失败降级内嵌环窗。
 func (b *RedisBackend) AllowTPM(keyID string, limit int64, now time.Time) bool {
 	if limit <= 0 {
-		return true // 不限(与 inmem 同契约)
+		return true // 不限（与 inmem 同契约）
 	}
 	if b.degraded.Load() {
 		b.maybeProbe()
@@ -147,7 +146,7 @@ func (b *RedisBackend) AllowTPM(keyID string, limit int64, now time.Time) bool {
 	return total < limit
 }
 
-// RecordTPM 完成记账;失败静默降级(记账丢失窗口 ≤ 降级期,控制面聚合兜底)。
+// RecordTPM 完成记账，失败静默降级：记账丢失窗口 ≤ 降级期，控制面聚合兜底。
 func (b *RedisBackend) RecordTPM(keyID string, tokens int64, now time.Time) {
 	if tokens <= 0 {
 		return
@@ -168,7 +167,7 @@ func (b *RedisBackend) RecordTPM(keyID string, tokens int64, now time.Time) {
 	}
 }
 
-// enterDegraded 进入降级(一次性告警),回退判定已在调用方完成。
+// enterDegraded 进入降级（一次性告警），回退判定已在调用方完成。
 func (b *RedisBackend) enterDegraded(err error) {
 	if b.degraded.CompareAndSwap(false, true) {
 		if b.logger != nil {
@@ -178,7 +177,7 @@ func (b *RedisBackend) enterDegraded(err error) {
 	}
 }
 
-// maybeProbe 降级态下按间隔试 PING,成功即回共享视图。
+// maybeProbe 降级态下按间隔试 PING，成功即回共享视图。
 func (b *RedisBackend) maybeProbe() {
 	now := time.Now().UnixNano()
 	last := b.lastProbe.Load()
@@ -198,7 +197,7 @@ func (b *RedisBackend) maybeProbe() {
 	}
 }
 
-// Record 满足 TPMRecorder(proxy 记账回填形态);与 RecordTPM 等价。
+// Record 满足 TPMRecorder（proxy 记账回填形态），与 RecordTPM 等价。
 func (b *RedisBackend) Record(keyID string, tokens int64, now time.Time) {
 	b.RecordTPM(keyID, tokens, now)
 }

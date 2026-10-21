@@ -1,6 +1,5 @@
-// Responses API 入站翻译(ADR-0012 无状态 v1;契约=proxy-and-streaming.md「Responses 入站翻译」):
-// 边缘翻译为规范 chat 请求后复用既有管道;响应与流式事件反向映射。
-// 全程零 float;翻译失败以 ResponsesUnsupportedError 携带机器码,handler 映射 400。
+// Responses API 请求转换为规范 chat 请求，响应和流事件再映射回 Responses 形态。
+// 不支持的请求通过 ResponsesUnsupportedError 返回机器码。
 package protocol
 
 import (
@@ -9,7 +8,7 @@ import (
 	"strings"
 )
 
-// 显式拒绝机器码(设计文档「显式拒绝清单」;禁散落硬编码)。
+// Responses 翻译失败的机器码。
 const (
 	CodePreviousResponseIDUnsupported = "previous_response_id_unsupported"
 	CodeBackgroundUnsupported         = "background_unsupported"
@@ -17,23 +16,22 @@ const (
 	CodeInputInvalid                  = "input_invalid"
 )
 
-// ResponsesUnsupportedError 显式拒绝(危险字段/不支持项);handler 映射 400 + code。
+// ResponsesUnsupportedError 表示请求包含不支持或无效的内容；handler 将其映射为 HTTP 400。
 type ResponsesUnsupportedError struct{ Code string }
 
 func (e *ResponsesUnsupportedError) Error() string { return "responses: " + e.Code }
 
-// respPart content part:仅文本类可翻译;其余类型显式拒绝。
+// respPart 是 Responses 输入中的内容部件。
 type respPart struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 }
 
-// respItem input[] 项:仅 message/function_call/function_call_output 三类。
+// respItem 是 Responses input 数组中的一项。
 type respItem struct {
 	Type string `json:"type"`
 	Role string `json:"role"`
-	// content 二态:字符串快捷形态(官方规范与部件数组等价)或部件数组,
-	// 解析期折叠(partsToText 消费点对两形态无感);数字/null/对象非法。
+	// content 可以是字符串或部件数组；其他 JSON 类型无效。
 	Content json.RawMessage `json:"content"`
 	// function_call
 	CallID    string `json:"call_id"`
@@ -43,8 +41,7 @@ type respItem struct {
 	Output string `json:"output"`
 }
 
-// contentParts content 二态解析:字符串→单 text 部件(折叠),数组→现行 parts 路径,
-// 其余形态(数字/null/对象)拒绝。仅 message 条目消费;空数组维持现行空文本语义。
+// contentParts 将字符串或部件数组统一为部件列表，其他 JSON 类型均拒绝。
 func (it *respItem) contentParts() ([]respPart, error) {
 	raw := it.Content
 	switch {
@@ -65,7 +62,7 @@ func (it *respItem) contentParts() ([]respPart, error) {
 	}
 }
 
-// respTool Responses 顶层 function 工具(name 在顶层,chat 需移入 function)。
+// respTool 是 Responses API 的 function 工具定义。
 type respTool struct {
 	Type        string `json:"type"`
 	Name        string `json:"name"`
@@ -87,9 +84,7 @@ type responsesRequest struct {
 	Background         *bool           `json:"background"`
 }
 
-// translateResponsesRequest Responses 请求 → 规范 chat 请求(映射表见设计文档,fixture 钉死)。
-// 返回的 ChatRequest.Raw 即 canonical chat JSON 字节——治理/缓存/计量与等价 chat 请求同构。
-// previous_response_id 仅提取不拒绝:其拒绝语义属翻译路径(legacy wrapper),原生 lane 走有状态粘性路由。
+// translateResponsesRequest 将 Responses 请求转换为规范 chat 请求，并提取 previous_response_id。
 func translateResponsesRequest(body []byte) (*ChatRequest, string, error) {
 	var rr responsesRequest
 	if err := json.Unmarshal(body, &rr); err != nil {
@@ -125,8 +120,8 @@ func translateResponsesRequest(body []byte) (*ChatRequest, string, error) {
 		for _, it := range items {
 			typ := it.Type
 			if typ == "" {
-				// 官方缺省语义:携带 role 的条目即 message(官方 SDK 缺省产物);
-				// 无 type 无 role 不做猜测(function_call 家族恒带 type)。
+				// 官方缺省语义：携带 role 的条目即 message，官方 SDK 缺省产物；
+				// 无 type 无 role 不做猜测，function_call 家族恒带 type。
 				if it.Role == "" {
 					return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
 				}
@@ -200,8 +195,7 @@ func translateResponsesRequest(body []byte) (*ChatRequest, string, error) {
 			return nil, "", &ResponsesUnsupportedError{Code: CodeInputInvalid}
 		}
 		if m, isM := tc.(map[string]any); isM {
-			// Responses 具名形态 {"type":"function","name":x} → chat 的 {"type":"function","function":{"name":x}}
-			// (域A 审查:此前条件 m["type"]==nil 写反,规范输入被原样透传为非法 chat)
+			// 将 Responses 的具名工具选择转换为 Chat 的 function 对象。
 			if name, isS := m["name"].(string); isS {
 				fn := map[string]any{"name": name}
 				if desc, has := m["description"].(string); has {
@@ -217,7 +211,7 @@ func translateResponsesRequest(body []byte) (*ChatRequest, string, error) {
 	}
 	b.WriteString(`}`)
 
-	// canonical JSON 经既有解析器回填 typed 字段(单源,避免两套解析)
+	// canonical JSON 经既有解析器回填 typed 字段，避免两套解析。
 	req, err := ParseChatRequest([]byte(b.String()))
 	if err != nil {
 		return nil, "", err
@@ -225,7 +219,7 @@ func translateResponsesRequest(body []byte) (*ChatRequest, string, error) {
 	return req, prevID, nil
 }
 
-// partsToText content parts → 文本(input_text/output_text;其余类型显式拒绝)。
+// partsToText content parts → 文本，仅接受 input_text/output_text，其余类型显式拒绝。
 func partsToText(parts []respPart) (string, error) {
 	var sb strings.Builder
 	for _, p := range parts {
@@ -239,7 +233,7 @@ func partsToText(parts []respPart) (string, error) {
 	return sb.String(), nil
 }
 
-// mustJSON 字符串 → JSON 字串字面量(含转义)。
+// mustJSON 字符串 → JSON 字符串字面量，含转义。
 func mustJSON(s string) []byte {
 	b, _ := json.Marshal(s)
 	return b
@@ -247,7 +241,7 @@ func mustJSON(s string) []byte {
 
 // ---- 响应侧映射 ----
 
-// responsesUsage chat usage → Responses usage(input/output/total;cached/reasoning 入 details)。
+// responsesUsage chat usage → Responses usage，input/output/total 直取，cached/reasoning 入 details。
 type responsesUsage struct {
 	InputTokens         int64            `json:"input_tokens"`
 	InputTokensDetails  map[string]int64 `json:"input_tokens_details,omitempty"`
@@ -256,8 +250,8 @@ type responsesUsage struct {
 	TotalTokens         int64            `json:"total_tokens"`
 }
 
-// ResponsesObjectFromChat 非流式:chat.completion → Responses 对象。
-// respID = "resp_" + request_id(追责链路与日志/usage_logs 一致)。
+// ResponsesObjectFromChat 非流式：chat.completion → Responses 对象。
+// respID = "resp_" + request_id，与日志、usage_logs 的追责口径一致。
 func ResponsesObjectFromChat(chatBody []byte, respID string) ([]byte, error) {
 	var chat struct {
 		Choices []struct {
@@ -303,8 +297,7 @@ func ResponsesObjectFromChat(chatBody []byte, respID string) ([]byte, error) {
 		"output": output,
 	}
 	if chat.Usage != nil {
-		// output_tokens = completion_tokens:reasoning_tokens 是其子集(OpenAI/DeepSeek details 语义),
-		// 相加即客户端可见双计——reasoning 只入 details
+		// reasoning_tokens 已包含在 completion_tokens 中，只写入明细以避免重复计数。
 		u := responsesUsage{
 			InputTokens:  chat.Usage.PromptTokens,
 			OutputTokens: chat.Usage.CompletionTokens,
@@ -323,21 +316,20 @@ func ResponsesObjectFromChat(chatBody []byte, respID string) ([]byte, error) {
 
 // ---- 流式事件编码器 ----
 
-// toolItem 单个 function_call 工具项的流式累积态(按上游 tool_calls[].index 跟踪,
-// 并行多工具各自独立 added/args/done,杜绝参数与 call_id 错配)。
+// toolItem 单个 function_call 工具项的流式累积态，按上游 tool_calls[].index 跟踪，
+// 并行多工具各自独立 added/args/done，杜绝参数与 call_id 错配。
 type toolItem struct {
 	added  bool
-	itemID string // item_1 起(0 号留给文本);并行工具各自独立
+	itemID string // 从 item_1 起，0 号留给文本；并行工具各自独立
 	callID string
 	name   string
 	args   strings.Builder
 }
 
-// ResponsesStreamEncoder 把上游 OpenAI 形态 SSE 帧翻译为 Responses 最小事件集
-// (顺序不变式:created 首帧、completed 终帧、delta 仅出现于两者之间)。
-// item 跟踪:文本单 item;function_call 按上游内层 index 多 item 独立配对;
-// 文本与工具混流时先收束文本再开启工具;仅消费 StreamChoice.Index==0 或缺省的 choice
-// (v1 契约未定义多 choice 映射,其余防御性忽略)。非并发安全:单请求单实例。
+// ResponsesStreamEncoder 把上游 OpenAI 形态 SSE 帧翻译为 Responses 最小事件集。
+// 顺序不变式：created 首帧、completed 终帧、delta 只在两者之间。
+// 文本单 item，function_call 按上游内层 index 多 item 独立配对；仅消费 index 0，其余忽略。
+// 非并发安全，单请求单实例。
 type ResponsesStreamEncoder struct {
 	id, model string
 	created   bool
@@ -349,7 +341,7 @@ type ResponsesStreamEncoder struct {
 	done      bool
 }
 
-// NewResponsesStreamEncoder 构造;id 应传 resp_<request_id>。
+// NewResponsesStreamEncoder 构造，id 应传 resp_<request_id>。
 func NewResponsesStreamEncoder(id, model string) *ResponsesStreamEncoder {
 	return &ResponsesStreamEncoder{id: id, model: model, tools: map[int]*toolItem{}}
 }
@@ -359,7 +351,7 @@ func (e *ResponsesStreamEncoder) event(v map[string]any) []byte {
 	return b
 }
 
-// Init 首帧 response.created(在任一 delta 之前恰好调用一次)。
+// Init 首帧 response.created，在任一 delta 之前恰好调用一次。
 func (e *ResponsesStreamEncoder) Init() []byte {
 	e.created = true
 	return e.event(map[string]any{"type": "response.created", "response": map[string]any{
@@ -367,14 +359,13 @@ func (e *ResponsesStreamEncoder) Init() []byte {
 	}})
 }
 
-// ensureCreated 惰性补发首帧。
 func (e *ResponsesStreamEncoder) ensureCreated(out *[][]byte) {
 	if !e.created {
 		*out = append(*out, e.Init())
 	}
 }
 
-// closeMessage 收束文本 item(msgOpen 时发 done 并复位;否则 no-op)。
+// closeMessage 收束文本 item，msgOpen 时发 done 并复位，否则 no-op。
 func (e *ResponsesStreamEncoder) closeMessage(out *[][]byte) {
 	if !e.msgOpen {
 		return
@@ -388,9 +379,8 @@ func (e *ResponsesStreamEncoder) closeMessage(out *[][]byte) {
 	e.textOut.Reset()
 }
 
-// Feed 消费一帧上游 OpenAI chunk(delta/usage/finish),返回待写的 Responses 事件序列。
-// usage 恒捕获(finish 帧与独立 usage 帧均兼容);reasoning_content 流式不透出
-// (v1 已登记限制:最小事件集无 reasoning 事件类型,非流式路径只读透出)。
+// Feed 消费一帧上游 OpenAI chunk(delta/usage/finish)，返回待写的 Responses 事件序列。
+// usage 恒捕获，兼容 finish 帧与独立 usage 帧；流式 reasoning_content 不透出。
 func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 	c, err := ParseStreamChunk(chunk)
 	if err != nil {
@@ -406,11 +396,11 @@ func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 	e.ensureCreated(&out)
 	for _, ch := range c.Choices {
 		if ch.Index != nil && *ch.Index != 0 {
-			continue // v1 仅映射首 choice(防御多 choice 合流错乱;契约未定义多 choice 映射)
+			continue // v1 仅映射首 choice，多 choice 映射未定义，防御合流错乱
 		}
 		if ch.Delta.Content != nil && *ch.Delta.Content != "" {
 			if !e.msgOpen {
-				e.closeMessage(&out) // 文本与工具混流:切换前收束文本
+				e.closeMessage(&out) // 文本与工具混流，切换前收束文本
 			}
 			if !e.msgOpen {
 				out = append(out, e.event(map[string]any{"type": "response.output_item.added",
@@ -451,8 +441,7 @@ func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 				ti.name = tc.Function.Name
 			}
 			if !ti.added {
-				// 有 tool_call 增量即开启 item(call_id/name 允许后续帧补齐,
-				// 杜绝「args 先于 name 到达」的非规范上游丢参数——域A 审查 B 项)
+				// 先创建 item，允许后续帧补齐 call_id 和 name。
 				ti.added = true
 				out = append(out, e.event(map[string]any{"type": "response.output_item.added",
 					"item_id": ti.itemID, "output_index": 0, "item": map[string]any{"type": "function_call",
@@ -485,13 +474,12 @@ func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 	return out
 }
 
-// Complete 终帧 response.completed(usage 恒携带,无上游 usage 时补零值;仅应调用一次)。
+// Complete 终帧 response.completed，usage 恒携带，无上游 usage 时补零值，仅应调用一次。
 func (e *ResponsesStreamEncoder) Complete() []byte {
 	e.created = true
 	u := responsesUsage{}
 	if e.usage != nil {
-		// output_tokens = completion_tokens:reasoning_tokens 是其子集(OpenAI/DeepSeek details
-		// 语义),相加即客户端可见双计——reasoning 只入 details(契约修正,域A/B 审查确认)
+		// reasoning_tokens 已包含在 completion_tokens 中，只写入明细以避免重复计数。
 		u = responsesUsage{
 			InputTokens:  e.usage.PromptTokens,
 			OutputTokens: e.usage.CompletionTokens,
@@ -510,26 +498,24 @@ func (e *ResponsesStreamEncoder) Complete() []byte {
 	return e.event(map[string]any{"type": "response.completed", "response": resp})
 }
 
-// Failed 流中失败:response.failed(诚实失败,不伪造 completed)。
+// Failed 流中失败：response.failed，不伪造 completed。
 func (e *ResponsesStreamEncoder) Failed(message string) []byte {
 	return e.event(map[string]any{"type": "response.failed", "response": map[string]any{
 		"id": e.id, "object": "response", "status": "failed", "error": map[string]any{"message": message},
 	}})
 }
 
-// ChatFromResponsesObject Responses 对象 → canonical chat 响应(受限逆映射:
-// 直通双存的 canonical 侧,protocol-native-passthrough;非对外翻译契约面)。
-// 支持 message(output_text)/reasoning/function_call 与 usage;其余 item 类型宁缺勿错
-// (canonical 缺失仅降级为跨协议不可命中,同构回放不受影响)。
-// finish_reason 按对象 status 保真(completed→stop / incomplete→length;缺省防御性 stop):
-// 伪造 stop 会让未完成响应经缓存准入流入跨协议回放。
+// ChatFromResponsesObject 将 Responses 对象逆映射为 canonical chat 响应，供直通双存，
+// 非对外翻译面。支持 message/reasoning/function_call 与 usage；其余 item 宁缺勿错。
+// finish_reason 按 status 保真：completed→stop、incomplete→length；伪造 stop 会让未完成
+// 响应经缓存准入流入跨协议回放。
 func ChatFromResponsesObject(body []byte) ([]byte, error) {
 	var resp struct {
 		Output []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
-			// reasoning 摘要:官方形态为 summary[](summary_text 部件);顶层 text 兼容
-			// 简化实现(语料登记的合成形态)。两处按序拼接,皆空 = canonical 无 reasoning。
+			// reasoning 摘要：官方形态为 summary 数组，元素为 summary_text 部件，顶层 text 兼容
+			// 简化实现。两处按序拼接，皆空即 canonical 无 reasoning。
 			Summary []struct {
 				Text string `json:"text"`
 			} `json:"summary"`

@@ -1,4 +1,4 @@
-// 零依赖 metrics 契约测试(ADR-0009):文本格式正确性/禁用零开销语义/标签转义。
+// 零依赖 metrics 测试：文本格式正确性/禁用零开销语义/标签转义。
 package metrics
 
 import (
@@ -26,7 +26,7 @@ func TestCounterVec_渲染与禁用(t *testing.T) {
 			t.Fatalf("输出缺 %q:\n%s", want, out)
 		}
 	}
-	// 禁用后:计数零开销短路,渲染为空
+	// 禁用后：计数零开销短路，渲染为空。
 	SetEnabled(false)
 	c.Inc("alias-a", "ok")
 	b.Reset()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# T5.4 压测用假上游:固定延迟 SSE 剧本(标准库实现,零依赖)。
+# 压测用假上游：按固定间隔发送 SSE 事件。
 # 用法:python3 scripts/bench/fake_upstream.py [port] [chunk数] [每帧延迟秒]
 # 剧本契约:与 internal/testkit 剧本形态一致——role 帧 → N 段 content → usage 终帧 → [DONE]。
 import json

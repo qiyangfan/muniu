@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { cn } from "../../lib/utils";
 
-// 本地标准件,API 对齐 kongming(field-sizing-content 随内容长高,min-h-16 兜底)
+// 本地标准件，API 和配方对齐 kongming；field-sizing-content 随内容长高，min-h-16 兜底。
 function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
   return (
     <textarea

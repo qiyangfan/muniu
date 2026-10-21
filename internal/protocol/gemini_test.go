@@ -1,6 +1,5 @@
-// Gemini 协议层契约测试(gemini-native-protocol;测试先行域):
-// 入站翻译逐格(fixture 单源)、拒绝清单、非流式/流式反向映射、回环对拍
-// (出站翻译 ∘ 入站翻译 = 恒等,可翻译子集域)。
+// Gemini 协议层测试：入站翻译逐格、拒绝清单、非流式与流式反向映射，
+// 以及回环对拍——出站翻译与入站翻译复合后在可翻译子集域为恒等。
 package protocol
 
 import (
@@ -11,7 +10,7 @@ import (
 	"testing"
 )
 
-// geminiCorpus 语料单源(conformance/gemini/native/corpus.json;双向反向消费)。
+// geminiCorpus 语料读取自 conformance/gemini/native/corpus.json，多个方向共用。
 func geminiCorpus(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
 	raw, err := os.ReadFile("../../conformance/gemini/native/corpus.json")
@@ -25,7 +24,7 @@ func geminiCorpus(t *testing.T) map[string]json.RawMessage {
 	return m
 }
 
-// TestTranslateGeminiRequest_合法映射 语料请求逐格翻译:systemInstruction/工具全链/
+// TestTranslateGeminiRequest_合法映射 语料请求逐格翻译：systemInstruction/工具全链/
 // inlineData 多模态/generationConfig 同义映射。
 func TestTranslateGeminiRequest_合法映射(t *testing.T) {
 	corpus := geminiCorpus(t)
@@ -48,11 +47,11 @@ func TestTranslateGeminiRequest_合法映射(t *testing.T) {
 	if !strings.Contains(raw, `"role":"system","content":"be nice"`) {
 		t.Fatalf("systemInstruction 应提升为 system: %s", raw)
 	}
-	// functionCall → tool_calls(合成 id)
+	// functionCall → tool_calls，合成 id
 	if !strings.Contains(raw, `"tool_calls":[{"id":"call_weather","type":"function","function":{"name":"weather"`) {
 		t.Fatalf("functionCall 应映射 tool_calls: %s", raw)
 	}
-	// functionResponse → role=tool(tool_call_id 回指)
+	// functionResponse → role=tool，tool_call_id 回指
 	if !strings.Contains(raw, `"role":"tool","tool_call_id":"call_weather"`) {
 		t.Fatalf("functionResponse 应映射 tool 消息: %s", raw)
 	}
@@ -76,7 +75,7 @@ func TestTranslateGeminiRequest_合法映射(t *testing.T) {
 	}
 }
 
-// TestTranslateGeminiRequest_拒绝清单 显式拒绝与登记限制(负面用例)。
+// TestTranslateGeminiRequest_拒绝清单 显式拒绝与静默丢弃的负面用例。
 func TestTranslateGeminiRequest_拒绝清单(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -100,7 +99,7 @@ func TestTranslateGeminiRequest_拒绝清单(t *testing.T) {
 			}
 		})
 	}
-	// 静默丢弃项正常服务(登记:safetySettings/topK/candidateCount/seed)
+	// 静默丢弃项正常服务：safetySettings/topK/candidateCount/seed
 	req, err := TranslateGeminiRequest("m", []byte(
 		`{"contents":[{"role":"user","parts":[{"text":"x"}]}],"safetySettings":[{"category":"HARM","threshold":"LOW"}],"generationConfig":{"topK":3,"candidateCount":1,"seed":7}}`), false)
 	if err != nil {
@@ -109,7 +108,7 @@ func TestTranslateGeminiRequest_拒绝清单(t *testing.T) {
 	if strings.Contains(string(req.Raw), "safetySettings") || strings.Contains(string(req.Raw), "topK") {
 		t.Fatalf("丢弃字段不得进入 canonical: %s", req.Raw)
 	}
-	// tool_choice 完整映射(含 NONE)
+	// tool_choice 完整映射，含 NONE
 	for mode, want := range map[string]string{"NONE": `"tool_choice":"none"`, "ANY": `"tool_choice":"required"`, "AUTO": `"tool_choice":"auto"`} {
 		req, err := TranslateGeminiRequest("m", []byte(
 			`{"contents":[{"role":"user","parts":[{"text":"x"}]}],"toolConfig":{"functionCallingConfig":{"mode":"`+mode+`"}}}`), false)
@@ -119,7 +118,7 @@ func TestTranslateGeminiRequest_拒绝清单(t *testing.T) {
 	}
 }
 
-// TestGenerateContentResponseFromChat_非流式反向映射 语料响应域逐格 + chat→gemini 冻结形态。
+// TestGenerateContentResponseFromChat_非流式反向映射 语料响应域逐格与 chat→gemini 固定映射。
 func TestGenerateContentResponseFromChat_非流式反向映射(t *testing.T) {
 	chat := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":"今天晴天"},"finish_reason":"stop"}],"usage":{"prompt_tokens":13,"completion_tokens":5,"cached_tokens":3,"reasoning_tokens":2}}`)
 	out, err := GenerateContentResponseFromChat(chat, "gemini-x")
@@ -162,7 +161,7 @@ func TestGenerateContentResponseFromChat_非流式反向映射(t *testing.T) {
 	if resp.ModelVersion != "gemini-x" {
 		t.Fatalf("modelVersion 应回显: %s", out)
 	}
-	// tool_calls → functionCall(args 对象形态)+ finish_reason=tool_calls → STOP
+	// tool_calls → functionCall 的 args 为对象形态；finish_reason=tool_calls → STOP
 	chatTool := []byte(`{"choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"weather","arguments":"{\"city\":\"北京\"}"}}]},"finish_reason":"tool_calls"}],"usage":null}`)
 	out2, err := GenerateContentResponseFromChat(chatTool, "m")
 	if err != nil {
@@ -174,14 +173,14 @@ func TestGenerateContentResponseFromChat_非流式反向映射(t *testing.T) {
 	}
 }
 
-// TestGeminiStreamEncoder_事件序列 语料流帧域:增量帧在前、终帧收尾、[DONE] 语义由 Complete 承担。
+// TestGeminiStreamEncoder_事件序列 语料流帧域：增量帧在前、终帧收尾、[DONE] 语义由 Complete 承担。
 func TestGeminiStreamEncoder_事件序列(t *testing.T) {
 	corpus := geminiCorpus(t)
 	var frames []string
 	if err := json.Unmarshal(corpus["stream_frames"], &frames); err != nil {
 		t.Fatal(err)
 	}
-	// 语料流帧即上游 gemini 形态——此处反向:经出站适配器同款帧结构构造 chat 流,映射回语料域
+	// 语料流帧即上游 gemini 形态，此处反向：以出站适配器同款帧结构构造 chat 流，映射回语料域
 	enc := NewGeminiStreamEncoder("gemini-x")
 	var out [][]byte
 	out = append(out, enc.Feed([]byte(`{"choices":[{"index":0,"delta":{"content":"今天"}}]}`))...)
@@ -200,16 +199,16 @@ func TestGeminiStreamEncoder_事件序列(t *testing.T) {
 			t.Fatalf("终帧缺 %s: %s", want, final)
 		}
 	}
-	// 断流收尾:Failed 产出 error 信封帧(不伪造正常终帧)
+	// 断流收尾：Failed 产出 error 信封帧，不伪造正常终帧
 	failed := NewGeminiStreamEncoder("m").Failed("上游流中断")
 	if !strings.Contains(string(failed), `"error"`) || strings.Contains(string(failed), "finishReason") {
 		t.Fatalf("失败帧形态不符: %s", failed)
 	}
 }
 
-// TestGemini_回环对拍 出站翻译 ∘ 入站翻译 = 恒等(可翻译子集域;语料单源漂移探测器)。
-// 方向:gemini 语料请求 → 入站翻译 canonical → (模拟出站适配器同规则)→ gemini 请求形态。
-// 本测试钉协议层不变式:入站翻译的 canonical 经等价 chat 重放,消息序列/系统/工具语义不丢失。
+// TestGemini_回环对拍 出站翻译 ∘ 入站翻译 = 恒等，可翻译子集域，兼作语料漂移探测。
+// 方向：gemini 语料请求 → 入站翻译 canonical → 模拟出站适配器同规则 → gemini 请求形态。
+// 钉住协议层不变式：入站翻译的 canonical 经等价 chat 重放，消息序列、系统与工具语义不丢失。
 func TestGemini_回环对拍(t *testing.T) {
 	corpus := geminiCorpus(t)
 	var req0 struct {
@@ -223,7 +222,7 @@ func TestGemini_回环对拍(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// canonical 语义域逐格(与语料请求同构):消息数 = system + user + model(tool) + user(tool) + user(text+image)
+	// canonical 语义域逐格，与语料请求同构：消息数 = system + user + model(tool) + user(tool) + user(text+image)
 	var env struct {
 		Messages []struct {
 			Role      string `json:"role"`

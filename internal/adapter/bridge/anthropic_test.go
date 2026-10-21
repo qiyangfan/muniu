@@ -1,5 +1,5 @@
-// Anthropic 桥接单测:请求翻译(system 提升/max_tokens 缺省/tools 重排/x-api-key 头)、
-// 非流式响应翻译(content/tool_use/stop_reason/usage)、流式事件机关键帧。
+// Anthropic 桥接单测覆盖：请求翻译的 system 提升、max_tokens 缺省、tools 重排与 x-api-key 头，
+// 非流式响应翻译的 content、tool_use、stop_reason 与 usage，以及流式事件机关键帧。
 package bridge_test
 
 import (
@@ -148,7 +148,7 @@ func TestBridge_RewriteResponse_非流式翻译(t *testing.T) {
 func TestBridge_StreamEvent_事件机(t *testing.T) {
 	ad := newBridge(t)
 
-	// message_start:usage 帧(prompt)
+	// message_start：usage 帧，含 prompt_tokens
 	passthrough, meta, err := ad.StreamEvent([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":21,"cache_read_input_tokens":4}}}`))
 	if err != nil || !meta.IsUsage || meta.HasContent {
 		t.Fatalf("message_start meta 不符: %+v %v", meta, err)
@@ -158,37 +158,37 @@ func TestBridge_StreamEvent_事件机(t *testing.T) {
 		t.Fatalf("message_start usage 不符: %+v", u)
 	}
 
-	// thinking_delta:实质内容(首 token 语义)
+	// thinking_delta 是实质内容，即首 token 语义
 	_, meta, err = ad.StreamEvent([]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"嗯"}}`))
 	if err != nil || !meta.HasContent {
 		t.Fatalf("thinking_delta 不符: %+v %v", meta, err)
 	}
 
-	// text_delta:内容透出在 delta.content
+	// text_delta 内容透出在 delta.content
 	passthrough, meta, err = ad.StreamEvent([]byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"答案"}}`))
 	if err != nil || !meta.HasContent || !strings.Contains(string(passthrough), `"content":"答案"`) {
 		t.Fatalf("text_delta 不符: %q %+v %v", passthrough, meta, err)
 	}
 
-	// ping:对客户端不可见
+	// ping 对客户端不可见
 	passthrough, meta, err = ad.StreamEvent([]byte(`{"type":"ping"}`))
 	if err != nil || passthrough != nil || meta.HasContent {
 		t.Fatalf("ping 应不可见: %q %+v %v", passthrough, meta, err)
 	}
 
-	// message_delta:finish_reason + completion tokens
+	// message_delta：finish_reason 与 completion tokens
 	passthrough, meta, err = ad.StreamEvent([]byte(`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}`))
 	if err != nil || !meta.IsUsage || !strings.Contains(string(passthrough), `"finish_reason":"stop"`) {
 		t.Fatalf("message_delta 不符: %q %+v %v", passthrough, meta, err)
 	}
 
-	// message_stop:[DONE]
+	// message_stop：[DONE]
 	passthrough, meta, err = ad.StreamEvent([]byte(`{"type":"message_stop"}`))
 	if err != nil || !meta.IsDone || string(passthrough) != "[DONE]" {
 		t.Fatalf("message_stop 不符: %q %+v %v", passthrough, meta, err)
 	}
 
-	// 流内错误事件:报错供上层归类
+	// 流内错误事件报错供上层归类
 	if _, _, err := ad.StreamEvent([]byte(`{"type":"error","error":{"message":"overloaded"}}`)); err == nil {
 		t.Fatal("错误事件必须报错")
 	}
@@ -197,8 +197,8 @@ func TestBridge_StreamEvent_事件机(t *testing.T) {
 func TestBridge_StreamEvent_toolUse翻译(t *testing.T) {
 	ad := newBridge(t)
 
-	// content_block_start(tool_use):首个 tool_call delta 必须携带 index/id/name
-	// (OpenAI 流式契约;缺 id/name 客户端拿到一串参数片段却不知道调哪个函数)
+	// tool_use 的 content_block_start 产出首个 tool_call delta，必须携带 index/id/name；
+	// 缺 id/name 时客户端拿到一串参数片段却不知道调哪个函数
 	pt, meta, err := ad.StreamEvent([]byte(`{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_9","name":"get_weather","input":{}}}`))
 	if err != nil || !meta.HasContent {
 		t.Fatalf("tool_use start meta 不符: %+v %v", meta, err)
@@ -226,7 +226,7 @@ func TestBridge_StreamEvent_toolUse翻译(t *testing.T) {
 		t.Fatalf("tool_use start 翻译不符: %s", pt)
 	}
 
-	// input_json_delta:arguments 增量挂在同块序号上(并行工具调用按序号分离,不串扰)
+	// input_json_delta 的 arguments 增量挂在同块序号上，并行工具调用按序号分离，不串扰
 	pt2, _, err := ad.StreamEvent([]byte(`{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"北京\"}"}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestBridge_StreamEvent_toolUse翻译(t *testing.T) {
 		t.Fatalf("input_json_delta 翻译不符: %s", pt2)
 	}
 
-	// content_block_start(text):对客户端不可见
+	// text 的 content_block_start 对客户端不可见
 	pt3, meta3, err := ad.StreamEvent([]byte(`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
 	if err != nil || pt3 != nil || meta3.HasContent {
 		t.Fatalf("text 块起始应不可见: %q %+v %v", pt3, meta3, err)
@@ -244,17 +244,17 @@ func TestBridge_StreamEvent_toolUse翻译(t *testing.T) {
 
 func TestBridge_StreamEvent_空载荷与未知stop(t *testing.T) {
 	ad := newBridge(t)
-	// 空 data/纯注释事件(SSE 心跳):不报错、不产出翻译帧,否则心跳会触发断流出口
+	// 空 data 或纯注释事件是 SSE 心跳：不报错、不产出翻译帧，否则心跳会触发断流出口
 	pt, meta, err := ad.StreamEvent(nil)
 	if err != nil || pt != nil || meta.HasContent || meta.IsUsage {
 		t.Fatalf("空载荷应不可见: %q %+v %v", pt, meta, err)
 	}
-	// model_context_window_exceeded → length(OpenAI 对应语义,不得伪装成正常 stop)
+	// model_context_window_exceeded 映射 length，属 OpenAI 对应语义，不得伪装成正常 stop
 	pt, _, err = ad.StreamEvent([]byte(`{"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded"},"usage":{"output_tokens":1}}`))
 	if err != nil || !strings.Contains(string(pt), `"finish_reason":"length"`) {
 		t.Fatalf("context_window_exceeded 应映射 length: %q %v", pt, err)
 	}
-	// refusal → content_filter
+	// refusal 映射 content_filter
 	pt, _, err = ad.StreamEvent([]byte(`{"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":1}}`))
 	if err != nil || !strings.Contains(string(pt), `"finish_reason":"content_filter"`) {
 		t.Fatalf("refusal 应映射 content_filter: %q %v", pt, err)
@@ -263,7 +263,7 @@ func TestBridge_StreamEvent_空载荷与未知stop(t *testing.T) {
 
 func TestBridge_Prepare_tools非法拒绝(t *testing.T) {
 	ad := newBridge(t)
-	// tools 字段形态非法 → 显式报错;静默丢弃会让上游在无工具状态下作答且无任何痕迹
+	// tools 字段形态非法时显式报错；静默丢弃会让上游在无工具状态下作答且无任何痕迹
 	req, err := protocol.ParseChatRequest([]byte(`{"model":"m","messages":[{"role":"user","content":"x"}],"tools":{"a":1}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -343,9 +343,9 @@ func extractUsage(t *testing.T, chunk []byte) string {
 	return string(frame.Usage)
 }
 
-// TestBridge_Prepare_鉴权形态声明 声明制鉴权(config.Provider.Auth → adapter.Options):
-// 缺省=x-api-key(协议标准,官方 Anthropic/SDK 口径);bearer=Authorization Bearer(国内分支口径),
-// 且两形态互斥(声明 bearer 不得残留 x-api-key,反之亦然)。
+// TestBridge_Prepare_鉴权形态声明 验证声明制鉴权，config.Provider.Auth 经 adapter.Options 传入：
+// 缺省发 x-api-key，即协议标准口径；bearer 发 Authorization Bearer，即国内分支口径；
+// 两形态互斥，声明 bearer 不得残留 x-api-key，反之亦然。
 func TestBridge_Prepare_鉴权形态声明(t *testing.T) {
 	build := func(t *testing.T, auth string) adapter.Adapter {
 		t.Helper()
@@ -378,15 +378,15 @@ func TestBridge_Prepare_鉴权形态声明(t *testing.T) {
 	if def.Header.Get("anthropic-version") != bearer.Header.Get("anthropic-version") {
 		t.Fatalf("anthropic-version 两形态都必须存在: %v / %v", def.Header, bearer.Header)
 	}
-	// 非法值:config 已拦截,adapter 层 fail-fast 兜底(控制面下发路径绕过 config.Load)
+	// 非法值 config 已拦截，adapter 层 fail-fast 兜底，防控制面下发路径绕过 config.Load
 	if _, err := adapter.For("anthropic", "https://x", "k", adapter.Options{Auth: "x-api-key"}); err == nil {
 		t.Fatal("auth 仅允许 空|bearer,非法值应报错")
 	}
 }
 
-// TestBridge_Prepare_工具多轮往返 请求侧翻译完整化(anthropic-bridge-tool-roundtrip):
-// assistant.tool_calls→tool_use 块(input 对象)/role=tool→user tool_result 块/连续 tool
-// 合并单 user/未配对 id 报错/纯文本 wire 逐字节不变(字符串 content 守门)。
+// TestBridge_Prepare_工具多轮往返 验证请求侧翻译完整：assistant.tool_calls 翻译为 tool_use 块，
+// input 为对象形态；role=tool 翻译为 user 的 tool_result 块；连续 tool 合并为单条 user；
+// 未配对 id 报错；纯文本 wire 靠字符串 content 守门，逐字节不变。
 func TestBridge_Prepare_工具多轮往返(t *testing.T) {
 	ad := newBridge(t)
 
@@ -428,7 +428,7 @@ func TestBridge_Prepare_工具多轮往返(t *testing.T) {
 			ToolUseID string          `json:"tool_use_id,omitempty"`
 			Content   string          `json:"content,omitempty"`
 		}
-		// assistant:content null + tool_calls → 仅 tool_use 块(input 对象形态)
+		// assistant 消息 content 为 null 加 tool_calls，只产出 tool_use 块，input 为对象形态
 		if err := json.Unmarshal(body.Messages[1].Content, &blocks); err != nil {
 			t.Fatalf("assistant 应为块数组: %s", body.Messages[1].Content)
 		}
@@ -437,7 +437,7 @@ func TestBridge_Prepare_工具多轮往返(t *testing.T) {
 			string(blocks[0].Input) != `{"city":"北京"}` {
 			t.Fatalf("tool_use 块不符: %+v", blocks)
 		}
-		// tool 结果:合并进单条 user 的 tool_result 块
+		// tool 结果合并进单条 user 的 tool_result 块
 		blocks = nil
 		if err := json.Unmarshal(body.Messages[2].Content, &blocks); err != nil {
 			t.Fatalf("tool 结果应为块数组: %s", body.Messages[2].Content)
@@ -446,7 +446,7 @@ func TestBridge_Prepare_工具多轮往返(t *testing.T) {
 			blocks[0].Type != "tool_result" || blocks[0].ToolUseID != "call_1" || blocks[0].Content != "晴 25°C" {
 			t.Fatalf("tool_result 块不符: %+v", blocks)
 		}
-		// 交替:user → assistant → user
+		// 角色交替：user、assistant、user
 		if body.Messages[0].Role != "user" {
 			t.Fatalf("角色序列不符: %+v", body.Messages)
 		}
@@ -480,7 +480,7 @@ func TestBridge_Prepare_工具多轮往返(t *testing.T) {
 			} `json:"messages"`
 		}
 		_ = json.Unmarshal(out.Body, &body)
-		// user / assistant(tool_use×2) / user(tool_result×2+text 合并) 三条,交替无断裂
+		// 三条消息：user、含两个 tool_use 的 assistant、含两个 tool_result 与合并 text 的 user，交替无断裂
 		if len(body.Messages) != 3 {
 			t.Fatalf("应合并为 3 条消息: %+v", body.Messages)
 		}

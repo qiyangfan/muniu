@@ -1,7 +1,5 @@
-// 拓扑快照与热替换管道(ADR-0005 配置源抽象 3.1):providers/model_routes/能力目录
-// 构成不可变快照,atomic.Pointer 原子替换;转发路径每请求入口加载一次(请求全程
-// 同一快照——换道候选视图一致),零锁开销。替换语义:基础校验失败整体拒绝(保持旧
-// 快照);provider 配置未变(DeepEqual)则 key 池原样保留——冷却/EMA 等运行态无损。
+// 拓扑以不可变快照原子替换；每个请求始终使用入口处加载的同一快照。
+// 校验或构建失败时保留旧快照；provider 配置未变时复用原 key 池及其运行状态。
 package proxy
 
 import (
@@ -14,28 +12,26 @@ import (
 	"github.com/solvela/muniu/internal/keypool"
 )
 
-// topologySnapshot 不可变拓扑:五要素同生共死,替换时整体换新。
-// adapter 实例随快照走——热替换失败路径的回滚天然一致,杜绝「旧池+新适配器」
-// 的混合转发状态(buildPool 的注册副作用被快照化吸收)。
-// loadedAt = 快照生成时刻(模型发现 /v1/models 的 created 语义;进程内稳定)。
+// topologySnapshot 保存一次拓扑快照及其对应的池、适配器和能力声明。
+// 替换时整体切换，保证在途请求不会混用新旧配置；loadedAt 用于模型目录的 created 字段。
 type topologySnapshot struct {
-	providers   []config.Provider             // 原始定义(池保留的 DeepEqual 基准)
+	providers   []config.Provider             // 原始定义，池保留的 DeepEqual 基准
 	routes      map[string][]config.Candidate // priority 升序已排序
 	pools       map[string]*keypool.Pool
-	adapters    map[string]adapter.Adapter // provider → 出站适配器(与池同生命周期)
+	adapters    map[string]adapter.Adapter // provider 到出站适配器，与池同生命周期
 	caps        map[governKey]config.ModelCapability
-	nativeResps map[string]bool // provider → native_responses 声明(responses 直通资格,声明制)
+	nativeResps map[string]bool // provider 到 native_responses 声明，responses 直通资格，声明制
 	loadedAt    time.Time
 }
 
-// TopologyStats 一次替换的池处置统计(可观测/日志)。
+// TopologyStats 记录一次拓扑替换中 key 池的复用、创建和移除数量。
 type TopologyStats struct {
-	Reused  int // 配置未变,运行态无损保留
-	Created int // 新增或配置变更,池重建
-	Removed int // 拓扑中消失,池丢弃(在途请求持旧池完成)
+	Reused  int // 配置未变，运行态无损保留
+	Created int // 新增或配置变更，池重建
+	Removed int // 拓扑中消失，池丢弃，在途请求持旧池完成
 }
 
-// Topology 当前快照的只读视图(管理面/诊断:供应商健康页与热替换同步)。
+// Topology 返回当前快照的 provider 和 key 池。
 func (p *Proxy) Topology() ([]config.Provider, map[string]*keypool.Pool) {
 	s := p.topo.Load()
 	if s == nil {
@@ -44,11 +40,8 @@ func (p *Proxy) Topology() ([]config.Provider, map[string]*keypool.Pool) {
 	return s.providers, s.pools
 }
 
-// ReplaceTopology 拓扑热替换管道:轻校验 → 池保留决策 → 原子替换。
-// cfg 携带新拓扑(Providers/Routes/Capabilities 必备,其余字段沿用现值);
-// buildPool 由装配层提供(环境变量解析 + adapter 构造 + keypool.NewPool),
-// 仅对「新增或配置变更」的 provider 调用——配置未变的池与适配器原样保留,
-// 运行态无损。校验/构建失败返回错误且旧快照原封不动(3.3 损坏拒绝应用守门)。
+// ReplaceTopology 校验并原子替换拓扑。cfg 必须包含 Providers、Routes 和 Capabilities。
+// buildPool 只为新增或已变更的 provider 调用；任何校验或构建错误都会保留旧快照。
 func (p *Proxy) ReplaceTopology(cfg Config,
 	buildPool func(config.Provider) (*keypool.Pool, adapter.Adapter, error)) (TopologyStats, error) {
 	if len(cfg.Routes) == 0 {
@@ -58,8 +51,7 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		return TopologyStats{}, errors.New("拓扑替换被拒绝: 池构建回调缺失")
 	}
 	old := p.topo.Load()
-	// 数值域守门(与 YAML validate 同规):weight/priority 契约 = 数据面 int 语义,
-	// 超域巨值下发后进入 failover 加权累加会溢出为负,加权随机失效且跨仓无从定位。
+	// 拓扑可能来自控制面，须限制在本机 int 可安全处理的数值范围内。
 	for _, prov := range cfg.Providers {
 		if prov.Weight <= 0 || int64(prov.Weight) > config.MaxTopologyInt {
 			return TopologyStats{}, fmt.Errorf(
@@ -112,7 +104,7 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		adapters[prov.Name] = ad
 		stats.Created++
 	}
-	stats.Removed = len(oldByName) // 旧有新无:池与适配器随旧快照释放(在途请求持旧快照完成)
+	stats.Removed = len(oldByName) // 旧有新无：池与适配器随旧快照释放，在途请求持旧快照完成
 
 	p.topo.Store(&topologySnapshot{
 		providers:   append([]config.Provider(nil), cfg.Providers...),
@@ -126,7 +118,7 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 	return stats, nil
 }
 
-// checkPoolCoverage 路由候选引用的全部 provider 必须在拓扑内定义(返回缺失名单)。
+// checkPoolCoverage 返回路由引用但未定义的 provider。
 func checkPoolCoverage(routes map[string][]config.Candidate, known map[string]bool) []string {
 	var missing []string
 	seen := map[string]bool{}
@@ -152,8 +144,7 @@ func providerByName(s *topologySnapshot) map[string]config.Provider {
 	return out
 }
 
-// providersEqual 配置级恒等(含 key 引用列表);环境变量值的变更不属拓扑范畴
-// (值经 .env 注入,池内 key 值启动期已解析)。
+// providersEqual 比较 provider 的拓扑配置，包括 key 引用列表。
 func providersEqual(a, b config.Provider) bool {
 	if a.Name != b.Name || a.Adapter != b.Adapter || a.BaseURL != b.BaseURL ||
 		a.Weight != b.Weight || a.Priority != b.Priority || len(a.Keys) != len(b.Keys) {
@@ -167,12 +158,12 @@ func providersEqual(a, b config.Provider) bool {
 	return true
 }
 
-// sortRoutes 候选按 priority 升序(与 New 同规则,替换路径复用)。
+// sortRoutes 按 priority 升序排列每个路由的候选。
 func sortRoutes(routes map[string][]config.Candidate) map[string][]config.Candidate {
 	sorted := make(map[string][]config.Candidate, len(routes))
 	for alias, cands := range routes {
 		cs := append([]config.Candidate(nil), cands...)
-		for i := 1; i < len(cs); i++ { // 插入排序:候选列表极短
+		for i := 1; i < len(cs); i++ { // 插入排序，候选列表极短
 			for j := i; j > 0 && cs[j].Priority < cs[j-1].Priority; j-- {
 				cs[j], cs[j-1] = cs[j-1], cs[j]
 			}

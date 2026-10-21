@@ -1,4 +1,4 @@
-// 官方端点预设目录端点:只读参考数据,无 Deps 依赖、无运行时行为(目录语义见 internal/presets)。
+// 官方端点预设目录端点：只读参考数据，无 Deps 依赖、无运行时行为，目录语义见 internal/presets。
 package admin
 
 import (

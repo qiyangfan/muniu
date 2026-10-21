@@ -1,4 +1,4 @@
-# 压测专用网关配置(T5.4):上游 = 本机假上游(scripts/bench/fake_upstream.py)
+# 压测配置：上游指向本机的 fake_upstream.py。
 server:
   addr: "127.0.0.1:8787"
   timeouts: { dial: 2, first_token: 120, chunk_idle: 60 }

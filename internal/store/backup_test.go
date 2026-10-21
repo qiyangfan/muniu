@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	_ "modernc.org/sqlite" // 只读打开用(与 Open 同一驱动)
+	_ "modernc.org/sqlite" // 只读打开用，与 Open 同一驱动。
 )
 
-// seedRows 造最小可核账状态:1 租户 + 2 key + 3 条 usage。
+// seedRows 造最小可核账状态：1 租户 + 2 key + 3 条 usage。
 func seedRows(t *testing.T, db *sql.DB) {
 	t.Helper()
 	mustExec(t, db,
@@ -62,7 +62,7 @@ func openDB(t *testing.T, path string) *sql.DB {
 	return db
 }
 
-// TestSnapshotRestoreRoundtrip:备份→恢复 roundtrip,三处行数与内容一致。
+// TestSnapshotRestoreRoundtrip：备份→恢复 roundtrip，三处行数与内容一致。
 func TestSnapshotRestoreRoundtrip(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.db")
@@ -104,7 +104,7 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 	if got := countOf(t, rdb, "usage_logs"); got != 3 {
 		t.Fatalf("usage_logs = %d, want 3", got)
 	}
-	// 内容级一致(key 前缀逐字)
+	// 内容级一致，key 前缀逐字比对。
 	var prefix string
 	if err := rdb.QueryRow("SELECT prefix FROM api_keys WHERE id='k2'").Scan(&prefix); err != nil {
 		t.Fatal(err)
@@ -114,17 +114,15 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 	}
 }
 
-// TestSnapshotIncludesUnmergedWAL:写入后不 checkpoint 直接备份,
-// VACUUM INTO 一致快照须含已提交 WAL 帧(不丢不旧)。
+// TestSnapshotIncludesUnmergedWAL：写入后不 checkpoint 直接备份，
+// VACUUM INTO 一致快照须含已提交 WAL 帧，不丢不旧。
 func TestSnapshotIncludesUnmergedWAL(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "wal.db")
 	db := openDB(t, src)
 	seedRows(t, db)
-	// 关键机制:连接**未关闭**(SQLite 末连接关闭才 checkpoint 合并),
-	// 数据仍以 WAL 帧存在;VACUUM INTO 的一致快照须含已提交帧。
-	// (早先版本在同池持读事务,撞 SetMaxOpenConns(1) 自锁——真实 CLI
-	// 是独立进程开自身连接,无此竞争;勿把测试写成自锁形状。)
+	// 保持连接打开，让已提交数据留在 WAL 帧中；快照仍须包含这些帧。
+	// 测试连接池只允许一个连接，因此不要在此连接上另开读事务。
 	backupDir := filepath.Join(dir, "bak")
 	if _, err := Snapshot(db, backupDir, time.Now()); err != nil {
 		t.Fatalf("snapshot(连接未关闭): %v", err)
@@ -142,7 +140,7 @@ func TestSnapshotIncludesUnmergedWAL(t *testing.T) {
 	}
 }
 
-// TestSnapshotRefusesExistingDir:备份目录已存在即拒(防混入既有备份)。
+// TestSnapshotRefusesExistingDir：备份目录已存在即拒，防混入既有备份。
 func TestSnapshotRefusesExistingDir(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.db")
@@ -158,16 +156,16 @@ func TestSnapshotRefusesExistingDir(t *testing.T) {
 	}
 }
 
-// TestSnapshotDeletesArtifactOnFailure:快照失败(VACUUM INTO 报错)时
-// 删档不残留——半成品备份比没有备份更危险。
+// TestSnapshotDeletesArtifactOnFailure：快照失败即 VACUUM INTO 报错时，
+// 删档不残留，半成品备份比没有备份更危险。
 func TestSnapshotDeletesArtifactOnFailure(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "ro.db")
 	db := openDB(t, src)
 	seedRows(t, db)
 	_ = db.Close()
-	// query_only 重开:VACUUM INTO 必失败(attempt to write a readonly database)
-	// (modernc 不认裸 mode=ro 查询参,query_only pragma 是本仓 Open 同款注入形态)
+	// query_only 重开：VACUUM INTO 必失败(attempt to write a readonly database)。
+	// modernc 不认裸 mode=ro 查询参，query_only pragma 是本仓 Open 同款注入形态。
 	ro, err := sql.Open("sqlite", src+"?_pragma=query_only(1)")
 	if err != nil {
 		t.Fatal(err)
@@ -183,13 +181,13 @@ func TestSnapshotDeletesArtifactOnFailure(t *testing.T) {
 	}
 }
 
-// TestRestoreRefusesExistingDestWithoutForce:目标已存在未传 force 即拒,
+// TestRestoreRefusesExistingDestWithoutForce：目标已存在未传 force 即拒，
 // 且目标内容零改动。
 func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.db")
 	db := openDB(t, src)
-	seedRows(t, db) // 备份源=3 条 usage(manifest 记 3)
+	seedRows(t, db) // 备份源 3 条 usage，manifest 记 3。
 	backupDir := filepath.Join(dir, "bak")
 	man, err := Snapshot(db, backupDir, time.Now())
 	if err != nil {
@@ -198,7 +196,7 @@ func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 	_ = db.Close()
 
 	dest := filepath.Join(dir, "dest.db")
-	// 目标故意造成不同内容(4 条 usage)
+	// 目标故意造成不同内容，4 条 usage。
 	ddb := openDB(t, dest)
 	seedRows(t, ddb)
 	mustExec(t, ddb,
@@ -211,7 +209,7 @@ func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 	if err := Restore(backupDir, dest, false); err == nil {
 		t.Fatal("期望拒绝覆盖")
 	}
-	// 目标零改动:仍 4 条(manifest 记的是 3 条备份)
+	// 目标零改动：仍 4 条，manifest 记的是 3 条备份。
 	rdb := openDB(t, dest)
 	defer func() { _ = rdb.Close() }()
 	if got := countOf(t, rdb, "usage_logs"); got != 4 {
@@ -220,7 +218,7 @@ func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 	if man.UsageLogs != 3 {
 		t.Fatalf("manifest usage = %d, want 3", man.UsageLogs)
 	}
-	// force 后成功覆盖
+	// force 后成功覆盖。
 	if err := Restore(backupDir, dest, true); err != nil {
 		t.Fatalf("force restore: %v", err)
 	}
@@ -231,8 +229,8 @@ func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 	}
 }
 
-// TestRestoreRejectsManifestMismatch:manifest 行数与快照实际不符 → 拒收,
-// 目标保持原样(spec「恢复后校验不符/坏档拒收」)。
+// TestRestoreRejectsManifestMismatch：manifest 行数与快照实际不符 → 拒收，
+// 目标保持原样。
 func TestRestoreRejectsManifestMismatch(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.db")
@@ -244,7 +242,7 @@ func TestRestoreRejectsManifestMismatch(t *testing.T) {
 	}
 	_ = db.Close()
 
-	// 篡改 manifest 的 usage_logs 行数(模拟坏档/对不齐)
+	// 篡改 manifest 的 usage_logs 行数，模拟坏档或对不齐。
 	manPath := filepath.Join(backupDir, manifestName)
 	raw, err := os.ReadFile(manPath)
 	if err != nil {
@@ -272,7 +270,7 @@ func TestRestoreRejectsManifestMismatch(t *testing.T) {
 	}
 }
 
-// TestRestoreRejectsTamperedSnapshot:快照文件被改动(sha256 不符 manifest)→ 拒。
+// TestRestoreRejectsTamperedSnapshot：快照文件被改动即 sha256 与 manifest 不符 → 拒。
 func TestRestoreRejectsTamperedSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.db")
@@ -283,8 +281,7 @@ func TestRestoreRejectsTamperedSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	// 追加脏字节到快照文件(SQLite 容忍尾部垃圾,integrity 可能仍过,
-	// 但 sha256 必须抓到)
+	// 追加脏字节到快照文件：SQLite 容忍尾部垃圾，integrity 可能仍过，但 sha256 必须抓到。
 	f, err := os.OpenFile(filepath.Join(backupDir, backupDBName), os.O_WRONLY|os.O_APPEND, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +297,7 @@ func TestRestoreRejectsTamperedSnapshot(t *testing.T) {
 	}
 }
 
-// TestRestoreRejectsMissingManifestDir:非 muniu 备份目录(缺 manifest)→ 拒。
+// TestRestoreRejectsMissingManifestDir：非 muniu 备份目录即缺 manifest → 拒。
 func TestRestoreRejectsMissingManifestDir(t *testing.T) {
 	dir := t.TempDir()
 	if err := Restore(dir, filepath.Join(dir, "x.db"), false); err == nil {
@@ -308,8 +305,8 @@ func TestRestoreRejectsMissingManifestDir(t *testing.T) {
 	}
 }
 
-// TestRestoreRefusesLockedTarget:目标被另一进程的 SQLite 连接持锁 →
-// 拒恢复(实例在运行;POSIX 锁跨进程实测可见,同进程不冲突故用子进程)。
+// TestRestoreRefusesLockedTarget：目标被另一进程的 SQLite 连接持锁 → 拒恢复。
+// 实例在运行即此状态；POSIX 锁跨进程可见，同进程不冲突，故用子进程构造。
 func TestRestoreRefusesLockedTarget(t *testing.T) {
 	if flag.Lookup("test.v") == nil {
 		t.Fatal("test 标志缺失?")
@@ -328,7 +325,7 @@ func TestRestoreRefusesLockedTarget(t *testing.T) {
 	hdb := openDB(t, dest)
 	seedRows(t, hdb)
 
-	// 子进程持有 dest 的 SQLite 连接(空闲连接亦持 POSIX 锁,实验实证)
+	// 子进程持有 dest 的 SQLite 连接，空闲连接亦持 POSIX 锁。
 	cmd := exec.Command(os.Args[0], "-test.run=TestLockHolderHelper", "-test.v=false") //nolint:gosec // 测试二进制自身
 	cmd.Env = append(os.Environ(), "MUNIU_LOCK_DB="+dest)
 	stdout, err := cmd.StdoutPipe()
@@ -359,7 +356,7 @@ func TestRestoreRefusesLockedTarget(t *testing.T) {
 		t.Fatal("等待锁持有子进程超时")
 	}
 
-	err = Restore(backupDir, dest, true) // force 也不行:占用闸先于覆盖闸
+	err = Restore(backupDir, dest, true) // force 也不行：占用闸先于覆盖闸。
 	if !errors.Is(err, ErrLocked) {
 		t.Fatalf("期望 ErrLocked,实际: %v", err)
 	}
@@ -370,8 +367,8 @@ func TestRestoreRefusesLockedTarget(t *testing.T) {
 	_ = hdb.Close()
 }
 
-// TestLockHolderHelper 不作为用例运行(由 TestRestoreRefusesLockedTarget
-// 以子进程拉起):打开指定库并保持连接,打印 ready。
+// TestLockHolderHelper 不作为用例运行，由 TestRestoreRefusesLockedTarget 以子进程
+// 拉起：打开指定库并保持连接，打印 ready。
 func TestLockHolderHelper(t *testing.T) {
 	path := os.Getenv("MUNIU_LOCK_DB")
 	if path == "" {
@@ -390,8 +387,7 @@ func TestLockHolderHelper(t *testing.T) {
 	time.Sleep(30 * time.Second)
 }
 
-// TestProbeLockedFreeWhenNoConnection:无连接时探测通过(回归:误报会让
-// 所有恢复被拒)。
+// TestProbeLockedFreeWhenNoConnection：无连接时探测通过，防误报导致所有恢复被拒。
 func TestProbeLockedFreeWhenNoConnection(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "free.db")
@@ -401,19 +397,19 @@ func TestProbeLockedFreeWhenNoConnection(t *testing.T) {
 	if err := probeLocked(p); err != nil {
 		t.Fatalf("无连接时应可探测通过: %v", err)
 	}
-	// 不存在的文件同样通过(新目标无占用概念)
+	// 不存在的文件同样通过，新目标无占用概念。
 	if err := probeLocked(filepath.Join(dir, "nope.db")); err != nil {
 		t.Fatalf("不存在目标应通过: %v", err)
 	}
 }
 
-// TestRestoreReplacesStaleWalSidecars:目标库带崩溃残留 -wal/-shm(unclean
-// shutdown)时,恢复须将旧 WAL 帧整体换走——单独替换主库文件会把陈旧 WAL
-// 留给新库,下次打开旧帧被恢复叠到新库上(静默数据混杂)。
-// 复现构造:另一库写入不合并 WAL → 整对拷到目标路径(不经 clean close)。
+// TestRestoreReplacesStaleWalSidecars：目标库带崩溃残留 -wal/-shm 即 unclean
+// shutdown 时，恢复须将旧 WAL 帧整体换走；单独替换主库文件会把陈旧 WAL 留给
+// 新库，下次打开旧帧被恢复叠到新库上，静默数据混杂。
+// 复现构造：另一库写入不合并 WAL，整对拷到目标路径，不经 clean close。
 func TestRestoreReplacesStaleWalSidecars(t *testing.T) {
 	dir := t.TempDir()
-	// 备份源:3 条 usage
+	// 备份源：3 条 usage。
 	src := filepath.Join(dir, "src.db")
 	sdb := openDB(t, src)
 	seedRows(t, sdb)
@@ -423,7 +419,7 @@ func TestRestoreReplacesStaleWalSidecars(t *testing.T) {
 	}
 	_ = sdb.Close()
 
-	// 旧目标:4 条 usage(第 4 条只存在于 WAL 帧,未合并主库)
+	// 旧目标：4 条 usage，第 4 条只存在于 WAL 帧，未合并主库。
 	stale := filepath.Join(dir, "stale-src.db")
 	tdb := openDB(t, stale)
 	seedRows(t, tdb)
@@ -445,9 +441,8 @@ func TestRestoreReplacesStaleWalSidecars(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	_ = tdb.Close() // 关旧库(其自身 sidecar 清掉,目标侧副本保留)
-	// 注意:勿在恢复前打开 dest——那会WAL 恢复+checkpoint+clean close 删掉
-	// sidecar,把待测条件亲手销毁(首版用例即此假绿)。
+	_ = tdb.Close() // 关旧库，其自身 sidecar 清掉，目标侧副本保留。
+	// 恢复前不要打开 dest，否则 SQLite 会恢复并清理待测的 WAL sidecar。
 
 	if err := Restore(backupDir, dest, true); err != nil {
 		t.Fatalf("restore: %v", err)

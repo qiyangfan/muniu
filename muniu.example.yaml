@@ -1,11 +1,9 @@
-# muniu 配置示例——复制为 muniu.yaml 后按需修改;真实配置已被 .gitignore 排除
-# 分工边界(docs/adr/0004):静态拓扑(providers/model_routes/pricing)走本文件,
-# 运行态(tenants/api_keys/usage)走 SQLite;密钥明文只允许存在于环境变量,
-# 本文件与数据库一律只存环境变量引用名。
+# 复制为 muniu.yaml 后按需修改。静态拓扑和价目存于本文件，租户、密钥和用量存于 SQLite。
+# 密钥只引用环境变量，不在配置或数据库中保存明文。
 
 server:
   addr: ":8787"
-  # 超时三层(秒),语义见 docs/design/proxy-and-streaming.md「超时模型」
+  # 三项超时均以秒为单位。
   timeouts:
     dial: 5          # TCP+TLS 建连
     first_token: 60  # 上游首个内容帧(非流式=响应首字节)
@@ -22,52 +20,48 @@ log:
 metering:
   flush_interval_ms: 500   # usage_logs 异步批量落库间隔
   flush_batch: 256         # 攒满即刷,不必等间隔
-  # 本位币与 credit(gateway-parity):credit = 账单最小刻度,1 credit = 本位币 1e-9
+  # 1 credit = 本位币的 10^-9。
   settlement: CNY           # 本位币:CNY(缺省)|USD;价目币种 ≠ 本位币时必须配汇率
   fx_usd_cny_milli: 7200    # 1 USD = 7.200 CNY(毫单位整数);USD 报价加载期一次换算
-  # 计量汇(ADR-0007):local(缺省,落本地 SQLite)| ingest(投控制面,失败整批落本地缓冲,恢复续传)
+  # local 写入本地 SQLite；ingest 推送到控制面，失败时缓冲并在恢复后续传。
   # sink: ingest
   # ingest_url: "http://control-plane:8080/internal/metering/ingest"
   # ingest_token: "..."            # 可选 Bearer,支持环境变量引用展开
   # buffer_capacity: 1000000       # 本地缓冲上限(行),超限阻塞并告警
 
-# 平台 key(ADR-0006,可选):HMAC 自校验载体 mk2-*,网关离线验真;空 = 未启用
+# 可选的平台 key 配置；未设置时禁用平台 key。
 # auth:
 #   platform_key_secrets:          # base64 HMAC 密钥(解码后 ≥16 字节),多把支持轮换
 #     - "<base64 密钥,建议经环境变量注入后展开>"
 #   revocations_url: "http://control-plane:8080/internal/keys/revocations"
 #   revocations_interval_sec: 60   # 吊销收敛窗口
 
-# 控制面拉取(ADR-0005,可选):价目/拓扑经控制面下发(响应与管理 API 一致),覆盖写入即时生效;空 = 不拉取
+# 可选的控制面价目与拓扑拉取；下发内容覆盖本地静态配置。
 # control_plane:
 #   pricing_url: "http://control-plane:8080/internal/pricing/list"
 #   topology_url: "http://control-plane:8080/internal/topology"   # 拓扑热替换(providers/model_routes/能力目录)
 #   poll_interval_sec: 60
 
-# 限流计数后端(ADR-0008 修订):inmem(缺省,实例自治,零依赖)| redis(共享视图,
-# cluster 形态消除 ×N;后端不可达自动降级实例自治并告警,恢复自动回共享视图)
+# inmem 按实例计数；redis 共享限流计数，故障时降级为实例计数并告警。
 # ratelimit:
 #   backend: redis
 #   redis_addr: "127.0.0.1:6379"
 
-# metrics(ADR-0009,可选):GET /metrics(Prometheus 文本协议;有管理 token 时需鉴权抓取)
+# 启用后需配置 MUNIU_ADMIN_TOKEN 才会挂载 Prometheus 指标端点 GET /metrics。
 # metrics:
 #   enabled: true
 
-# 上游供应商(静态拓扑)。weight 同优先级内加权轮询;priority 小者先被选中,
-# 仅在同优先级候选全部不可用时向更大 priority 降级。
-# 官方端点全家福——OpenAI 兼容各官方家 / 各家 Anthropic 分支(桥接组合)/
-# 聚合与本地平台 / Plan 订阅端点计费红线——见 docs/provider-presets.md;
-# 本节只留代表性样例,中转站一律不预设(兼容基座自填端点 + 白名单放行即可)。
+# 上游静态拓扑。同优先级按权重随机确定尝试顺序；本组耗尽后再降级。
+# 官方端点可从 /admin/v1/provider-presets 查看；此处仅展示配置示例。
 providers:
   - name: deepseek
     adapter: deepseek                     # 适配器类型(值域单源=adapter.Types()):openai=兼容基座;deepseek/moonshot/glm/qwen/doubao=基座+quirk;anthropic=桥接
-                                          # 官方端点全目录见 GET /admin/v1/provider-presets 与 docs/provider-presets.md;Gemini 走 adapter: openai + 官方兼容层
+                                          # 类型来自 adapter.Types()；Gemini 也可使用原生 gemini 适配器。
     base_url: "https://api.deepseek.com/v1"
     keys:
       - env: DEEPSEEK_API_KEY_1           # 只写环境变量名,绝不写明文
-      # - env: DEEPSEEK_API_KEY_2         # 多把 key 构成 key 池:平滑加权轮询 + 冷却/禁用
-      #   weight: 30                       # key 权重(缺省 1),EMA 健康度自动降权
+      # - env: DEEPSEEK_API_KEY_2         # 多 key 会组成 key 池
+      #   weight: 30                       # key 权重，缺省为 1
     weight: 70
     priority: 0
   - name: openai
@@ -77,30 +71,26 @@ providers:
       - env: OPENAI_API_KEY_1
     weight: 30
     priority: 1
-  # 兼容官方家全部 openai 基座零代码,按预设目录抄 base_url 即可(示例 MiniMax):
+  # OpenAI 兼容适配器示例：
   # - name: minimax
   #   adapter: openai
   #   base_url: "https://api.minimaxi.com/v1"
   #   keys:
   #     - env: MINIMAX_API_KEY_1
-  # anthropic 分支(订阅制 Coding Plan 多挂在此形态)——⚠ 目录 B 节「鉴权头
-  # 形态缺口」未冒烟前勿上生产:
+  # Anthropic 兼容端点示例：请按供应商要求选择鉴权方式。
   # - name: kimi-coding
   #   adapter: anthropic
-  #   auth: bearer                       # 国内分支声明口径(官方 Anthropic 缺省 x-api-key)
+  #   auth: bearer                       # 使用 Authorization Bearer；缺省使用 x-api-key
   #   base_url: "https://api.kimi.com/coding/"
   #   keys:
   #     - env: KIMI_CODING_KEY_1
-  # Gemini 原生出站(ADR-0015,真异构桥接型、工具多轮翻译完整):
+  # Gemini 原生出站示例：
   # - name: gemini-native
   #   adapter: gemini
   #   base_url: "https://generativelanguage.googleapis.com/v1beta"
   #   keys:
   #     - env: GEMINI_API_KEY
-  # responses 原生端点声明(声明制直通,protocol-native-passthrough):
-  # true = /v1/responses 入站对该 provider 原生直通(仅 model 改写+鉴权注入)。
-  # 「OpenAI 兼容」≠「responses 端点可用」——未实证该端点的厂商勿声明
-  # (百炼 responses 多轮回放有服务端缺口,实证前勿开,见 docs/provider-presets.md):
+  # 仅对已验证支持 Responses API 的供应商启用原生直通；否则使用 chat 翻译。
   # - name: openai-official
   #   adapter: openai
   #   native_responses: true
@@ -108,50 +98,40 @@ providers:
   #   keys:
   #     - env: OPENAI_API_KEY_1
 
-# 模型路由:键 = 对外模型别名(即入站请求的 model 字段),
-# 值 = 有序候选列表,failover 依此降级(语义见 docs/design/traffic-governance.md)
+# 模型路由键是入站别名；候选按 priority 顺序尝试。
 model_routes:
   deepseek-chat:
     - { provider: deepseek, model: deepseek-v4-flash, priority: 0 }
   gpt-4o-mini:
     - { provider: openai, model: gpt-4o-mini, priority: 0 }
-  # 桥接型(Phase 3 起 Anthropic 可用;需 blank import adapter/bridge 的二进制,官方发布版已含):
+  # Anthropic 桥接适配器示例：
   # claude-sonnet:
   #   - { provider: anthropic, model: claude-sonnet-4-5, priority: 0 }
 
-# 价目表:每百万 Token 价格,人类可读数值;加载期换算为整数 credit(1 credit = 本币十亿分之一)参与运算,
-# 内部零浮点(docs/design/metering.md)。
-# 核对记录(2026-09-09,来源见 HANDOFF 验收记录「牌价核对表」):
-#   - gpt-4o-mini:$0.15 / $0.60(OpenAI 官方定价页)
-#   - deepseek-v4-flash:峰谷双价 + 缓存命中单独价——峰时上限价配置如下,错峰半价可用
-#     time_windows 按倍率表达(见下方注释;契约见 metering.md「分时段倍率」)
+# 价目按每百万 token 配置，启动时转换为整数 credit 参与计费。
 pricing:
   deepseek-chat:
     currency: USD
     input: 0.44        # $0.44 / 百万输入 Token(峰时,缓存未命中)
     cached_input: 0.014 # $0.014 / 百万缓存命中输入(峰时);缺省=input
     output: 1.32       # $1.32 / 百万输出 Token(峰时)
-    # 分时段倍率(可选):整张价目卡按窗缩放(保守向上取整),先声明先匹配,支持跨午夜窗
+    # 可选时段倍率；按声明顺序匹配，支持跨午夜。
     # timezone: "UTC"   # "UTC" 或 ±HH:MM 固定偏移(北京时间用 "+08:00");缺省 UTC
     # time_windows:
-    #   - { window: "16:30-00:30", multiplier: "0.5" }   # DeepSeek 官方错峰时段半价(UTC 计)
-    # 在线改价:本节为静态兜底;厂商日常调价请走管理面 /admin/v1/pricing 或控制台「价目管理」
-    # (运行态覆盖,即时生效零重启;删除覆盖即回落本节价格)——见 docs/design/metering.md「动态价目」
+    #   - { window: "16:30-00:30", multiplier: "0.5" }   # 示例：该时段半价
+    # 管理面价目会覆盖此处配置；删除覆盖后回落到静态价目。
   gpt-4o-mini:
     currency: USD
     input: 0.15        # $0.15 / 百万输入 Token
     output: 0.60       # $0.60 / 百万输出 Token
 
-# 告警通知(webhook-alerting;默认关闭):运营关键事件(key 池不可用/候选全失败/
-# 计量汇降级)经 webhook POST JSON 主动通知;去重窗口内同事件键静默,退避重试后
-# 放弃绝不干扰请求路径。接收端:任意收 JSON POST 的端点(企业微信/飞书机器人桥接等)。
+# 告警 webhook 默认关闭；通知失败不会影响请求处理。
 # alerts:
 #   webhook_url: "https://hooks.example.com/muniu"
 #   dedup_window_sec: 300
 
-# 语义缓存(默认关闭;开启需租户级开关 PATCH /admin/v1/tenants/{id}):
-# 同义问题命中缓存省上游,宁缺勿错(docs/design/semantic-cache.md)。
-# embedding_model 必须已在 model_routes 定义,否则启动校验失败。
+# 语义缓存默认关闭；启用时还需打开租户开关。
+# embedding_model 必须已配置在 model_routes 中。
 # semantic:
 #   enabled: true
 #   embedding_model: deepseek-chat   # 嵌入经本网关 /v1/embeddings 通道自调用
@@ -160,10 +140,8 @@ pricing:
 #   ttl_hours: 24                    # 条目 TTL
 #   capacity: 10000                  # LRU 容量上限
 
-# 模型能力目录(ADR-0010,可选):(provider, model) 二元组精确声明,零内置零通配;
-# 未声明的模型/参数 = 零干预透传。治理在每次换道尝试出站前按目标模型重新生效——
-# 一份客户端参数跨家换道时,按新模型约束重新 drop/clamp(参数兼容是换道正确性的组成部分)。
-# 干预默认留痕放行(结构化日志 + 响应头 X-Muniu-Normalized);strict_governance 可改 400 拒绝。
+# 模型能力按 provider 和 model 精确声明；未声明的模型不做参数治理。
+# 治理会在每次换道时按目标模型重新执行；strict_governance 可将干预改为 400 拒绝。
 # models:
 #   - provider: deepseek
 #     model: deepseek-reasoner
@@ -174,37 +152,32 @@ pricing:
 #     max_output_tokens: 16384            # 输出上限,越界 clamp max_tokens(界内不动)
 # strict_governance: false                # true = 命中约束即 400(缺省宽松放行+留痕)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# WASM 插件(ADR-0011,可选):沙箱执行的请求体钩子,限流后、语义缓存与上游候选前单次执行。
-# ABI v0 契约见 docs/design/plugin-abi.md;样例插件与 SDK 见 plugins/(构建:./plugins/build.sh)。
-# 默认 fail_closed:插件超时/超内存/崩溃即拒绝该请求(安全类插件语义);fail_open 慎用。
-# 重启后以本节声明为准;运行态增改走管理面 API(不落盘,见 openapi.yaml 插件端点)。
+# WASM 插件在限流后、缓存和上游请求前运行。默认 fail_closed，插件失败时拒绝请求。
+# 配置变更通过管理面 API 生效；重启后以本节声明为准。
 # plugins:
-#   - name: pii-masker                           # 内容扫描:正则规则脱敏自由文本(引擎层 ASCII 词边界,紧贴中文命中)
-#     path: ./plugins/pii-masker/pii_masker.wasm   # wasm32-unknown-unknown 二进制(路径支持环境变量展开)
-#     enabled: true                                # 缺省 true;启停可经管理面在线切换
-#     fail_open: false                             # true = 插件失效放行原请求——安全类插件务必 false
-#     timeout_ms: 50                               # 单次调用超时(wazero epoch 中断)
-#     memory_limit_mib: 64                         # 实例内存硬顶
-#     pool_size: 8                                 # 实例池(并发复用,空闲回收)
-#     config:                                      # 透传插件配置(get_config 键值)
+#   - name: pii-masker                           # 请求内容脱敏
+#     path: ./plugins/pii-masker/pii_masker.wasm   # WASM 文件路径
+#     enabled: true
+#     fail_open: false                             # 插件失败时拒绝请求
+#     timeout_ms: 50
+#     memory_limit_mib: 64
+#     pool_size: 8
+#     config:
 #       rules: |
 #         [{"pattern":"1[3-9]\\d{9}","replacement":"[PHONE]"},{"pattern":"\\d{17}[0-9X]","replacement":"[ID]"}]
 #
-#   - name: json-redactor                        # 结构定向:JSON Pointer 字段级删除/替换(与内容扫描正交)
+#   - name: json-redactor                        # 按 JSON Pointer 修改字段
 #     path: ./plugins/json-redactor/json_redactor.wasm
 #     enabled: true
 #     config:
 #       rules: |
 #         [{"pointer":"/messages/*/name","op":"remove"},{"pointer":"/metadata/user_id","op":"replace","value":"[REDACTED]"}]
 
-# 同步图片生成的静态兜底价（可选；报价/张，最多九位小数，DB 运行态覆盖）。
+# 图片生成静态兜底价（可选，按张报价，最多九位小数）。
 # image_pricing:
 #   image-model-alias:
 #     currency: CNY
 #     default: "0.35"
 #     tiers:
 #       "1024x1024|standard": "0.30"
-# 管理面支持本地管理员会话或 MUNIU_ADMIN_TOKEN：
-# 首次引导 muniu admins add --username <管理员>，tty 双次口令；无 token 但有活跃账号亦开放。
-# 管理员凭据在本地 SQLite，仅存 argon2id PHC；无需新增 YAML 明文口令字段。
+# 管理面支持本地管理员会话或 MUNIU_ADMIN_TOKEN。管理员凭据以 argon2id PHC 哈希存入 SQLite。

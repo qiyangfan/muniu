@@ -1,5 +1,5 @@
-// auth 契约测试(测试先行域):签发形态、sha256 落库、校验中间件成功路径与
-// 负面路径(无头/坏格式/吊销/不存在)、进程内缓存的过期与容量淘汰。
+// auth 测试：签发形态、sha256 落库、校验中间件成功路径与负面路径、
+// 进程内缓存的过期与容量淘汰。
 package auth
 
 import (
@@ -60,7 +60,7 @@ func TestHash_确定性(t *testing.T) {
 	}
 }
 
-// newVerifierDB 签一把入库的 key,返回 (db, 明文, prefix)。
+// newVerifierDB 签一把入库的 key，返回 db、明文与 prefix。
 func newVerifierDB(t *testing.T) (*sql.DB, string, string) {
 	t.Helper()
 	db := openDB(t)
@@ -90,7 +90,7 @@ func TestVerifier_成功路径挂载租户上下文(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("合法 key 应放行,实际 %d: %s", rec.Code, rec.Body.String())
 	}
-	// ctx 挂载的是解析后的租户 id(FK 键),不是租户名
+	// ctx 挂载的是解析后的租户 id，不是租户名
 	if seenKeyID == "" || seenTenant != "01900000-0000-7000-8000-000000000001" {
 		t.Fatalf("ctx 未挂载 key 信息: %q %q", seenKeyID, seenTenant)
 	}
@@ -142,7 +142,7 @@ func TestVerifier_负面路径全归auth_failed(t *testing.T) {
 	if _, err := RevokeKeyByPrefix(db, prefix); err != nil {
 		t.Fatalf("吊销失败: %v", err)
 	}
-	v.Invalidate() // 吊销属管理操作:清缓存立生效
+	v.Invalidate() // 吊销属管理操作，清缓存立生效
 	rec := do("Bearer " + plaintext)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("吊销 key 应 401,实际 %d", rec.Code)
@@ -151,7 +151,7 @@ func TestVerifier_负面路径全归auth_failed(t *testing.T) {
 
 func TestCache_过期与容量淘汰(t *testing.T) {
 	db, plaintext, _ := newVerifierDB(t)
-	// TTL 极短:第二次请求时缓存必过期
+	// TTL 极短，第二次请求时缓存必过期
 	v := NewVerifier(db, Options{TTL: 5 * time.Millisecond, Capacity: 100}, testLogger())
 	handler := v.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
@@ -170,7 +170,7 @@ func TestCache_过期与容量淘汰(t *testing.T) {
 		t.Fatalf("过期后应重新查库放行: %d", code)
 	}
 
-	// 容量淘汰:容量为 1,另一 key 入缓存后挤掉前者(随机淘汰,只断言不崩且仍放行)
+	// 容量淘汰：容量为 1，另一 key 入缓存后挤掉前者；随机淘汰，只断言不崩且仍放行
 	v2 := NewVerifier(db, Options{TTL: time.Minute, Capacity: 1}, testLogger())
 	h2 := v2.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	for i := 0; i < 5; i++ {
@@ -205,8 +205,8 @@ func TestCreateKey_落库记录与明文回显(t *testing.T) {
 	}
 }
 
-// 租户级冻结:管理面 disable 租户 + 清验证缓存后,该租户的 active key 也必须拒绝
-// (租户状态随 GetAPIKeyByHash 的 JOIN 返回,verify 一并判定)。
+// 租户级冻结：管理面 disable 租户并清验证缓存后，该租户的 active key 也必须拒绝；
+// 租户状态随 GetAPIKeyByHash 的 JOIN 返回，verify 一并判定。
 func TestVerify_租户禁用拒绝(t *testing.T) {
 	db := openDB(t)
 	plaintext, _, err := CreateKey(db, "default", "tenant-disable", 60, KeyOpts{})
@@ -226,14 +226,14 @@ func TestVerify_租户禁用拒绝(t *testing.T) {
 	if _, err := db.Exec(`UPDATE tenants SET status = 'disabled' WHERE name = 'default'`); err != nil {
 		t.Fatal(err)
 	}
-	// 管理面 patch 租户后会调用 Invalidate(接线契约);此处直接模拟同一序列
+	// 管理面 patch 租户后会调用 Invalidate，此处直接模拟同一序列
 	v.Invalidate()
 	if err := probe(); err == nil {
 		t.Fatal("租户禁用后其 active key 必须拒绝")
 	}
 }
 
-// 平台 key(ADR-0006):离线验真/过期/篡改/吊销快照,与查库 key 并存。
+// 平台 key：离线验真、过期、篡改、吊销快照，与查库 key 并存。
 func TestPlatformKey_验真与负面(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	claims := PlatformClaims{TenantID: "t-1", KeyID: "k-1", ExpiresUnix: time.Now().Add(time.Hour).Unix(),
@@ -268,7 +268,7 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	if _, err := req(other); err == nil {
 		t.Fatal("未知密钥签发必须拒绝")
 	}
-	// 密钥轮换:新旧两把验签密钥并存
+	// 密钥轮换：新旧两把验签密钥并存
 	oldKey := key
 	v2 := NewVerifier(nil, Options{PlatformSecrets: [][]byte{[]byte("new-secret-0123456789abcdef"), secret}, RevocationsURL: ""}, testLogger())
 	t.Cleanup(v2.Close)
@@ -288,7 +288,7 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	if _, err := v3.verify(r3); err == nil {
 		t.Fatal("吊销名单内必须拒绝")
 	}
-	// 未启用平台 key(空密钥):一律拒绝
+	// 未启用平台 key 即空密钥时一律拒绝
 	v4 := NewVerifier(nil, Options{}, testLogger())
 	t.Cleanup(v4.Close)
 	if _, err := func() (*KeyInfo, error) {
@@ -300,8 +300,7 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	}
 }
 
-// 吊销同步循环(ADR-0006):interval 缺省不 panic(曾被零值 NewTicker 击穿)、启动即拉、
-// 版本单调防回退、Close 幂等。
+// 吊销同步循环：interval 缺省不 panic、启动即拉、版本单调防回退、Close 幂等。
 func TestRevocationLoop_收敛与单调(t *testing.T) {
 	version := int64(1)
 	revoked := []string{"k-1"}
@@ -310,7 +309,7 @@ func TestRevocationLoop_收敛与单调(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	// interval 缺省(0)——回归钉子:此前缺省修正写在构造副本上,NewTicker(0) 直接 panic
+	// interval 缺省时应使用安全默认值，不能将 0 传给 NewTicker。
 	v := NewVerifier(nil, Options{
 		PlatformSecrets:     [][]byte{[]byte("0123456789abcdef0123456789abcdef")},
 		RevocationsURL:      srv.URL,
@@ -329,7 +328,7 @@ func TestRevocationLoop_收敛与单调(t *testing.T) {
 		_, verr := v.verify(r)
 		return verr == nil
 	}
-	// 启动即拉:快照生效后 k-1 必须拒绝(轮询至多几十 ms)
+	// 启动即拉：快照生效后 k-1 必须拒绝，轮询至多几十 ms
 	deadline := time.Now().Add(2 * time.Second)
 	for verifyKey() && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -337,7 +336,7 @@ func TestRevocationLoop_收敛与单调(t *testing.T) {
 	if verifyKey() {
 		t.Fatal("吊销快照生效后必须拒绝")
 	}
-	// 版本单调:旧快照(version 0)不得洗白
+	// 版本单调：旧快照(version 0)不得洗白
 	func() {
 		v.revMu.Lock()
 		defer v.revMu.Unlock()

@@ -1,6 +1,6 @@
-// conformance 回放测试:遍历 conformance/<provider>/<scenario>.json,
-// 非流式断言 NormalizeUsage,流式逐事件断言 meta 与 passthrough 字节等价。
-// fixture 是独立资产(conformance/README.md):改 fixture 必须同步 quirk。
+// conformance 回放测试：遍历 conformance/<provider>/<scenario>.json，
+// 非流式断言 NormalizeUsage，流式逐事件断言 meta 与 passthrough 字节等价。
+// fixture 是独立资产，改动时必须同步 quirk。
 package adapter_test
 
 import (
@@ -16,10 +16,10 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// blank import:接线 anthropic 桥接工厂(anthropic fixture 需要)
+// blank import 接线 anthropic 桥接工厂，anthropic fixture 需要
 var _ = bridge.NewAnthropic
 
-// conformanceFixture fixture 文件形态(与 conformance/schema.json 对齐)。
+// conformanceFixture 是 fixture 文件形态，与 conformance/schema.json 对齐。
 type conformanceFixture struct {
 	Provider    string          `json:"provider"`
 	Scenario    string          `json:"scenario"`
@@ -51,7 +51,7 @@ func TestConformance(t *testing.T) {
 	}
 }
 
-// globFixtures 收集 conformance/*/*.json(排除 README/schema)。
+// globFixtures 收集 conformance/*/*.json，排除 README 与 schema。
 func globFixtures(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(root)
@@ -73,8 +73,8 @@ func globFixtures(t *testing.T, root string) []string {
 	return out
 }
 
-// loadFixture 读取并做结构性校验(必填字段与文件名一致性;等价 schema 的最小手写检查,
-// 不引第三方 jsonschema 依赖——conventions 依赖纪律)。
+// loadFixture 读取并做结构性校验，含必填字段与文件名一致性；等价 schema 的最小手写检查，
+// 不引第三方 jsonschema 依赖。
 func loadFixture(t *testing.T, root, path string) *conformanceFixture {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -102,7 +102,6 @@ func loadFixture(t *testing.T, root, path string) *conformanceFixture {
 	return &f
 }
 
-// replay 单 fixture 回放。
 func replay(t *testing.T, f *conformanceFixture) {
 	t.Helper()
 	ad, err := adapter.For(f.Provider, "https://upstream.invalid/v1", "conformance-key")
@@ -120,8 +119,8 @@ func replay(t *testing.T, f *conformanceFixture) {
 	}
 }
 
-// replayStream 流式回放:可见事件 meta 对齐 + passthrough 逐字节(可关) + usage 帧归一。
-// 可见事件 = 非零翻译(桥接 start/stop/ping 等零输出事件不进入断言序列)。
+// replayStream 流式回放：可见事件 meta 对齐，passthrough 逐字节比对且可关闭，usage 帧归一。
+// 可见事件指非零翻译，桥接的 start、stop、ping 等零输出事件不进入断言序列。
 func replayStream(t *testing.T, ad adapter.Adapter, f *conformanceFixture) {
 	t.Helper()
 	lossless := f.Expect.PassthroughLossless == nil || *f.Expect.PassthroughLossless
@@ -141,7 +140,7 @@ func replayStream(t *testing.T, ad adapter.Adapter, f *conformanceFixture) {
 			visible = append(visible, meta)
 		}
 		if meta.IsUsage {
-			// usage 帧:抽内层 usage 对象供归一;桥接事件抽翻译后的帧(与 proxy 同缝)
+			// usage 帧抽内层 usage 对象供归一；桥接事件抽翻译后的帧，与 proxy 同一取法
 			src := payload
 			if len(passthrough) > 0 && string(passthrough) != payload {
 				src = string(passthrough)
@@ -163,11 +162,11 @@ func replayStream(t *testing.T, ad adapter.Adapter, f *conformanceFixture) {
 		}
 	}
 
-	// usage 断言:多帧字段合并(桥接 input/output 分帧到达)后比对
+	// usage 断言：多帧字段合并后比对，桥接的 input/output 分帧到达
 	assertUsage(t, ad, usageFrames, f.Expect.Usage, f.Provider, f.Scenario)
 }
 
-// replayNonStream 非流式回放:body.usage(OpenAI 形态)或 usageMetadata(Gemini 形态)归一断言。
+// replayNonStream 非流式回放：body.usage 或 usageMetadata 归一断言，分别为 OpenAI 与 Gemini 形态。
 func replayNonStream(t *testing.T, ad adapter.Adapter, f *conformanceFixture) {
 	t.Helper()
 	var body struct {
@@ -184,7 +183,7 @@ func replayNonStream(t *testing.T, ad adapter.Adapter, f *conformanceFixture) {
 	assertUsage(t, ad, []json.RawMessage{usage}, f.Expect.Usage, f.Provider, f.Scenario)
 }
 
-// assertUsage 归一 usage(多帧合并)与期望逐字段比对(nil 期望跳过;无帧而期望存在 → 失败)。
+// assertUsage 将归一后的 usage 与期望逐字段比对；期望为 nil 时跳过，无帧而期望存在时报错。
 func assertUsage(t *testing.T, ad adapter.Adapter, frames []json.RawMessage, want *protocol.Usage, provider, scenario string) {
 	t.Helper()
 	if want == nil {
@@ -223,9 +222,7 @@ func assertUsage(t *testing.T, ad adapter.Adapter, frames []json.RawMessage, wan
 	}
 }
 
-// replayNonStream 仍传单帧。
-
-// sourceURLOf 重读 fixture 的 source_url 供失败信息溯源(测试辅助)。
+// sourceURLOf 重读 fixture 的 source_url 供失败信息溯源（测试辅助）。
 func sourceURLOf(provider, scenario string) string {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "conformance", provider, scenario+".json"))
 	if err != nil {

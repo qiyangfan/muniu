@@ -1,4 +1,4 @@
-// semantic_cache 表 repo(T4.5):存储、按指纹精确查、命中计数、过期清理与启动加载。
+// semantic_cache 表的存储与查询方法。
 package store
 
 import (
@@ -9,34 +9,34 @@ import (
 	"uuid"
 )
 
-// CacheRow semantic_cache 行(读侧形态)。
+// CacheRow semantic_cache 行，读侧形态。
 type CacheRow struct {
 	ID             string
 	TenantID       string
 	Fingerprint    string
 	ModelAlias     string
 	Embedding      []byte
-	Response       []byte // canonical chat 形态(跨协议命中)
-	NativeResponse []byte // 直通原始响应体(nil = 翻译路径条目)
-	NativeProto    string // 入站协议标签(messages|responses;空 = 翻译路径条目)
+	Response       []byte // canonical chat 形态，供跨协议命中。
+	NativeResponse []byte // 直通原始响应体，nil 表示翻译路径条目。
+	NativeProto    string // 入站协议标签，messages 或 responses；空表示翻译路径条目。
 	NativeForm     string // 表单标记(stream|nonstream)
 	Hits           int64
 	CreatedAt      time.Time
 	ExpiresAt      time.Time
 }
 
-// cacheCols SELECT 列清单单源(行查询共用)。
+// cacheCols 为行查询共用的 SELECT 列清单。
 const cacheCols = `id, tenant_id, fingerprint, model_alias, embedding, response,
 		native_response, native_proto, native_form, hits, created_at, expires_at`
 
-// UpsertCacheRow 写入/覆盖缓存条目(同 tenant+fingerprint 覆盖;翻译路径条目)。
+// UpsertCacheRow 写入或覆盖缓存条目，同 tenant+fingerprint 覆盖，属翻译路径条目。
 func UpsertCacheRow(db *sql.DB, tenantID, fingerprint, modelAlias string, embedding, response []byte, ttl time.Duration) error {
 	return UpsertCacheRowNative(db, tenantID, fingerprint, modelAlias, embedding, response, nil, "", "", ttl)
 }
 
-// UpsertCacheRowNative 写入/覆盖缓存条目(直通双存形态:canonical + 原生体/标签/表单)。
+// UpsertCacheRowNative 写入或覆盖缓存条目，直通双存形态：canonical 加原生体、标签、表单。
 func UpsertCacheRowNative(db *sql.DB, tenantID, fingerprint, modelAlias string, embedding, response, nativeResponse []byte, nativeProto, nativeForm string, ttl time.Duration) error {
-	// 本表时间列用 RFC3339Nano:短 TTL 测试与亚秒边界需要亚秒精度
+	// 本表时间列用 RFC3339Nano：短 TTL 测试与亚秒边界需要亚秒精度。
 	now := time.Now().UTC()
 	_, err := db.Exec(`INSERT INTO semantic_cache
 		(id, tenant_id, fingerprint, model_alias, embedding, response,
@@ -57,7 +57,7 @@ func UpsertCacheRowNative(db *sql.DB, tenantID, fingerprint, modelAlias string, 
 	return nil
 }
 
-// GetCacheByFingerprint 按(租户,指纹)精确查;过期行视为不存在。
+// GetCacheByFingerprint 按租户与指纹精确查，过期行视为不存在。
 func GetCacheByFingerprint(db *sql.DB, tenantID, fingerprint string, now time.Time) (*CacheRow, error) {
 	row := db.QueryRow(`SELECT `+cacheCols+`
 		FROM semantic_cache
@@ -66,7 +66,7 @@ func GetCacheByFingerprint(db *sql.DB, tenantID, fingerprint string, now time.Ti
 	return scanCacheInto(row)
 }
 
-// GetCacheByID 按 id 查(向量 TopK 命中回取)。
+// GetCacheByID 按 id 查，用于向量 TopK 命中后回取。
 func GetCacheByID(db *sql.DB, id string, now time.Time) (*CacheRow, error) {
 	row := db.QueryRow(`SELECT `+cacheCols+`
 		FROM semantic_cache WHERE id = ? AND expires_at > ?`, id, now.UTC().Format(time.RFC3339Nano))
@@ -79,14 +79,14 @@ func TouchCacheHits(db *sql.DB, id string) error {
 	return err
 }
 
-// DeleteCache 删除条目(LRU 淘汰/清理)。
+// DeleteCache 删除条目，用于 LRU 淘汰与清理。
 func DeleteCache(db *sql.DB, id string) error {
 	_, err := db.Exec(`DELETE FROM semantic_cache WHERE id = ?`, id)
 	return err
 }
 
-// DeleteExpiredCache 删除全部已过期条目(TTL 只在读取侧过滤,存储侧靠本调用回收;
-// 启动期调用一次即可防止表无限膨胀)。返回删除行数。
+// DeleteExpiredCache 删除全部已过期条目，返回删除行数。
+// TTL 只在读取侧过滤，存储侧靠本调用回收，启动期调用一次即可防止表无限膨胀。
 func DeleteExpiredCache(db *sql.DB, now time.Time) (int64, error) {
 	res, err := db.Exec(`DELETE FROM semantic_cache WHERE expires_at <= ?`, now.UTC().Format(time.RFC3339Nano))
 	if err != nil {
@@ -96,7 +96,7 @@ func DeleteExpiredCache(db *sql.DB, now time.Time) (int64, error) {
 	return n, nil
 }
 
-// LoadCacheRows 启动加载全部未过期条目(索引内存态重启重建)。
+// LoadCacheRows 启动加载全部未过期条目，索引内存态重启后由此重建。
 func LoadCacheRows(db *sql.DB) ([]CacheRow, error) {
 	rows, err := db.Query(`SELECT `+cacheCols+`
 		FROM semantic_cache WHERE expires_at > ? ORDER BY created_at`, time.Now().UTC().Format(time.RFC3339Nano))
@@ -115,7 +115,7 @@ func LoadCacheRows(db *sql.DB) ([]CacheRow, error) {
 	return out, rows.Err()
 }
 
-// scanCacheInto 扫描一行缓存条目(单行/多行共用;时间列 RFC3339)。
+// scanCacheInto 扫描一行缓存条目，单行与多行共用；时间列为 RFC3339Nano。
 func scanCacheInto(scanner interface{ Scan(...any) error }) (*CacheRow, error) {
 	var r CacheRow
 	var created, expires string
@@ -129,13 +129,13 @@ func scanCacheInto(scanner interface{ Scan(...any) error }) (*CacheRow, error) {
 	return &r, nil
 }
 
-// CacheStatsRow 统计(管理 API)。
+// CacheStatsRow 统计，供管理 API 使用。
 type CacheStatsRow struct {
 	Entries int64
 	Hits    int64
 }
 
-// CacheStatsRowGet 统计:条数与累计命中。
+// CacheStatsRowGet 统计：条数与累计命中。
 func CacheStatsRowGet(db *sql.DB) (CacheStatsRow, error) {
 	var s CacheStatsRow
 	err := db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(hits),0) FROM semantic_cache WHERE expires_at > ?`,

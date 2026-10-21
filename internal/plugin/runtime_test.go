@@ -1,5 +1,5 @@
-// 宿主加载与调用测试(任务 2.2/3.1/3.2,先红后绿):
-// 加载/版本探测/坏插件拒载、并发池、超时/trap/超内存/exit 四态 containment、宿主导入联调。
+// 宿主加载与调用测试：加载/版本探测/坏插件拒载、并发池、
+// 超时/trap/超内存/exit 四态 containment、宿主导入联调。
 package plugin
 
 import (
@@ -19,7 +19,7 @@ func testOptions(name string, kind testkit.PluginFixtureKind) Options {
 		Name:             name,
 		Binary:           testkit.FixturePlugin(kind),
 		TimeoutMs:        DefaultTimeoutMs,
-		MemoryLimitPages: 1, // 测试用最小上限:越界写必触 containment
+		MemoryLimitPages: 1, // 测试用最小上限，越界写必触 containment。
 		PoolSize:         2,
 		IdleTTLMs:        DefaultIdleTTLMs,
 		Config:           map[string]string{"greeting": "你好"},
@@ -36,7 +36,7 @@ func compileFor(t *testing.T, name string, kind testkit.PluginFixtureKind) *Plug
 	return p
 }
 
-// ---- 2.2 加载/版本探测/拒载 ----
+// ---- 加载/版本探测/拒载 ----
 
 func TestCompile_ValidPlugins(t *testing.T) {
 	for _, kind := range []testkit.PluginFixtureKind{testkit.FixturePass, testkit.FixtureModify, testkit.FixtureReject, testkit.FixtureCfg} {
@@ -114,7 +114,7 @@ func TestHook_Reject(t *testing.T) {
 	}
 }
 
-// testkit.FixtureCfg:宿主导入联调——get_config 读到 "你好"(UTF-8 透传)即改写为配置值,plugin_start 经 log 上报。
+// testkit.FixtureCfg 宿主导入联调：get_config 以 UTF-8 透传读到 "你好" 即改写为配置值，plugin_start 经 log 上报。
 func TestHook_HostImports(t *testing.T) {
 	p := compileFor(t, "hook-cfg", testkit.FixtureCfg)
 	v := p.HookRequestBody(context.Background(), testkit.FixtureChatBody("m1"))
@@ -126,7 +126,7 @@ func TestHook_HostImports(t *testing.T) {
 	}
 }
 
-// ---- 3.2 资源隔离四态(超时/trap/超内存/exit)——插件死不拖垮宿主 ----
+// ---- 资源隔离四态：超时/trap/超内存/exit，插件死不拖垮宿主 ----
 
 func TestContain_Timeout(t *testing.T) {
 	p, err := Compile(Options{Name: "loop", Binary: testkit.FixturePlugin(testkit.FixtureLoop), TimeoutMs: 80,
@@ -135,7 +135,7 @@ func TestContain_Timeout(t *testing.T) {
 		t.Fatalf("加载: %v", err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
-	for i := 0; i < 2; i++ { // 连续两次超时,网关(宿主)持续存活可继续服务
+	for i := 0; i < 2; i++ { // 连续两次超时，网关持续存活可继续服务。
 		start := time.Now()
 		v := p.HookRequestBody(context.Background(), testkit.FixtureChatBody("m1"))
 		if v.Kind != VerdictKindFailed {
@@ -153,7 +153,7 @@ func TestContain_Trap(t *testing.T) {
 	if v.Kind != VerdictKindFailed {
 		t.Fatalf("期望失败,得到 %v", v.Kind)
 	}
-	// trap 后实例被丢弃,后续请求由重建实例正常服务
+	// trap 后实例被丢弃，后续请求由重建实例正常服务。
 	v2 := p.HookRequestBody(context.Background(), testkit.FixtureChatBody("m1"))
 	if v2.Kind != VerdictKindFailed {
 		t.Fatalf("第二次也应失败(trap 恒定),得到 %v", v2.Kind)
@@ -179,7 +179,7 @@ func TestContain_Exit(t *testing.T) {
 	}
 }
 
-// ---- fail_open:调用失败时原请求放行(策略在 HookRequestBody 内兑现) ----
+// ---- fail_open：调用失败时原请求放行，策略在 HookRequestBody 内兑现 ----
 
 func TestFailOpen_OnContainment(t *testing.T) {
 	o := testOptions("loop-open", testkit.FixtureLoop)
@@ -196,7 +196,7 @@ func TestFailOpen_OnContainment(t *testing.T) {
 	}
 }
 
-// ---- 3.1 实例池并发与回收 ----
+// ---- 实例池并发与回收 ----
 
 func TestPool_ConcurrentReuse(t *testing.T) {
 	p := compileFor(t, "pool", testkit.FixturePass)
@@ -235,7 +235,7 @@ func TestPool_IdleRecycle(t *testing.T) {
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if p.pool.closedTotal.Load() > 0 { // 空闲回收已发生
+		if p.pool.closedTotal.Load() > 0 { // 空闲回收已发生。
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -243,7 +243,7 @@ func TestPool_IdleRecycle(t *testing.T) {
 	t.Fatal("空闲实例未被回收")
 }
 
-// ---- 拒载后既有插件不受影响(spec「非法插件拒载」场景) ----
+// ---- 拒载后既有插件不受影响 ----
 
 func TestCompile_RejectKeepsExisting(t *testing.T) {
 	p := compileFor(t, "keeper", testkit.FixturePass)
@@ -255,8 +255,7 @@ func TestCompile_RejectKeepsExisting(t *testing.T) {
 	}
 }
 
-// free 中死循环:宿主必须有界中断(free 独立超时),调用按 containment 终结,
-// 网关持续存活——恶意插件在清理环节的挂死链回归钉子。
+// 验证 free 阶段陷入死循环的插件会被中断，宿主仍可继续运行。
 func TestContain_FreeLoop(t *testing.T) {
 	o := testOptions("free-loop", testkit.FixtureFreeLoop)
 	o.TimeoutMs = 100
@@ -275,17 +274,16 @@ func TestContain_FreeLoop(t *testing.T) {
 	}
 }
 
-// discardLogger 测试用静音日志器。
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// ---- 注册探测超时:plugin_start 死循环必须在有界时间内拒载 ----
+// ---- 注册探测超时：plugin_start 死循环必须在有界时间内拒载 ----
 
 func TestCompile_ProbeTimeout(t *testing.T) {
 	o := testOptions("start-loop", testkit.FixtureStartLoop)
-	o.TimeoutMs = 50       // 探测超时缺省 = max(2s, 4×TimeoutMs) = 2s
-	o.ProbeTimeoutMs = 100 // 测试收紧
+	o.TimeoutMs = 50       // 探测超时缺省为 max(2s, 4×TimeoutMs) 即 2s。
+	o.ProbeTimeoutMs = 100 // 测试收紧。
 	start := time.Now()
 	_, err := Compile(o)
 	if err == nil {

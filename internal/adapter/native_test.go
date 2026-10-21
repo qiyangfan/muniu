@@ -1,6 +1,6 @@
-// 基座直通能力契约测试(protocol-native-passthrough;测试先行域):
-// PrepareNative(responses 声明制 lane 的出站构造)/NativeStreamEvent(responses SSE
-// meta-only 读侧)/NormalizeNativeUsage(responses usage 形态)/PrepareNativeFetch(GET 代理)。
+// 基座直通能力契约测试：PrepareNative 构造 responses 声明制通道的出站请求，
+// NativeStreamEvent 为 responses SSE 的 meta 读侧，NormalizeNativeUsage 处理 responses
+// usage 形态，PrepareNativeFetch 为 GET 代理。
 package adapter_test
 
 import (
@@ -18,7 +18,7 @@ func newBase(t *testing.T) *adapter.OpenAI {
 	return adapter.NewOpenAI("https://up.invalid/v1", "")
 }
 
-// TestOpenAI_PrepareNative_responses 出站 = <base>/v1/responses,仅 model 原位手术 + Bearer 注入。
+// TestOpenAI_PrepareNative_responses 验证出站为 <base>/v1/responses，仅改写 model 字段并注入 Bearer。
 func TestOpenAI_PrepareNative_responses(t *testing.T) {
 	raw := []byte(`{"model":"alias-r","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,xx"}]}],"tools":[{"type":"web_search"}]}`)
 	out, err := newBase(t).PrepareNative(&protocol.NativeRequest{Proto: protocol.InboundResponses, Raw: raw}, "up-r", "sk-9")
@@ -35,14 +35,14 @@ func TestOpenAI_PrepareNative_responses(t *testing.T) {
 	if string(out.Body) != want {
 		t.Fatalf("wire 保真破坏:\n got=%s\nwant=%s", out.Body, want)
 	}
-	// 非 responses 入站标签拒做(能力边界显式)
+	// 非 responses 入站标签拒做，能力边界显式
 	if _, err := newBase(t).PrepareNative(&protocol.NativeRequest{Proto: protocol.InboundMessages, Raw: raw}, "m", "k"); err == nil {
 		t.Fatal("messages 入站对基座直通应拒绝")
 	}
 }
 
-// TestOpenAI_NativeStreamEvent_responses 读侧 meta 对照:delta 有内容、completed 终帧带 usage、
-// 生命周期事件不可见、failed 诚实报错。内部 chunk 供计量拼包(与翻译路径同缝)。
+// TestOpenAI_NativeStreamEvent_responses 读侧 meta 对照：delta 有内容，completed 终帧带 usage，
+// 生命周期事件不可见，failed 诚实报错；内部 chunk 供计量拼包，与翻译路径同一取法。
 func TestOpenAI_NativeStreamEvent_responses(t *testing.T) {
 	ad := newBase(t)
 	events := []struct {
@@ -86,14 +86,14 @@ func TestOpenAI_NativeStreamEvent_responses(t *testing.T) {
 			}
 		}
 	}
-	// 完成终帧的内部 chunk 携带 finish_reason=stop(缓存拼包准入与翻译路径同缝)
+	// 完成终帧的内部 chunk 携带 finish_reason=stop，缓存拼包准入与翻译路径一致
 	_, meta, _ := ad.NativeStreamEvent([]byte(`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":1,"output_tokens":1}}}`))
 	if !meta.IsDone {
 		t.Fatal("completed 应为终帧")
 	}
 }
 
-// TestOpenAI_PrepareNativeFetch GET 代理出站:URL = <base>/responses/{id},无请求体,Bearer。
+// TestOpenAI_PrepareNativeFetch 验证 GET 代理出站，URL 为 <base>/responses/{id}，无请求体，Bearer 鉴权。
 func TestOpenAI_PrepareNativeFetch(t *testing.T) {
 	out, err := newBase(t).PrepareNativeFetch(http.MethodGet, "resp_abc", "sk-1")
 	if err != nil {
@@ -110,7 +110,7 @@ func TestOpenAI_PrepareNativeFetch(t *testing.T) {
 	}
 }
 
-// 编译期契约断言:基座实现直通与 GET 代理能力。
+// 编译期断言：基座实现直通与 GET 代理能力。
 var (
 	_ adapter.NativePreparer = (*adapter.OpenAI)(nil)
 	_ adapter.NativeFetcher  = (*adapter.OpenAI)(nil)

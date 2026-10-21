@@ -1,6 +1,5 @@
-// 模型发现契约测试(gateway-parity「model-discovery」):
-// 列表与拓扑快照同源(热替换同步可见)、id 升序、单查命中/未命中 404 not_found 信封、
-// created 语义 = 快照加载时刻。
+// 模型发现契约：列表与拓扑快照同源，热替换同步可见；id 升序；
+// 单查命中 200、未命中 404 not_found 信封；created 为快照加载时刻。
 package proxy
 
 import (
@@ -56,7 +55,7 @@ func TestModelCatalog_列表与快照同源且升序(t *testing.T) {
 	}
 }
 
-// 热替换后列表同步变化:目录与转发同源,零额外失效机制。
+// 热替换后列表同步变化：目录与转发同源，零额外失效机制。
 func TestModelCatalog_热替换同步(t *testing.T) {
 	cfg := topoConfig("alpha", "http://alpha")
 	p := New(cfg)

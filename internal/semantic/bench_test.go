@@ -1,8 +1,6 @@
 //go:build eval
 
-// T4.4 向量索引选型评估:1 万条 1536 维 Top5,暴力 vs HNSW 延迟对比。
-// 判据(semantic-cache.md):暴力 p99 < 5ms → 零依赖;否则引一个纯 Go HNSW。
-// 实测结论(本机 2026-09-10):暴力 p99≈21ms 超判据 → 引 github.com/coder/hnsw。
+// 本基准对比 1 万条 1536 维向量的暴力搜索与 HNSW 延迟。
 package semantic
 
 import (
@@ -26,7 +24,7 @@ func genVectors(n, dim int) [][]float32 {
 	return out
 }
 
-// TestIndexEval_1万条1536维对比 选型评估(输出判据数字供 HANDOFF 留证)。
+// TestIndexEval_1万条1536维对比 输出两种索引的延迟分位数。
 func TestIndexEval_1万条1536维对比(t *testing.T) {
 	const n, dim, k, queries = 10_000, 1536, 5, 100
 	vecs := genVectors(n, dim)

@@ -1,4 +1,4 @@
-// 中间件实现(顺序即契约,architecture「中间件链」):request_id → recover → access_log → …。
+// 中间件实现，挂载顺序即契约：request_id → recover → access_log → …。
 package server
 
 import (
@@ -18,18 +18,18 @@ import (
 // RequestIDHeader 响应回带 request_id 的头名。
 const RequestIDHeader = "X-Muniu-Request-Id"
 
-// RequestID 签发 UUIDv7(与 DB 主键同源),写 ctx + 回带响应头。
+// RequestID 签发 UUIDv7，与 DB 主键同源；写 ctx 并回带响应头。
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// stdlib v7 保证排序单调(时钟回拨除外),不返回错误,无需退化路径
+		// stdlib v7 保证排序单调，时钟回拨除外；不返回错误，无需退化路径
 		id := uuid.NewV7().String()
 		w.Header().Set(RequestIDHeader, id)
 		next.ServeHTTP(w, r.WithContext(logging.WithRequestID(r.Context(), id)))
 	})
 }
 
-// Recover 兜底 panic → 500 internal 信封 + 堆栈日志,绝不裸崩进程。
-// http.ErrAbortHandler 是 net/http 内部控制流约定,必须原样放行。
+// Recover 兜底 panic，返回 500 internal 信封并记堆栈日志，绝不裸崩进程。
+// http.ErrAbortHandler 是 net/http 内部控制流约定，必须原样放行。
 func Recover(logger *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,8 +54,8 @@ func Recover(logger *slog.Logger) Middleware {
 	}
 }
 
-// statusWriter 捕获 handler 实际写出的状态码(供访问日志)。
-// 必须透传 Flush:包裹后若方法集缺失 http.Flusher,下游 SSE 逐事件冲刷会静默退化为缓冲写。
+// statusWriter 捕获 handler 实际写出的状态码，供访问日志。
+// 必须透传 Flush：包裹后若方法集缺失 http.Flusher，下游 SSE 逐事件冲刷会静默退化为缓冲写。
 type statusWriter struct {
 	http.ResponseWriter
 	status int
@@ -66,7 +66,7 @@ func (s *statusWriter) WriteHeader(code int) {
 	s.ResponseWriter.WriteHeader(code)
 }
 
-// Flush 转发底层 Flusher(net/http 场景恒可用;测试 ResponseWriter 亦实现)。
+// Flush 转发底层 Flusher，net/http 场景恒可用，测试 ResponseWriter 亦实现。
 func (s *statusWriter) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
@@ -76,7 +76,7 @@ func (s *statusWriter) Flush() {
 // Unwrap 支持 http.ResponseController 穿透包装定位底层能力。
 func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
-// AccessLog 进入/退出各一条 slog;退出条含状态与耗时(conventions 字段表)。
+// AccessLog 进入/退出各一条 slog；退出条含状态与耗时。
 func AccessLog(logger *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +100,7 @@ func AccessLog(logger *slog.Logger) Middleware {
 	}
 }
 
-// tostring panic 值转可读字串(error/stringer 兜底)。
+// tostring panic 值转可读字串，error/stringer 兜底。
 func tostring(v any) string {
 	switch x := v.(type) {
 	case string:
@@ -116,14 +116,14 @@ func tostring(v any) string {
 	}
 }
 
-// loggingRequestID ctx 取 request_id 的包内别名(测试与后续中间件共用)。
+// loggingRequestID ctx 取 request_id 的包内别名，测试与后续中间件共用。
 func loggingRequestID(ctx context.Context) string {
 	return logging.RequestIDFrom(ctx)
 }
 
-// AdaptAnthropicKey Anthropic 入站(/v1/messages)鉴权头适配:Anthropic 协议客户端经
-// x-api-key 携带 key,而数据面 verifier 只认 Authorization Bearer。仅在该路径且缺失
-// Authorization 时补写 Bearer 头,其余请求零改动;必须挂于 verifier.Middleware 之前。
+// AdaptAnthropicKey Anthropic 入站 /v1/messages 的鉴权头适配：Anthropic 协议客户端经
+// x-api-key 携带 key，而数据面 verifier 只认 Authorization Bearer。仅在该路径且缺失
+// Authorization 时补写 Bearer 头，其余请求零改动；必须挂于 verifier.Middleware 之前。
 func AdaptAnthropicKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/messages" &&
@@ -134,10 +134,10 @@ func AdaptAnthropicKey(next http.Handler) http.Handler {
 	})
 }
 
-// AdaptGeminiKey Gemini 入站(/v1beta/models/*)鉴权适配(gemini-native-protocol):
-// Gemini 客户端以 x-goog-api-key 头或 ?key= 查询参数携带凭证,数据面 verifier 只认
-// Authorization Bearer。缺失 Authorization 时按序补写(头优先,参数兜底);
-// ?key= 必须读后从 URL 剥离——访问日志、上游请求、错误回显中不得出现该参数。
+// AdaptGeminiKey Gemini 入站 /v1beta/models/* 的鉴权适配：Gemini 客户端以 x-goog-api-key 头
+// 或 ?key= 查询参数携带凭证，数据面 verifier 只认 Authorization Bearer。
+// 缺失 Authorization 时按序补写，头优先、参数兜底；
+// ?key= 必须读后从 URL 剥离，访问日志、上游请求、错误回显中不得出现该参数。
 func AdaptGeminiKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1beta/models/") {
@@ -148,12 +148,12 @@ func AdaptGeminiKey(next http.Handler) http.Handler {
 					r.Header.Set("Authorization", "Bearer "+k)
 				}
 			}
-			// ?key= 读后剥离(鉴权已完成载体转换;防泄漏优先于参数透传)
+			// ?key= 读后剥离：鉴权已完成载体转换，防泄漏优先于参数透传
 			if r.URL.Query().Get("key") != "" {
 				q := r.URL.Query()
 				q.Del("key")
 				r2 := *r
-				r2.URL = r.URL.JoinPath() // 保留路径;查询串重建
+				r2.URL = r.URL.JoinPath() // 保留路径；查询串重建
 				r2.URL.RawQuery = q.Encode()
 				r = &r2
 			}

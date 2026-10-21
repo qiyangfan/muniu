@@ -1,5 +1,5 @@
-// 路由漂移门禁(T4.2):contracts/openapi.yaml 的方法×路径集合 ≡ 装配实际注册集合。
-// openapi.yaml 是手写单源;改路由必须同步改 yaml(或反之),本测试防两者漂移。
+// 验证 OpenAPI 中声明的路由与装配时注册的路由一致。
+// openapi.yaml 为手写维护，改路由必须同步改 yaml 或反之，本测试防两者漂移。
 package main
 
 import (
@@ -17,9 +17,9 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// TestRoutes_与OpenAPI契约无漂移。
+// TestRoutes_与OpenAPI契约无漂移 双向比对 openapi.yaml 契约集合与装配注册集合。
 func TestRoutes_与OpenAPI契约无漂移(t *testing.T) {
-	// 1) 解析 openapi.yaml → 方法×路径集合(/console/* 静态资源不在契约内)
+	// 1) 解析 openapi.yaml 为方法×路径集合，/console/* 静态资源不在契约内。
 	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "openapi.yaml"))
 	if err != nil {
 		t.Fatalf("读取 openapi.yaml: %v", err)
@@ -43,7 +43,7 @@ func TestRoutes_与OpenAPI契约无漂移(t *testing.T) {
 		t.Fatalf("契约路径过少,疑似解析失败: %d", len(contract))
 	}
 
-	// 2) 装配真实路由表(管理面开启)
+	// 2) 装配真实路由表，管理面开启。
 	t.Setenv("MUNIU_ADMIN_TOKEN", "test-admin-token")
 	t.Setenv("E2E_FAKE_KEY", "sk-e2e")
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
@@ -73,7 +73,7 @@ model_routes:
 	}
 	cleanup()
 
-	// 3) 集合比对:双向差异都必须为空
+	// 3) 集合比对：双向差异都必须为空。
 	actual := map[string]bool{}
 	for _, r := range routes {
 		actual[r] = true

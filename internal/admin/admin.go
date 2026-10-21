@@ -1,5 +1,5 @@
 // Package admin 承载运维面双轨鉴权与动作审计；账号和共享令牌均未配置时整体关闭。
-// keys 管理与 Phase 2 CLI 同源(复用 auth 库函数);错误信封与业务面同格式。
+// API key 管理接口复用 auth 包的签发与校验逻辑。
 package admin
 
 import (
@@ -22,21 +22,20 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
-// CacheStatsProvider 语义缓存统计源(装配注入;nil 时统计端点返回空态)。
+// CacheStatsProvider 语义缓存统计源，由装配注入；nil 时统计端点返回空态。
 type CacheStatsProvider func() map[string]any
 
-// StaticEntry YAML 静态兜底价目的展示形态(GET 列表 yaml 来源行;窗口如实透出,
-// 防止控制台编辑 yaml 行时静默丢窗)。
+// StaticEntry YAML 静态兜底价目在 GET 列表中的展示形态；时间窗口如实透出，
+// 避免控制台编辑 yaml 行时静默丢窗。
 type StaticEntry struct {
 	Def         metering.Pricing
 	Timezone    string
 	TimeWindows []PricingWindowView
 }
 
-// Deps 管理面依赖。Verifier 供吊销 key / 变更租户后即时清空鉴权缓存
-// (不注入则依赖 TTL 自然收敛,「立即生效」承诺不成立)。
-// Pricing 三件套支撑动态改价:PricingDir 转发热路径消费的目录;StaticPricing 为 YAML 静态兜底价
-// (GET 列表展示用);RefreshPricing 由装配层注入——持久化成功后重建目录并原子替换。
+// Deps 管理面依赖。Verifier 用于吊销 key、变更租户后即时清空鉴权缓存；不注入则只能等 TTL 收敛。
+// PricingDir 是转发热路径消费的计价目录，StaticPricing 供 GET 列表展示 YAML 兜底价，
+// RefreshPricing 由装配层注入，在改价持久化成功后重建目录并原子替换。
 type Deps struct {
 	DB         *sql.DB
 	AdminAuth  *auth.AdminService
@@ -52,7 +51,7 @@ type Deps struct {
 	PricingDir         *metering.PricingDirectory
 	StaticPricing      map[string]StaticEntry
 	RefreshPricing     func() error
-	Plugins            *plugin.Registry // WASM 插件注册表(ADR-0011);nil = 端点返回禁用态
+	Plugins            *plugin.Registry // WASM 插件注册表；nil = 端点返回禁用态
 
 	Logger *slog.Logger
 }
@@ -63,8 +62,8 @@ type adminRouteEntry struct {
 	Handler func(Deps) http.HandlerFunc
 }
 
-// adminRouteTable 管理面路由单一事实源:New 据此注册,Routes() 据此回报(漂移门禁消费)。
-// 两处手写必然漂移(同业务面 /v1/messages 曾 404 的教训),模式在这里只写一次。
+// adminRouteTable 管理面路由单一事实源：New 据此注册，Routes() 据此回报，漂移门禁消费同一份。
+// 两处手写必然漂移，模式只在这里声明一次。
 var adminRouteTable = []adminRouteEntry{
 	{"POST /admin/v1/auth/login", adminLogin},
 	{"POST /admin/v1/auth/logout", adminLogout},
@@ -147,9 +146,8 @@ func writeAdminError(w http.ResponseWriter, r *http.Request, status int, typ, co
 	writeJSON(w, status, protocol.NewErrorEnvelope(typ, code, msg, logging.RequestIDFrom(r.Context())))
 }
 
-// respondErr 错误出口分类:业务错(校验/冲突/不存在,store.MarkBusiness 标记)以 400+原样
-// 可读 message 返回;其余(DB I/O 等内部故障)收敛为 500+「内部错误」,细节只进日志
-// (conventions 错误纪律对管理面同样生效,驱动错误串不外泄)。
+// respondErr 业务错误返回 400 并透出原始 message；内部故障收敛为 500 统一「内部错误」，
+// 细节只进日志，数据库驱动错误串不外泄。
 func respondErr(d Deps, w http.ResponseWriter, r *http.Request, err error, bizCode string) {
 	if store.IsBusiness(err) {
 		writeAdminError(w, r, 400, protocol.TypeBadRequest, bizCode, err.Error())
@@ -178,7 +176,7 @@ func listTenants(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenants, err := store.ListTenants(d.DB)
 		if err != nil {
-			// 内部错误细节只进日志,对外统一归一 message(conventions 错误纪律)
+			// 内部错误细节只进日志，对外统一归一 message
 			d.Logger.Error("列出租户失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "内部错误")
 			return
@@ -218,7 +216,7 @@ func patchTenant(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
 			return
 		}
-		// 负额度会被 quota/tpm 判定解释为「不限」,与收紧意图相反,入口即拒
+		// 负额度会被 quota/tpm 判定解释为「不限」，与收紧意图相反，入口即拒
 		if (req.DailyQuotaCredits != nil && *req.DailyQuotaCredits < 0) ||
 			(req.TPMLimit != nil && *req.TPMLimit < 0) {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "daily_quota_credits/tpm_limit 不可为负")
@@ -271,8 +269,8 @@ func createKey(d Deps) http.HandlerFunc {
 			TPMLimit              int64    `json:"tpm_limit"`
 			DailyQuotaCredits     int64    `json:"daily_quota_credits"`
 			MaxRequestCostCredits int64    `json:"max_request_cost_credits"`
-			AllowedModels         []string `json:"allowed_models"` // 缺省/空 = 不限;空白条目整单拒绝
-			ExpiresAt             string   `json:"expires_at"`     // 可空;RFC3339(空 = 永不过期)
+			AllowedModels         []string `json:"allowed_models"` // 缺省或空 = 不限；空白条目整单拒绝
+			ExpiresAt             string   `json:"expires_at"`     // 可空，RFC3339；空 = 永不过期
 		}
 		if err := decode(r, &req); err != nil || req.Name == "" {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
@@ -292,8 +290,8 @@ func createKey(d Deps) http.HandlerFunc {
 				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 形态")
 				return
 			}
-			// 创建期拒过去时刻:不存在「签发即死」的合法诉求,静默接受只会产出
-			// 一个看起来正常、实际已过期的 key;立即失效语义归 PATCH(运维工具)
+			// 创建期拒绝过去时刻：静默接受只会产出看似正常、实际已过期的 key，
+			// 立即失效语义归 PATCH
 			if t.Before(time.Now()) {
 				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
 					"expires_at 不可早于当前时刻(立即失效请经 PATCH 置过去时刻)")
@@ -307,7 +305,7 @@ func createKey(d Deps) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, 200, map[string]any{
-			"key": plaintext, // 管理面明文仅此一次(与 CLI 同语义)
+			"key": plaintext, // 管理面明文仅此一次，与 CLI 同语义
 			"id":  rec.ID, "prefix": rec.Prefix, "tenant": rec.TenantID,
 			"rpm_limit": rec.RPMLimit, "tpm_limit": rec.TPMLimit,
 			"daily_quota_credits": rec.DailyQuotaCredits, "expires_at": rec.ExpiresAt,
@@ -316,18 +314,18 @@ func createKey(d Deps) http.HandlerFunc {
 	}
 }
 
-// patchKey key 运行态限额局部更新(PATCH 语义:省略字段不动,expires_at 显式 null 清除)。
-// 写后 Invalidate:限额是 DB 可变状态,必须走吊销同款失效协议,下一请求即新限额。
+// patchKey 局部更新 key 运行态限额：省略字段不动，expires_at 显式 null 表示清除。
+// 写后 Invalidate：限额是 DB 可变状态，须走吊销同款失效协议，下一请求即新限额。
 func patchKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			RPMLimit              *int64          `json:"rpm_limit"`
 			TPMLimit              *int64          `json:"tpm_limit"`
 			DailyQuotaCredits     *int64          `json:"daily_quota_credits"`
-			ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动;null=清除;"RFC3339"=设定
-			Disabled              *bool           `json:"disabled"`                 // 缺省=不动;true=停用/false=恢复
-			MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动;0=不限
-			AllowedModels         json.RawMessage `json:"allowed_models"`           // 缺省=不动;null=清除(不限);数组=整体设定
+			ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动；null=清除；"RFC3339"=设定
+			Disabled              *bool           `json:"disabled"`                 // 缺省=不动；true=停用，false=恢复
+			MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动；0=不限
+			AllowedModels         json.RawMessage `json:"allowed_models"`           // 缺省=不动；null=清除即不限；数组=整体设定
 		}
 		if err := decode(r, &req); err != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
@@ -342,7 +340,7 @@ func patchKey(d Deps) http.HandlerFunc {
 			Disabled: req.Disabled, MaxRequestCostCredits: req.MaxRequestCostCredits,
 		}
 		switch {
-		case len(req.AllowedModels) == 0: // 字段缺省:不动
+		case len(req.AllowedModels) == 0: // 字段缺省：不动
 		case string(req.AllowedModels) == "null":
 			patch.ClearAllowModels = true
 		default:
@@ -351,10 +349,10 @@ func patchKey(d Deps) http.HandlerFunc {
 				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "allowed_models 须为字符串数组或 null")
 				return
 			}
-			patch.AllowedModels = models // 空白条目整单拒绝在 auth 归一化(MarkBusiness→400)
+			patch.AllowedModels = models // 空白条目整单拒绝在 auth 归一化，返回 400
 		}
 		switch {
-		case len(req.ExpiresAt) == 0: // 字段缺省:不动
+		case len(req.ExpiresAt) == 0: // 字段缺省：不动
 		case string(req.ExpiresAt) == "null":
 			patch.ClearExpires = true
 		default:
@@ -380,7 +378,7 @@ func patchKey(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.Verifier != nil {
-			d.Verifier.Invalidate() // 新限额下一请求即生效,不等缓存 TTL
+			d.Verifier.Invalidate() // 新限额下一请求即生效，不等缓存 TTL
 		}
 		writeJSON(w, 200, rec)
 	}
@@ -400,7 +398,7 @@ func revokeKey(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.Verifier != nil {
-			d.Verifier.Invalidate() // 吊销即时生效,不等缓存 TTL
+			d.Verifier.Invalidate() // 吊销即时生效，不等缓存 TTL
 		}
 		writeJSON(w, 200, map[string]any{"revoked": n})
 	}
@@ -428,8 +426,8 @@ func usage(d Deps) http.HandlerFunc {
 				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", label+" 须为 RFC3339 形态")
 				return "", false
 			}
-			// 必须归一为 UTC:usage_logs.created_at 存 Z 后缀形态,SQL 按字典序比较,
-			// 带 +08:00 之类偏移的入参不归一会让区间过滤整体错位
+			// 必须归一为 UTC：usage_logs.created_at 存 Z 后缀形态，SQL 按字典序比较，
+			// 带时区偏移的入参不归一会让区间过滤整体错位
 			return t.UTC().Format(time.RFC3339), true
 		}
 		from, ok := parseTS(q.Get("from"), "from")
@@ -505,7 +503,7 @@ func cacheStats(d Deps) http.HandlerFunc {
 	}
 }
 
-// derefStr 指针转值(nil→空串,UpdateTenantPatch 以空串表达「不动」)。
+// derefStr 指针转值，nil 转空串；UpdateTenantPatch 以空串表达「不动」。
 func derefStr(s *string) string {
 	if s == nil {
 		return ""
@@ -513,7 +511,7 @@ func derefStr(s *string) string {
 	return *s
 }
 
-// Routes 管理面注册的路由模式表(漂移门禁与装配层共享;由 adminRouteTable 派生,顺序稳定)。
+// Routes 管理面注册的路由模式表，由 adminRouteTable 派生，顺序稳定；漂移门禁与装配层共享。
 func Routes() []string {
 	out := make([]string, 0, len(adminRouteTable))
 	for _, e := range adminRouteTable {

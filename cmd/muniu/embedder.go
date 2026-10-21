@@ -1,5 +1,5 @@
-// 语义缓存的嵌入通道(T4.5):进程内自调用网关 /v1/embeddings
-// (semantic-cache.md「嵌入经本网关通道」;内部 key 每次启动重签,明文只存内存)。
+// 语义缓存的嵌入通道，通过进程内请求调用 /v1/embeddings；
+// 内部 key 每次启动重签，明文只存内存。
 package main
 
 import (
@@ -15,10 +15,10 @@ import (
 	"github.com/solvela/muniu/internal/auth"
 )
 
-// 内部嵌入 key 的名称(每次启动重签并吊销旧 key,明文不可恢复故无法复用)。
+// 内部嵌入 key 的名称；明文不可恢复故无法复用，每次启动重签并吊销旧 key。
 const internalEmbedKeyName = "internal-semantic-embedder"
 
-// lateEmbedder 延迟绑定嵌入器:HTTP 处理链装配完成后才能自调用。
+// lateEmbedder 延迟绑定嵌入器：HTTP 处理链装配完成后才能自调用。
 type lateEmbedder struct {
 	mu sync.Mutex
 	fn func(ctx context.Context, model, input string) ([]float32, error)
@@ -40,7 +40,7 @@ func (e *lateEmbedder) set(fn func(ctx context.Context, model, input string) ([]
 	e.fn = fn
 }
 
-// ensureInternalEmbedKey 每次启动签发新的内部嵌入 key(旧的 active 同名 key 全部吊销)。
+// ensureInternalEmbedKey 每次启动签发新的内部嵌入 key，旧的 active 同名 key 全部吊销。
 func ensureInternalEmbedKey(db *sql.DB, logger *slog.Logger) string {
 	keys, err := auth.ListKeys(db)
 	if err == nil {
@@ -58,7 +58,7 @@ func ensureInternalEmbedKey(db *sql.DB, logger *slog.Logger) string {
 	return plaintext
 }
 
-// recorder 最小 ResponseWriter(进程内自调用收集响应)。
+// recorder 最小 ResponseWriter，供进程内自调用收集响应。
 type recorder struct {
 	header http.Header
 	code   int
@@ -78,8 +78,8 @@ func (w *recorder) Flush() {}
 // bindEmbedder 把「进程内自调用 /v1/embeddings」的嵌入函数绑定到 lateEmbedder。
 func bindEmbedder(late *lateEmbedder, handler http.Handler, embedKey string) {
 	late.set(func(ctx context.Context, model, input string) ([]float32, error) {
-		// body 必须经 json.Marshal 构造:fmt %q 是 Go 字面量转义,\v/\x01 等控制字符
-		// 不在 JSON 转义白名单内,会产生非法 JSON 让嵌入通道整链失效
+		// body 必须经 json.Marshal 构造：fmt %q 按 Go 字面量转义，\v/\x01 等控制字符
+		// 不在 JSON 转义白名单内，会产出非法 JSON 使嵌入通道整链失效。
 		body, err := json.Marshal(struct {
 			Model string `json:"model"`
 			Input string `json:"input"`

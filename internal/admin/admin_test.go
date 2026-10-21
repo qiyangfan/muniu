@@ -1,4 +1,4 @@
-// 管理面契约测试:token 关闭/鉴权失败、租户与 key CRUD、usage 聚合参数校验、providers 拓扑、缓存统计空态。
+// 管理面契约测试：token 关闭/鉴权失败、租户与 key CRUD、usage 聚合参数校验、providers 拓扑、缓存统计空态。
 package admin_test
 
 import (
@@ -110,7 +110,7 @@ func TestAdmin_租户CRUD全链(t *testing.T) {
 		t.Fatalf("列表不符: %d %s", code, body)
 	}
 
-	// 更新:禁用 + 配额
+	// 更新：禁用 + 配额
 	quota := int64(5000)
 	patch, _ := json.Marshal(map[string]any{"status": "disabled", "daily_quota_credits": quota})
 	code, body = call(t, h, "PATCH", "/admin/v1/tenants/"+created.ID, "tok", string(patch))
@@ -161,7 +161,7 @@ func TestAdmin_keysCRUD全链(t *testing.T) {
 	}
 }
 
-// 启停与请求级成本预算的 PATCH 契约:boolean/数值字段落库回显,负预算 400(整单拒绝)。
+// 启停与请求级成本预算的 PATCH 契约：boolean/数值字段落库回显，负预算整单拒绝返回 400。
 func TestAdmin_key启停与预算PATCH(t *testing.T) {
 	db := openDB(t)
 	h := newAdmin(t, db, "tok", nil)
@@ -178,7 +178,7 @@ func TestAdmin_key启停与预算PATCH(t *testing.T) {
 		t.Fatalf("签发响应缺 id: %s", body)
 	}
 
-	// 签发期预算真实落库(P0 回归钉子:handler 漏接字段会静默丢弃为 0)
+	// 确认签发请求中的预算字段已持久化。
 	code, _ = call(t, h, "POST", "/admin/v1/keys", "tok",
 		`{"tenant":"default","name":"budget-key","max_request_cost_credits":7777}`)
 	if code != 200 {
@@ -190,7 +190,7 @@ func TestAdmin_key启停与预算PATCH(t *testing.T) {
 		t.Fatalf("负预算签发应 400: %d", code)
 	}
 
-	// 停用:回执如实回显 disabled + status
+	// 停用：回执如实回显 disabled + status
 	code, body = call(t, h, "PATCH", "/admin/v1/keys/"+created.ID, "tok", `{"disabled":true}`)
 	if code != 200 || !strings.Contains(body, `"disabled":true`) || !strings.Contains(body, `"status":"active"`) {
 		t.Fatalf("停用应 200 且回显 disabled/status: %d %s", code, body)
@@ -206,7 +206,7 @@ func TestAdmin_key启停与预算PATCH(t *testing.T) {
 	if code != 400 {
 		t.Fatalf("负预算应 400: %d", code)
 	}
-	// 列表回显预算字段(P2 收紧:证字段名更证值)
+	// 列表回显预算字段，证字段名也证值
 	_, body = call(t, h, "GET", "/admin/v1/keys", "tok", "")
 	if !strings.Contains(body, `"max_request_cost_credits":5000`) {
 		t.Fatalf("列表应回显预算值 5000: %s", body)
@@ -256,7 +256,7 @@ func TestAdmin_缓存统计空态(t *testing.T) {
 	}
 }
 
-// 吊销 key 必须即时清空进程内验证缓存(Deps.Verifier 接线):未清前已缓存的 key 在 TTL 内仍可放行。
+// 吊销 key 必须即时清空进程内验证缓存，验证依赖 Deps.Verifier 接线；未清前已缓存的 key 在 TTL 内仍可放行。
 func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec, err := auth.CreateKey(db, "default", "revoke-pin", 60, auth.KeyOpts{})
@@ -290,14 +290,13 @@ func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 	}
 }
 
-// 动态改价全流程(动态价目契约,metering.md):GET 展示 yaml 兜底 → PUT 运行态覆盖
-// (持久化+目录刷新即时生效)→ DELETE 撤销覆盖回落 yaml;校验失败整单拒绝。
+// 动态改价全流程：GET 展示 yaml 兜底，PUT 运行态覆盖并持久化、目录即时刷新，DELETE 撤销覆盖回落 yaml；校验失败整单拒绝。
 func TestAdmin_动态改价全流程(t *testing.T) {
 	db := openDB(t)
 	staticDefs := map[string]metering.Pricing{
 		"alias-yaml": {Currency: "USD", InputCreditsPerM: 440_000_000, OutputCreditsPerM: 1_320_000_000},
 	}
-	// 复刻装配层合并:静态兜底 + DB 覆盖 → 目录整体替换
+	// 复刻装配层合并：静态兜底 + DB 覆盖 → 目录整体替换
 	rebuild := func() *metering.PricingDirectory {
 		tables := map[string]*metering.PricingTable{}
 		for alias, def := range staticDefs {
@@ -348,7 +347,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 
-	// 1) PUT 前:GET 显示 yaml 兜底来源,目录为静态价
+	// 1) PUT 前：GET 显示 yaml 兜底来源，目录为静态价
 	code, body := call(t, h, "GET", "/admin/v1/pricing", "t", "")
 	if code != 200 || !strings.Contains(body, `"source":"yaml"`) || !strings.Contains(body, `"input":"0.44"`) {
 		t.Fatalf("GET 应列出 yaml 兜底: %d %s", code, body)
@@ -357,7 +356,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 		t.Fatalf("改价前应为静态价: %+v", got)
 	}
 
-	// 2) PUT 运行态覆盖(半价 + 时段窗):持久化 + 刷新,目录即时生效
+	// 2) PUT 运行态覆盖为半价加时段窗：持久化 + 刷新，目录即时生效
 	putBody := `{"currency":"USD","input":"0.22","output":"0.66","timezone":"+08:00","time_windows":[{"window":"00:30-08:30","multiplier":"0.5"}]}`
 	code, body = call(t, h, "PUT", "/admin/v1/pricing/alias-yaml", "t", putBody)
 	if code != 200 || !strings.Contains(body, `"ok":true`) {
@@ -368,8 +367,8 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 		!strings.Contains(body, `"multiplier":"0.5"`) {
 		t.Fatalf("PUT 后 GET 应显示 db 来源与新价: %d %s", code, body)
 	}
-	// 目录已刷新:PUT 的 input/output 为缺省(峰时)价,窗口按倍率缩放
-	// 窗内(北京 04:00)= 0.22×0.5 = 0.11(110_000_000 credit);窗外(北京 12:00)= 缺省 0.22
+	// 目录已刷新：PUT 的 input/output 为缺省峰时价，窗口按倍率缩放。
+	// 窗内北京 04:00 = 0.22×0.5 = 0.11；窗外北京 12:00 = 缺省 0.22
 	cst := time.FixedZone("cst", 8*3600)
 	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputCreditsPerM != 110_000_000 {
 		t.Fatalf("刷新后窗内应 0.22×0.5=0.11: %+v", got)
@@ -378,7 +377,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 		t.Fatalf("窗外应为 DB 缺省价 0.22: %+v", got)
 	}
 
-	// 3) 校验失败整单拒绝(不落库不刷新)
+	// 3) 校验失败整单拒绝，不落库不刷新
 	code, _ = call(t, h, "PUT", "/admin/v1/pricing/alias-yaml", "t",
 		`{"currency":"USD","input":"0.22","output":"0.66","time_windows":[{"window":"00:00-24:00","multiplier":"0"}]}`)
 	if code != 400 {
@@ -388,7 +387,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 		t.Fatalf("拒绝后目录不应变化(窗内仍 0.11): %+v", got)
 	}
 
-	// 4) DELETE 撤销覆盖:回落 yaml 静态价;重复删除 404
+	// 4) DELETE 撤销覆盖：回落 yaml 静态价；重复删除 404
 	code, _ = call(t, h, "DELETE", "/admin/v1/pricing/alias-yaml", "t", "")
 	if code != 200 {
 		t.Fatalf("DELETE 应成功: %d", code)
@@ -402,7 +401,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 	}
 }
 
-// buildStaticEntries 测试辅助:静态价目 → 管理面展示形态(与装配层同构)。
+// buildStaticEntries 测试辅助：静态价目转管理面展示形态，与装配层同构。
 func buildStaticEntries(defs map[string]metering.Pricing) map[string]admin.StaticEntry {
 	out := make(map[string]admin.StaticEntry, len(defs))
 	for alias, def := range defs {
@@ -411,7 +410,7 @@ func buildStaticEntries(defs map[string]metering.Pricing) map[string]admin.Stati
 	return out
 }
 
-// ---- 插件管理端点(ADR-0011 任务 5.1)----
+// ---- 插件管理端点 ----
 
 func newAdminWithPlugins(t *testing.T, db *sql.DB, reg *plugin.Registry) http.Handler {
 	t.Helper()
@@ -443,7 +442,7 @@ func TestAdmin_Plugins_注册列表启停替换(t *testing.T) {
 	t.Cleanup(reg.Close)
 	h := newAdminWithPlugins(t, db, reg)
 
-	// 注册(经文件路径)
+	// 注册，经文件路径
 	wasmPath := writeFixtureWasm(t, testkit.FixturePass)
 	status, body := call(t, h, "PUT", "/admin/v1/plugins/masker", "tok",
 		`{"path":"`+wasmPath+`","fail_open":false,"timeout_ms":50,"config":{"k":"v"}}`)
@@ -477,7 +476,7 @@ func TestAdmin_Plugins_注册列表启停替换(t *testing.T) {
 		t.Fatal("停用后注册表应反映 false")
 	}
 
-	// 版本替换:哈希变化 + replaced=true;启停状态沿用(false)
+	// 版本替换：哈希变化 + replaced=true；启停状态沿用 false
 	wasmPath2 := writeFixtureWasm(t, testkit.FixtureModifyEcho)
 	status, body = call(t, h, "PUT", "/admin/v1/plugins/masker", "tok", `{"path":"`+wasmPath2+`"}`)
 	if status != 200 {
@@ -509,7 +508,7 @@ func TestAdmin_Plugins_拒载与文件缺失(t *testing.T) {
 	t.Cleanup(reg.Close)
 	h := newAdminWithPlugins(t, db, reg)
 
-	// 非 wasm 文件拒载 400,注册表不受影响
+	// 非 wasm 文件拒载 400，注册表不受影响
 	bad := filepath.Join(t.TempDir(), "bad.wasm")
 	_ = os.WriteFile(bad, []byte("not wasm"), 0o600)
 	status, body := call(t, h, "PUT", "/admin/v1/plugins/bad", "tok", `{"path":"`+bad+`"}`)
@@ -530,7 +529,7 @@ func TestAdmin_Plugins_拒载与文件缺失(t *testing.T) {
 		t.Fatalf("ABI 不匹配应 400: %d %s", status, body)
 	}
 
-	// 拒载风暴后注册表仍可用:注册合法插件
+	// 拒载风暴后注册表仍可用：注册合法插件
 	good := writeFixtureWasm(t, testkit.FixturePass)
 	status, _ = call(t, h, "PUT", "/admin/v1/plugins/good", "tok", `{"path":"`+good+`"}`)
 	if status != 200 {
@@ -574,12 +573,8 @@ func TestAdmin_Plugins_资源参数钳制(t *testing.T) {
 	}
 }
 
-// TestAdmin_签发响应与OpenAPI契约一致(openspec fix-api-key-binding-identifiers):
-// handler 实际输出的字段集合 ≡ contracts/openapi.yaml KeyCreateResponse 声明的属性集合,
-// 双向钉死——运行时加字段不改契约、或契约声明运行时没有的字段,都在此处先红。
-// 语义锚点:id 是用量归账/锦官绑定的连接值,不得与 secret(key)/prefix 混同;
-// 创建响应的租户字段沿用既有名 tenant(值为租户名;列表 KeyRecord.tenant_id 为租户 UUID,
-// 同指所属租户但值域不同——契约不重命名,描述如实区分)。
+// TestAdmin_签发响应与OpenAPI契约一致 验证签发字段与 OpenAPI 定义相同。
+// id、key 和 prefix 含义不同；创建响应的 tenant 是租户名，列表中的 tenant_id 是 UUID。
 func TestAdmin_签发响应与OpenAPI契约一致(t *testing.T) {
 	db := openDB(t)
 	h := newAdmin(t, db, "tok", nil)
@@ -599,7 +594,7 @@ func TestAdmin_签发响应与OpenAPI契约一致(t *testing.T) {
 		actual[k] = true
 	}
 
-	// 语义锚点:三值互不相同,id 非空、明文带 mk- 前缀、租户字段名为 tenant
+	// id 不得与 key 或 prefix 相同；创建响应使用 tenant 字段。
 	if id, _ := resp["id"].(string); id == "" || id == resp["key"] || id == resp["prefix"] {
 		t.Fatalf("id 必须是非空且区别于 secret/prefix 的独立值: %q", resp["id"])
 	}
@@ -613,7 +608,7 @@ func TestAdmin_签发响应与OpenAPI契约一致(t *testing.T) {
 		t.Fatalf("创建响应不得出现 tenant_id(契约不做同义改名): %v", actual)
 	}
 
-	// 契约侧:解析 openapi.yaml 的 KeyCreateResponse 属性集合
+	// 契约侧：解析 openapi.yaml 的 KeyCreateResponse 属性集合
 	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "openapi.yaml"))
 	if err != nil {
 		t.Fatalf("读取 openapi.yaml: %v", err)
@@ -640,8 +635,7 @@ func TestAdmin_签发响应与OpenAPI契约一致(t *testing.T) {
 	for k := range schema.Properties {
 		declared[k] = true
 	}
-	// required 面:handler 无条件输出全部 8 键,契约必须同等声明「属性全集即 required 全集」;
-	// 漏声明会把必返字段洗成可选,生成类型随之退化为 undefined(门禁与「双向钉死」声称对齐)
+	// handler 始终返回的字段都必须在契约中声明为必填，避免生成类型变成可选。
 	if len(schema.Required) != len(schema.Properties) {
 		t.Fatalf("KeyCreateResponse 的 required(%d 项)必须覆盖全部属性(%d 项): %v",
 			len(schema.Required), len(schema.Properties), schema.Required)
@@ -651,7 +645,7 @@ func TestAdmin_签发响应与OpenAPI契约一致(t *testing.T) {
 			t.Fatalf("required 引用了未声明属性: %q", k)
 		}
 	}
-	// expires_at 可空语义:handler 侧 *time.Time(nil→null),契约必须 nullable(漏声明会误伤 null 消费方)
+	// expires_at 可空语义：handler 侧 *time.Time 的 nil 输出为 null，契约必须声明 nullable，漏声明会误伤 null 消费方
 	if exp, ok := schema.Properties["expires_at"].(map[string]any); ok {
 		if nullable, _ := exp["nullable"].(bool); !nullable {
 			t.Fatal("expires_at 必须声明 nullable:true(运行时永不过期返回 null)")
@@ -677,7 +671,7 @@ func TestAdmin_签发响应与OpenAPI契约一致(t *testing.T) {
 	}
 }
 
-// sortedQuote 稳定排序输出(契约漂移断言的可读差异列表)。
+// sortedQuote 稳定排序输出契约漂移断言的可读差异列表。
 func sortedQuote(list []string) string {
 	out := make([]string, 0, len(list))
 	out = append(out, list...)
@@ -689,8 +683,8 @@ func sortedQuote(list []string) string {
 	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
-// TestAdmin_签发过期时刻校验 创建拒过去时刻(「签发即死」无合法诉求,静默接受会产出
-// 看似正常实则已过期的 key);PATCH 置过去时刻 = 立即失效的运维语义,允许。
+// TestAdmin_签发过期时刻校验 创建拒过去时刻，静默接受会产出看似正常实则已过期的 key；
+// PATCH 置过去时刻等于立即失效的运维语义，允许。
 func TestAdmin_签发过期时刻校验(t *testing.T) {
 	db := openDB(t)
 	h := newAdmin(t, db, "tok", nil)
@@ -702,7 +696,7 @@ func TestAdmin_签发过期时刻校验(t *testing.T) {
 		t.Fatalf("创建过去时刻应 400: %d %s", code, body)
 	}
 
-	// 对照:未来时刻正常签发
+	// 对照：未来时刻正常签发
 	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
 	code, body = call(t, h, "POST", "/admin/v1/keys", "tok",
 		`{"tenant":"default","name":"living","expires_at":"`+future+`"}`)

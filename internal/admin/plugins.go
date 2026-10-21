@@ -1,8 +1,8 @@
-// 插件管理端点(ADR-0011,任务 5.1):列表 / 注册与版本替换 / 启停。
-// 注册与替换以本地文件为载体(PUT 传 path,服务端读文件),内容 SHA-256 固定版本;
-// 注册即校验(wasm magic → 编译 → ABI 版本 → plugin_start),失败 400 且既有插件不受影响。
-// 替换热生效:新请求由新版本处理,在途请求在旧版本上完成;替换不改变启停状态。
-// 运行态注册不持久化——重启后回落 YAML plugins 静态声明(ADR-0004 拓扑分工)。
+// 插件管理端点：列表、注册与版本替换、启停。
+// 注册与替换以本地文件为载体，PUT 传 path 由服务端读文件，内容 SHA-256 固定版本；
+// 注册即校验，依次为 wasm magic、编译、ABI 版本、plugin_start，失败 400 且既有插件不受影响。
+// 替换热生效：新请求由新版本处理，在途请求在旧版本上完成；替换不改变启停状态。
+// 运行态注册不持久化，重启后回落 YAML plugins 静态声明。
 package admin
 
 import (
@@ -18,16 +18,16 @@ import (
 
 // pluginPutRequest PUT /admin/v1/plugins/{name} 请求体。
 type pluginPutRequest struct {
-	Path           string            `json:"path"`             // wasm 二进制本地路径(必填)
-	Enabled        *bool             `json:"enabled"`          // 新注册缺省 true;替换时沿用原状态(忽略本字段)
-	FailOpen       bool              `json:"fail_open"`        // true = 失效放行(安全类插件务必 false)
+	Path           string            `json:"path"`             // wasm 二进制本地路径，必填
+	Enabled        *bool             `json:"enabled"`          // 新注册缺省 true；替换时沿用原状态，忽略本字段
+	FailOpen       bool              `json:"fail_open"`        // true = 失效放行，安全类插件务必 false
 	TimeoutMs      int64             `json:"timeout_ms"`       // 0 = 缺省 50
 	MemoryLimitMiB int               `json:"memory_limit_mib"` // 0 = 缺省 64
 	PoolSize       int               `json:"pool_size"`        // 0 = 缺省 8
 	Config         map[string]string `json:"config"`           // get_config 键值
 }
 
-// 插件路由经 adminRouteTable 挂载(pluginsList/pluginPut/pluginPatch),不再单独注册。
+// 插件路由经 adminRouteTable 挂载（pluginsList/pluginPut/pluginPatch），不再单独注册。
 
 func pluginsList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -56,8 +56,8 @@ func pluginPut(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "path 必填")
 			return
 		}
-		// 资源硬顶与 config 层同源(单一真理源用 plugin 包常量):超限直达 wazero 会
-		// panic(admin 链无 recover),负值经 uint32 换算会溢出成巨大上限——入口即拒。
+		// 资源硬顶与 config 层同源，取值用 plugin 包常量：超限直达 wazero 会 panic，
+		// admin 链无 recover；负值经 uint32 换算会溢出成巨大上限，入口即拒。
 		if req.TimeoutMs < 0 || req.TimeoutMs > plugin.MaxTimeoutMs {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
 				"timeout_ms 须在 0.."+strconv.Itoa(plugin.MaxTimeoutMs))
@@ -91,7 +91,7 @@ func pluginPut(d Deps) http.HandlerFunc {
 			Logger:           d.Logger,
 		})
 		if err != nil {
-			// 拒载属业务可读错误(非 wasm/ABI 不匹配/start 失败),原样返回不外泄内部细节
+			// 拒载属业务可读错误，如非 wasm、ABI 不匹配、start 失败，原样返回不外泄内部细节
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "plugin_rejected", err.Error())
 			return
 		}
@@ -110,7 +110,7 @@ func pluginPut(d Deps) http.HandlerFunc {
 	}
 }
 
-// pluginPatchRequest PATCH /admin/v1/plugins/{name} 请求体(仅启停)。
+// pluginPatchRequest PATCH /admin/v1/plugins/{name} 请求体，仅启停。
 type pluginPatchRequest struct {
 	Enabled *bool `json:"enabled"`
 }

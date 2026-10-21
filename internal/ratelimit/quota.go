@@ -1,6 +1,6 @@
-// 日配额闸(traffic-governance「限流」):key 级与租户聚合级两道闸,
-// 已耗成本 = SUM(cost_credits WHERE estimated=0 AND created_at ≥ 当日)(metering 对账口径),
-// 进程内缓存 30s——一致性声明:事后记账模型,存在「同刻并发小幅超限」窗口(README FAQ)。
+// 日配额闸：key 级与租户聚合级两道闸。
+// 已耗成本 = SUM(cost_credits WHERE estimated=0 AND created_at ≥ 当日)，与计量侧对账口径一致；
+// 进程内缓存 30s。事后记账模型，存在同刻并发小幅超限的一致性窗口。
 // 超限 → 402 quota_exceeded。
 package ratelimit
 
@@ -19,19 +19,19 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
-// KeyInfoLite 配额判定所需的最小 key/租户信息(中间件从 auth.KeyInfo 转换)。
+// KeyInfoLite 配额判定所需的最小 key/租户信息，由中间件从 auth.KeyInfo 转换。
 type KeyInfoLite struct {
 	ID                string
 	TenantID          string
 	DailyQuotaCredits int64 // 0=不限
 }
 
-// Options 配额闸参数;零值取默认(TTL 30s)。
+// Options 配额闸参数，零值取默认 TTL 30s。
 type Options struct {
 	CacheTTL time.Duration
 }
 
-// Quota 日配额判定器(进程内单例)。
+// Quota 日配额判定器，进程内单例。
 type Quota struct {
 	db       *sql.DB
 	ttl      time.Duration
@@ -41,13 +41,13 @@ type Quota struct {
 	dbErrLog *slog.Logger
 }
 
-// quotaEntry 缓存条目:任意字段访问须持 q.mu。
+// quotaEntry 缓存条目，任意字段访问须持 q.mu。
 type quotaEntry struct {
 	sum       int64
 	expiresAt time.Time
 }
 
-// NewQuota 构造配额闸。logger 供「聚合失败放行」告警(该事件不可观测会让超支无从排查)。
+// NewQuota 构造配额闸。logger 供「聚合失败放行」告警，该事件不可观测会让超支无从排查。
 func NewQuota(db *sql.DB, opts Options, logger *slog.Logger) *Quota {
 	ttl := opts.CacheTTL
 	if ttl <= 0 {
@@ -59,7 +59,7 @@ func NewQuota(db *sql.DB, opts Options, logger *slog.Logger) *Quota {
 	return &Quota{db: db, ttl: ttl, now: time.Now, cache: map[string]quotaEntry{}, dbErrLog: logger}
 }
 
-// exceeded 判定:先 key 级再租户聚合级,任一超限即拒。额度 0=不限。
+// exceeded 判定：先 key 级再租户聚合级，任一超限即拒。额度 0=不限。
 func (q *Quota) exceeded(info *KeyInfoLite, now time.Time) bool {
 	dayStart := now.UTC().Format("2006-01-02T00:00:00Z")
 	if info.DailyQuotaCredits > 0 {
@@ -67,7 +67,7 @@ func (q *Quota) exceeded(info *KeyInfoLite, now time.Time) bool {
 			return true
 		}
 	}
-	// 租户聚合第二道闸(额度存 tenants.daily_quota_credits,迁移 0002)
+	// 租户聚合第二道闸（额度存 tenants.daily_quota_credits）
 	if tq := q.tenantQuota(info.TenantID); tq > 0 {
 		if q.cachedSum("t:"+info.TenantID, "", info.TenantID, dayStart, now) >= tq {
 			return true
@@ -76,7 +76,7 @@ func (q *Quota) exceeded(info *KeyInfoLite, now time.Time) bool {
 	return false
 }
 
-// cachedSum 带 30s TTL 的聚合缓存;调用点须注意:同一请求两道闸各自缓存,口径一致。
+// cachedSum 带 30s TTL 的聚合缓存；同一请求两道闸各自缓存，口径一致。
 func (q *Quota) cachedSum(scope, keyID, tenantID, dayStart string, now time.Time) int64 {
 	q.mu.Lock()
 	if e, ok := q.cache[scope]; ok && now.Before(e.expiresAt) {
@@ -87,7 +87,7 @@ func (q *Quota) cachedSum(scope, keyID, tenantID, dayStart string, now time.Time
 
 	sum, err := store.SumCostToday(q.db, tenantID, keyID, dayStart)
 	if err != nil {
-		// 聚合失败放行并记日志(可用性优先;该失败仅影响配额精度,不影响计量正确性)
+		// 聚合失败放行并记日志：可用性优先，该失败仅影响配额精度，不影响计量正确性
 		if q.dbErrLog != nil {
 			q.dbErrLog.Warn("日配额聚合失败,本次放行", "error_detail", err.Error())
 		}
@@ -99,7 +99,7 @@ func (q *Quota) cachedSum(scope, keyID, tenantID, dayStart string, now time.Time
 	return sum
 }
 
-// tenantQuota 租户聚合额度(tenants.daily_quota_credits,迁移 0002);查不到按 0(不限)。
+// tenantQuota 租户聚合额度（tenants.daily_quota_credits），查不到按 0 不限。
 func (q *Quota) tenantQuota(tenantID string) int64 {
 	var quota int64
 	err := q.db.QueryRow(`SELECT daily_quota_credits FROM tenants WHERE id = ?`, tenantID).Scan(&quota)
@@ -109,7 +109,7 @@ func (q *Quota) tenantQuota(tenantID string) int64 {
 	return quota
 }
 
-// Middleware 日配额中间件(链序:auth → quota → ratelimit);无鉴权信息的链路直接放行。
+// Middleware 日配额中间件，挂载顺序 auth → quota → ratelimit；无鉴权信息的请求直接放行。
 func (q *Quota) Middleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +127,7 @@ func (q *Quota) Middleware(logger *slog.Logger) func(http.Handler) http.Handler 
 	}
 }
 
-// keyInfoFrom ctx 取鉴权信息并裁剪为配额视角(字段显式拷贝,两型字段集不同不可直接转换)。
+// keyInfoFrom 从 ctx 取鉴权信息并裁剪为配额视角，字段显式拷贝——两型字段集不同，不可直接转换。
 func keyInfoFrom(ctx context.Context) *KeyInfoLite {
 	if info := auth.KeyFrom(ctx); info != nil {
 		return &KeyInfoLite{

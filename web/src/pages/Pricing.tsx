@@ -152,13 +152,12 @@ export default function Pricing() {
 
   // 单价单位随币种标注(后端契约:十进制小数,元|美元 / 百万 Tokens)
   const unit = form.currency === "USD" ? "美元" : "元";
-  // 时区下拉候选:现值不在常用列表(如历史 ±HH:MM 偏移)时追加现值,保证可回显
+  // 当前时区不在候选列表时仍追加显示，避免编辑时丢失原值。
   const tzValue = form.timezone ?? "UTC";
   const tzOptions = TIMEZONES.some((t) => t.value === tzValue)
     ? TIMEZONES
     : [{ value: tzValue, label: tzValue }, ...TIMEZONES];
 
-  // 列定义单源:桌面表格与移动卡片共用
   const columns: DataCol<PricingEntry>[] = [
     {
       key: "alias",
@@ -171,7 +170,7 @@ export default function Pricing() {
       label: "来源",
       secondary: true,
       render: (p) => (
-        /* 「非 db 一律 secondary」语义:显式 fallback 保持行为等价(StatusBadge 立约) */
+        /* 未知来源按静态配置价显示。 */
         <StatusBadge
           meta={{ db: { label: "运行态", variant: "success" } }}
           value={p.source}

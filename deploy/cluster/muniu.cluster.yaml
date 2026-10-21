@@ -1,11 +1,5 @@
-# muniu cluster 形态配置样例(挂载为各副本容器内 /muniu.yaml)
-# 与 standalone(muniu.example.yaml)的差异:四根管子全部指向锦官——
-#   ①价目下发 GET /control/v1/pricing(拉取无认证头,靠部署网络隔离保护,现实契约)
-#   ②key 吊销快照 GET /control/v1/key-revocations(同上)
-#   ③计量 ingest POST /ingest/usage(Bearer 独立静态 token,${VAR} 环境变量展开)
-#   ④拓扑下发 GET /control/v1/topology(同①;变更经 PUT /admin/topology 热替换生效)
-# 联调实录(2026-09-13):首拉热替换 reused=0/created=1/removed=1;变更轮 reused=1/created=0/removed=0
-# (池运行态无损);锦官失联后 WARN 保持当前快照,数据面存活。
+# 集群配置示例：价目、拓扑、密钥吊销和计量均通过控制面同步。
+# 控制面不可达时保留当前拓扑快照，网关继续处理请求。
 
 server:
   addr: ":8787"

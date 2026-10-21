@@ -1,6 +1,6 @@
-// 请求级成本预算契约测试(per-request-cost-budget):
-// 预检拒绝(上游零调用、不落计量行)、流中中断(断言收尾 + key 池零影响 + 计量如实落账)、
-// 累计判定的真值覆盖与零预算旁路。价目口径:输入 2 credit/tok、输出 8 credit/tok。
+// 请求级成本预算行为：预检拒绝时上游零调用且不落计量行、流中中断时断言收尾且
+// key 池零影响、计量如实落账、累计判定的真值覆盖与零预算旁路。
+// 价目口径：输入 2 credit/tok、输出 8 credit/tok。
 package proxy
 
 import (
@@ -29,8 +29,8 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// newBudgetServer 构造带价目(alias-a:输入 2e6/输出 8e6 credit 每百万)与预算注入的网关;
-// 预算经 budgetSrc 间接读取(流中测试中断后调大预算复用同网关,行为级证明池无损)。
+// newBudgetServer 构造带价目与预算注入的网关，alias-a 价目为输入 2e6、输出 8e6 credit 每百万。
+// 预算经 budgetSrc 间接读取，流中测试中断后调大预算可复用同网关，行为级证明 key 池无损。
 func newBudgetServer(t *testing.T, up *testkit.Upstream, budgetSrc *int64) (*httptest.Server, *sql.DB) {
 	t.Helper()
 	reg := adapter.NewRegistry()
@@ -70,7 +70,7 @@ func newBudgetServer(t *testing.T, up *testkit.Upstream, budgetSrc *int64) (*htt
 	return ts, db
 }
 
-// assertNoRows 轮询断言计量零落账(预检拒绝不进 usage_logs)。
+// assertNoRows 轮询断言计量零落账，预检拒绝不进 usage_logs。
 func assertNoRows(t *testing.T, db *sql.DB) {
 	t.Helper()
 	deadline := time.Now().Add(500 * time.Millisecond)
@@ -86,8 +86,7 @@ func assertNoRows(t *testing.T, db *sql.DB) {
 	}
 }
 
-// 预检闸:估算输入 + max_tokens 输出上界超预算 → 402 cost_budget_exceeded,
-// 上游零调用、零落账。
+// 预检闸：估算输入加 max_tokens 输出上界超预算即 402 cost_budget_exceeded，上游零调用、零落账。
 func TestCostBudget_预检拒绝(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
 	budget := int64(100) // 输出上界 1000 tok × 8 = 8000 credit ≫ 100
@@ -103,8 +102,8 @@ func TestCostBudget_预检拒绝(t *testing.T) {
 	assertNoRows(t, db)
 }
 
-// 流中闸:预检放行(max_tokens 上界内)、流式累计超限 → 断言收尾(内容保留+错误帧+[DONE]);
-// 中断后调大预算复用同网关同 key:请求照常成功 = 不计 key 失败、无冷却。
+// 流中闸：预检放行后流式累计超限即断言收尾，已生成内容保留、追加错误帧与 [DONE]；
+// 中断后调大预算复用同网关同 key，请求照常成功，不计 key 失败、无冷却。
 func TestCostBudget_流中中断与池无损(t *testing.T) {
 	const chunk = "十二字测试内容十二字测试" // 每帧约 12+ token
 	var frames strings.Builder
@@ -113,7 +112,7 @@ func TestCostBudget_流中中断与池无损(t *testing.T) {
 	}
 	events := []testkit.Event{{Data: frames.String() + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"}}
 	up := testkit.StartStreamUpstream(t, events)
-	budget := int64(1000) // 预检:max_tokens 50×8=400+输入 < 1000 放行;流式累计 24 帧 ≫ 1000
+	budget := int64(1000) // 预检：max_tokens 50×8=400 加输入 < 1000 放行；流式累计 24 帧 ≫ 1000
 	ts, db := newBudgetServer(t, up, &budget)
 
 	code, body := foPost(t, ts, `{"model":"alias-a","stream":true,"messages":[{"role":"user","content":"hi"}],"max_tokens":50}`)
@@ -131,7 +130,7 @@ func TestCostBudget_流中中断与池无损(t *testing.T) {
 		t.Fatalf("中断行应如实落账: %+v", rows[0])
 	}
 
-	// 池无损行为证明:同 key 调大预算后同剧本请求照常完整成功(无冷却/禁用/EMA 惩罚)
+	// 池无损行为证明：同 key 调大预算后同剧本请求照常完整成功，无冷却、禁用、EMA 惩罚。
 	budget = 1 << 40
 	code, body = foPost(t, ts, `{"model":"alias-a","stream":true,"messages":[{"role":"user","content":"hi"}],"max_tokens":50}`)
 	if code != 200 || strings.Contains(body, "cost_budget_exceeded") || !strings.HasSuffix(body, "data: [DONE]\n\n") {
@@ -139,7 +138,7 @@ func TestCostBudget_流中中断与池无损(t *testing.T) {
 	}
 }
 
-// 累计判定单元:真值覆盖估算、零预算/无价目旁路。
+// 累计判定单元：真值覆盖估算、零预算/无价目旁路。
 func TestMeterState_budgetExceeded(t *testing.T) {
 	prices := &metering.Pricing{InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000}
 	m := &meterState{budget: 100, budgetPrices: prices, budgetModel: "alias-a"}
@@ -154,12 +153,12 @@ func TestMeterState_budgetExceeded(t *testing.T) {
 	if !m.budgetExceeded() {
 		t.Fatal("140 credit > 预算 100 应超限")
 	}
-	// usage 帧真值覆盖估算(真值显著小于估算)
+	// usage 帧真值覆盖估算，真值显著小于估算。
 	m.budgetObserveUsage(protocol.Usage{PromptTokens: 5, CompletionTokens: 5}) // 10 + 40 = 50
 	if m.budgetExceeded() {
 		t.Fatal("真值覆盖后 50 credit 不应超限")
 	}
-	// 旁路格:预算 0 / 无价目
+	// 旁路格：预算 0 / 无价目。
 	if (&meterState{budgetPrices: prices, budgetIn: 1 << 40}).budgetExceeded() {
 		t.Fatal("预算 0 应旁路")
 	}

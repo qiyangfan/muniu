@@ -1,7 +1,4 @@
-// Gemini 原生入站端到端钉子(gemini-native-protocol):
-// 路径解析与 alt=sse 校验、非流式/流式反向映射、路径别名同规错误、鉴权适配与 ?key= 剥离、
-// bridgegate 声明式缺口(gemini 候选工具多轮不豁免)、跨协议缓存 canonical 同构、
-// gemini×gemini 全链(StreamCloseDone 干净收尾)。
+// 验证 Gemini 入站的路由、协议映射、鉴权、工具多轮限制和跨协议缓存。
 package proxy
 
 import (
@@ -21,7 +18,7 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// mountGemini 装配 Gemini 入站(mux 同生产形态:AdaptGeminiKey 先于业务)。
+// mountGemini 装配 Gemini 入站，mux 同生产形态，AdaptGeminiKey 先于业务。
 func mountGemini(t *testing.T, p *Proxy) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
@@ -73,10 +70,10 @@ func newGeminiProxy(t *testing.T, up *testkit.Upstream) *Proxy {
 	return p
 }
 
-// geminiJSONBody gemini 形态假上游响应(gemini 候选消费 gemini wire)。
+// geminiJSONBody gemini 形态假上游响应，gemini 候选消费 gemini wire。
 const geminiJSONBody = `{"candidates":[{"content":{"parts":[{"text":"你好"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":8,"totalTokenCount":20},"modelVersion":"up-g"}`
 
-// TestGeminiE2E_非流式 全链:翻译 → 上游 → 反向映射为 GenerateContentResponse。
+// TestGeminiE2E_非流式 全链：翻译、上游调用、反向映射为 GenerateContentResponse。
 func TestGeminiE2E_非流式(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, geminiJSONBody)
 	p := newGeminiProxy(t, up)
@@ -112,7 +109,7 @@ func TestGeminiE2E_非流式(t *testing.T) {
 	if obj.UsageMetadata.PromptTokenCount != 12 || obj.UsageMetadata.CandidatesTokenCount != 8 {
 		t.Fatalf("usageMetadata 不符: %s", body)
 	}
-	// 出站 wire:gemini 形态(x-goog-api-key + :generateContent)
+	// 出站 wire 为 gemini 形态，用 x-goog-api-key 与 :generateContent。
 	if got := up.LastHeader("x-goog-api-key"); got != "gk" {
 		t.Fatalf("鉴权头不符: %q", got)
 	}
@@ -123,8 +120,8 @@ func TestGeminiE2E_非流式(t *testing.T) {
 	}
 }
 
-// TestGeminiE2E_流式 alt=sse 流式:增量帧 → 终帧;上游无 [DONE](StreamCloseDone)干净收尾。
-// 假上游语料 = gemini wire(conformance/gemini/text-stream 同款);全链走 gemini→canonical→gemini 往返。
+// TestGeminiE2E_流式 alt=sse 流式：增量帧到终帧，上游无 [DONE]，经 StreamCloseDone 干净收尾。
+// 假上游语料为 gemini wire，全链走 gemini→canonical→gemini 往返。
 func TestGeminiE2E_流式(t *testing.T) {
 	up := testkit.StartStreamUpstream(t, []testkit.Event{
 		{Data: "data: " + `{"candidates":[{"content":{"parts":[{"text":"今天"}],"role":"model"},"index":0}]}` + "\n\n"},
@@ -145,13 +142,13 @@ func TestGeminiE2E_流式(t *testing.T) {
 	if !strings.Contains(body, `"finishReason":"STOP"`) || !strings.Contains(body, `"promptTokenCount":12`) {
 		t.Fatalf("缺终帧(usage/finishReason): %s", body)
 	}
-	// 网关补 [DONE] 语义在此不存在:客户端流以终帧收尾,无 OpenAI [DONE] 泄漏
+	// 网关不补 [DONE]：客户端流以终帧收尾，无 OpenAI [DONE] 泄漏。
 	if strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("Gemini 流不得泄漏 [DONE]: %s", body)
 	}
 }
 
-// TestGeminiE2E_streamForm校验 streamGenerateContent 缺 alt=sse → 400 机器码信封。
+// TestGeminiE2E_streamForm校验 streamGenerateContent 缺 alt=sse 时返回 400 机器码信封。
 func TestGeminiE2E_streamForm校验(t *testing.T) {
 	p := newGeminiProxy(t, testkit.StartJSONUpstream(t, 200, usageJSONBody))
 	ts := mountGemini(t, p)
@@ -161,13 +158,13 @@ func TestGeminiE2E_streamForm校验(t *testing.T) {
 	}
 }
 
-// TestGeminiE2E_路径别名与翻译拒绝 同规错误与显式拒绝(Gemini 信封形态)。
+// TestGeminiE2E_路径别名与翻译拒绝 验证同规错误与显式拒绝的 Gemini 信封形态。
 func TestGeminiE2E_路径别名与翻译拒绝(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	p := newGeminiProxy(t, up)
 	ts := mountGemini(t, p)
 
-	// 别名不存在:与 chat model_not_found 同规(400 + 同文案;信封改写为 Gemini 形态)
+	// 别名不存在：与 chat model_not_found 同规，400 加同文案，信封改写为 Gemini 形态。
 	resp, body := postGemini(t, ts.URL, "no-such:generateContent", `{"contents":[{"role":"user","parts":[{"text":"x"}]}]}`, http.Header{}, "")
 	if resp.StatusCode != 400 || !strings.Contains(body, "模型别名不存在: no-such") || !strings.Contains(body, `"status":"INVALID_ARGUMENT"`) {
 		t.Fatalf("别名不存在应同规 400(Gemini 信封): %d %s", resp.StatusCode, body)
@@ -183,7 +180,7 @@ func TestGeminiE2E_路径别名与翻译拒绝(t *testing.T) {
 	}
 }
 
-// TestGeminiE2E_鉴权适配剥离 两种凭证形态放行;?key= 读后从 URL 剥离。
+// TestGeminiE2E_鉴权适配剥离 两种凭证形态放行，?key= 读取后从 URL 剥离。
 func TestGeminiE2E_鉴权适配剥离(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	reg := adapter.NewRegistry()
@@ -196,20 +193,20 @@ func TestGeminiE2E_鉴权适配剥离(t *testing.T) {
 		Pools:     map[string]*keypool.Pool{"gem": keypool.NewPool([]keypool.KeyInput{{ID: "KG", Value: "gk", Weight: 1}})},
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	// 带 verifier 的链:AdaptGeminiKey 必须先于鉴权
+	// 带 verifier 的链：AdaptGeminiKey 必须先于鉴权。
 	mux := http.NewServeMux()
 	mux.Handle("POST /v1beta/models/{modelMethod}", server.AdaptGeminiKey(p.HandlerGemini()))
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	// 头形态(数据面 verifier 未挂时 handler 不校验 key;此处验 ?key= 剥离语义)
+	// 头形态：数据面 verifier 未挂时 handler 不校验 key，此处验 ?key= 剥离语义。
 	_, body := postGemini(t, ts.URL, "gemini-x:generateContent",
 		`{"contents":[{"role":"user","parts":[{"text":"x"}]}]}`, http.Header{}, "?key=sekrit-platform-key")
 	if !strings.Contains(body, `"candidates"`) {
 		t.Fatalf("?key= 形态应放行: %s", body)
 	}
 	_ = up
-	// AdaptGeminiKey 单元语义:?key= 剥离 + Bearer 补写(无 Authorization 时)
+	// AdaptGeminiKey 单元语义：?key= 剥离，无 Authorization 时补写 Bearer。
 	r := httptest.NewRequest("POST", "/v1beta/models/m:generateContent?key=sekrit", nil)
 	r.Header.Set("X-Goog-Api-Key", "")
 	got := make(chan *http.Request, 1)
@@ -224,14 +221,14 @@ func TestGeminiE2E_鉴权适配剥离(t *testing.T) {
 	}
 }
 
-// TestGeminiE2E_bridgegate声明式缺口 gemini 候选工具多轮正常出站(不豁免);
-// anthropic 桥接同流量维持豁免(现状逐字节)。
+// TestGeminiE2E_bridgegate声明式缺口 gemini 候选工具多轮正常出站，不豁免；
+// anthropic 桥接同流量维持豁免。
 func TestGeminiE2E_bridgegate声明式缺口(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	p := newGeminiProxy(t, up)
 	ts := mountGemini(t, p)
 
-	// gemini 入站:工具多轮(functionCall/functionResponse 全链)→ 正常服务
+	// gemini 入站：工具多轮 functionCall/functionResponse 全链正常服务。
 	raw := `{"contents":[
 		{"role":"user","parts":[{"text":"查天气"}]},
 		{"role":"model","parts":[{"functionCall":{"name":"weather","args":{"city":"北京"}}}]},
@@ -246,8 +243,7 @@ func TestGeminiE2E_bridgegate声明式缺口(t *testing.T) {
 	}
 }
 
-// TestGeminiE2E_跨协议缓存同构 gemini 入站 canonical ≡ 等价 chat canonical
-// (缓存跨协议命中的传递性钉子;治理/计量同构随之成立)。
+// TestGeminiE2E_跨协议缓存同构 验证 Gemini 与等价 Chat 请求共享缓存条目。
 func TestGeminiE2E_跨协议缓存同构(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	p := newGeminiProxy(t, up)

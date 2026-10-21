@@ -1,5 +1,5 @@
-// proxy 契约测试:fake 剧本 × 客户端可见字节序列逐字节等价(passthrough 契约)、
-// 超时/断流错误信封形态、断连传导。半帧用例名直接证明「不解析半事件」。
+// proxy 契约测试：fake 剧本下客户端可见字节序列逐字节等价，超时/断流错误信封形态、断连传导。
+// 半帧用例名直接证明不解析半事件。
 package proxy
 
 import (
@@ -19,7 +19,7 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// newTestProxy 组装指向 fake 上游的单候选代理,返回可请求的 httptest.Server。
+// newTestProxy 组装指向 fake 上游的单候选代理，返回可请求的 httptest.Server。
 func newTestProxy(t *testing.T, upstreamURL string, timeouts Timeouts) *httptest.Server {
 	t.Helper()
 	reg := adapter.NewRegistry()
@@ -40,7 +40,7 @@ func newTestProxy(t *testing.T, upstreamURL string, timeouts Timeouts) *httptest
 	return ts
 }
 
-// postChat 发一条 /v1/chat/completions 请求,返回响应与 body 全文。
+// postChat 发一条 /v1/chat/completions 请求，返回响应与 body 全文。
 func postChat(t *testing.T, url, body string) (*http.Response, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -60,10 +60,10 @@ func postChat(t *testing.T, url, body string) (*http.Response, string) {
 
 const chatBody = `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`
 
-// streamChatBody 流式请求(显式 stream:true);所有 SSE 用例必须用它,否则走非流式路径测不到透传契约。
+// streamChatBody 流式请求，显式 stream:true；所有 SSE 用例必须用它，否则走非流式路径测不到透传行为。
 const streamChatBody = `{"model":"alias-a","stream":true,"messages":[{"role":"user","content":"hi"}]}`
 
-// joinEvents 剧本期望字节 = 事件依次拼接。
+// joinEvents 剧本期望字节为事件依次拼接。
 func joinEvents(events []testkit.Event) string {
 	var sb strings.Builder
 	for _, ev := range events {
@@ -90,8 +90,8 @@ func TestStream_normal_客户端字节逐字节等价(t *testing.T) {
 }
 
 func TestStream_half_frame_不解析半事件_字节逐字节等价(t *testing.T) {
-	// 用例名即证明:半帧剧本下客户端必须收到与剧本完全一致的完整事件序列,
-	// 半帧只能缓冲等待补齐,绝不产出半个事件。
+	// 用例名即证明：半帧剧本下客户端必须收到与剧本完全一致的完整事件序列，
+	// 半帧只能缓冲等待补齐，绝不产出半个事件。
 	events := testkit.HalfFrameEvents()
 	up := testkit.StartStreamUpstream(t, events)
 	ts := newTestProxy(t, up.URL(), defTimeouts())
@@ -121,7 +121,7 @@ func TestStream_mid_stream_cut_断言出口_流内错误帧加DONE(t *testing.T)
 	ts := newTestProxy(t, up.URL(), defTimeouts())
 
 	_, body := postChat(t, ts.URL, streamChatBody)
-	// 断言出口:已转发部分原样 + 流内错误帧 + [DONE] 干净收尾
+	// 断言出口：已转发部分原样，流内错误帧，[DONE] 干净收尾。
 	if !strings.HasSuffix(body, "data: [DONE]\n\n") {
 		t.Fatalf("断言出口必须补发 [DONE]: %q", body)
 	}
@@ -151,7 +151,7 @@ func TestStream_slow_chunk_帧间超时_断言出口(t *testing.T) {
 }
 
 func TestStream_first_token超时_未产出任何输出_返回超时信封(t *testing.T) {
-	// 首个内容帧迟迟不来:未过首 token,对客户端零可见流输出 → 归一化超时信封
+	// 首个内容帧迟迟不来：未过首 token，对客户端零可见流输出，归一化超时信封。
 	events := testkit.SlowChunkEvents(5 * time.Second)
 	up := testkit.StartStreamUpstream(t, events)
 	ts := newTestProxy(t, up.URL(), Timeouts{Dial: time.Second, FirstToken: 150 * time.Millisecond, ChunkIdle: time.Second})
@@ -287,12 +287,12 @@ func TestStream_客户端断连_静默退出(t *testing.T) {
 	buf := make([]byte, 128)
 	_, _ = resp.Body.Read(buf)
 	cancel()
-	_, _ = io.ReadAll(resp.Body) // 消费到连接关闭,不给 server 留悬挂写
+	_, _ = io.ReadAll(resp.Body) // 消费到连接关闭，不给 server 留悬挂写
 	_ = resp.Body.Close()
-	// 若 proxy 未正确传导 cancel,此处会因上游 500ms 剧本悬挂;超时即失败(由外层 10s 超时兜底)
+	// 若 proxy 未正确传导 cancel，此处会因上游 500ms 剧本悬挂，超时即失败，由外层 10s 超时兜底。
 }
 
-// defTimeouts 常规测试超时(足够大,不触发)。
+// defTimeouts 常规测试超时，足够大不触发。
 func defTimeouts() Timeouts {
 	return Timeouts{Dial: 5 * time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second}
 }

@@ -1,4 +1,4 @@
-// 总览:按日用量/成本图表 + 语义缓存统计(首屏图表,semantic-cache.md「计量与可观测」)。
+// 总览展示按日用量、成本和语义缓存统计。
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, type CacheStats, type UsagePoint } from "../lib/api";
@@ -14,7 +14,7 @@ export default function Overview() {
   const [points, setPoints] = useState<UsagePoint[]>([]);
   const [stats, setStats] = useState<CacheStats | null>(null);
   const [err, setErr] = useState("");
-  // 加载中 ≠ 空数据:无 loaded 标志会在请求在途时闪现「暂无数据」假事实
+  // 加载期间与零数据状态分开显示。
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -31,7 +31,6 @@ export default function Overview() {
 
   if (err) return <ErrorAlert text={`错误:${err}`} />;
   return (
-    // 页面顶层块间距全站一档 space-y-4(与表格/卡片密度档一致,宪法 Article 2)
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
@@ -39,7 +38,7 @@ export default function Overview() {
           value={stats?.enabled ? formatNumber(stats.entries) : "未启用"}
         />
         <StatCard label="缓存累计命中" value={stats?.enabled ? formatNumber(stats.hits) : "—"} />
-        {/* 相似度阈值是 0~1 小数(如 0.97),非数量,不走千分位 */}
+        {/* 相似度阈值是 0 到 1 的小数，不按数量格式化。 */}
         <StatCard label="缓存相似度阈值" value={stats?.enabled ? String(stats.threshold) : "—"} />
       </div>
       <Card>
@@ -48,8 +47,7 @@ export default function Overview() {
           <CardDescription>请求数与成本;成本 1 credit = 十亿分之一本币</CardDescription>
         </CardHeader>
         <CardContent>
-          {/* 空数据态:零数据时 recharts 连坐标轴都不渲染,只剩无解释空白——禁静默空白;
-              文案只说用户事实,不暴露存储/汇形态等实现细节 */}
+          {/* 空数据时图表不显示坐标轴，使用明确的空状态提示。 */}
           {!loaded ? (
             <Skeleton className="h-48 w-full sm:h-64" />
           ) : points.length === 0 ? (
@@ -72,8 +70,7 @@ export default function Overview() {
                   <Tooltip
                     cursor={{ fill: "var(--color-accent)" }}
                     formatter={(v, name) =>
-                      // 请求数是次数不是 credit,不得套 credit 缩写;成本(credit)走大数缩写;
-                      // 千分位走 datetime 单源(锁 zh-CN 分组,禁裸 toLocaleString 漂移 locale)
+                      // 请求数使用千分位；成本使用 credit 缩写。
                       name === "请求数" ? formatNumber(Number(v)) : fmtCredits(Number(v))
                     }
                     contentStyle={{

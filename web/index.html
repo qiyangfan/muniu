@@ -6,8 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>muniu 控制台</title>
     <script>
-      // 防 FOUC:首帧前按「localStorage 手动值 → 系统偏好 → 亮色」挂 .dark,
-      // 契约同 src/lib/theme.ts(key muniu-theme 与优先级钉死,双侧注释互指,改动必须同步)
+      // 首帧按 localStorage、系统偏好、亮色的顺序确定主题；与 src/lib/theme.ts 保持一致。
       (function () {
         try {
           var t = localStorage.getItem("muniu-theme");

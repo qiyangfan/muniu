@@ -1,4 +1,4 @@
-// store 管理侧扩展测试:租户 CRUD/校验、usage 四维聚合(含语义缓存命中与 estimated 剔除)。
+// store 管理侧扩展测试：租户 CRUD 与校验、usage 四维聚合，含语义缓存命中与 estimated 剔除。
 package store
 
 import (
@@ -9,7 +9,7 @@ import (
 	"uuid"
 )
 
-// sqlDB 标准库连接别名(测试内直用)。
+// sqlDB 标准库连接别名，测试内直用。
 type sqlDB = sql.DB
 
 // adminDBHandle 便于测试内传递连接的别名。
@@ -64,7 +64,7 @@ func TestTenant_CRUD(t *testing.T) {
 	if !found {
 		t.Fatal("列表未含新租户")
 	}
-	// default 种子恒在
+	// default 种子恒在。
 	hasDefault := false
 	for _, tn := range tenants {
 		if tn.Name == "default" {
@@ -95,7 +95,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 	db := openAdminDB(t)
 	now := time.Now().UTC()
 
-	// 三行:普通成功 / 语义缓存命中 / estimated 行(不计成本)
+	// 三行：普通成功、语义缓存命中、estimated 行，其中 estimated 行不计成本。
 	rows := []UsageRow{
 		{ID: uuid.NewV7().String(), RequestID: "r1", TenantID: "t1", APIKeyID: "k1",
 			Provider: "deepseek", ModelAlias: "m1", UpstreamModel: "u", Status: "ok",
@@ -116,7 +116,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 	from := now.Add(-time.Minute).Format(time.RFC3339)
 	to := now.Add(time.Minute).Format(time.RFC3339)
 
-	// 按 provider:deepseek 成本只计 500(estimated 999 剔除);semantic-cache 命中 1 次
+	// 按 provider 聚合：deepseek 成本只计 500，estimated 999 剔除；semantic-cache 命中 1 次。
 	pts, err := UsageAggregate(db, DimProvider, from, to, "", "")
 	if err != nil {
 		t.Fatal(err)

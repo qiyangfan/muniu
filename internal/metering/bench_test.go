@@ -1,4 +1,4 @@
-// 计价基准(phase-2 T2.10):单请求成本换算开销(纯整数运算)。
+// BenchmarkCost 测量单次请求的成本换算开销。
 package metering
 
 import "testing"

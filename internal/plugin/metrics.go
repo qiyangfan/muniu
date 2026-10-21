@@ -1,4 +1,4 @@
-// per-plugin 指标(5.2,ADR-0009 零依赖直写;未启用时全部零开销短路)。
+// per-plugin 指标，零依赖直写；未启用时全部零开销短路。
 package plugin
 
 import "github.com/solvela/muniu/internal/metrics"

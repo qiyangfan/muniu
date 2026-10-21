@@ -1,10 +1,10 @@
-// keys 管理子命令(单二进制形态,Phase 4 才有管理 API):
+// keys 管理子命令用于签发、查询和吊销 API key。
 //
 //	muniu keys create --tenant default --name kongming [--rpm 120]   # 明文仅此一次展示
 //	muniu keys list
 //	muniu keys revoke <prefix>
 //
-// 数据库路径取自配置(与网关同一 store)。
+// 数据库路径取自配置，与网关同一 store。
 package main
 
 import (
@@ -21,7 +21,7 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
-// keysMain keys 子命令入口;返回进程退出码。cfg 由调用方加载(与网关共享配置定位)。
+// keysMain keys 子命令入口，返回进程退出码；cfg 由调用方加载，与网关共享配置定位。
 func keysMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, keysUsage)
@@ -59,8 +59,8 @@ const keysUsage = `用法:
   muniu keys enable <prefix>
 `
 
-// keysCreate 签发:明文只打印一次,stderr 同时给出警示。
-// 限额与过期字段暴露存储层既有能力(tpm/日配额列本就生效于限流与配额闸;过期迁移 0006)。
+// keysCreate 签发 key，明文只打印一次并在 stderr 给出警示。
+// 限额与过期字段暴露存储层既有能力，tpm 与日配额列本就生效于限流与配额闸。
 func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("create", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -85,7 +85,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 		for i := range parts {
 			parts[i] = strings.TrimSpace(parts[i])
 		}
-		opts.AllowedModels = parts // 空白条目的整单拒绝在 auth 归一化(报错退出非零)
+		opts.AllowedModels = parts // 空白条目的整单拒绝在 auth 归一化，出错即非零退出
 	}
 	if *expires != "" {
 		t, err := time.Parse(time.RFC3339, *expires)
@@ -114,9 +114,9 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// truncateDisplayBytes 按字节预算截断展示串,rune 边界安全(多字节字符不拦腰切断):
-// 超预算时保留预算内完整 rune 前缀并以省略号收尾,总宽不超 maxBytes。
-// 展示列宽以字节计(%-18s 与 CJK 宽度仅近似,终端对齐为尽力语义)。
+// truncateDisplayBytes 按字节预算截断展示串，rune 边界安全，多字节字符不拦腰切断：
+// 超预算时保留预算内完整 rune 前缀并以省略号收尾，总宽不超 maxBytes。
+// 展示列宽以字节计，%-18s 对 CJK 宽度仅近似，终端对齐为尽力语义。
 func truncateDisplayBytes(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
@@ -134,7 +134,7 @@ func truncateDisplayBytes(s string, maxBytes int) string {
 	return out + ellipsis
 }
 
-// keysList 列出全部 key(不含任何明文/哈希)。
+// keysList 列出全部 key，不含任何明文与哈希。
 func keysList(db *sql.DB, stdout, stderr io.Writer) int {
 	keys, err := auth.ListKeys(db)
 	if err != nil {
@@ -175,14 +175,14 @@ func keysRevoke(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintf(stdout, "未找到 active 状态的 prefix %s(可能已吊销或不存在)\n", args[0])
 		return 1
 	}
-	// CLI 与网关是两个进程,无法直清网关的鉴权缓存:如实说明收敛时长,不承诺「立即失效」
+	// CLI 与网关是两个进程，无法直清网关的鉴权缓存，故如实说明收敛时长而不承诺立即失效。
 	_, _ = fmt.Fprintf(stdout, "已吊销 %d 把 key(prefix=%s);运行中网关的鉴权缓存至多 %s 内收敛。\n",
 		n, args[0], (10 * time.Second).String())
 	return 0
 }
 
-// keysToggle 启停 key(可逆禁用):按 prefix 定位后 PATCH disabled_at 列。
-// CLI 与网关是两个进程,无法直清网关的鉴权缓存:如实说明收敛时长(revoke 同款文案纪律)。
+// keysToggle 可逆启停 key：按 prefix 定位后 PATCH disabled_at 列。
+// CLI 与网关是两个进程，无法直清网关的鉴权缓存，故如实说明收敛时长。
 func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Writer) int {
 	verb := "enable"
 	if disable {
@@ -227,25 +227,24 @@ func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Write
 	return 0
 }
 
-// keysSubArgs 判定是否为 keys 子命令调用,并返回 keys 之后的参数
-// (容忍 -c <path> 出现在子命令前的任意位置;非 keys 调用返回 false)。
+// keysSubArgs 判定是否为 keys 子命令调用并返回其后参数，
+// 容忍 -c <path> 出现在子命令前的任意位置。
 func keysSubArgs(args []string) ([]string, bool) {
 	for i := 1; i < len(args); i++ {
 		switch {
 		case args[i] == "-c":
-			i++ // 跳过其参数值
+			i++
 		case args[i] == "keys":
 			return args[i+1:], true
 		case strings.HasPrefix(args[i], "-"):
-			// 其他全局 flag:继续扫
 		default:
-			return nil, false // 首个位置参数即子命令,不是 keys
+			return nil, false
 		}
 	}
 	return nil, false
 }
 
-// runKeys 加载配置并执行 keys 子命令(进程退出码语义)。
+// runKeys 加载配置并执行 keys 子命令，返回进程退出码。
 func runKeys(flagConf string, args []string) int {
 	cfg, err := config.Load(flagConf)
 	if err != nil {

@@ -1,6 +1,6 @@
-// Package metrics 零依赖 Prometheus 文本协议直写(ADR-0009):
-// stdlib 实现 counter/gauge/histogram,不引 client 依赖树;采集全部原子操作,不阻塞请求路径。
-// 未启用(SetEnabled(false))时仪表不计数、渲染输出空,调用方零开销短路。
+// Package metrics 零依赖 Prometheus 文本协议直写：
+// stdlib 实现 counter/gauge/histogram，不引 client 依赖树；采集全部原子操作，不阻塞请求路径。
+// 未启用(SetEnabled(false))时仪表不计数、渲染输出空，调用方零开销短路。
 package metrics
 
 import (
@@ -16,13 +16,13 @@ import (
 
 var enabled atomic.Bool
 
-// SetEnabled 全局开关(装配期一次性设定)。
+// SetEnabled 全局开关，装配期一次性设定。
 func SetEnabled(v bool) { enabled.Store(v) }
 
-// Enabled 开关状态(调用方据此短路插桩)。
+// Enabled 开关状态，调用方据此短路插桩。
 func Enabled() bool { return enabled.Load() }
 
-// Sample 单个时间序列样本(标签为有序 KV)。
+// Sample 单个时间序列样本，标签为有序 KV。
 type Sample struct {
 	Labels [][2]string
 	Value  float64
@@ -58,7 +58,7 @@ func RenderTo(w io.Writer) {
 		b.WriteString("# HELP " + name + " " + help + "\n")
 		b.WriteString("# TYPE " + name + " " + typ + "\n")
 		if h, ok := c.(*Histogram); ok {
-			h.writeTo(&b, name) // histogram 序列带 _bucket/_sum/_count 后缀,单独直写
+			h.writeTo(&b, name) // histogram 序列带 _bucket/_sum/_count 后缀，单独直写。
 			_, _ = io.WriteString(w, b.String())
 			continue
 		}
@@ -82,7 +82,7 @@ func RenderTo(w io.Writer) {
 	}
 }
 
-// CounterVec 带 label 的计数器(动态标签值;禁用时不计数)。
+// CounterVec 带 label 的计数器，动态标签值；禁用时不计数。
 type CounterVec struct {
 	name, help string
 	labels     []string
@@ -103,10 +103,10 @@ func NewCounterVec(name, help string, labelNames ...string) *CounterVec {
 	return c
 }
 
-// Inc 计数 +1(禁用时零开销)。
+// Inc 计数 +1，禁用时零开销。
 func (c *CounterVec) Inc(labels ...string) { c.Add(1, labels...) }
 
-// Add 计数 +n(禁用时零开销)。
+// Add 计数 +n，禁用时零开销。
 func (c *CounterVec) Add(n int64, labels ...string) {
 	if !Enabled() {
 		return
@@ -140,7 +140,7 @@ func (c *CounterVec) Collect() []Sample {
 	return out
 }
 
-// GaugeFunc 函数型仪表(抓取时回调取值;用于水位/状态计数等派生值)。
+// GaugeFunc 函数型仪表，抓取时回调取值，用于水位/状态计数等派生值。
 type GaugeFunc struct {
 	name, help string
 	fn         func() []Sample
@@ -156,7 +156,7 @@ func NewGaugeFunc(name, help string, fn func() []Sample) *GaugeFunc {
 // Meta 实现 Collector。
 func (g *GaugeFunc) Meta() (string, string, string) { return g.name, g.help, "gauge" }
 
-// Collect 实现 Collector(禁用时返回空,渲染输出空)。
+// Collect 实现 Collector；禁用时返回空，渲染输出空。
 func (g *GaugeFunc) Collect() []Sample {
 	if !Enabled() {
 		return nil
@@ -164,7 +164,7 @@ func (g *GaugeFunc) Collect() []Sample {
 	return g.fn()
 }
 
-// Histogram 直方图(预定义桶;累计计数与总和)。
+// Histogram 直方图，预定义桶，累计计数与总和。
 type Histogram struct {
 	name, help string
 	bounds     []float64
@@ -177,7 +177,7 @@ type Histogram struct {
 // DefBuckets 请求延迟常用桶(ms)。
 var DefBuckets = []float64{5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000}
 
-// NewHistogram 构造并注册(桶必须严格升序且 ≤ +Inf;+Inf 序列由渲染层以 count 合成)。
+// NewHistogram 构造并注册；桶必须严格升序且 ≤ +Inf，+Inf 序列由渲染层以 count 合成。
 func NewHistogram(name, help string, buckets []float64) *Histogram {
 	for i := 1; i < len(buckets); i++ {
 		if buckets[i] <= buckets[i-1] {
@@ -190,7 +190,7 @@ func NewHistogram(name, help string, buckets []float64) *Histogram {
 	return h
 }
 
-// Observe 观测一个值(禁用时零开销)。
+// Observe 观测一个值，禁用时零开销。
 func (h *Histogram) Observe(v float64) {
 	if !Enabled() {
 		return
@@ -213,10 +213,10 @@ func (h *Histogram) Observe(v float64) {
 // Meta 实现 Collector。
 func (h *Histogram) Meta() (string, string, string) { return h.name, h.help, "histogram" }
 
-// Collect 实现 Collector(histogram 渲染经 RenderTo 类型分派走 writeTo,此方法不消费)。
+// Collect 实现 Collector；histogram 渲染经 RenderTo 类型分派走 writeTo，此方法不消费。
 func (h *Histogram) Collect() []Sample { return nil }
 
-// writeTo 输出 _bucket(含 +Inf)/_sum/_count 序列。
+// writeTo 输出 _bucket 含 +Inf 与 _sum/_count 序列。
 func (h *Histogram) writeTo(b *strings.Builder, name string) {
 	cum := 0.0
 	for i, bound := range h.bounds {
@@ -243,7 +243,7 @@ func escapeLabel(v string) string {
 	return r.Replace(v)
 }
 
-// formatFloat 整数值不带小数点,其余走 strconv(合法 Prometheus 浮点)。
+// formatFloat 整数值不带小数点，其余走 strconv 输出合法 Prometheus 浮点。
 func formatFloat(v float64) string {
 	if v == math.Trunc(v) && math.Abs(v) < 1e15 {
 		return strconv.FormatInt(int64(v), 10)

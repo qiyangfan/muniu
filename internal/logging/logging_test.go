@@ -21,7 +21,7 @@ func TestNew_级别过滤(t *testing.T) {
 }
 
 func TestNew_format选择(t *testing.T) {
-	// json 输出可回读为 JSON;text 输出为 key=value 形态
+	// json 输出可回读为 JSON；text 输出为 key=value 形态
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 	logger.Info("x", "request_id", "01J")

@@ -1,6 +1,5 @@
-// 语义缓存直通双存测试(protocol-native-passthrough;测试先行域):
-// 直通成功入库为双存(canonical 跨协议命中 / 原生体+标签+表单同构命中)、同构命中原生
-// 恒等回放、表单不兼容/跨协议回退 canonical、翻译失格与状态请求零检索零入库。
+// 语义缓存直通双存行为：直通成功入库为双存，canonical 可跨协议命中、原生体+标签+表单可同构命中；
+// 同构命中原生恒等回放，表单不兼容或跨协议回退 canonical，翻译失格与状态请求零检索零入库。
 package proxy
 
 import (
@@ -26,14 +25,14 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// tenantRequest 携带租户身份的测试请求(缓存租户归属从 ctx 取,与生产同缝)。
+// tenantRequest 携带租户身份的测试请求，缓存租户归属从 ctx 取，与生产一致。
 func tenantRequest(t *testing.T, target string) *http.Request {
 	t.Helper()
 	return httptest.NewRequest("POST", target, nil).WithContext(
 		auth.WithKeyInfo(context.Background(), &auth.KeyInfo{ID: "k1", TenantID: testTenant}))
 }
 
-// newTestDB 测试用 SQLite(迁移 0008 直通双存列齐备)。
+// newTestDB 测试用 SQLite，schema 含直通双存列。
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := store.Open(t.TempDir() + "/native-cache.db")
@@ -64,8 +63,8 @@ func newCacheProxy(t *testing.T) *Proxy {
 	return p
 }
 
-// TestNativeCache_双存入库与同构命中 直通(messages×anthropic)成功入库:canonical 可被
-// 等价 chat 请求命中(跨协议互通);原生体+标签+表单可被同构请求命中。
+// TestNativeCache_双存入库与同构命中 验证 messages 直通成功后 canonical 可被等价 chat
+// 请求跨协议命中，原生体、标签与表单可被同构请求命中。
 func TestNativeCache_双存入库与同构命中(t *testing.T) {
 	p := newCacheProxy(t)
 	r := tenantRequest(t, "/v1/messages")
@@ -75,18 +74,18 @@ func TestNativeCache_双存入库与同构命中(t *testing.T) {
 	if ph == nil {
 		t.Fatal("应有 miss phase")
 	}
-	// 直通双存:canonical chat 形态 + anthropic 原生体(stream 表单)
+	// 直通双存：canonical chat 形态加 anthropic 原生体，stream 表单。
 	nativeBody := []byte(`data: {"type":"message_start"}` + "\n\n" + `data: {"type":"message_stop"}` + "\n\n")
 	canonical := []byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
 	m := &meterState{nativePath: true, stream: true, outBody: nativeBody, canonicalBody: canonical}
 	p.storePhase(r, ph, req, failover.Candidate{Provider: "anth"}, m, &inboundNative{proto: protocol.InboundMessages})
 
-	// 跨协议:等价 chat 请求(nat=nil)命中 canonical 侧
+	// 跨协议：等价 chat 请求(nat=nil)命中 canonical 侧。
 	res, _ := p.lookupCacheFor(testTenant, r, req)
 	if res == nil || len(res.Response) == 0 {
 		t.Fatal("等价 chat 请求应命中 canonical 侧")
 	}
-	// 同构:messages 请求命中且原生体+标签+表单齐备
+	// 同构：messages 请求命中且原生体、标签、表单齐备。
 	res2, _ := p.lookupCacheFor(testTenant, r, req)
 	if res2 == nil || res2.NativeProto != "messages" || res2.NativeForm != cacheFormStream || len(res2.NativeResponse) == 0 {
 		t.Fatalf("同构请求应命中原生侧: %+v", res2)
@@ -96,7 +95,7 @@ func TestNativeCache_双存入库与同构命中(t *testing.T) {
 	}
 }
 
-// TestNativeCache_回放择优 同构命中且表单兼容 → 原生恒等回放;表单不兼容/跨协议 → canonical。
+// TestNativeCache_回放择优 同构命中且表单兼容时原生恒等回放，表单不兼容或跨协议回退 canonical。
 func TestNativeCache_回放择优(t *testing.T) {
 	p := newCacheProxy(t)
 	native := []byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":21}}}` + "\n\n")
@@ -138,17 +137,17 @@ func TestNativeCache_回放择优(t *testing.T) {
 	})
 }
 
-// TestNativeCache_失格与状态请求旁路 翻译失格与状态请求零检索零入库(缓存覆盖的自然边界)。
+// TestNativeCache_失格与状态请求旁路 验证翻译失格与状态请求零检索零入库，属缓存覆盖的自然边界。
 func TestNativeCache_失格与状态请求旁路(t *testing.T) {
 	p := newCacheProxy(t)
 	r := tenantRequest(t, "/v1/responses")
 
-	// 状态请求:handleChat 分支跳过 lookupCache——此处钉 storePhase 侧与旁路判据的单元语义:
-	// 失格 native 入库仍可(canonical 缺失降级),但 stateful 请求根本不会拿到 phase(集成钉子覆盖)。
+	// 状态请求跳过缓存检索；这里验证检索和存储阶段各自的准入条件。
+	// 不符合 canonical 条件的请求仍可写入原生响应，但无法跨协议命中。
 	temp := 0.1
 	req := &protocol.ChatRequest{Model: "alias-a", Messages: msgOf(`[{"role":"user","content":"hi"}]`), Temperature: &temp}
 	_, ph := p.lookupCacheFor(testTenant, r, req)
-	// 失格直通成功:canonical 缺失 → 仅原生侧入库(canonical 为 nil,降级为跨协议不可命中)
+	// 失格直通成功：canonical 缺失，仅原生侧入库，降级为跨协议不可命中。
 	m := &meterState{nativePath: true, stream: false, outBody: []byte(`{"id":"msg_1","type":"message","usage":{"input_tokens":1}}`)}
 	p.storePhase(r, ph, req, failover.Candidate{Provider: "anth"}, m, &inboundNative{proto: protocol.InboundMessages, ineligCode: protocol.CodeContentBlockUnsupported})
 	res, _ := p.lookupCacheFor(testTenant, r, req)
@@ -156,7 +155,7 @@ func TestNativeCache_失格与状态请求旁路(t *testing.T) {
 		t.Fatal("原生侧应入库可命中")
 	}
 	if len(res.Response) == 0 {
-		// canonical 缺失条目:跨协议(chat)视角不可回放——旁路判据语义正确
+		// canonical 缺失条目从跨协议视角不可回放，旁路判据语义正确。
 		t.Log("canonical 缺失:仅原生侧可命中(预期降级形态)")
 	}
 }
@@ -174,10 +173,7 @@ func TestNativeFormCompatible(t *testing.T) {
 	}
 }
 
-// TestNativeCache_直通流式入库与原生回放 spec「同构命中原生回放」全链钉子:
-// 流式直通成功经 attemptNativeStream 回填双存(原生 SSE 字节累计 + canonical 拼包),
-// 同构第二次请求零上游触达、逐字节恒等回放。(回归钉:修复前流式出口不回填
-// outBody/canonicalBody,storePhase 早退,spec 流式场景永不成立。)
+// TestNativeCache_直通流式入库与原生回放 验证流式响应可双存并逐字节回放。
 func TestNativeCache_直通流式入库与原生回放(t *testing.T) {
 	up := testkit.StartStreamUpstream(t, anthropicStreamEvents())
 	reg := adapter.NewRegistry()
@@ -203,7 +199,7 @@ func TestNativeCache_直通流式入库与原生回放(t *testing.T) {
 		RandIntn: func(n int) int { return 0 },
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	// 鉴权中间件替身:缓存租户归属从 ctx 取(生产由 verifier 注入,测试直注同缝形态)
+	// 鉴权中间件替身：缓存租户归属从 ctx 取，生产由 verifier 注入，测试直注等价形态。
 	authed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p.HandlerMessages().ServeHTTP(w, r.WithContext(
 			auth.WithKeyInfo(r.Context(), &auth.KeyInfo{ID: "k1", TenantID: testTenant})))
@@ -224,7 +220,7 @@ func TestNativeCache_直通流式入库与原生回放(t *testing.T) {
 		t.Fatalf("首次应触达上游恰好一次: %d", n)
 	}
 
-	// 同构第二次请求:命中原生侧,零上游触达,逐字节恒等回放
+	// 同构第二次请求：命中原生侧，零上游触达，逐字节恒等回放。
 	resp2, body2 := postChat(t, ts.URL, raw)
 	if resp2.StatusCode != 200 {
 		t.Fatalf("命中回放应 200: %d %s", resp2.StatusCode, body2)

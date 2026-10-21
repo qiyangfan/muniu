@@ -1,7 +1,5 @@
-// 计量落库链(metering.md「异步落库」契约):请求 goroutine → channel(cap 4096) →
-// flusher 单 goroutine(500ms 或攒满 256 条 → 汇批量写入)。
-// 背压优先于丢单:channel 满阻塞请求路径并告警,绝不 drop;优雅退出排干存量。
-// 汇可插拔(ADR-0007):本地 SQLite(standalone 默认)/控制面 ingest(失败整批落本地缓冲,恢复按序续传)。
+// Package metering 异步写入用量；队列满时阻塞请求，关闭时排空队列。
+// 用量可写入本地 SQLite 或远端汇；远端失败时整批暂存到本地。
 package metering
 
 import (
@@ -14,23 +12,23 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
-// UsageRow 落库行 = store.UsageRow(单一事实源,别名复用不做二次定义)。
+// UsageRow 落库行，别名复用 store.UsageRow，不做二次定义。
 type UsageRow = store.UsageRow
 
-// Options 管道参数;零值取契约默认(4096/500ms/256)。
-// Remote 为 nil = 纯本地汇(standalone 默认,行为与历史版本等价);
-// Remote 非 nil 时 Buffer 必须非 nil(投递失败整批落本地缓冲,恢复按序续传——ADR-0007)。
+// Options 管道参数，零值取默认 4096/500ms/256。
+// Remote 为 nil 时仅写入本地汇；
+// Remote 非 nil 时 Buffer 必须非 nil，投递失败整批落本地缓冲、恢复后按序续传。
 type Options struct {
 	Capacity int           // channel 容量
 	Interval time.Duration // 定时刷盘间隔
 	Batch    int           // 攒满即刷阈值
-	Remote   Sink          // 远端汇;nil = 纯本地
-	Buffer   BufferStore   // 本地缓冲(Remote 非 nil 时必须)
-	// OnSinkDown 远端汇投递失败落缓冲时的告警回调(webhook-alerting;可空)。
+	Remote   Sink          // 远端汇，nil 表示纯本地。
+	Buffer   BufferStore   // 本地缓冲，Remote 非 nil 时必须。
+	// OnSinkDown 远端汇投递失败落缓冲时的告警回调，可空。
 	OnSinkDown func(sink string, rows int)
 }
 
-// Pipeline 计量异步落库管道(进程内单例,由装配层持有)。
+// Pipeline 计量异步落库管道，进程内单例，由装配层持有。
 type Pipeline struct {
 	opts   Options
 	logger *slog.Logger
@@ -39,7 +37,7 @@ type Pipeline struct {
 	buffer BufferStore
 
 	ch     chan UsageRow
-	mu     sync.RWMutex // RLock=在途提交;Lock=关闭前排他等待(保证 close 无并发提交)
+	mu     sync.RWMutex // RLock 在途提交；Lock 关闭前排他等待，保证 close 无并发提交。
 	closed bool
 	done   chan struct{} // flusher 退出信号
 }
@@ -59,7 +57,7 @@ func NewPipeline(db *sql.DB, opts Options, logger *slog.Logger) *Pipeline {
 		logger = slog.Default()
 	}
 	if opts.Remote != nil && opts.Buffer == nil {
-		// 装配层应保证;此处防呆降级为本地汇并显式告警(绝不因配置错而丢计量)
+		// 装配层应保证；此处防呆降级为本地汇并显式告警，绝不因配置错而丢计量。
 		logger.Error("计量远端汇缺少本地缓冲,降级为本地汇")
 		opts.Remote = nil
 	}
@@ -76,11 +74,12 @@ func NewPipeline(db *sql.DB, opts Options, logger *slog.Logger) *Pipeline {
 	return p
 }
 
-// InFlight 管道在途水位(观测用,与 metrics 开关无关)。
+// InFlight 管道在途水位，观测用，与 metrics 开关无关。
 func (p *Pipeline) InFlight() int { return len(p.ch) }
 
-// Submit 投递一行计量(每请求一行,含失败请求)。
-// channel 满:阻塞请求路径(计量行是钱)并先告警暴露背压;管道已关闭则丢弃并告警,绝不 panic。
+// Submit 投递一行计量，每请求一行，含失败请求。
+// channel 满时阻塞请求路径并先告警暴露背压，计量行是钱不能丢；
+// 管道已关闭则丢弃并告警，绝不 panic。
 func (p *Pipeline) Submit(row UsageRow) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -92,12 +91,12 @@ func (p *Pipeline) Submit(row UsageRow) {
 	case p.ch <- row:
 	default:
 		p.logger.Warn("计量管道背压,请求路径阻塞等待落库", "request_id", row.RequestID, "capacity", p.opts.Capacity)
-		p.ch <- row // 持 RLock 阻塞:与 Close 的排他锁互斥,保证不会向已关闭 channel 发送
+		p.ch <- row // 持 RLock 阻塞：与 Close 的排他锁互斥，保证不会向已关闭 channel 发送。
 	}
 }
 
-// Close 优雅关闭:等待在途提交全部入队 → 关闭入口 → 排干存量并落库 → 返回。
-// 阻塞中的 Submit 会因 flusher 持续消费而完成,不会丢单。
+// Close 优雅关闭：等待在途提交全部入队 → 关闭入口 → 排干存量并落库 → 返回。
+// 阻塞中的 Submit 会因 flusher 持续消费而完成，不会丢单。
 func (p *Pipeline) Close() error {
 	p.mu.Lock()
 	if p.closed {
@@ -111,8 +110,8 @@ func (p *Pipeline) Close() error {
 	return nil
 }
 
-// flushLoop 单 goroutine 消费:攒满 Batch 即刷,或到 Interval 定时刷;
-// channel 关闭后排干剩余再退出(metering.md 背压与排干契约)。
+// flushLoop 单 goroutine 消费：攒满 Batch 即刷，或到 Interval 定时刷；
+// channel 关闭后排干剩余再退出。
 func (p *Pipeline) flushLoop() {
 	defer close(p.done)
 	ticker := time.NewTicker(p.opts.Interval)
@@ -140,18 +139,17 @@ func (p *Pipeline) flushLoop() {
 		case <-ticker.C:
 			flush()
 			if p.remote != nil {
-				p.replay() // 独立于新流量:定时排空历史缓冲(ADR-0007 恢复续传)
+				p.replay() // 定时排空待续传缓冲。
 			}
 		}
 	}
 }
 
-// writeOut 单批出站:无远端汇直接本地落库(现状等价);有远端汇先投远端,
-// 失败整批落本地缓冲(计量行绝不丢),成功后尝试排空历史缓冲。
+// writeOut 无远端汇时写入本地；远端失败时暂存整批，成功时按序续传缓冲。
 func (p *Pipeline) writeOut(batch []UsageRow) {
 	if p.remote == nil {
 		if err := p.local.Write(batch); err != nil {
-			// 本地落库失败如实记日志:行已从管道取出,无法回投;SQLite 单文件+OR IGNORE 下失败罕见
+			// 本地落库失败如实记日志：行已从管道取出无法回投；SQLite 单文件+OR IGNORE 下失败罕见。
 			p.logger.Error("计量批量落库失败", "rows", len(batch), "error_detail", err.Error())
 		}
 		return
@@ -165,12 +163,12 @@ func (p *Pipeline) writeOut(batch []UsageRow) {
 		p.saveBuffered(batch)
 		return
 	}
-	p.replay() // 远端恢复:排空历史缓冲
+	p.replay() // 远端恢复，排空历史缓冲。
 }
 
-// saveBuffered 落缓冲;容量满时阻塞重试(停止消费 channel,背压沿管道传导至请求路径)。
-// 每轮重试前先 best-effort 排空缓冲:远端已恢复时释放空间,死锁不可能成立(ADR-0007 恢复续传)。
-// 非容量类错误(磁盘故障等)同样无限重试——「计量行绝不丢」优先于可用性,文案如实区分。
+// saveBuffered 落缓冲；容量满时阻塞重试，停止消费 channel，背压沿管道传导至请求路径。
+// 每轮重试前先 best-effort 排空缓冲，远端已恢复时释放空间，死锁不可能成立。
+// 非容量类错误如磁盘故障同样无限重试——计量行绝不丢优先于可用性，文案如实区分。
 func (p *Pipeline) saveBuffered(batch []UsageRow) {
 	for {
 		if p.remote != nil {
@@ -189,7 +187,7 @@ func (p *Pipeline) saveBuffered(batch []UsageRow) {
 	}
 }
 
-// replay 按序续传缓冲(只读→投递→成功才删除;崩溃窗口由远端按 row_id 幂等去重兜底)。
+// replay 按序续传缓冲：只读 → 投递 → 成功才删除；崩溃窗口由远端按 row_id 幂等去重兜底。
 func (p *Pipeline) replay() {
 	for {
 		items, skipped, err := p.buffer.Pending(p.opts.Batch)

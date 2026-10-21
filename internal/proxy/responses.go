@@ -1,9 +1,9 @@
-// Responses 入站 handler(responses-api-inbound,ADR-0012;直通扩展 protocol-native-passthrough):
-// POST /v1/responses 边缘翻译为规范 chat 请求后委托既有管道;非流式响应整体改写为
-// Responses 对象,流式经 SSE 编码器映射为最小事件集(翻译路径)。直通:候选声明
-// native_responses 时出站用客户端原始字节(writer 直通模式恒等透传),input_image 等
-// 部件原生支持;有状态请求(previous_response_id)走粘性路由(affinity.go)。
-// 翻译失败(危险字段)在进入管道前 fail-fast;失格在无直通候选别名上即时 400。
+// Responses 入站 handler：
+// POST /v1/responses 边缘翻译为规范 chat 请求后委托既有管道；非流式响应整体改写为
+// Responses 对象，流式经 SSE 编码器映射为最小事件集，此为翻译路径。直通：候选声明
+// native_responses 时出站用客户端原始字节，writer 直通模式恒等透传，input_image 等
+// 部件原生支持；有状态请求 previous_response_id 走粘性路由，见 affinity.go。
+// 翻译失败即危险字段在进入管道前 fail-fast；失格在无直通候选别名上即时 400。
 package proxy
 
 import (
@@ -22,7 +22,7 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// HandlerResponses POST /v1/responses(须挂全链:auth → quota → ratelimit → 本 handler → chat 管道)。
+// HandlerResponses POST /v1/responses，须挂全链：auth → quota → ratelimit → 本 handler → chat 管道。
 func (p *Proxy) HandlerResponses() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxInboundBody))
@@ -40,7 +40,7 @@ func (p *Proxy) HandlerResponses() http.Handler {
 			p.writeError(w, r, protocol.TypeBadRequest, "input_invalid", "请求不符合 OpenAI Responses 格式")
 			return
 		}
-		// 惰性拒绝别名级预判:无 native_responses 声明候选的别名维持现状即时 400
+		// 惰性拒绝别名级预判：无 native_responses 声明候选的别名即时 400
 		if res.Ineligible != nil && !p.aliasNative(protocol.InboundResponses, res.Model) {
 			var ue *protocol.ResponsesUnsupportedError
 			code := "input_invalid"
@@ -58,8 +58,8 @@ func (p *Proxy) HandlerResponses() http.Handler {
 				nat.ineligMsg = responsesRejectMessage(ue.Code)
 			}
 		}
-		// canonical chat 字节替换入站体(失格/状态请求无 canonical 或旁路缓存,原始体直通):
-		// 下游(治理 Raw 层/缓存指纹/适配器透传)与等价 chat 完全同构
+		// canonical chat 字节替换入站体，失格与状态请求无 canonical 或旁路缓存，原始体直通：
+		// 治理 Raw 层、缓存指纹、适配器透传等下游与等价 chat 完全同构
 		payload := body
 		if res.Chat != nil {
 			payload = res.Chat.Raw
@@ -82,9 +82,9 @@ func (p *Proxy) HandlerResponses() http.Handler {
 	})
 }
 
-// HandlerResponsesStateless GET /v1/responses/{id}(直通扩展后按亲和分域):
-// 亲和已知 → 代理转发亲和 provider 原样返回(有状态 lane 的状态查询);
-// 亲和未知 → 恒 404 自解释(与既有无状态语义逐字节一致,不因曾经代理过而可查)。
+// HandlerResponsesStateless GET /v1/responses/{id}，按亲和分域：
+// 亲和已知时代理转发亲和 provider 并原样返回，即对服务端状态的查询；
+// 亲和未知恒 404 自解释：代理过不代表之后可查。
 func (p *Proxy) HandlerResponsesStateless() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		respID := r.PathValue("id")
@@ -100,7 +100,7 @@ func (p *Proxy) HandlerResponsesStateless() http.Handler {
 				protocol.TypeNotFound, "response_not_found", "无状态网关不存储 response", logging.RequestIDFrom(r.Context())))
 			return
 		}
-		// 代理转发:取 key(域内可用性)→ NativeFetch GET → 原样透传状态/头/体
+		// 代理转发：取 key 确认域内可用性，经 NativeFetch GET 原样透传状态、头、体
 		snap := p.topo.Load()
 		ad, ok := snap.adapters[provider]
 		if !ok {
@@ -162,7 +162,7 @@ func responsesRejectMessage(code string) string {
 	}
 }
 
-// ---- 非流式:缓冲 → 200 成功体改写为 Responses 对象;错误信封原样透传 ----
+// ---- 非流式：缓冲后 200 成功体改写为 Responses 对象；错误信封原样透传 ----
 
 type responsesNonStreamWriter struct {
 	http.ResponseWriter
@@ -170,7 +170,7 @@ type responsesNonStreamWriter struct {
 	status  int
 	body    bytes.Buffer
 	flushed bool
-	native  bool // 直通模式位:恒等写(升格 400/错误透传/直通响应保真)
+	native  bool // 直通模式位：恒等写，升格 400、错误透传、直通响应保真
 }
 
 func (w *responsesNonStreamWriter) setNativeMode(n bool) {
@@ -192,15 +192,15 @@ func (w *responsesNonStreamWriter) Write(b []byte) (int, error) {
 		w.ResponseWriter.WriteHeader(http.StatusOK)
 	}
 	if w.native || w.status != http.StatusOK {
-		return w.ResponseWriter.Write(b) // 直通恒等写 / 错误信封直写,不缓冲
+		return w.ResponseWriter.Write(b) // 直通恒等写或错误信封直写，不缓冲
 	}
 	return w.body.Write(b)
 }
 
-// flush 委托返回后执行:翻译路径 200 成功体改写为 Responses 对象(直通恒等写无缓冲)。
+// flush 在委托返回后执行：翻译路径 200 成功体改写为 Responses 对象，直通恒等写无缓冲。
 func (w *responsesNonStreamWriter) flush() {
 	if w.native || w.status != http.StatusOK {
-		return // 直通已恒等直写 / 错误信封已在 Write 直写
+		return // 直通已恒等直写，错误信封已在 Write 直写
 	}
 	out := w.body.Bytes()
 	if rewritten, err := protocol.ResponsesObjectFromChat(out, w.respID); err == nil {
@@ -209,20 +209,20 @@ func (w *responsesNonStreamWriter) flush() {
 	_, _ = w.ResponseWriter.Write(out)
 }
 
-// ---- 流式:SSE 帧翻译为 Responses 事件([DONE] → completed;流中错误帧 → failed) ----
+// ---- 流式：SSE 帧翻译为 Responses 事件，[DONE] 转 completed，流中错误帧转 failed ----
 
 type responsesStreamWriter struct {
 	http.ResponseWriter
 	enc      *protocol.ResponsesStreamEncoder
 	created  bool
 	finished bool
-	native   bool   // 直通模式位:恒等透传上游原字节(零事件翻译)
-	tail     []byte // 半帧残留(SSE 以 \n\n 分隔,Write 边界不保证对齐)
+	native   bool   // 直通模式位：恒等透传上游原字节，零事件翻译
+	tail     []byte // 半帧残留：SSE 以 \n\n 分隔，Write 边界不保证对齐
 }
 
 func (w *responsesStreamWriter) setNativeMode(n bool) {
 	if w.created || w.finished {
-		return // 翻译已开闸/已提交:绝不切换形态
+		return // 翻译已开闸或已提交，绝不切换形态
 	}
 	w.native = n
 }
@@ -236,7 +236,7 @@ func (w *responsesStreamWriter) Write(b []byte) (int, error) {
 		return n, err
 	}
 	if w.finished {
-		return len(b), nil // completed 已写出:吞掉后续([DONE] 等)
+		return len(b), nil // completed 已写出，吞掉后续 [DONE] 等
 	}
 	w.tail = append(w.tail, b...)
 	for {
@@ -253,13 +253,13 @@ func (w *responsesStreamWriter) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// feedFrame 处理一帧完整 SSE data:OpenAI chunk → Responses 事件;[DONE] → completed。
+// feedFrame 处理一帧完整 SSE data：OpenAI chunk 转 Responses 事件，[DONE] 转 completed。
 func (w *responsesStreamWriter) feedFrame(line string) error {
 	if line == "" {
 		return nil
 	}
 	if line == "[DONE]" {
-		if !w.created { // 空内容流(无任何内容帧):created 首帧不变式仍须成立
+		if !w.created { // 空内容流无任何内容帧，created 首帧不变式仍须成立
 			w.emit(appendSSE(w.enc.Init()))
 			w.created = true
 		}
@@ -267,7 +267,7 @@ func (w *responsesStreamWriter) feedFrame(line string) error {
 		w.finished = true
 		return nil
 	}
-	// 流中错误帧:诚实失败,不伪造 completed
+	// 流中错误帧：诚实失败，不伪造 completed
 	var probe struct {
 		Error *struct {
 			Message string `json:"message"`
@@ -278,7 +278,7 @@ func (w *responsesStreamWriter) feedFrame(line string) error {
 		if msg == "" {
 			msg = "上游流中断,已生成部分可能不完整"
 		}
-		if !w.created { // 防御对称:错误帧先于任何内容帧时仍保证 created 首帧
+		if !w.created { // 防御对称：错误帧先于任何内容帧时仍保证 created 首帧
 			w.emit(appendSSE(w.enc.Init()))
 			w.created = true
 		}
@@ -296,15 +296,10 @@ func (w *responsesStreamWriter) feedFrame(line string) error {
 	return nil
 }
 
-// finish 委托返回后兜底(域B 审查 high#1):
-// ①管道在流开始前失败(writeError 单行 JSON 信封,无 \n\n 分隔)→ tail 残留即错误信封,
-//
-//	原样冲刷给客户端(状态码已由 WriteHeader 直写,正确);
-//
-// ②流已开始但无 [DONE] 收尾(上游断流)→ response.failed,不伪造 completed。
+// finish 处理上游未正常结束的情况：未开始响应时转发错误信封，流中断时返回 response.failed。
 func (w *responsesStreamWriter) finish() {
 	if w.finished || w.native {
-		return // 直通:上游形态已原样转发,不合成任何事件
+		return // 直通：上游形态已原样转发，不合成任何事件
 	}
 	if !w.created {
 		if len(w.tail) > 0 {
@@ -324,7 +319,7 @@ func (w *responsesStreamWriter) emit(frame []byte) {
 	}
 }
 
-// appendSSE 事件对象 → SSE 帧(data: 前缀 + 空行)。
+// appendSSE 事件对象转 SSE 帧，加 data: 前缀与空行。
 func appendSSE(event []byte) []byte {
 	out := make([]byte, 0, len(event)+8)
 	out = append(out, "data: "...)
@@ -333,14 +328,14 @@ func appendSSE(event []byte) []byte {
 	return out
 }
 
-// Flush 穿透 http.Flusher 探测(trackWriter/逐事件冲刷契约依赖)。
+// Flush 穿透 http.Flusher 探测，trackWriter 与逐事件冲刷契约依赖此方法。
 func (w *responsesStreamWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
-// Flush 穿透(非流式场景无人调用,保持接口完整)。
+// Flush 穿透，非流式场景无人调用，保持接口完整。
 func (w *responsesNonStreamWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()

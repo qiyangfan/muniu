@@ -1,5 +1,4 @@
-// 预设目录契约测试:目录数据是「抄进用户配置就能用」的承诺,必须钉死——
-// 逐条字段自洽 + 整目录过 config.Validate(adapter/base_url/唯一别名)+ 适配器仅限 adapter.For 已实现集合。
+// 验证预设目录可生成有效配置，且仅包含 adapter.For 支持的适配器。
 package presets_test
 
 import (
@@ -14,8 +13,7 @@ import (
 	"github.com/solvela/muniu/internal/presets"
 )
 
-// implementedAdapters 值域单源 adapter.Types()(= adapter.For 可实现集合)。
-// 预设目录只收可实现形态;此处不再第三处手抄清单,漂移由 config 校验测试与本断言各自钉死。
+// 预设目录和配置校验共用 adapter.Types()，避免适配器清单与工厂实现不一致。
 var implementedAdapters = func() map[string]bool {
 	m := make(map[string]bool, len(adapter.Types()))
 	for _, t := range adapter.Types() {
@@ -28,7 +26,7 @@ var validGroups = map[string]bool{
 	presets.GroupDomestic: true, presets.GroupGlobal: true, presets.GroupLocal: true,
 }
 
-// TestCatalog_字段自洽 目录逐条字段契约:唯一别名、合法 URL、https 文档、大写下划线 env、合法分组。
+// TestCatalog_字段自洽 目录逐条字段契约：唯一别名、合法 URL、https 文档、大写下划线 env、合法分组。
 func TestCatalog_字段自洽(t *testing.T) {
 	seenAlias := map[string]bool{}
 	for _, p := range presets.Catalog() {
@@ -75,8 +73,8 @@ func TestCatalog_字段自洽(t *testing.T) {
 	}
 }
 
-// TestCatalog_抄进配置可通过校验 终极承诺:每条预设渲染成 YAML 走真实 config.Load 全链路
-// (yaml tag + 展开 + 校验)必须可用——目录与配置 schema 漂移(如 adapter 改名、base_url 规则收紧)在此立即见红。
+// TestCatalog_抄进配置可通过校验 每条预设渲染成 YAML 后必须通过真实 config.Load 全流程，
+// 即 yaml tag、展开、校验；目录与配置 schema 漂移如 adapter 改名、base_url 规则收紧在此立即见红。
 func TestCatalog_抄进配置可通过校验(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("server:\n  addr: \":0\"\nstorage:\n  sqlite:\n    path: \":memory:\"\nproviders:\n")
@@ -100,7 +98,7 @@ func TestCatalog_抄进配置可通过校验(t *testing.T) {
 	}
 }
 
-// TestCatalog_分组完备 三组各有条目(UI 分组渲染不出现空组);本地运行时必须免密钥占位语义。
+// TestCatalog_分组完备 三组各有条目，UI 分组渲染不出现空组；本地运行时必须免密钥占位语义。
 func TestCatalog_分组完备(t *testing.T) {
 	perGroup := map[string]int{}
 	for _, p := range presets.Catalog() {
@@ -116,7 +114,7 @@ func TestCatalog_分组完备(t *testing.T) {
 	}
 }
 
-// TestCatalog_桥接裸域 anthropic 桥接自己拼 /v1/messages,base_url 若带路径会拼出错误端点——钉死裸域形态。
+// TestCatalog_桥接裸域 验证 Anthropic 预设的 base_url 不以斜杠结尾。
 func TestCatalog_桥接裸域(t *testing.T) {
 	for _, p := range presets.Catalog() {
 		if p.Adapter == "anthropic" && strings.TrimRight(p.BaseURL, "/") != p.BaseURL {
@@ -125,8 +123,8 @@ func TestCatalog_桥接裸域(t *testing.T) {
 	}
 }
 
-// TestCatalog_鉴权声明口径 官方 Anthropic 保持协议缺省 x-api-key(其文档明确 Bearer 仅供 OAuth,
-// 发 API key 形态即 401);国内六家分支按各自官方文档 AUTH_TOKEN(Bearer)口径声明 bearer。
+// TestCatalog_鉴权声明口径 官方 Anthropic 保持协议缺省 x-api-key，其文档明确 Bearer 仅供 OAuth，
+// 发 API key 形态即 401；国内六家分支按各自官方文档 AUTH_TOKEN 的 Bearer 口径声明 bearer。
 func TestCatalog_鉴权声明口径(t *testing.T) {
 	for _, p := range presets.Catalog() {
 		if p.Adapter != "anthropic" {

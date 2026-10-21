@@ -1,5 +1,5 @@
-// protocol 契约测试:入站解析、出站改写(未知字段零丢失)、流式 chunk 首内容判定、
-// 错误信封与状态映射。协议适配属测试先行域:本文件先于实现存在(conventions「测试范式」)。
+// protocol 包测试：入站解析、出站改写的未知字段零丢失、流式 chunk 首内容判定、
+// 错误信封与状态映射。
 package protocol
 
 import (
@@ -42,7 +42,7 @@ func TestRewriteModel_未知字段零丢失(t *testing.T) {
 			if err := json.Unmarshal(out, &got); err != nil {
 				t.Fatalf("改写后 body 解析失败: %v", err)
 			}
-			// 字段集合等价:改写不得增删字段(model 除外)
+			// 字段集合等价：改写不得增删字段，model 除外
 			if len(orig) != len(got) && len(orig)+1 != len(got) {
 				// 允许"原本无 model、改写后新增"一种情形
 				t.Fatalf("字段数不齐: 原始 %d 个, 改写后 %d 个", len(orig), len(got))
@@ -88,7 +88,7 @@ func TestParseChatRequest(t *testing.T) {
 	if req.Temperature == nil || *req.Temperature != 0.3 || req.MaxTokens == nil || *req.MaxTokens != 512 {
 		t.Fatalf("可选指针字段解析不符: %+v %+v", req.Temperature, req.MaxTokens)
 	}
-	// 原始字节必须完整持有(生命周期第 7 步契约:适配层转换基于 Raw)
+	// 原始字节必须完整持有，适配层转换基于 Raw
 	if string(req.Raw) != body {
 		t.Fatalf("Raw 与入站字节不等价")
 	}
@@ -120,7 +120,7 @@ func TestParseChatRequest_非法输入(t *testing.T) {
 }
 
 func TestStreamChunk_首内容判定(t *testing.T) {
-	// 首 token 边界(proxy-and-streaming):role 帧/空 delta/usage 终帧不算实质内容
+	// 首 token 边界：role 帧、空 delta、usage 终帧不算实质内容
 	cases := []struct {
 		name    string
 		data    string
@@ -161,7 +161,7 @@ func TestUsage_统一形态(t *testing.T) {
 }
 
 func TestErrorEnvelope_状态映射(t *testing.T) {
-	// conventions 错误信封:HTTP 状态映射表
+	// 错误信封 HTTP 状态映射表
 	cases := map[string]int{
 		"bad_request":    400,
 		"auth_failed":    401,
@@ -203,8 +203,8 @@ func TestErrorEnvelope_序列化(t *testing.T) {
 	}
 }
 
-// TestRewriteModelInPlace_原位手术 直通保真原语:仅 model 值字节变化,
-// 键序/空白/未知字段逐字节保留(RewriteModel 的 map 往返会重排键序,不适用直通)。
+// TestRewriteModelInPlace_原位手术 直通保真原语：仅 model 值字节变化，
+// 键序、空白、未知字段逐字节保留；RewriteModel 的 map 往返会重排键序，不适用直通。
 func TestRewriteModelInPlace_原位手术(t *testing.T) {
 	raw := []byte(`{"zoo":1 ,"model":"alias-a","messages":[{"role":"user","content":"你好"}],"stream":true,  "top_k":  3}`)
 	out, err := RewriteModelInPlace(raw, "up-model-x")

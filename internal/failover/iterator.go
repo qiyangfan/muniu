@@ -1,11 +1,10 @@
-// 候选迭代器(traffic-governance「候选迭代器」):按 priority 升序分组降级,
-// 同 priority 组内以加权随机选起点、环绕遍历全组(起点之前的成员仍会被尝试)。
-// 随机源注入,纯函数可穷举测试。
+// 候选迭代器：按 priority 升序分组降级，同 priority 组内以加权随机选起点、
+// 环绕遍历全组（起点之前的成员仍会被尝试）。随机源可注入，纯函数可穷举测试。
 package failover
 
 import "sort"
 
-// Candidate 路由候选(failover 视角的最小形态;proxy 负责从 config 转换)。
+// Candidate 路由候选，failover 视角的最小形态，proxy 负责从 config 转换。
 type Candidate struct {
 	Provider string
 	Model    string
@@ -13,12 +12,12 @@ type Candidate struct {
 	Weight   int
 }
 
-// Iterator 候选序列:Next 耗尽返回 false。
+// Iterator 候选序列：Next 耗尽返回 false。
 type Iterator interface {
 	Next() (Candidate, bool)
 }
 
-// randIntn 随机源:返回 [0,n) 的整数;n<=0 时不会被调用。
+// randIntn 随机源：返回 [0,n) 的整数，n<=0 时不会被调用。
 type randIntn func(n int) int
 
 type iterator struct {
@@ -32,8 +31,8 @@ type iterator struct {
 	done    bool
 }
 
-// NewIterator 构造:内部复制候选并按 priority 升序稳定分组。
-// weight 非法(<=0)按 1 参与起点加权;randIntn 为 nil 时起点恒 0。
+// NewIterator 构造：内部复制候选并按 priority 升序稳定分组。
+// weight 非法（<=0）按 1 参与起点加权；randIntn 为 nil 时起点恒 0。
 func NewIterator(cands []Candidate, randIntn randIntn) Iterator {
 	cs := append([]Candidate(nil), cands...)
 	sort.SliceStable(cs, func(i, j int) bool {
@@ -53,7 +52,7 @@ func NewIterator(cands []Candidate, randIntn randIntn) Iterator {
 	return it
 }
 
-// Next 产出下一候选:当前组环绕遍历完(含起点之前成员)→ 下一 priority 组。
+// Next 产出下一候选：当前组环绕遍历完（含起点之前成员）后进入下一 priority 组。
 func (it *iterator) Next() (Candidate, bool) {
 	if it.done {
 		return Candidate{}, false
@@ -79,7 +78,7 @@ func (it *iterator) Next() (Candidate, bool) {
 	}
 }
 
-// startOf 组内加权随机起点:总权重 W,取 rand(W),落在累积权重区间即起点。
+// startOf 组内加权随机起点：总权重 W 内取 rand(W)，落入累积权重区间的成员即起点。
 func (it *iterator) startOf(group []Candidate) int {
 	total := 0
 	for _, c := range group {

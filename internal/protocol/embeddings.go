@@ -1,5 +1,5 @@
-// embeddings 入站 DTO(T4.3):OpenAI /v1/embeddings 兼容。
-// 只解析路由所需的 model 与 input 存在性;Raw 完整持有(改写仅换 model,零字段丢失)。
+// embeddings 入站协议：OpenAI /v1/embeddings 兼容。
+// 只解析路由所需的 model 与 input 存在性；Raw 完整持有，改写仅换 model，零字段丢失。
 package protocol
 
 import (
@@ -17,7 +17,7 @@ type EmbeddingRequest struct {
 	Raw   json.RawMessage `json:"-"`
 }
 
-// ParseEmbeddingRequest 解析校验:model 非空、input 存在(字符串或数组均接受)。
+// ParseEmbeddingRequest 解析校验：model 非空、input 存在，字符串或数组均接受。
 func ParseEmbeddingRequest(body []byte) (*EmbeddingRequest, error) {
 	var req EmbeddingRequest
 	if err := json.Unmarshal(body, &req); err != nil {

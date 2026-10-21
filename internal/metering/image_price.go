@@ -41,7 +41,7 @@ func (p ImagePrice) Cost(tier string, n int64) (int64, error) {
 	return price * n, nil
 }
 
-// SettleImagePrice 复用既有汇率与取整契约，在加载期换算全部档位。
+// SettleImagePrice 复用既有汇率与取整规则，在加载期换算全部档位。
 func SettleImagePrice(p ImagePrice, settlement string, fx int64) (ImagePrice, error) {
 	if err := ValidateImagePrice(p); err != nil {
 		return ImagePrice{}, err

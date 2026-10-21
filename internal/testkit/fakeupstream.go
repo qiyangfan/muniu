@@ -1,5 +1,6 @@
-// Package testkit 是测试专用设施(仅测试与 smoke 构建消费,conventions「测试范式」)。
-// fake 上游是可编程 httptest.Server:流式剧本由事件序列声明,支持慢帧/半帧/中途断;fake 也是代码,剧本自身必须有测试。
+// fake 上游是可编程 httptest.Server：流式剧本由事件序列声明，支持慢帧、半帧、中途断。
+// fake 也是代码，剧本自身必须有测试；本包仅供测试与 smoke 构建消费。
+
 package testkit
 
 import (
@@ -13,13 +14,13 @@ import (
 
 // Event 流式剧本的单个事件。
 type Event struct {
-	Data        string        // 事件完整线上字节(多行 data 合法,应以 \n\n 结尾)
-	DelayBefore time.Duration // 发送前等待(模拟帧间间隔/首帧迟滞);客户端断连则提前返回
-	SplitAt     int           // >0 时按该字节偏移切片发送,隔一拍再发余下(模拟半帧)
-	CloseAfter  bool          // 发送后劫持连接直接掐断(不发 [DONE],模拟中途断流)
+	Data        string        // 事件完整线上字节，多行 data 合法，应以 \n\n 结尾。
+	DelayBefore time.Duration // 发送前等待，模拟帧间间隔与首帧迟滞；客户端断连则提前返回。
+	SplitAt     int           // 大于 0 时按该字节偏移切片发送，隔一拍再发余下，模拟半帧。
+	CloseAfter  bool          // 发送后劫持连接直接掐断，不发 [DONE]，模拟中途断流。
 }
 
-// Upstream fake 上游句柄:URL 与请求记录(供 adapter/proxy 测试断言出站形态)。
+// Upstream fake 上游句柄，提供 URL 与请求记录，供 adapter/proxy 测试断言出站形态。
 type Upstream struct {
 	server *httptest.Server
 
@@ -31,7 +32,7 @@ type Upstream struct {
 // URL 返回 fake 上游基址。
 func (u *Upstream) URL() string { return u.server.URL }
 
-// Close 手动关闭(Cleanup 已自动注册,一般无需调用)。
+// Close 手动关闭；Cleanup 已自动注册，一般无需调用。
 func (u *Upstream) Close() { u.server.Close() }
 
 // RequestCount 收到的请求数。
@@ -61,7 +62,7 @@ func (u *Upstream) LastHeader(key string) string {
 	return u.headers[len(u.headers)-1].Get(key)
 }
 
-// StartStreamUpstream 启动流式 fake:任何请求都按剧本吐 SSE。
+// StartStreamUpstream 启动流式 fake，任何请求都按剧本吐 SSE。
 func StartStreamUpstream(tb testing.TB, events []Event) *Upstream {
 	tb.Helper()
 	u := &Upstream{}
@@ -70,7 +71,7 @@ func StartStreamUpstream(tb testing.TB, events []Event) *Upstream {
 	return u
 }
 
-// StartJSONUpstream 启动非流式 fake:任何请求都返回固定状态与 body。
+// StartJSONUpstream 启动非流式 fake，任何请求都返回固定状态与 body。
 func StartJSONUpstream(tb testing.TB, status int, body string) *Upstream {
 	tb.Helper()
 	u := &Upstream{}
@@ -84,13 +85,13 @@ func StartJSONUpstream(tb testing.TB, status int, body string) *Upstream {
 	return u
 }
 
-// record 记录请求(body 先读全,记录失败不干扰剧本)。
+// record 记录请求，body 先读全，记录失败不干扰剧本。
 func (u *Upstream) record(r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	u.recordBody(r, body)
 }
 
-// recordBody 以调用方已读的 body 记录请求(body 需二次消费的替身用,如存储语义)。
+// recordBody 以调用方已读的 body 记录请求，供 body 需二次消费的替身使用。
 func (u *Upstream) recordBody(r *http.Request, body []byte) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -98,8 +99,8 @@ func (u *Upstream) recordBody(r *http.Request, body []byte) {
 	u.headers = append(u.headers, r.Header.Clone())
 }
 
-// serveStream 剧本执行器:逐事件 延时→(可选半帧切分)→写出→flush;
-// CloseAfter 用 Hijack 直接掐 TCP,让客户端读到意外 EOF(与优雅关流严格区分)。
+// serveStream 剧本执行器：逐事件延时、可选半帧切分、写出并 flush；CloseAfter 用
+// Hijack 直接掐 TCP，让客户端读到意外 EOF，与优雅关流严格区分。
 func (u *Upstream) serveStream(events []Event) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u.record(r)
@@ -144,12 +145,12 @@ func (u *Upstream) serveStream(events []Event) http.HandlerFunc {
 	}
 }
 
-// ---- 内置剧本(proxy-and-streaming「测试矩阵」;payload 均为 OpenAI 兼容形态) ----
+// ---- 内置剧本：payload 均为 OpenAI 兼容形态 ----
 
-// chunkData 把 JSON payload 包成完整 SSE data 事件(带 data: 前缀与空行结尾)。
+// chunkData 把 JSON payload 包成完整 SSE data 事件，带 data: 前缀与空行结尾。
 func chunkData(payload string) string { return "data: " + payload + "\n\n" }
 
-// OpenAI 形态 chunk 模板:role 帧 / content 增量 / usage 终帧。
+// OpenAI 形态 chunk 模板：role 帧、content 增量、usage 终帧。
 const (
 	roleChunk    = `{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"role":"assistant"}}]}`
 	contentChunk = `{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"%s"}}]}`
@@ -157,7 +158,7 @@ const (
 	doneEvent    = "data: [DONE]\n\n"
 )
 
-// NormalEvents 正常流:role 帧 → 两段 content → usage 终帧 → [DONE]。
+// NormalEvents 正常流：role 帧 → 两段 content → usage 终帧 → [DONE]。
 func NormalEvents() []Event {
 	return []Event{
 		{Data: chunkData(roleChunk)},
@@ -168,7 +169,7 @@ func NormalEvents() []Event {
 	}
 }
 
-// SlowChunkEvents 慢帧流:每帧前等待 d(用于触发帧间超时剧本,d 传小值即成正常流)。
+// SlowChunkEvents 慢帧流：每帧前等待 d，用于触发帧间超时剧本；d 传小值即成正常流。
 func SlowChunkEvents(d time.Duration) []Event {
 	events := NormalEvents()
 	for i := range events {
@@ -177,7 +178,7 @@ func SlowChunkEvents(d time.Duration) []Event {
 	return events
 }
 
-// MidStreamCutEvents 中途断流:一段 content 后直接掐断,无 usage、无 [DONE]。
+// MidStreamCutEvents 中途断流：一段 content 后直接掐断，无 usage、无 [DONE]。
 func MidStreamCutEvents() []Event {
 	return []Event{
 		{Data: chunkData(roleChunk)},
@@ -185,7 +186,7 @@ func MidStreamCutEvents() []Event {
 	}
 }
 
-// HalfFrameEvents 半帧:第二个事件的字节在 SplitAt 处被切开发送。
+// HalfFrameEvents 半帧：第二个事件的字节在 SplitAt 处被切开发送。
 func HalfFrameEvents() []Event {
 	split := chunkData(`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{"content":"被切开的一帧"}}]}`)
 	return []Event{
@@ -196,7 +197,7 @@ func HalfFrameEvents() []Event {
 	}
 }
 
-// UsageMissingEvents usage 缺失流:有内容与 [DONE],但无 usage 终帧(估算路径)。
+// UsageMissingEvents usage 缺失流：有内容与 [DONE] 但无 usage 终帧，触发估算路径。
 func UsageMissingEvents() []Event {
 	return []Event{
 		{Data: chunkData(roleChunk)},
@@ -213,10 +214,9 @@ const JSONOKBody = `{"id":"chatcmpl-2","object":"chat.completion","model":"fake"
 // JSON500Body 上游 5xx 错误响应。
 const JSON500Body = `{"error":{"message":"upstream exploded","type":"server_error"}}`
 
-// ---- 有状态 Responses 替身(protocol-native-passthrough 7.3) ----
+// ---- 有状态 Responses 替身 ----
 
-// responsesUpstream 有状态 fake:内存 response 存储 + POST 创建 / GET 查询,
-// 形态按 OpenAI Responses 公开契约钉死(见 fakeupstream_stateful_test.go)。
+// responsesUpstream 在内存中保存响应，提供创建和查询接口；数据形态遵循 OpenAI Responses。
 type responsesUpstream struct {
 	*Upstream
 	mu     sync.Mutex
@@ -224,7 +224,7 @@ type responsesUpstream struct {
 	next   int
 }
 
-// Stored 查询内存存储(断言链式上下文/GET 命中)。
+// Stored 查询内存存储，供断言链式上下文与 GET 命中使用。
 func (u *responsesUpstream) Stored(id string) (string, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -232,8 +232,8 @@ func (u *responsesUpstream) Stored(id string) (string, bool) {
 	return body, ok
 }
 
-// StartResponsesUpstream 启动有状态 fake:POST /responses 创建(分配 resp_N 并回显
-// 请求体中的 input 语义),GET /responses/{id} 返回存储体(404 = 未创建)。
+// StartResponsesUpstream 启动有状态 fake：POST /responses 创建并分配 resp_N，
+// GET /responses/{id} 返回存储体，未创建返回 404。
 func StartResponsesUpstream(tb testing.TB) *responsesUpstream {
 	tb.Helper()
 	base := &Upstream{}
@@ -254,7 +254,7 @@ func StartResponsesUpstream(tb testing.TB) *responsesUpstream {
 		base.record(r)
 		id := r.PathValue("id")
 		if r.Method == http.MethodDelete {
-			// 状态 lane 删除动词:删除存储,回 OpenAI 删除契约形态(存在性校验交调用方)
+			// 状态 lane 的删除动词：删除存储并回 OpenAI 删除契约形态，存在性校验交调用方。
 			u.mu.Lock()
 			_, ok := u.stored[id]
 			delete(u.stored, id)
@@ -285,7 +285,7 @@ func StartResponsesUpstream(tb testing.TB) *responsesUpstream {
 	return u
 }
 
-// itoa 极小整数转字符串(testkit 内零依赖)。
+// itoa 极小整数转字符串，testkit 内零依赖。
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

@@ -1,4 +1,3 @@
-// CopyButton 组件测试(openspec fix-api-key-binding-identifiers):
 // 复制值取原始完整值、失败反馈保留可手动选择的文本、禁用不触发复制、无新增持久化。
 import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";

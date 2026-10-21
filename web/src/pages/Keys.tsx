@@ -25,7 +25,7 @@ import { StatusBadge, type StatusMeta } from "../components/status-badge";
 import { formatDateTime, formatNumber } from "../lib/datetime";
 import { fmtCredits, rfc3339ToLocal } from "../lib/utils";
 
-// key 状态徽章三态:吊销终态 > 可逆停用 > 启用(与后端判定顺序一致,先吊销后停用)。
+// 状态优先级：已吊销、已停用、启用。
 const KEY_STATUS_META: StatusMeta = {
   active: { label: "启用", variant: "success" },
   disabled: { label: "已停用", variant: "warning" },
@@ -34,7 +34,7 @@ const KEY_STATUS_META: StatusMeta = {
 const keyStatusOf = (k: KeyRecord): string =>
   k.status === "revoked" ? "revoked" : k.disabled ? "disabled" : "active";
 
-// 白名单 textarea ⇄ 数组:每行一个别名(别名理论可含逗号,按行分隔无歧义);空行忽略。
+// 白名单每行一个别名，避免含逗号的别名被拆开；忽略空行。
 const allowlistToText = (models: string[] | null | undefined) => (models ?? []).join("\n");
 const textToAllowlist = (text: string) =>
   text
@@ -42,10 +42,7 @@ const textToAllowlist = (text: string) =>
     .map((s) => s.trim())
     .filter(Boolean);
 
-// 快捷过期时刻:点击填入 N 天后的本地时刻(datetime-local 分钟精度)。
-// 签发表单与编辑弹窗共用,文案与行为单源。
-// 纯度规则:Date.now() 只允许出现在事件属性闭包内(点击时刻取 now),
-// 抽函数经 .map 传递会丢事件处理器豁免,故内联进 onClick。
+// 填入 N 天后的本地时刻；签发和编辑表单共用。
 function QuickExpires({ onPick }: { onPick: (v: string) => void }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -72,9 +69,7 @@ function QuickExpires({ onPick }: { onPick: (v: string) => void }) {
 
 export default function Keys() {
   const [keys, setKeys] = useState<KeyRecord[]>([]);
-  // 签发结果:明文一次性展示 + Key ID 复制入口。ID 与明文分开承载——锦官绑定填 Key ID,
-  // 明文只用于请求鉴权,两者不可互换(openspec fix-api-key-binding-identifiers);
-  // 契约 KeyCreateResponse 将 key/id 声明为必返,两值恒在
+  // 明文 key 用于请求鉴权，ID 用于平台绑定，二者不可互换。
   const [issued, setIssued] = useState<{ key: string; id: string } | null>(null);
   const [err, setErr] = useState("");
   const [name, setName] = useState("");
@@ -85,7 +80,7 @@ export default function Keys() {
   const [budget, setBudget] = useState(0);
   const [allowed, setAllowed] = useState("");
   const [expires, setExpires] = useState("");
-  const [busy, setBusy] = useState(false); // 签发防重复
+  const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<KeyRecord | null>(null);
   const [editTarget, setEditTarget] = useState<KeyRecord | null>(null);
@@ -123,7 +118,7 @@ export default function Keys() {
     }
   };
 
-  // 启停(可逆):吊销终态的 key 不允许启停操作(按钮层已隐藏,此处防御)
+  // 吊销后的 key 不允许启停。
   const toggleDisabled = async (k: KeyRecord) => {
     if (!k.id || k.status === "revoked") return;
     try {
@@ -136,7 +131,7 @@ export default function Keys() {
   };
 
   const openEdit = (k: KeyRecord) => {
-    setErr(""); // 清上次操作残留错误,避免弹窗一打开就显示旧错误
+    setErr("");
     setEditTarget(k);
     setEditForm({
       rpm: k.rpm_limit ?? 0,
@@ -157,9 +152,9 @@ export default function Keys() {
         tpm_limit: editForm.tpm,
         daily_quota_credits: editForm.quota,
         max_request_cost_credits: editForm.budget,
-        // 输入框清空 = 显式清除过期(null);选值 = 设定新过期(datetime-local 本地时区 → UTC)
+        // 空值表示清除过期时间；选中的本地时间转换为 UTC。
         expires_at: editForm.expires === "" ? null : new Date(editForm.expires).toISOString(),
-        // 白名单保存即整体设定:清空 = null(恢复不限),有行 = 数组整体替换
+        // 白名单整体替换；空列表表示不限。
         allowed_models:
           textToAllowlist(editForm.allowed).length === 0 ? null : textToAllowlist(editForm.allowed),
       });
@@ -174,11 +169,10 @@ export default function Keys() {
   };
 
   const fmtExpires = (v: string | null | undefined) => (v ? formatDateTime(v) : "永不过期");
-  // 限额/配额统一口径:0(或空)= 不限,其余数值千分位/credit 缩写
+  // 0 表示不限。
   const fmtLimit = (n: number | null | undefined) => (!n ? "不限" : formatNumber(n));
   const fmtQuota = (n: number | null | undefined) => (!n ? "不限" : fmtCredits(n));
 
-  // 列定义单源:桌面表格与移动卡片共用;mobile 位做触屏口径(租户截短/按钮档位)
   const columns: DataCol<KeyRecord>[] = [
     {
       key: "prefix",
@@ -191,9 +185,8 @@ export default function Keys() {
       ),
     },
     {
-      // Key ID 是用量归账/锦官绑定的连接值,与明文(prefix 的来源)和前缀严格区分。
-      // 长 ID(UUID 形态)桌面与移动统一截短显示 + title 全值,复制永远取完整原值
-      //(design:长 ID 用既有截断/提示组件显示;全值渲染会把表格 min-content 撑爆出横向滚动)
+      // Key ID 用于用量归账和平台绑定，与明文 key 和 prefix 区分。
+      // 长 ID 截短显示并通过 title 暴露全值；复制仍使用完整原值。
       key: "id",
       label: "Key ID",
       headTitle: "用量归账与锦官绑定使用的真实 ID(不是明文密钥/前缀)",
@@ -212,7 +205,7 @@ export default function Keys() {
             />
           </span>
         ) : (
-          // 兼容条目缺 ID:明确示不可用并禁用复制,不以 prefix/序号充当 ID
+          // 缺少 ID 时显示不可用，不从 prefix 或序号推导。
           <span className="inline-flex items-center gap-1.5">
             <span className="text-muted-foreground">ID 不可用</span>
             <CopyButton
@@ -230,7 +223,7 @@ export default function Keys() {
     {
       key: "tenant",
       label: "租户",
-      // 租户 id 的 UUID 形态与 Key ID 同款截短(title 保留全值),防表格 min-content 溢出
+      // 截短长租户 ID，避免撑宽表格；title 保留完整值。
       render: (k) => {
         const v = k.tenant_id ?? "—";
         return <span title={v}>{v.length > 18 ? `${v.slice(0, 16)}…` : v}</span>;
@@ -319,8 +312,7 @@ export default function Keys() {
 
   return (
     <div className="space-y-4">
-      {/* 签发表单:移动端单列全宽,sm 起两列、lg 三列、xl 四列——datetime 控件与快捷按钮
-          需要约 270px 宽度,六列形态(每列 ~165px)会裁切控件与折乱按钮(走查实测返工) */}
+      {/* datetime-local 控件与快捷按钮需要较宽布局。 */}
       <Card className="p-4">
         <form
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
@@ -332,7 +324,7 @@ export default function Keys() {
                 tpm_limit: tpm,
                 daily_quota_credits: quota,
                 max_request_cost_credits: budget,
-                // 白名单留空 = 不限;有行 = 数组签发
+                // 留空表示不限；填写后按行设置白名单。
                 ...(textToAllowlist(allowed).length > 0
                   ? { allowed_models: textToAllowlist(allowed) }
                   : {}),
@@ -341,7 +333,7 @@ export default function Keys() {
               setIssued({ key: r.key, id: r.id });
               setErr("");
               setName("");
-              // 新增字段一并复位:残留的过期时刻会静默套到下一把密钥上
+              // 重置表单，避免沿用上一把 key 的过期时间。
               setExpires("");
               setTpm(0);
               setQuota(0);
@@ -415,7 +407,6 @@ export default function Keys() {
               <QuickExpires onPick={setExpires} />
             </>
           </FormRow>
-          {/* lg 3 列下白名单跨 2 格与过期同行填满;xl 4 列回落单格——三档网格均无空洞 */}
           <FormRow
             label="模型白名单(每行一个别名)"
             htmlFor="key-allowed"
@@ -429,7 +420,6 @@ export default function Keys() {
               onChange={(e) => setAllowed(e.target.value)}
             />
           </FormRow>
-          {/* 提交按钮独占一行,不留网格空洞 */}
           <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-4">
             <Button type="submit" disabled={busy} className="w-full sm:w-auto">
               {busy ? "签发中…" : "签发"}
@@ -442,7 +432,7 @@ export default function Keys() {
         过期时刻留空表示永不过期;模型白名单留空表示不限,白名单外的别名请求将被拒绝(403);1 credit =
         十亿分之一本币。
       </p>
-      {/* 错误必须独立于明文区展示:混用会让操作者把错误串当 key 复制走 */}
+      {/* 错误与明文 key 分开显示，避免误复制。 */}
       {err && <ErrorAlert text={`错误:${err}`} />}
       {issued && (
         <NoticeBanner>
@@ -456,7 +446,7 @@ export default function Keys() {
               </span>
               <CopyButton value={issued.id} label="复制 Key ID" size="xs" variant="outline" />
             </div>
-            {/* 锦官绑定入口提示:绑定填 Key ID,明文只用于请求鉴权 */}
+            {/* 平台绑定使用 Key ID；明文 key 仅用于请求鉴权。 */}
             <p className="text-xs">锦官绑定填写 Key ID(不是明文密钥);明文仅用于调用方请求鉴权。</p>
           </div>
         </NoticeBanner>
@@ -548,7 +538,7 @@ export default function Keys() {
             <AlertDialogAction
               disabled={busy}
               onClick={(e) => {
-                // 保存失败留在弹窗改错重试(Radix Action 默认点击即关);成功由 saveEdit 内部关闭
+                // 失败时保留弹窗供修改；成功后由 saveEdit 关闭。
                 e.preventDefault();
                 void saveEdit();
               }}

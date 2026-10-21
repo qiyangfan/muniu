@@ -1,6 +1,4 @@
-// 同构直通端到端钉子(protocol-native-passthrough;组合测试冻结):
-// wire 保真(仅 model 改写)、流式真实 usage 直达、换道 writer 切换、失格惰性升格、
-// 声明制 responses 直通、bridgegate 收窄、治理回落、缓存双存、有状态粘性路由。
+// 验证原生协议直通的请求保真、流式计量、换道、治理、缓存和状态路由。
 package proxy
 
 import (
@@ -20,10 +18,10 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// anthropic 非流式响应(usage 真实形态)。
+// anthropic 非流式响应，usage 为真实形态。
 const anthropicJSONBody = `{"id":"msg_1","type":"message","role":"assistant","model":"claude-up","content":[{"type":"text","text":"看图回答"}],"stop_reason":"end_turn","usage":{"input_tokens":21,"output_tokens":5}}`
 
-// anthropic 流式事件(message_start 携真实 input_tokens=21;翻译路径登记偏差为恒 0)。
+// anthropic 流式事件，message_start 携真实 input_tokens=21，翻译路径登记偏差为恒 0。
 func anthropicStreamEvents() []testkit.Event {
 	return []testkit.Event{
 		{Data: "data: " + `{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":21}}}` + "\n\n"},
@@ -34,7 +32,7 @@ func anthropicStreamEvents() []testkit.Event {
 	}
 }
 
-// newNativeProxy 直通拓扑:anthropic 桥接 + openai 系候选(可声明 native_responses)。
+// newNativeProxy 直通拓扑：anthropic 桥接加 openai 系候选，后者可声明 native_responses。
 type nativeTopo struct {
 	messagesUp *testkit.Upstream
 	openaiUp   *testkit.Upstream
@@ -67,10 +65,10 @@ func newNativeProxy(t *testing.T, msgsUp, openaiUp *testkit.Upstream, declaredNa
 	return &nativeTopo{messagesUp: msgsUp, openaiUp: openaiUp, p: p}
 }
 
-// TestNativeE2E_Messages直通非流式保真 多模态/扩展字段经直通零丢失,响应逐字节透传。
+// TestNativeE2E_Messages直通非流式保真 验证多模态与扩展字段经直通零丢失，响应逐字节透传。
 func TestNativeE2E_Messages直通非流式保真(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, anthropicJSONBody)
-	dead := httptest.NewServer(http404Handler{}) // oai 候选不参与(直通成功即返回)
+	dead := httptest.NewServer(http404Handler{}) // oai 候选不参与，直通成功即返回
 	t.Cleanup(dead.Close)
 	oai := testkit.StartJSONUpstream(t, 200, usageJSONBody)
 	tp := newNativeProxy(t, up, oai, false, nil)
@@ -84,7 +82,7 @@ func TestNativeE2E_Messages直通非流式保真(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("直通应 200: %d %s", resp.StatusCode, body)
 	}
-	// wire 保真:上游收到的除 model 外逐字节等于客户端原始体(image/cache_control/top_k 零丢失)
+	// wire 保真：上游收到的除 model 外逐字节等于客户端原始体，image/cache_control/top_k 零丢失。
 	want := strings.Replace(raw, `"model":"alias-a"`, `"model":"claude-up"`, 1)
 	if string(up.LastBody()) != want {
 		t.Fatalf("wire 保真破坏:\n got=%s\nwant=%s", up.LastBody(), want)
@@ -95,7 +93,7 @@ func TestNativeE2E_Messages直通非流式保真(t *testing.T) {
 	if up.LastHeader("anthropic-version") == "" {
 		t.Fatal("anthropic-version 缺失")
 	}
-	// 响应逐字节透传(零反向映射;非 message 对象即直通证据)
+	// 响应逐字节透传，零反向映射，非 message 对象即直通证据。
 	if body != anthropicJSONBody {
 		t.Fatalf("响应应逐字节透传:\n got=%s\nwant=%s", body, anthropicJSONBody)
 	}
@@ -105,8 +103,8 @@ func TestNativeE2E_Messages直通非流式保真(t *testing.T) {
 	_ = dead
 }
 
-// TestNativeE2E_Messages直通流式真实usage 事件序列逐字节透传;message_start.usage.input_tokens
-// 为上游真实值(翻译路径登记偏差恒 0 不出现);无合成首帧、无 [DONE] 透传。
+// TestNativeE2E_Messages直通流式真实usage 验证事件序列逐字节透传，message_start.usage.input_tokens
+// 为上游真实值，翻译路径登记偏差恒 0 不出现，无合成首帧、无 [DONE] 透传。
 func TestNativeE2E_Messages直通流式真实usage(t *testing.T) {
 	up := testkit.StartStreamUpstream(t, anthropicStreamEvents())
 	tp := newNativeProxy(t, up, testkit.StartJSONUpstream(t, 200, usageJSONBody), false, nil)
@@ -126,16 +124,16 @@ func TestNativeE2E_Messages直通流式真实usage(t *testing.T) {
 	if strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("直通不得合成/透传 [DONE]: %s", body)
 	}
-	// wire 保真:请求体除 model 外逐字节
+	// wire 保真：请求体除 model 外逐字节。
 	want := `{"model":"claude-up","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`
 	if string(up.LastBody()) != want {
 		t.Fatalf("wire 保真破坏: %s", up.LastBody())
 	}
 }
 
-// TestNativeE2E_直通失败换道翻译writer切换 首字节前失败换道:客户端获单一完整翻译响应。
+// TestNativeE2E_直通失败换道翻译writer切换 验证首字节前失败换道，客户端获单一完整翻译响应。
 func TestNativeE2E_直通失败换道翻译writer切换(t *testing.T) {
-	dead := testkit.StartStreamUpstream(t, []testkit.Event{{Data: "", CloseAfter: true}}) // 直通候选:立即断流(未过首token,可换道)
+	dead := testkit.StartStreamUpstream(t, []testkit.Event{{Data: "", CloseAfter: true}}) // 直通候选：立即断流，未过首 token，可换道
 	up := testkit.StartStreamUpstream(t, testkit.NormalEvents())
 	tp := newNativeProxy(t, dead, up, false, nil)
 	ts := httptest.NewServer(tp.p.HandlerMessages())
@@ -145,7 +143,7 @@ func TestNativeE2E_直通失败换道翻译writer切换(t *testing.T) {
 	if resp.StatusCode != 200 {
 		t.Fatalf("换道后应 200: %d %s", resp.StatusCode, body)
 	}
-	// 第二候选走翻译路径:客户端收到翻译后的 Anthropic 事件(单一完整响应,无形态混用)
+	// 第二候选走翻译路径：客户端收到翻译后的 Anthropic 事件，单一完整响应，无形态混用。
 	if !strings.Contains(body, `"type":"message_start"`) || !strings.Contains(body, `"type":"message_stop"`) {
 		t.Fatalf("换道翻译响应形态不符: %s", body)
 	}
@@ -154,7 +152,7 @@ func TestNativeE2E_直通失败换道翻译writer切换(t *testing.T) {
 	}
 }
 
-// TestNativeE2E_失格换道升格400 直通候选失败回落翻译候选时,出站前升格既有 400(不触达翻译上游)。
+// TestNativeE2E_失格换道升格400 验证直通候选失败回落翻译候选时出站前升格既有 400，不触达翻译上游。
 func TestNativeE2E_失格换道升格400(t *testing.T) {
 	dead := httptest.NewServer(http404Handler{})
 	t.Cleanup(dead.Close)
@@ -178,7 +176,7 @@ func TestNativeE2E_失格换道升格400(t *testing.T) {
 	_ = dead
 }
 
-// TestNativeE2E_Responses声明直通 声明候选直通(input_image 原生透传);未声明翻译兜底维持拒绝。
+// TestNativeE2E_Responses声明直通 验证声明候选时 input_image 原生透传直通，未声明翻译兜底维持拒绝。
 func TestNativeE2E_Responses声明直通(t *testing.T) {
 	raw := `{"model":"alias-r","stream":false,"input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,xx"}]}]}`
 
@@ -234,15 +232,15 @@ func TestNativeE2E_Responses声明直通(t *testing.T) {
 	})
 }
 
-// TestBridgeGate_Messages直通恢复工具多轮 收窄语义:messages 入站 × anthropic 候选工具多轮
-// 直通正常服务(不豁免不拒绝);chat 入站同流量维持既有豁免边界。
+// TestBridgeGate_Messages直通恢复工具多轮 验证 messages 入站加 anthropic 候选的工具多轮
+// 直通正常服务，不豁免不拒绝；chat 入站同流量维持既有豁免边界。
 func TestBridgeGate_Messages直通恢复工具多轮(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, anthropicJSONBody)
 	tp := newNativeProxy(t, up, testkit.StartJSONUpstream(t, 200, usageJSONBody), false, nil)
 	ts := httptest.NewServer(tp.p.HandlerMessages())
 	t.Cleanup(ts.Close)
 
-	// 工具多轮上下文(tool_result 块;canonical 侧即 role=tool 标记)
+	// 工具多轮上下文：tool_result 块，canonical 侧即 role=tool 标记。
 	raw := `{"model":"alias-a","max_tokens":64,"messages":[` +
 		`{"role":"user","content":[{"type":"text","text":"查天气"}]},` +
 		`{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"weather","input":{"city":"北京"}}]},` +
@@ -257,8 +255,8 @@ func TestBridgeGate_Messages直通恢复工具多轮(t *testing.T) {
 	}
 }
 
-// TestNativeE2E_治理回落翻译 能力目录声明约束且实际干预时,该 attempt 回落翻译路径
-// (干预触达出站 wire;留痕头在;行为与变更前翻译路径一致)。
+// TestNativeE2E_治理回落翻译 验证能力目录声明约束且实际干预时该 attempt 回落翻译路径，
+// 干预触达出站 wire，留痕头在。
 func TestNativeE2E_治理回落翻译(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, anthropicJSONBody)
 	tp := newNativeProxy(t, up, testkit.StartJSONUpstream(t, 200, usageJSONBody), false,
@@ -277,7 +275,7 @@ func TestNativeE2E_治理回落翻译(t *testing.T) {
 	if got := up.LastHeader("x-api-key"); got != "k" {
 		t.Fatalf("回落翻译出站形态不符: %q", got)
 	}
-	// 翻译路径出站 = canonical 经桥接翻译(重建形态,非原字节)
+	// 翻译路径出站为 canonical 经桥接翻译重建的形态，非原字节。
 	var out map[string]any
 	if err := json.Unmarshal(up.LastBody(), &out); err != nil {
 		t.Fatal(err)
@@ -294,9 +292,7 @@ func (http404Handler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"error":"not found"}`))
 }
 
-// TestNativeE2E_失格治理升格400 失格请求的声明约束同样受治理(回归钉:修复前失格×
-// 原生候选整体跳过治理,DropParams 等声明约束被直通绕过)。top_k 冲突 → 升格既有 400;
-// 对照组:无冲突参数的失格请求仍直通正常服务(治理零干预不改变失格语义)。
+// TestNativeE2E_失格治理升格400 验证失格请求仍受模型能力约束，且无冲突时仍可直通。
 func TestNativeE2E_失格治理升格400(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, anthropicJSONBody)
 	tp := newNativeProxy(t, up, testkit.StartJSONUpstream(t, 200, usageJSONBody), false,

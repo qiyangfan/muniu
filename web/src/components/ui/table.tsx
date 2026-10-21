@@ -2,9 +2,7 @@ import * as React from "react";
 
 import { cn } from "../../lib/utils";
 
-// 本地标准件,API/配方逐类对齐 kongming(2026-10-02 视觉收敛:组件名统一为
-// TableHeader/TableRow/TableHead/TableCell,行 border-b、TD p-2 / TH h-10 px-2 密度档同双仓);
-// 「卡片底 + 圆角」容器归属 DataList(业务层桌面形态),不在本件配方内。
+// 本地标准件，API 和配方对齐 kongming；业务卡片容器由 DataList 提供。
 function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div data-slot="table-container" className="relative w-full overflow-x-auto">

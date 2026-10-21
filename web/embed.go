@@ -1,5 +1,5 @@
-// Package web 嵌入控制台构建产物(dist),由网关 /console/* 提供——单二进制自带控制台。
-// dist 缺失时(未执行 pnpm build 的纯 Go 构建)以占位文件存在,路由仍可用。
+// Package web 嵌入控制台构建产物（dist），由网关 /console/* 提供，单二进制自带控制台。
+// 未执行 pnpm build 的纯 Go 构建中，dist 以占位文件存在，路由仍可用。
 package web
 
 import (
@@ -12,7 +12,7 @@ import (
 //go:embed all:dist
 var distFS embed.FS
 
-// Handler 返回控制台静态资源(单页应用;未知路径回退 index.html,避免 FileServer 重定向循环)。
+// Handler 返回控制台静态资源；未知路径回退 index.html，避免 FileServer 重定向循环。
 func Handler() http.Handler {
 	sub, err := fs.Sub(distFS, "dist")
 	if err != nil {

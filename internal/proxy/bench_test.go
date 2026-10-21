@@ -1,5 +1,4 @@
-// SSE 转发基准(phase-1 T1.9):fake 剧本 1000 事件,记录 ns/op 与 allocs/op 进 HANDOFF。
-// 性能预算(p99 < 1ms/chunk 增量开销)自 Phase 2 起守,本基准即钉子。
+// BenchmarkSSEForward 测量 1000 个 SSE 事件的端到端转发开销。
 package proxy
 
 import (
@@ -16,7 +15,7 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// BenchmarkSSEForward 单请求 1000 事件流式转发的端到端开销(含 HTTP 往返与 fake 上游)。
+// BenchmarkSSEForward 单请求 1000 事件流式转发的端到端开销，含 HTTP 往返与 fake 上游。
 func BenchmarkSSEForward(b *testing.B) {
 	const chunkCount = 1000
 	payload := `{"id":"bench","choices":[{"index":0,"delta":{"content":"x"}}]}`
@@ -61,5 +60,5 @@ func BenchmarkSSEForward(b *testing.B) {
 	}
 }
 
-// benchTimeout 基准用超时上限(不应触发)。
+// benchTimeout 基准用超时上限，不应触发。
 const benchTimeout = 30e9

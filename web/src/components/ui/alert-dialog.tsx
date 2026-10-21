@@ -4,11 +4,8 @@ import { AlertDialog as AlertDialogPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { Button } from "./button";
 
-// 本地标准件,API/配方逐类对齐 kongming(Radix AlertDialog:role=alertdialog、aria-modal、
-// 焦点圈定与还原由 Radix 提供,勿手搓替代);破坏性确认 Action 传 variant="destructive"。
-// 移动端形态为三仓单源(2026-10-02 双仓对齐裁定「以木牛为准」,kongming 已同款收编):
-// 窄屏贴底抽屉(bottom sheet,拇指可达 + 避键盘),sm+ 居中弹窗;max-h[dvh]+overflow
-// 防小屏竖向溢出,底部内边距让出 iOS 安全区。
+// 本地标准件 API 与 kongming 对齐；Radix 提供交互语义。
+// 窄屏贴底并避开安全区，较宽屏居中；破坏性操作使用 destructive 按钮。
 function AlertDialog({ ...props }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
   return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />;
 }
@@ -39,8 +36,7 @@ function AlertDialogOverlay({
   );
 }
 
-/* 移动端形态见文件头注释;宽度档 size=default sm:max-w-lg / size=sm sm:max-w-xs;
-   动画与 ui/dialog 同款:移动端淡入淡出,sm+ 缩放。 */
+/* 桌面宽度和 Dialog 对齐。 */
 function AlertDialogContent({
   className,
   size = "default",

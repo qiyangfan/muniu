@@ -2,6 +2,13 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-21,全仓注释简化批完成含复审;已获提交/push 指令)
+
+- **复审续改(2026-10-21)**:在 53 批基础上补扫残留套话/过程引用、迁移头、12 个未覆盖新文件与复述型短注释;终态 237 文件(+3309/−3884,净 −575 行)。验证见验收记录 53 续条。
+- **范围**:按 comment-cleanup skill 收尾上一会话中断的注释简化,227 文件(+3303/−3838,净 −535 行):Go 175、web TS 33、Rust 4、配置/脚本 15。口径:删复述与过程性引用(ADR/Phase/change 名/日期叙事),中文全角标点,行为契约与陷阱语义逐条保留;字符串字面量零触碰。约 12 处注释与代码不符已按代码修正(如 1e8→1e9、RFC3339→RFC3339Nano、29600→296000 credit)。
+- **验证**:全 diff「剥 // 后代码逐字对称」校验通过(无指令/构建标签丢失);gofmt 全仓干净;lint 0 issues;vet 过;race 全包 ok;coverage gate PASS 70.3%;web 五件套过;cargo check(sdk)过。证据见验收记录 53。
+- **环境回归(下个会话必踩,待裁决)**:`make check` 的 lint 步裸 PATH 下必挂——①`~/workspace/go/bin/golangci-lint`(2.13.0)先于 mise 命中;②mise 上游 2.15.0 二进制(go1.27.0 构建)读不了 go 1.27.2 stdlib 导出数据(v5 > 上限 v4),系 mise.toml 浮动 `go = "1.27"` 拉到 1.27.2 所致。本轮以 `GOBIN=/tmp/gclbin go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0` 本地构建绕过(/tmp 重启即失,复现命令在此);修法见开放项。CI 是否同病取决于 setup-go 实际解析版本,未查。
+
 ## 当前状态(2026-10-18,tech-stack-refresh-2026-10 全栈升级落地;已获提交/push/盯 CI 指令)
 
 - **change 状态**:openspec `tech-stack-refresh-2026-10` 12/12 全勾(skip_specs,零能力规格变化,validate --all 23/23);评审循环 1 轮收敛后经 owner 指令提交推送,CI 实跑结果补记验收记录。
@@ -155,6 +162,7 @@
 
 ## 开放决策项
 
+- 【新增 2026-10-20】golangci-lint × go 1.27.2 工具链失配(环境级,非代码缺陷):上游 2.15.0 官方二进制为 go1.27.0 构建,无法解码 go1.27.2 stdlib 导出数据(v5>v4)。候选修法:mise.toml 把 go 钉到 1.27.0(最小动作,但放弃补丁版)/ 等 golangci-lint 发 go1.27.2 构建后 mise 升版本 / 本地常驻自建二进制;同时核查 CI 的 setup-go 版本解析是否同样踩中。
 - 【新增 2026-10-18】web 依赖白名单增补 `oxc-transform-react`(devDep;plugin-react ≥6 `compiler:true` 的官方指定载体,react 系工具链,oxc/React 团队联合产出)。React Compiler 关闭口径 = vite.config.ts 摘 `compiler: true` 一行,零残留。
 - 【观察 2026-10-18】coder/hnsw 维持 v0.6.1(上游最新正式 tag;main 有未发版正确性修复,钉伪版本被实测 7× 热路径回退否决,bench 判据见验收记录 52):上游发 v0.6.2+ 即重评估。
 - 【观察 2026-10-18】低频维护依赖:goccy/go-yaml(v1.19.2,9 个月无发版)、pkoukk/tiktoken-go(v0.1.8,13 个月;google/uuid 因其传递引用保留在 go.sum,非本仓直接依赖);随 govulncheck 例行复查。
@@ -190,6 +198,12 @@
 | 2026-10-13 | key-model-allowlist 评审登记双边界:①状态 lane(GET/DELETE /v1/responses/{id})不受白名单约束(请求无别名可校验,跨 key 可读为既有形态);②messages 流式管道错误信封硬编码 api_error(proxy-and-streaming v1 登记),forbidden 类型 HTTP 403 正确但类型字段落 api_error | 均既有语义非白名单批引入;收紧=契约级变更 | ①亲和条目绑 key/租户归属或按创建时模型回溯校验;②管道错误类型映射升级(与 model_not_found/quota 同批)——均待真实治理/消费诉求触发 | **已裁决并落地(2026-10-14 owner 委任裁决)**:①修——根因是亲和条目缺归属维度(跨用户读取/不可逆删除/上下文续写=安全洞,零消费话术不适用),独立 change `responses-state-ownership` 落地(亲和绑 apiKeyID per-key,三消费点不匹配≡未知不可区分,DELETE 先拒后出站);②修——同 lane 一套错误形态(翻译期本就发 Anthropic 原生类型),流式 finish 按类型映射五类精确映射+api_error 兜底,原「待真实消费者」条款由 Anthropic SDK 实际消费满足;登记详见 proxy-and-streaming.md 两处与 change design |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**53. 全仓注释简化收尾(2026-10-20,owner「根据注释简化的 skill,简化当前项目的注释」;承接中断半成品)**
+- 判据:diff 为纯注释 + make check 等价门禁全绿(lint/vet/race/coverage/web)+ gofmt/cargo check。
+- 证据:①逐 hunk「剥 // 后代码 multiset 对称」:92 文件代码行逐字对称、其余为纯注释行增删;字符串内 `//` 盲区扫描 0 命中;`//go:`/`//nolint`/构建标签零丢失。②lint 0 issues(本地 go1.27.2 自建 2.15.0,见当前状态环境回归条)、vet 0、`go test -race` 全包 ok、coverage gate PASS 70.3%、web typecheck/lint/lint:css/test/format exit 0、`cargo check`(plugins/sdk)exit 0、`gofmt -l` 全仓空。③终扫:ADR/Phase/change 名/日期叙事全仓 grep 清零;降级纪律、ABI 不变量、治理链序、wire 不变式等契约语义逐条保留。
+- 取舍留痕:迁移编号引用按 schema 出处事实保留;`(nat=nil)`、`(ms)`、`[base, base+end_needed)` 等纯代码/数字括号保留半角;「国内分支口径」改写为「国内厂商 Anthropic 兼容分支的通行形态」(presets 实证:deepseek-anthropic/moonshot-anthropic 均 bearer)。
+- **续条(2026-10-21 复审)**:补扫清零「链路/本次」类套话与迁移头 Phase/change/ADR 引用,处理 12 个未覆盖新文件及复述型短注释;终态 237 文件(+3309/−3884)。证据:①Go 175 文件经 go/scanner 去注释后 token 流与 HEAD 逐一相同,`//go:`/`//nolint`/构建标签零丢失;web 30 文件 `transpileModule(removeComments)` 输出与 HEAD 一致,eslint-disable/@ts- 指令零丢失;②`PATH=/tmp/gclbin:$PATH make check` EXIT:0(lint 0 issues,web 6 文件 15 测试全过,coverage gate PASS 70.3%);③`vite build --outDir /tmp/dist-check` ✓ 673ms、`cargo check` EXIT:0、`CGO_ENABLED=0 go build ./...` 过、`git diff --check` 过。`web/src/lib/api-types.d.ts` 为 OpenAPI 生成物,其 ADR 文案未手改以免与契约源漂移。
 
 **52. 全栈技术底座刷新(2026-10-18,openspec `tech-stack-refresh-2026-10` 12/12;调研→立项→实施→验收单会话闭环,owner「全权调研并决策」授权)**
 - 判据:逐任务门禁各自全绿(Go=`make check`,web=四件套+build /tmp)+ hnsw bench 对比 + embed 冒烟 + 真上游数据面单笔 + 三档×亮暗走查。

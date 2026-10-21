@@ -2,7 +2,7 @@ GO ?= go
 BIN := bin
 PKG := github.com/solvela/muniu
 
-## check: 全量质量门禁(vet + lint + web typecheck/lint/test/format + race test/覆盖率)——任何交付前必须全绿
+## check: 全量门禁(vet、lint、web 检查、race test 和覆盖率)
 .PHONY: check
 check: vet lint web-check test
 
@@ -27,7 +27,7 @@ vet:
 lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; else echo "[lint] golangci-lint 未安装,跳过"; fi
 
-## test: 竞态检测下的全量测试 + 全局覆盖率门禁(total ≥65%,JaCoCo 同位一票否决;阈值只升不降)
+## test: race 全量测试和 65% 最低覆盖率门禁
 .PHONY: test
 test:
 	$(GO) test -race -covermode=atomic -coverprofile=coverage.out ./...

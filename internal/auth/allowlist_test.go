@@ -1,6 +1,5 @@
-// key 级模型白名单契约测试(测试先行域,先红后绿):签发回显与读侧贯通、归一化
-// (trim 非空/去重/整单拒绝)、三态 PATCH、verify 携带白名单与缓存可见性、
-// 损坏 JSON 宁拒不放行(expires_at 损坏同款纪律)。
+// key 级模型白名单测试：签发回显与读侧贯通、归一化 trim 去重与空白条目整单拒绝、
+// 三态 PATCH、verify 携带白名单与缓存可见性、损坏 JSON 宁拒不放行。
 package auth
 
 import (
@@ -44,7 +43,7 @@ func sameStrings(a, b []string) bool {
 	return true
 }
 
-// 签发回显即持久:KeyRecord 回执与 GetAPIKeyByHash 读侧同值(执行链的事实源)。
+// 签发回显即持久：KeyRecord 回执与 GetAPIKeyByHash 读侧同值。
 func TestAllowlist_签发回显与读侧贯通(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec := createAllowKey(t, db, []string{"m-flash", "m-pro"})
@@ -60,7 +59,7 @@ func TestAllowlist_签发回显与读侧贯通(t *testing.T) {
 	}
 }
 
-// 归一化:空白条目整单拒绝;合法条目 trim + 去重(保持首现顺序)。
+// 归一化：空白条目整单拒绝；合法条目 trim 加去重，保持首现顺序。
 func TestAllowlist_归一化_空条目拒绝与去重(t *testing.T) {
 	db := openDB(t)
 	if _, _, err := CreateKey(db, "default", "bad", 60, KeyOpts{AllowedModels: []string{"m-a", "   "}}); err == nil {
@@ -75,7 +74,7 @@ func TestAllowlist_归一化_空条目拒绝与去重(t *testing.T) {
 	}
 }
 
-// PATCH 三态:数组=整体设定(null 语义归 ClearAllowModels);省略=不动;非法条目整单拒绝不落库。
+// PATCH 三态：数组为整体设定，JSON null 归入 ClearAllowModels；省略为不动；非法条目整单拒绝不落库。
 func TestAllowlist_三态PATCH(t *testing.T) {
 	db := openDB(t)
 	_, rec := createAllowKey(t, db, []string{"m-a"})
@@ -118,7 +117,7 @@ func TestAllowlist_三态PATCH(t *testing.T) {
 	}
 }
 
-// rowHash 按 key id 反查 hash(白名单读侧断言用;测试辅助,生产路径无此形态)。
+// rowHash 按 key id 反查 hash，供白名单读侧断言；测试辅助，生产路径无此形态。
 func rowHash(t *testing.T, db *sql.DB, keyID string) string {
 	t.Helper()
 	var h string
@@ -128,7 +127,7 @@ func rowHash(t *testing.T, db *sql.DB, keyID string) string {
 	return h
 }
 
-// verify 携带白名单;缓存 TTL 内旧值可见;Invalidate 后新值生效(与限额同款协议)。
+// verify 携带白名单；缓存 TTL 内旧值可见，Invalidate 后新值生效，与限额同款协议。
 func TestAllowlist_verify携带与缓存可见性(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec := createAllowKey(t, db, []string{"m-a"})
@@ -144,7 +143,7 @@ func TestAllowlist_verify携带与缓存可见性(t *testing.T) {
 	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{AllowedModels: next}); err != nil {
 		t.Fatal(err)
 	}
-	// 缓存窗口内旧值可见(TTL 语义,只影响 DB 变更可见性)
+	// 缓存窗口内旧值可见，TTL 只影响 DB 变更可见性
 	info = verifyWith(t, v, plaintext)
 	if !sameStrings(info.AllowedModels, []string{"m-a"}) {
 		t.Fatalf("缓存窗口内应仍见旧白名单: %v", info.AllowedModels)
@@ -156,7 +155,7 @@ func TestAllowlist_verify携带与缓存可见性(t *testing.T) {
 	}
 }
 
-// 列损坏(非法 JSON)按查询错误拒绝该 key——不放行语义不明的凭据(expires_at 损坏同款纪律)。
+// 列损坏即非法 JSON 时按查询错误拒绝该 key，不放行语义不明的凭据。
 func TestAllowlist_损坏JSON拒不放行(t *testing.T) {
 	db := openDB(t)
 	plaintext, _ := createAllowKey(t, db, []string{"m-a"})

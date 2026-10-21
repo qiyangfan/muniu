@@ -1,5 +1,5 @@
-// Gate = 配额 → RPM → TPM 三闸合一中间件(链序契约:auth → quota → ratelimit → handler)。
-// TPM 前置判定用 key 的 tpm_limit;记账由 proxy 在请求完成时回填(ratelimit.TPM.Record)。
+// Gate 配额 → RPM → TPM 三闸合一中间件，链序 auth → quota → ratelimit → handler。
+// TPM 前置判定用 key 的 tpm_limit；记账由 proxy 在请求完成时回填 ratelimit.TPM.Record。
 package ratelimit
 
 import (
@@ -14,20 +14,20 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// timeNow 时钟源(包级,测试可换)。
+// timeNow 时钟源（包级，测试可换）。
 var timeNow = time.Now
 
-// Gate 流量治理闸门(装配层持有,进程内单例)。
+// Gate 流量治理闸门，装配层持有，进程内单例。
 type Gate struct {
 	RPM    *Limiter
 	TPM    *TPM
 	Quota  *Quota
 	Logger *slog.Logger
-	// Shared 可选共享计数后端(ADR-0008 修订);nil = 现状 inmem 语义(零变更)。
+	// Shared 可选共享计数后端；nil 即进程内 inmem 语义。
 	Shared SharedBackend
 }
 
-// Middleware 三闸串联:任一拒绝即终止(信封已写)。无鉴权信息的链路直接放行。
+// Middleware 三闸串联，任一拒绝即终止（信封已写）；无鉴权信息的请求直接放行。
 func (g *Gate) Middleware(next http.Handler) http.Handler {
 	if g.Shared != nil {
 		return g.sharedMiddleware(next)
@@ -35,7 +35,7 @@ func (g *Gate) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		info := auth.KeyFrom(r.Context())
 		if info != nil {
-			// 1) 日配额(key 级 + 租户聚合)
+			// 1) 日配额（key 级 + 租户聚合）
 			if g.Quota != nil && g.Quota.exceeded(keyInfoFrom(r.Context()), timeNow()) {
 				g.denyQuota(w, r)
 				return
@@ -49,7 +49,7 @@ func (g *Gate) Middleware(next http.Handler) http.Handler {
 			}
 			// 3) TPM 滑动窗口
 			if g.TPM != nil && !g.TPM.Allow(info.ID, info.TPMLimit, timeNow()) {
-				g.deny429(w, r, time.Second) // TPM 无 Retry-After 依据,给 1s
+				g.deny429(w, r, time.Second) // TPM 无 Retry-After 依据，给 1s
 				return
 			}
 		}

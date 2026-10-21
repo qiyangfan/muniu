@@ -1,14 +1,10 @@
-// 复制按钮(业务层标准件):预设目录 YAML 片段与密钥页 Key ID 复制共用单源
-// (宪法 Article 4:≥2 处同类 UI 抽公共组件)。value 必须传原始完整值——截断/省略显示
-// 由调用方负责,本组件绝不改动复制内容(不转换大小写/不加前缀/不换值)。
-// 剪贴板 API 仅安全上下文可用,经 LAN IP 访问控制台时回退 execCommand;
-// 复制失败保留可读提示,调用方展示的文本仍可手动选中,不悄悄复制其他内容。
+// 优先使用 Clipboard API，不可用时回退 execCommand；显示可截断但复制始终使用完整原值。
+// 复制失败时保留可手动选择的文本。
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { Check, Copy } from "lucide-react";
 
 import { Button } from "./ui/button";
 
-// 剪贴板写入:clipboard API 仅安全上下文(https/localhost)可用,LAN IP 访问回退 execCommand
 export async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
@@ -57,7 +53,7 @@ export function CopyButton({
   const [failed, setFailed] = useState(false);
   const timer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(timer.current), []);
-  // disabled 态的缺值场景(如 ID 不可用)由调用方展示占位文案,本组件不代填值
+  // 缺值占位由调用方展示。
   const copy = async () => {
     window.clearTimeout(timer.current);
     setFailed(false);

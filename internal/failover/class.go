@@ -1,12 +1,10 @@
-// Package failover 承载候选迭代器与错误分类→动作判定(proxy-and-streaming「Failover 判定表」)。
-// Phase 1 仅提供 ErrorClass 枚举(adapter.Classify 的返回契约);判定表与迭代器 Phase 3 落地。
-// 本包必须保持纯函数零 IO(architecture「包结构」)。
+// Package failover 定义上游错误分类与候选换道规则，ErrorClass 为适配器归一后的上游错误类型。
 package failover
 
-// ErrorClass 上游错误分类,即判定表的行坐标。
+// ErrorClass 上游错误分类，即判定表的行坐标。
 type ErrorClass string
 
-// 错误分类常量(语义见 proxy-and-streaming 判定表)。
+// 错误分类常量。
 const (
 	ClassDialFail        ErrorClass = "dial_fail"            // 连不上、握手失败
 	ClassTimeoutFirst    ErrorClass = "timeout_first"        // 首 token 超时
@@ -16,6 +14,6 @@ const (
 	ClassBadRequest      ErrorClass = "bad_request_400"      // 参数被上游拒
 	ClassMidStreamFail   ErrorClass = "mid_stream_fail"      // 流中断/帧间超时/解析崩
 	ClassContextCanceled ErrorClass = "context_canceled"     // 客户端断连
-	ClassCostBudget      ErrorClass = "cost_budget_exceeded" // 网关策略:单请求成本预算超限(非上游质量)
+	ClassCostBudget      ErrorClass = "cost_budget_exceeded" // 网关策略：单请求成本预算超限，非上游质量问题
 	ClassUnknown         ErrorClass = "unknown"              // 未归类
 )

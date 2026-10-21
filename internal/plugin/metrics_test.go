@@ -1,5 +1,5 @@
-// per-plugin 指标文本协议测试(任务 5.2):调用计数{verdict}/耗时直方图/containment{kind}
-// 四类序列全部进 /metrics 渲染输出;禁用态(全局开关)不产出。
+// 验证插件指标进入 /metrics 文本输出：调用计数、耗时直方图、containment 事件与
+// 实例水位仪表；禁用态不产出。
 package plugin
 
 import (
@@ -16,7 +16,7 @@ func TestPluginMetrics_文本协议(t *testing.T) {
 	metrics.SetEnabled(true)
 	t.Cleanup(func() { metrics.SetEnabled(false) })
 
-	// 一放行一拒绝,一次 containment(死循环超时)
+	// 一放行一拒绝，一次 containment 死循环超时。
 	pPass := compileFor(t, "m-pass", testkit.FixturePass)
 	_ = pPass.HookRequestBody(context.Background(), testkit.FixtureChatBody("m"))
 	pRej := compileFor(t, "m-rej", testkit.FixtureReject)
@@ -49,7 +49,7 @@ func TestPluginMetrics_文本协议(t *testing.T) {
 		}
 	}
 
-	// 实例水位仪表(GaugeFunc 在 NewRegistry 注册;需注册表内有插件才有序列)
+	// 实例水位仪表在 NewRegistry 注册，需注册表内有插件才有序列。
 	reg := NewRegistry()
 	t.Cleanup(reg.Close)
 	if _, _, err := reg.Register(Options{Name: "m-g", Binary: testkit.FixturePlugin(testkit.FixturePass),

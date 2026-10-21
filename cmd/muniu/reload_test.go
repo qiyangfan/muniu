@@ -1,6 +1,6 @@
-// SIGHUP 配置热加载集成测试(sighup-config-reload):
-// 合法新配置 → 新请求走新 provider;非法新配置 → 保持旧态继续服务。
-// 假上游经 testkit,进程内自发 SIGHUP(signal.Notify 捕获本进程信号)。
+// SIGHUP 配置热加载集成测试：合法新配置 → 新请求走新 provider；
+// 非法新配置 → 保持旧态继续服务。
+// 假上游经 testkit，进程内自发自收 SIGHUP，signal.Notify 捕获本进程信号。
 package main
 
 import (
@@ -70,7 +70,7 @@ model_routes:
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
 
-	// 数据面 key:经同库签发(装配已开库,第二连接 WAL 共存)
+	// 数据面 key 经同库签发：装配已开库，第二连接 WAL 共存。
 	keyDB, err := store.Open(dbPath)
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ model_routes:
 		t.Fatalf("初态应触达 up1 一次: %d", up1.RequestCount())
 	}
 
-	// 合法新配置:provider 指向 up2 → SIGHUP → 新请求走 up2(轮询等待热替换落地)
+	// 合法新配置 provider 指向 up2 → SIGHUP → 新请求走 up2，轮询等待热替换落地。
 	providerName = "p2"
 	writeCfg(up2.URL(), "SIGHUP_TEST_KEY_2")
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
@@ -138,7 +138,7 @@ model_routes:
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Counter 保留历史 provider 是正确行为；只核对实时 keypool gauge。
+		// counter 为累计值；此处只核对反映当前状态的 keypool gauge。
 		if path == "/metrics" {
 			var gauges strings.Builder
 			for _, line := range strings.Split(string(body), "\n") {
@@ -153,7 +153,7 @@ model_routes:
 			t.Fatalf("热更读侧失真 %s: %d %s", path, resp.StatusCode, body)
 		}
 	}
-	// 非法新配置:保持旧态继续服务(绝不半更新)
+	// 非法新配置：保持旧态继续服务，绝不半更新。
 	writeCfgBroken := func() {
 		body := fmt.Sprintf(`server:
   addr: "127.0.0.1:0"
@@ -181,7 +181,7 @@ model_routes:
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(300 * time.Millisecond) // 给(不会发生的)替换留窗口
+	time.Sleep(300 * time.Millisecond) // 给不会发生的替换留窗口
 	before := up2.RequestCount()
 	if code, body := post(); code != 200 {
 		t.Fatalf("非法配置应保持旧态继续服务: %d %s", code, body)

@@ -1,8 +1,5 @@
-/* 主题偏好单源(契约对齐 kongming/jinguan 的 lib/theme-store.ts):
-   「localStorage 手动值 → prefers-color-scheme → 亮色」,与 index.html 内联防 FOUC
-   脚本为同一契约(key muniu-theme 与优先级钉死,双侧注释互指,改动必须同步)。
-   muniu 无 zustand,以纯函数 + hook 实现;手动切换写入 localStorage 并从此优先于系统偏好;
-   系统偏好实时跟随仅无手动值时生效(宪法 Article 10)。 */
+/* 主题优先级为 localStorage 手动值、系统偏好、亮色。
+   与 index.html 的首帧初始化共用 key 和优先级，修改时同步更新。 */
 import { useCallback, useEffect, useState } from "react";
 
 export const THEME_STORAGE_KEY = "muniu-theme";
@@ -22,7 +19,7 @@ function systemTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-/** 契约解析(与 index.html 内联脚本同语义) */
+/** 按 localStorage 和系统偏好解析当前主题。 */
 export function resolveTheme(): Theme {
   return readStored() ?? systemTheme();
 }
@@ -31,11 +28,11 @@ function applyToDom(theme: Theme): void {
   document.documentElement.classList.toggle("dark", theme === "dark");
 }
 
-/** 渲染态主题 + 手动切换(翻转生效主题,写入 localStorage 并优先于系统偏好)。 */
+/** 返回当前主题和手动切换函数。 */
 export function useTheme(): { theme: Theme; toggle: () => void } {
   const [theme, setTheme] = useState<Theme>(resolveTheme);
 
-  // 系统偏好实时跟随:有手动值时忽略系统变化(手动值优先,不逆转用户选择)
+  // 仅在用户没有手动选择主题时跟随系统变化。
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = (e: MediaQueryListEvent) => {
@@ -53,7 +50,7 @@ export function useTheme(): { theme: Theme; toggle: () => void } {
     try {
       localStorage.setItem(THEME_STORAGE_KEY, next);
     } catch {
-      /* 写失败(隐私模式):本次会话内仍生效,持久化降级 */
+      /* 存储不可用时，当前会话内仍可切换主题。 */
     }
     applyToDom(next);
     setTheme(next);

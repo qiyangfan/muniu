@@ -1,12 +1,12 @@
 //go:build smoke
 
-// 真上游冒烟(手动档,CI 禁跑):make smoke PROVIDER=<名>
-// 环境变量:
+// 真上游冒烟，手动档且 CI 禁跑，用法 make smoke PROVIDER=<名>
+// 环境变量：
 //
-//	MUNIU_SMOKE_KEY      必填,真 key(ollama 等本地实现可用任意占位值)
-//	MUNIU_SMOKE_BASE_URL 必填,如 https://api.deepseek.com/v1
-//	MUNIU_SMOKE_PROVIDER 适配器形态(openai/deepseek/moonshot/glm,缺省 openai)
-//	MUNIU_SMOKE_MODEL    上游模型名,缺省请求体自带
+//	MUNIU_SMOKE_KEY      必填，真 key，ollama 等本地实现可用任意占位值
+//	MUNIU_SMOKE_BASE_URL 必填，如 https://api.deepseek.com/v1
+//	MUNIU_SMOKE_PROVIDER 适配器形态 openai/deepseek/moonshot/glm，缺省 openai
+//	MUNIU_SMOKE_MODEL    上游模型名，缺省请求体自带
 package adapter_test
 
 import (
@@ -26,10 +26,10 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// blank import:接线 anthropic 桥接工厂
+// blank import 接线 anthropic 桥接工厂
 var _ = bridge.NewAnthropic
 
-// smokeEnv 读取冒烟环境变量;缺配置则跳过(不 fail CI)。
+// smokeEnv 读取冒烟环境变量，缺配置则跳过，不 fail CI。
 func smokeEnv(t *testing.T) (adapter.Adapter, string) {
 	t.Helper()
 	key := os.Getenv("MUNIU_SMOKE_KEY")
@@ -41,7 +41,7 @@ func smokeEnv(t *testing.T) (adapter.Adapter, string) {
 	if provider == "" {
 		provider = "openai"
 	}
-	// MUNIU_SMOKE_AUTH 鉴权形态声明(空=缺省;bearer=国内 Anthropic 分支口径),透传 config.Provider.Auth
+	// MUNIU_SMOKE_AUTH 鉴权形态声明，空为缺省，bearer 为国内 Anthropic 分支口径；透传 config.Provider.Auth
 	ad, err := adapter.For(provider, base, key, adapter.Options{Auth: os.Getenv("MUNIU_SMOKE_AUTH")})
 	if err != nil {
 		t.Fatalf("构造适配器: %v", err)
@@ -141,8 +141,8 @@ func truncateSmk(b []byte) string {
 	return string(b)
 }
 
-// 按供应商入口:make smoke PROVIDER=deepseek → -run TestSmoke_deepseek(共用 TestSmoke_Env)。
-// PROVIDER 只选测试入口,适配器形态由 MUNIU_SMOKE_PROVIDER 决定(缺省 openai);
+// 按供应商入口：make smoke PROVIDER=deepseek 跑 TestSmoke_deepseek，共用 TestSmoke_Env。
+// PROVIDER 只选测试入口，适配器形态由 MUNIU_SMOKE_PROVIDER 决定，缺省 openai；
 // 各家官方端点与模型示例见 docs/provider-presets.md。
 func TestSmoke_deepseek(t *testing.T) { TestSmoke_Env(t) }
 func TestSmoke_moonshot(t *testing.T) { TestSmoke_Env(t) }
@@ -150,7 +150,7 @@ func TestSmoke_glm(t *testing.T)      { TestSmoke_Env(t) }
 func TestSmoke_ollama(t *testing.T)   { TestSmoke_Env(t) }
 func TestSmoke_openai(t *testing.T)   { TestSmoke_Env(t) }
 
-// 预设目录各家的冒烟入口(端点抄 docs/provider-presets.md 表 A/C)。
+// 预设目录各家的冒烟入口，端点取自 docs/provider-presets.md 表 A/C。
 func TestSmoke_qwen(t *testing.T)        { TestSmoke_Env(t) }
 func TestSmoke_doubao(t *testing.T)      { TestSmoke_Env(t) }
 func TestSmoke_byteplus(t *testing.T)    { TestSmoke_Env(t) }

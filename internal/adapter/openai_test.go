@@ -1,5 +1,5 @@
-// openai 基座适配器契约测试(协议适配=测试先行域):Prepare 出站形态、Classify 粗分、
-// usage 归一表、StreamEvent 只读归一(passthrough 原字节)。
+// openai 基座适配器契约测试：Prepare 出站形态、Classify 粗分、usage 归一、
+// StreamEvent 只读归一且 passthrough 为原字节。
 package adapter
 
 import (
@@ -42,7 +42,7 @@ func TestOpenAI_Prepare(t *testing.T) {
 			if got := out.Header.Get("Content-Type"); got != "application/json" {
 				t.Fatalf("Content-Type 不符: %q", got)
 			}
-			// 出站 body:只换 model,未知字段零丢失
+			// 出站 body 只换 model，未知字段零丢失
 			var fields map[string]json.RawMessage
 			if err := json.Unmarshal(out.Body, &fields); err != nil {
 				t.Fatalf("出站 body 非法: %v", err)
@@ -138,7 +138,7 @@ func TestOpenAI_StreamEvent_passthrough原字节(t *testing.T) {
 			if err != nil {
 				t.Fatalf("StreamEvent 失败: %v", err)
 			}
-			// passthrough 契约:原字节零改写
+			// passthrough 为原字节零改写
 			if string(passthrough) != c.data {
 				t.Fatalf("passthrough 被改写: %q → %q", c.data, passthrough)
 			}
@@ -192,7 +192,7 @@ func TestOpenAI_PrepareEmbeddings(t *testing.T) {
 	if out.Header.Get("Authorization") != "Bearer sk-emb" {
 		t.Fatalf("鉴权头不符: %v", out.Header)
 	}
-	// 只换 model,input 与未知字段零丢失
+	// 只换 model，input 与未知字段零丢失
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(out.Body, &fields)
 	var m, inp string
@@ -203,7 +203,7 @@ func TestOpenAI_PrepareEmbeddings(t *testing.T) {
 	}
 }
 
-// 空 data / 纯注释事件(SSE 心跳)不得报错:按解析失败处理会把合法心跳误判为上游断流。
+// 空 data 或纯注释事件是 SSE 心跳，不得报错；按解析失败处理会把合法心跳误判为上游断流。
 func TestOpenAI_StreamEvent_空载荷心跳(t *testing.T) {
 	o := &OpenAI{}
 	for _, in := range [][]byte{nil, []byte(""), []byte(": keep-alive")} {
@@ -214,7 +214,7 @@ func TestOpenAI_StreamEvent_空载荷心跳(t *testing.T) {
 	}
 }
 
-// DeepSeek 402(余额不足)必须归限流而非未知:欠费 key 走冷却自动重探(充值即恢复),
+// DeepSeek 402 余额不足必须归限流而非未知：欠费 key 走冷却自动重探，充值即恢复；
 // 归 ClassUnknown 会让欠费 key 被持续选中重试且不触发任何冷却。
 func TestQuirk_DeepSeek402归类限流(t *testing.T) {
 	ad, err := For("deepseek", "https://api.deepseek.com/v1", "k")
@@ -224,7 +224,7 @@ func TestQuirk_DeepSeek402归类限流(t *testing.T) {
 	if got := ad.Classify(402, nil); got != failover.ClassRateLimited {
 		t.Fatalf("402 应归 rate_limited: %v", got)
 	}
-	// 其余状态码仍走基座粗分表(差异只声明差异)
+	// 其余状态码仍走基座粗分表，quirk 只声明差异
 	if got := ad.Classify(401, nil); got != failover.ClassAuthFailed {
 		t.Fatalf("401 应仍归 auth_failed: %v", got)
 	}
@@ -234,7 +234,7 @@ func TestQuirk_DeepSeek402归类限流(t *testing.T) {
 	if got := ad.Classify(429, nil); got != failover.ClassRateLimited {
 		t.Fatalf("429 应仍归 rate_limited: %v", got)
 	}
-	// 基座(无 quirk)对 402 维持 Phase 1 粒度:归 unknown,不由本测试改动
+	// OpenAI 基座将 402 归为 unknown；DeepSeek 的覆盖行为由适配器测试验证。
 	base := &OpenAI{}
 	if got := base.Classify(402, nil); got != failover.ClassUnknown {
 		t.Fatalf("基座 402 应维持 unknown: %v", got)

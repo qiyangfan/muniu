@@ -1,6 +1,4 @@
-// Gate 共享后端路径测试(cluster-ratelimit-shared-view):链序契约在 shared
-// 模式下保持 quota → RPM → TPM 三闸(修复实证:首版 sharedMiddleware 丢失
-// quota 闸,redis 模式日配额失效——本测试钉死该链序)。
+// 验证共享后端模式仍按 quota、RPM、TPM 的顺序执行限流检查。
 package ratelimit
 
 import (
@@ -14,7 +12,7 @@ import (
 	"github.com/solvela/muniu/internal/auth"
 )
 
-// fakeShared 记录各闸调用,供链序断言。
+// fakeShared 记录各闸调用，供链序断言。
 type fakeShared struct {
 	rpmCalled, tpmCalled bool
 	rpmAllow             bool
@@ -35,10 +33,10 @@ func (f *fakeShared) RecordTPM(keyID string, tokens int64, now time.Time) {}
 func (f *fakeShared) Degraded() bool { return false }
 func (f *fakeShared) Close() error   { return nil }
 
-// sharedGate 构造带 quota(超限态)与共享后端的 Gate。
+// sharedGate 构造带 quota（超限态）与共享后端的 Gate。
 func sharedGate(t *testing.T, shared *fakeShared) *Gate {
 	t.Helper()
-	q := seedQuota(t, 0) // 租户不限;key 级 100 credits,由下方 insertUsage 灌满
+	q := seedQuota(t, 0) // 租户不限；key 级 100 credits，由下方 insertUsage 灌满
 	insertUsage(t, q, "r-1", quotaTenant, "key-shared", 100, time.Now())
 	return &Gate{Quota: q, Shared: shared, Logger: slog.Default()}
 }
@@ -63,7 +61,7 @@ func TestGateShared_quota闸在共享模式生效(t *testing.T) {
 
 func TestGateShared_未超限走共享RPM判定(t *testing.T) {
 	shared := &fakeShared{rpmAllow: false}
-	g := &Gate{Shared: shared, Logger: slog.Default()} // Quota nil:验证 nil 容忍与 RPM 判定
+	g := &Gate{Shared: shared, Logger: slog.Default()} // Quota nil：验证 nil 容忍与 RPM 判定
 	info := &auth.KeyInfo{ID: "k9", TenantID: quotaTenant, RPMLimit: 60}
 	proxy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 

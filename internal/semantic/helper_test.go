@@ -1,4 +1,4 @@
-// 测试辅助:临时库缓存实例与指针构造。
+// 测试辅助：临时库缓存实例与指针构造。
 package semantic
 
 import (
@@ -16,7 +16,7 @@ func newCacheForTest(t *testing.T, opts Options, embedder Embedder) (*Cache, err
 		return nil, err
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	// 语义缓存行有 tenants FK:种子测试租户 t1/t2
+	// 语义缓存行有 tenants 外键，先种子测试租户 t1/t2。
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, tn := range []string{"t1", "t2"} {
 		if _, err := db.Exec(`INSERT INTO tenants (id, name, created_at) VALUES (?,?,?)`, tn, tn, now); err != nil {

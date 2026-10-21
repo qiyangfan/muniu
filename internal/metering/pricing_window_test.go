@@ -1,6 +1,6 @@
-// 分时段倍率价目表契约测试(测试先行域):倍率解析(基点/零浮点)、窗口解析(跨午夜)、
+// 分时段倍率价目表测试：倍率解析按基点且零浮点、窗口解析含跨午夜、
 // 时区固定偏移、先声明先匹配、保守向上取整、溢出防护。
-// 契约:metering.md「计价」——配置人类可读,加载期一次性换算为整数,运行时零浮点查表。
+// 配置人类可读，加载期一次性换算为整数，运行时零浮点查表。
 package metering
 
 import (
@@ -19,7 +19,7 @@ func TestParseMultiplier(t *testing.T) {
 		{"1", 10000},
 		{"2", 20000},
 		{"0.25", 2500},
-		{"0.0001", 1},    // 最小粒度:1 基点
+		{"0.0001", 1},    // 最小粒度：1 基点。
 		{"10", 100000},   // 上限 10 倍
 		{"0.1234", 1234}, // 4 位小数即基点精度
 	}
@@ -34,9 +34,9 @@ func TestParseMultiplier(t *testing.T) {
 func TestParseMultiplier_非法(t *testing.T) {
 	cases := []string{
 		"", "abc", "-0.5", "+0.5", "0", "0.0000", // 非正
-		"10.0001",                     // 超上限(>10 倍)
-		"0.12345",                     // 超 4 位小数(超出基点精度)
-		"1e-2", " 0.5 ", "0.5.", ".5", // 形态非法(与 ParsePrice 同纪律)
+		"10.0001",                     // 超上限，大于 10 倍。
+		"0.12345",                     // 超 4 位小数，超出基点精度。
+		"1e-2", " 0.5 ", "0.5.", ".5", // 形态非法，与 ParsePrice 同纪律。
 	}
 	for _, in := range cases {
 		if got, err := ParseMultiplier(in); !errors.Is(err, ErrInvalidPrice) {
@@ -51,7 +51,7 @@ func TestParseWindowMinutes(t *testing.T) {
 		start, end int
 		wantWrap   bool
 	}{
-		{"16:30-00:30", 16*60 + 30, 30, true}, // 跨午夜(DeepSeek 错峰)
+		{"16:30-00:30", 16*60 + 30, 30, true}, // 跨午夜，DeepSeek 错峰场景。
 		{"00:00-08:30", 0, 8*60 + 30, false},
 		{"00:00-24:00", 0, 1440, false}, // 24:00 作为终点合法
 		{"23:00-24:00", 23 * 60, 1440, false},
@@ -177,8 +177,8 @@ func TestPricingTable_At(t *testing.T) {
 
 	t.Run("先声明先匹配", func(t *testing.T) {
 		tbl, err := NewPricingTable(def, utc, []WindowSpec{
-			{StartMin: 0, EndMin: 1440, BasisPoints: 8000}, // 全天 0.8(先声明,赢)
-			{StartMin: 0, EndMin: 1440, BasisPoints: 5000}, // 全天 0.5(被遮蔽)
+			{StartMin: 0, EndMin: 1440, BasisPoints: 8000}, // 全天 0.8，先声明者赢。
+			{StartMin: 0, EndMin: 1440, BasisPoints: 5000}, // 全天 0.5，被遮蔽。
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -190,7 +190,7 @@ func TestPricingTable_At(t *testing.T) {
 	})
 
 	t.Run("固定偏移时区换算", func(t *testing.T) {
-		// 北京时间 00:30-08:30 错峰:UTC 16:30-00:30
+		// 北京时间 00:30-08:30 错峰，即 UTC 16:30-00:30。
 		cst, _ := ParseZoneOffset("+08:00")
 		tbl, err := NewPricingTable(def, cst, []WindowSpec{
 			{StartMin: 30, EndMin: 8*60 + 30, BasisPoints: 5000},
@@ -202,14 +202,14 @@ func TestPricingTable_At(t *testing.T) {
 		if got := tbl.At(time.Date(2026, 9, 11, 16, 30, 0, 0, time.UTC)); got.InputCreditsPerM != 220_000 {
 			t.Fatalf("UTC16:30(北京00:30)应半价: %+v", got)
 		}
-		// UTC 00:30 = 北京 08:30 → 不命中(终点不含)
+		// UTC 00:30 = 北京 08:30 → 不命中，终点不含。
 		if got := tbl.At(time.Date(2026, 9, 11, 0, 30, 0, 0, time.UTC)); got != def {
 			t.Fatalf("UTC00:30(北京08:30)应缺省价: %+v", got)
 		}
 	})
 
 	t.Run("倍率作用于三段价且 cached 缺省语义保持", func(t *testing.T) {
-		// def 的 cached=0 表示「缺省=input」:缩放后仍为 0,CostWithCached 的缺省解析不受影响
+		// def 的 cached=0 表示缺省=input：缩放后仍为 0，CostWithCached 的缺省解析不受影响。
 		defWithCached := Pricing{Currency: "CNY", InputCreditsPerM: 999_999, CachedInputCreditsPerM: 0, OutputCreditsPerM: 3}
 		tbl, err := NewPricingTable(defWithCached, utc, []WindowSpec{
 			{StartMin: 0, EndMin: 1440, BasisPoints: 5000},
@@ -243,7 +243,7 @@ func TestFormatPrice(t *testing.T) {
 			t.Fatalf("FormatPrice(%d) = %q, 期望 %q", c.credits, got, c.want)
 		}
 	}
-	// 恒等往返:FormatPrice(ParsePrice(x)) == x(规范化形态)
+	// 恒等往返：FormatPrice(ParsePrice(x)) == x，规范化形态。
 	for _, in := range []string{"0.44", "0.014", "2", "0.000001", "0.00000001"} {
 		credits, err := ParsePrice(in)
 		if err != nil {

@@ -1,4 +1,4 @@
-// store 契约测试:迁移幂等、default 租户种子、repo 三方法(查 key/批量落库幂等/日成本聚合)。
+// store 测试：迁移幂等、default 租户种子、repo 三方法，即查 key、批量落库幂等、日成本聚合。
 package store
 
 import (
@@ -20,7 +20,7 @@ func TestMigrate_幂等_重复打开不报错(t *testing.T) {
 	}
 	_ = db1.Close()
 
-	db2, err := Open(p) // 第二次打开:已应用迁移必须全部跳过
+	db2, err := Open(p) // 第二次打开：已应用迁移必须全部跳过。
 	if err != nil {
 		t.Fatalf("二次打开(迁移应幂等)失败: %v", err)
 	}
@@ -148,9 +148,9 @@ func TestSumCostToday_过滤estimated与当日(t *testing.T) {
 	rows := []UsageRow{
 		mk("a", "ok", false, 100, now),
 		mk("b", "ok", false, 200, now),
-		mk("c", "error", false, 400, now),                  // 失败请求也聚合(error_class 不影响成本口径)
-		mk("d", "ok", true, 800, now),                      // estimated 行必须被剔除
-		mk("e", "ok", false, 1600, now.Add(-25*time.Hour)), // 昨日不计
+		mk("c", "error", false, 400, now),                  // 失败请求也聚合，error_class 不影响成本口径。
+		mk("d", "ok", true, 800, now),                      // estimated 行必须被剔除。
+		mk("e", "ok", false, 1600, now.Add(-25*time.Hour)), // 昨日不计。
 	}
 	if err := InsertUsageBatch(db, rows); err != nil {
 		t.Fatal(err)
@@ -170,7 +170,7 @@ func TestSumCostToday_过滤estimated与当日(t *testing.T) {
 	}
 }
 
-// openTestStore 开临时库(迁移自动执行)。
+// openTestStore 开临时库，迁移自动执行。
 func openTestStore(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := Open(filepath.Join(t.TempDir(), "pricing.db"))
@@ -181,7 +181,7 @@ func openTestStore(t *testing.T) *sql.DB {
 	return db
 }
 
-// 动态价目 CRUD(0004):upsert 覆盖、窗口 JSON 往返、删除回落语义(删行即无)。
+// 动态价目 CRUD，迁移 0004：upsert 覆盖、窗口 JSON 往返、删除回落语义，删行即无。
 func TestPricing_CRUD(t *testing.T) {
 	db := openTestStore(t)
 	rec := PricingRecord{
@@ -201,7 +201,7 @@ func TestPricing_CRUD(t *testing.T) {
 		len(got.Windows) != 1 || got.Windows[0] != (PricingWindowRecord{Window: "00:30-08:30", BasisPoints: 5000}) {
 		t.Fatalf("读回不符: %+v", got)
 	}
-	// 覆盖写:窗口替换 + cached 归零(缺省语义)
+	// 覆盖写：窗口替换，cached 归零为缺省语义。
 	rec.Windows = []PricingWindowRecord{{Window: "16:30-00:30", BasisPoints: 5000}, {Window: "00:00-00:30", BasisPoints: 5000}}
 	rec.CachedInputCredits = 0
 	if err := UpsertPricing(db, rec); err != nil {
@@ -211,7 +211,7 @@ func TestPricing_CRUD(t *testing.T) {
 	if err != nil || len(all) != 1 || len(all[0].Windows) != 2 || all[0].CachedInputCredits != 0 {
 		t.Fatalf("覆盖写不符: %+v %v", all, err)
 	}
-	// 时区缺省补 UTC
+	// 时区缺省补 UTC。
 	rec2 := rec
 	rec2.Alias = "alias-b"
 	rec2.Timezone = ""
@@ -222,7 +222,7 @@ func TestPricing_CRUD(t *testing.T) {
 	if got2.Timezone != "UTC" {
 		t.Fatalf("空时区应缺省 UTC: %+v", got2)
 	}
-	// 删除:行消失,再读 ErrNotFound
+	// 删除：行消失，再读 ErrNotFound。
 	n, err := DeletePricing(db, "alias-a")
 	if err != nil || n != 1 {
 		t.Fatalf("删除应命中 1 行: %d %v", n, err)
@@ -232,15 +232,15 @@ func TestPricing_CRUD(t *testing.T) {
 	}
 }
 
-// 毒丸行自愈(0005):损坏 payload 在单连接(MaxOpenConns(1))下读取不得死锁,
-// 损坏行被剔除并计入 skipped,合法行不受影响。
+// 毒丸行自愈，迁移 0005：损坏 payload 在单连接 MaxOpenConns(1) 下读取不得死锁，
+// 损坏行被剔除并计入 skipped，合法行不受影响。
 func TestPendingBufferedRows_毒丸行自愈(t *testing.T) {
 	db := openTestStore(t)
 	if _, err := db.Exec(`INSERT INTO metering_buffer (row_id, payload, created_at) VALUES ('bad','{broken',?)`,
 		time.Now().UTC().Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
-	// JSON 键 = UsageRow Go 字段名(encoding/json 大小写不敏感匹配)
+	// JSON 键 = UsageRow Go 字段名，encoding/json 匹配大小写不敏感。
 	valid := `{"ID":"good","RequestID":"r1","Provider":"p","ModelAlias":"m","UpstreamModel":"m","Stream":false,"Status":"ok","PromptTokens":1,"CompletionTokens":2,"Estimated":false,"CostCredits":0,"Currency":"CNY","TenantID":"t","APIKeyID":"k","LatencyTotalMs":5,"CreatedAt":"2026-09-11T00:00:00Z"}`
 	if _, err := db.Exec(`INSERT INTO metering_buffer (row_id, payload, created_at) VALUES ('good',?,?)`,
 		valid, time.Now().UTC().Format(time.RFC3339)); err != nil {

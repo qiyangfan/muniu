@@ -1,10 +1,7 @@
-// quirk patch 实现(ADR-0003):只声明「与 openai 基座的差异」,禁止整家覆写。
-// 每个差异点溯源到 conformance fixture 与官方文档(见 fixture source_url)。
-// 已核对结论(docs/design/upstream-adapters.md 矩阵,2026-09-09):
-//   - deepseek:usage 缓存命中为顶层 prompt_cache_hit_tokens(非 OpenAI details 嵌套),
-//     reasoning_tokens 在 completion_tokens_details;
-//   - moonshot:cached_tokens 为顶层 OpenAI 风格命名,流式 usage 依赖 include_usage(缺省无 usage 帧);
-//   - glm:当前流式形态与基座无已实证差异 → 显式空 quirk(流式 usage 返回方式仍 ⚠ 待实证)。
+// quirk patch 只声明与 OpenAI 基座的差异；每项差异均对应 conformance fixture。
+//   - deepseek：usage 缓存命中为顶层 prompt_cache_hit_tokens（非 OpenAI 的 details 嵌套），reasoning_tokens 在 completion_tokens_details；
+//   - moonshot：cached_tokens 为顶层 OpenAI 风格命名，流式 usage 依赖 include_usage，缺省无 usage 帧；
+//   - glm：流式形态与基座无已实证差异，流式 usage 返回方式仍待实证。
 package adapter
 
 import (
@@ -16,7 +13,7 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// quirk 通用包装:默认全透传基座,仅覆写声明了差异的方法。
+// quirk 通用包装：默认透传基座，仅覆写声明了差异的方法。
 type quirk struct {
 	base           Adapter
 	normalizeUsage func(raw json.RawMessage) (protocol.Usage, error)
@@ -46,8 +43,7 @@ func (q *quirk) NormalizeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	return q.normalizeUsage(raw)
 }
 
-// newDeepseek DeepSeek quirk:缓存命中字段重映射(见 deepseek/usage-cache-tokens fixture)
-// 与 402 余额不足归类(裁决 2026-09-11:HANDOFF 开放决策项)。
+// newDeepseek 添加 DeepSeek usage 字段归一化和 402 余额不足分类。
 func newDeepseek(base Adapter) Adapter {
 	return &quirk{base: base, normalizeUsage: func(raw json.RawMessage) (protocol.Usage, error) {
 		var u struct {
@@ -69,8 +65,8 @@ func newDeepseek(base Adapter) Adapter {
 			CachedTokens:     u.PromptCacheHit,
 		}, nil
 	}, classify: func(status int, body []byte) failover.ErrorClass {
-		// 402 = 欠费:充值即恢复的暂态。归限流冷却(指数退避、自动重探)而非 401 式禁用
-		// (禁用需人工重启恢复)——大厂熔断器「半开自动探测」语义;判定表 rate_limited 行为换道。
+		// 402 欠费是充值即恢复的暂态，归入限流冷却走指数退避与自动重探，
+		// 而非 401 式禁用；限流冷却对应熔断器半开自动探测，禁用则需人工重启恢复。
 		if status == http.StatusPaymentRequired {
 			return failover.ClassRateLimited
 		}
@@ -78,7 +74,7 @@ func newDeepseek(base Adapter) Adapter {
 	}}
 }
 
-// newMoonshot Moonshot/Kimi quirk:缓存命中为顶层 cached_tokens(OpenAI 风格命名但位置不同)。
+// newMoonshot 添加 Moonshot/Kimi quirk：缓存命中为顶层 cached_tokens，命名同 OpenAI 但位置不同。
 func newMoonshot(base Adapter) Adapter {
 	return &quirk{base: base, normalizeUsage: func(raw json.RawMessage) (protocol.Usage, error) {
 		var u struct {
@@ -97,8 +93,8 @@ func newMoonshot(base Adapter) Adapter {
 	}}
 }
 
-// newGLM GLM quirk:当前无与基座的已实证差异(显式空 quirk,全方法透传基座)。
-// 流式 usage 返回方式仍 ⚠ 待实证;实证后差异在此落地并配 fixture。
+// newGLM 保留 GLM 的 quirk 扩展点；当前所有方法均透传基座。
+// 流式 usage 返回方式待实证。
 func newGLM(base Adapter) Adapter {
 	return &quirk{base: base, normalizeUsage: base.NormalizeUsage}
 }

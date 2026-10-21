@@ -1,8 +1,5 @@
-//! muniu-plugin-sdk — muniu WASM 插件 SDK(ABI v0,docs/design/plugin-abi.md)。
-//!
-//! 把 ABI 机制(导出符号、线性内存交换、双 arena 代际回收、两段式配置读取、
-//! scratch 错位)全部收口在 crate 内部 unsafe 模块(`__abi`),插件作者零 unsafe,
-//! 只写两个函数并在 crate 根声明:
+//! muniu-plugin-sdk 为 WASM 插件提供 ABI v0 的配置、日志和请求体钩子接口。
+//! 插件作者只需实现初始化和请求处理函数，并在 crate 根声明：
 //!
 //! ```no_run
 //! use muniu_plugin_sdk as sdk;
@@ -17,7 +14,7 @@
 //!     greeting: String,
 //! }
 //!
-//! // init:读宿主配置、编译规则;Err → plugin_start 非 0,注册即拒载(坏配置不允许静默降级)
+//! // 初始化并读取插件配置。
 //! fn init(config: &sdk::Config) -> Result<State, String> {
 //!     let cfg: GreetConfig = config
 //!         .json("rules")?
@@ -26,7 +23,7 @@
 //!     Ok(State { greeting: cfg.greeting })
 //! }
 //!
-//! // 钩子:入参 = 完整请求体字节(宿主已保证合法 JSON);返回三态
+//! // 处理请求体并返回放行、改写或拒绝。
 //! fn on_body(body: &[u8], state: &State) -> sdk::Verdict {
 //!     let _ = state;
 //!     if body.is_empty() {
@@ -43,15 +40,8 @@
 //! }
 //! ```
 //!
-//! 行为契约(与 ABI v0 冻结文档一一对应,宿主侧零感知):
-//! - `plugin_start` 退出码:0 成功;1 init Err(拒载);2 重复启动(防御);3 arena 预留失败。
-//! - 钩子 verdict:`Pass`→0 放行;`Rewrite`→1 改写(产物经 B 区 + 结果通道交宿主,
-//!   产物必须是合法 JSON,宿主会重新执行入站解析);`Reject`→2 拒绝(理由经结果通道,
-//!   宿主截断至 512 字节,SDK 已先行按字符边界钳制)。
-//! - 产物/理由超过 B 区容量(25MiB)时保守降级为放行(0),不因插件资源问题阻断业务。
-//! - 目标 `wasm32-unknown-unknown`(零 WASI 导入,沙箱面最小);宿主 `free` 为
-//!   no-op,回收靠代际重置——**插件不得持有跨调用内存指针**(ABI §2),
-//!   状态一律驻留 `state`(init 产物,dlmalloc 区,与 arena 正交)。
+//! 请求体改写必须返回完整合法 JSON；钩子返回的请求体切片不得跨调用保存。
+//! ABI 细节见 `docs/design/plugin-abi.md`。
 
 use serde::de::DeserializeOwned;
 
@@ -59,16 +49,16 @@ use serde::de::DeserializeOwned;
 #[doc(hidden)]
 pub mod __abi;
 
-/// 宿主配置只读句柄(`plugin_start` 期注入 init;契约 §3:字符串直通,v0 不做结构校验)。
+/// 只读的宿主配置句柄。
 pub struct Config;
 
 impl Config {
-    /// 读配置原始字符串。None = key 不存在或值超过 SDK 缓冲容量(64KiB)。
+    /// 读取配置字符串；未配置或超出缓冲区时返回 None。
     pub fn raw(&self, key: &str) -> Option<String> {
         __abi::read_config(key)
     }
 
-    /// 读配置并按 JSON 解析为 `T`。解析失败 = Err(建议直接让 init 返回 Err 拒载)。
+    /// 读取配置并将其解析为 JSON 类型 `T`。
     pub fn json<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, String> {
         match self.raw(key) {
             None => Ok(None),
@@ -77,12 +67,12 @@ impl Config {
     }
 }
 
-/// 配置 JSON 解析(独立纯函数便于宿主单测):错误信息带 key 定位。
+/// 解析配置 JSON，并在错误中包含配置键名。
 fn parse_config_value<T: DeserializeOwned>(key: &str, raw: &str) -> Result<T, String> {
     serde_json::from_str(raw).map_err(|e| format!("配置 {key} JSON 解析失败: {e}"))
 }
 
-/// 宿主日志级别(契约 §3)。
+/// 宿主日志级别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
     Debug = 0,
@@ -91,26 +81,22 @@ pub enum Level {
     Error = 3,
 }
 
-/// 写宿主结构化日志(经宿主透传,自动带插件名标签);超长截断到 SDK 缓冲容量。
+/// 向宿主写入结构化日志。
 pub fn log(level: Level, msg: &str) {
     __abi::write_log(level as i32, msg);
 }
 
-/// 钩子裁决三态(ABI v0 钩子语义全量)。
+/// 请求钩子的三种处理结果。
 pub enum Verdict {
-    /// 放行:请求体原样继续(verdict 0)。
+    /// 放行原请求。
     Pass,
-    /// 改写:产物为**完整合法 JSON** 请求体字节,宿主重新执行入站解析(verdict 1)。
+    /// 以完整合法 JSON 请求体替换原请求。
     Rewrite(Vec<u8>),
-    /// 拒绝:理由经结果通道交宿主,超出 512 字节按字符边界钳制(verdict 2)。
+    /// 拒绝请求并返回原因。
     Reject(String),
 }
 
-/// 声明插件:在 crate 根生成 ABI v0 全部 6 个导出,并接管内存策略与生命周期。
-///
-/// 错误码契约见 crate 根文档;`malloc`/`free` 采用 ABI 导出名(规避与工具链
-/// C 运行时符号同名),`hook_request_body` 期宿主再次 malloc 即代际重置。
-///
+/// 在 crate 根声明插件入口，并生成 ABI v0 所需的导出。
 /// - `state`:init 成功产物类型,每次钩子以 `&state` 注入;
 /// - `init`:`fn(&Config) -> Result<S, String>`,Err 即拒载(plugin_start = 1);
 /// - `hook_request_body`:`fn(&[u8], &S) -> Verdict`。

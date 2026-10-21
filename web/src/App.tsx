@@ -25,7 +25,7 @@ import Providers from "./pages/Providers";
 import Pricing from "./pages/Pricing";
 import Audit from "./pages/Audit";
 
-// 登录双轨共享 whoami，页面重载可恢复 HttpOnly 会话，不依赖浏览器可读的会话密钥。
+// 两种登录方式均通过 whoami 恢复会话；会话凭据由 HttpOnly cookie 保存。
 function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -118,7 +118,7 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
   );
 }
 
-// label=桌面导航完整文案;shortLabel=移动端底部标签(375px 五等分格内不折行)
+// label 用于桌面导航，shortLabel 用于移动端导航。
 const TABS: { key: TabKey; label: string; shortLabel: string; icon: LucideIcon }[] = [
   { key: "overview", label: "总览", shortLabel: "总览", icon: LayoutDashboard },
   { key: "keys", label: "密钥管理", shortLabel: "密钥", icon: KeyRound },
@@ -159,7 +159,7 @@ export default function App() {
   }, []);
   const [tab, setTab] = useState<TabKey>("overview");
   const { theme, toggle } = useTheme();
-  // 页签切换回顶:滚动残留会让新页面一进来就在中部(移动端长列表下尤其明显)
+  // 切换页签时回到页面顶部。
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [tab]);
@@ -219,7 +219,7 @@ export default function App() {
 
   return (
     <div className="min-h-dvh">
-      {/* 顶栏全端粘性;移动端只留品牌+主操作,导航下沉到底部标签栏 */}
+      {/* 移动端顶栏仅保留品牌和主操作；导航移至底部。 */}
       <header className="sticky top-0 z-40 flex h-14 items-center gap-4 border-b border-border bg-card px-4 md:px-6">
         <span className="shrink-0 font-semibold text-primary">木牛 muniu</span>
         <nav className="hidden items-center gap-1 md:flex" aria-label="主导航">
@@ -252,12 +252,12 @@ export default function App() {
         {tab === "pricing" && <Pricing />}
         {tab === "audit" && <Audit />}
       </main>
-      {/* 移动端主导航:拇指区底部标签栏(图标+短标签),让出 iOS 安全区;md+ 由顶栏接管 */}
+      {/* 移动端使用底部导航，并为 iOS 安全区留出空间。 */}
       <nav
         className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card md:hidden"
         aria-label="主导航"
       >
-        {/* grid-cols-6 与 TABS.length 硬绑定:增删页签须同步改列数 */}
+        {/* 网格列数需与 TABS.length 一致。 */}
         <div className="grid grid-cols-6 pb-[env(safe-area-inset-bottom)]">
           {TABS.map((t) => {
             const active = tab === t.key;

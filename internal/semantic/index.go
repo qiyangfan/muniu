@@ -1,8 +1,4 @@
-// 语义缓存向量索引(T4.4 选型评估结论):
-// 评估(1 万条×1536 维 Top5,本机 2026-09-10):暴力余弦 p99≈21ms,超 5ms 判据 →
-// **按契约引入纯 Go HNSW(github.com/coder/hnsw,唯一向量索引依赖)**。
-// 两个实现共用 VectorIndex 接口:暴力版保留作对照与小规模回退;生产默认 HNSW。
-// HNSW 为近似检索:TopK 召回非精确,经阈值 0.97 过滤后满足缓存「宁缺勿错」要求。
+// HNSW 使用近似搜索，命中结果仍由缓存按相似度阈值筛选。
 package semantic
 
 import (
@@ -21,13 +17,13 @@ type VectorIndex interface {
 	TopK(query []float32, k int) []Hit
 }
 
-// Hit 检索命中:条目标识与余弦相似度(归一化向量下即点积,[-1,1])。
+// Hit 检索命中：条目标识与余弦相似度；归一化向量下即点积，取值 [-1,1]。
 type Hit struct {
 	ID    string
 	Score float32
 }
 
-// normalize 向量 L2 归一化(零向量原样返回)。
+// normalize 向量 L2 归一化，零向量原样返回。
 func normalize(v []float32) []float32 {
 	var sum float64
 	for _, x := range v {
@@ -44,30 +40,30 @@ func normalize(v []float32) []float32 {
 	return out
 }
 
-// NewIndex 生产默认索引:HNSW(评估结论)。
+// NewIndex 创建生产用 HNSW 索引。
 func NewIndex(dim int) VectorIndex {
 	return NewHNSWIndex(dim)
 }
 
-// HNSWIndex coder/hnsw 封装:自带读写锁(coder/hnsw Graph 非并发安全)。
+// HNSWIndex 是 coder/hnsw 的封装，自带读写锁；coder/hnsw Graph 非并发安全。
 type HNSWIndex struct {
 	mu sync.RWMutex
 	g  *hnsw.Graph[string]
-	// vectors 存活条目(id→归一化向量)。上游 Graph.Delete 留悬空 entry/elevator
-	// 引用(v0.6.1 Search 层间下降 nodes[elevator] 对已删节点得 nil → SIGSEGV),
-	// 故删除走墓碑:图只增不删,TopK 过滤死节点;墓碑过半才全量重建(均摊 O(1))。
+	// vectors 存活条目，id 到归一化向量的映射。上游 v0.6.1 的 Graph.Delete 会留
+	// 悬空的 entry/elevator 引用，Search 层间下降取已删节点得 nil 致 SIGSEGV；
+	// 故删除走墓碑：图只增不删，TopK 过滤死节点，墓碑过半才全量重建，均摊 O(1)。
 	vectors map[string][]float32
 	dead    map[string]struct{}
 }
 
-// NewHNSWIndex 构造(dim 仅作维度记录,HNSW 自按向量维度断言)。
+// NewHNSWIndex 构造；dim 仅作维度记录，HNSW 自按向量维度断言。
 func NewHNSWIndex(dim int) *HNSWIndex {
 	g := hnsw.NewGraph[string]()
 	g.Distance = hnsw.CosineDistance
 	return &HNSWIndex{g: g, vectors: make(map[string][]float32), dead: make(map[string]struct{})}
 }
 
-// Add 追加条目(重复存活 id 幂等忽略;命中墓碑 id 则重建后插,见图结构一致性)。
+// Add 追加条目；重复存活 id 幂等忽略，命中墓碑 id 则重建后插入，保证图结构一致。
 func (ix *HNSWIndex) Add(id string, vec []float32) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
@@ -83,7 +79,7 @@ func (ix *HNSWIndex) Add(id string, vec []float32) {
 	ix.g.Add(hnsw.MakeNode(id, nv))
 }
 
-// Remove 删除条目(墓碑标记:规避上游 Delete 悬空引用缺陷,见 vectors 字段注释)。
+// Remove 删除条目，走墓碑标记规避上游 Delete 悬空引用缺陷，见 vectors 字段注释。
 func (ix *HNSWIndex) Remove(id string) {
 	ix.mu.Lock()
 	defer ix.mu.Unlock()
@@ -92,13 +88,13 @@ func (ix *HNSWIndex) Remove(id string) {
 	}
 	delete(ix.vectors, id)
 	ix.dead[id] = struct{}{}
-	// 墓碑过半才重建:重图结构并清墓碑,保证死节点不随累积劣化召回
+	// 墓碑过半才重建：重建图结构并清墓碑，保证死节点不随累积劣化召回。
 	if len(ix.dead) > len(ix.vectors) {
 		ix.rebuildLocked()
 	}
 }
 
-// rebuildLocked 全量重建(调用方持写锁)。
+// rebuildLocked 全量重建，调用方持写锁。
 func (ix *HNSWIndex) rebuildLocked() {
 	ix.g = hnsw.NewGraph[string]()
 	ix.g.Distance = hnsw.CosineDistance
@@ -115,8 +111,8 @@ func (ix *HNSWIndex) Len() int {
 	return len(ix.vectors)
 }
 
-// TopK 近似余弦 Top-K(分数降序)。墓碑节点过滤:死节点可能占名额致召回略少,
-// 语义缓存「宁缺勿错」容忍;墓碑过半已在 Remove 时重建兜底。
+// TopK 近似余弦 Top-K，分数降序。死节点过滤可能占名额致召回略少，语义缓存宁缺勿错
+// 可以容忍；墓碑过半已在 Remove 时重建兜底。
 func (ix *HNSWIndex) TopK(query []float32, k int) []Hit {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()
@@ -127,14 +123,14 @@ func (ix *HNSWIndex) TopK(query []float32, k int) []Hit {
 		if _, alive := ix.vectors[n.Key]; !alive {
 			continue
 		}
-		// coder/hnsw 距离=1-余弦相似度,还原为相似度
+		// coder/hnsw 距离 = 1-余弦相似度，还原为相似度。
 		hits = append(hits, Hit{ID: n.Key, Score: 1 - ix.g.Distance(n.Value, q)})
 	}
 	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 	return hits
 }
 
-// BruteIndex 暴力余弦索引:零依赖对照实现(评估基线/小规模回退)。
+// BruteIndex 暴力余弦索引，零依赖对照实现，作评估基线与小规模回退。
 type BruteIndex struct {
 	mu   sync.RWMutex
 	dim  int
@@ -173,7 +169,7 @@ func (ix *BruteIndex) Remove(id string) {
 	}
 }
 
-// TopK 精确余弦 Top-K(分数降序)。
+// TopK 精确余弦 Top-K，分数降序。
 func (ix *BruteIndex) TopK(query []float32, k int) []Hit {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()

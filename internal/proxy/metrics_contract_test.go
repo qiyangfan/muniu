@@ -1,5 +1,5 @@
-// 指标契约测试(gateway-parity「usage-metrics」):token 三向累加与落账同口径、
-// 非流式不观测首字节、缓存判定三分支、禁用零开销等价、序列基数受配置界。
+// 指标契约：token 三向累加与落账同口径、非流式不观测首字节、缓存判定三分支、
+// 禁用零开销等价、序列基数受配置界。
 package proxy
 
 import (
@@ -23,14 +23,14 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// renderMetrics 渲染当前指标全文(测试断言用)。
+// renderMetrics 渲染当前指标全文，测试断言用。
 func renderMetrics() string {
 	var b strings.Builder
 	metrics.RenderTo(&b)
 	return b.String()
 }
 
-// newMeteredProxy 带计量管道的单候选代理(usage 来自上游 JSON body)。
+// newMeteredProxy 带计量管道的单候选代理，usage 来自上游 JSON body。
 func newMeteredProxy(t *testing.T, jsonBody string) (*httptest.Server, *Proxy) {
 	t.Helper()
 	up := testkit.StartJSONUpstream(t, 200, jsonBody)
@@ -60,13 +60,13 @@ func newMeteredProxy(t *testing.T, jsonBody string) (*httptest.Server, *Proxy) {
 
 const usageBody = `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"prompt_tokens_details":{"cached_tokens":20}}}`
 
-// 禁用态零开销等价(渲染空)→ 启用后 token 三向累加且与落账行同口径;
-// 非流式不观测首字节;序列恒 3 行(基数受配置界)。
+// 禁用态渲染为空即零开销等价，启用后 token 三向累加且与落账行同口径；
+// 非流式不观测首字节，序列恒 3 行，基数受配置界。
 func TestMetrics_Token三向累加_禁用等价_非流式无TTFB(t *testing.T) {
 	metrics.SetEnabled(false)
 	ts, _ := newMeteredProxy(t, usageBody)
 
-	// 禁用态:请求行为正常,渲染输出空(禁用=无新序列且行为零变化)
+	// 禁用态：请求行为正常，渲染输出空，无新序列且行为零变化。
 	if resp, _ := postChat(t, ts.URL, chatBody); resp.StatusCode != 200 {
 		t.Fatalf("禁用态请求应正常: %d", resp.StatusCode)
 	}
@@ -74,7 +74,7 @@ func TestMetrics_Token三向累加_禁用等价_非流式无TTFB(t *testing.T) {
 		t.Fatalf("禁用态渲染应为空: %q", got)
 	}
 
-	// 启用:同口径三向累加(prompt=100/cached=20/completion=10)
+	// 启用：同口径三向累加，prompt=100、cached=20、completion=10。
 	metrics.SetEnabled(true)
 	t.Cleanup(func() { metrics.SetEnabled(false) })
 	if resp, _ := postChat(t, ts.URL, chatBody); resp.StatusCode != 200 {
@@ -124,7 +124,7 @@ func TestMetrics_流式首token观测(t *testing.T) {
 	}
 }
 
-// 缓存判定三分支:skip(租户开关关/tools 请求)、miss、hit(写入后同输入命中)。
+// 缓存判定三分支：skip 即租户开关关或 tools 请求、miss、hit 即写入后同输入命中。
 func TestMetrics_缓存判定三分支(t *testing.T) {
 	metrics.SetEnabled(true)
 	t.Cleanup(func() { metrics.SetEnabled(false) })
@@ -151,7 +151,7 @@ func TestMetrics_缓存判定三分支(t *testing.T) {
 
 	temp := 0.1
 	plain := &protocol.ChatRequest{Model: "alias-a", Messages: msgOf(`[{"role":"user","content":"hi"}]`), Temperature: &temp}
-	// skip:租户开关关
+	// skip：租户开关关。
 	if _, ph := p.lookupCacheFor("no-such-tenant", r, plain); ph != nil {
 		t.Fatal("租户关应 skip(无 phase)")
 	}
@@ -159,12 +159,12 @@ func TestMetrics_缓存判定三分支(t *testing.T) {
 	if _, ph := p.lookupCacheFor("01900000-0000-7000-8000-000000000001", r, plain); ph == nil {
 		t.Fatal("首次检索应 miss(有 phase)")
 	}
-	// skip:tools 请求
+	// skip：tools 请求。
 	toolReq := &protocol.ChatRequest{Model: "alias-a", Messages: msgOf(`[{"role":"user","content":"hi"}]`), Temperature: &temp, Tools: json.RawMessage(`[]`)}
 	if _, ph := p.lookupCacheFor("01900000-0000-7000-8000-000000000001", r, toolReq); ph != nil {
 		t.Fatal("tools 请求应 skip")
 	}
-	// 写入后同输入 → hit
+	// 写入后同输入即 hit。
 	_, ph := p.lookupCacheFor("01900000-0000-7000-8000-000000000001", r, plain)
 	if err := p.cache.Store(r.Context(), "01900000-0000-7000-8000-000000000001", ph.fp, "alias-a", ph.vec,
 		[]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)); err != nil {
@@ -184,7 +184,7 @@ func TestMetrics_缓存判定三分支(t *testing.T) {
 
 type constEmbedder struct{}
 
-// Embed 恒返回同一归一化向量(同输入指纹精确命中;阈值 0.5 下语义路径同样收敛)。
+// Embed 恒返回同一归一化向量，同输入指纹精确命中；阈值 0.5 下语义路径同样收敛。
 func (constEmbedder) Embed(context.Context, string, string) ([]float32, error) {
 	return []float32{1, 0, 0, 0}, nil
 }
@@ -193,7 +193,7 @@ func msgOf(raw string) []protocol.Message {
 	return []protocol.Message{{Role: "user", Content: json.RawMessage(raw)}}
 }
 
-// assertMetricLine 断言渲染文本含指定序列行(Prometheus 文本格式)。
+// assertMetricLine 断言渲染文本含指定 Prometheus 文本格式序列行。
 func assertMetricLine(t *testing.T, rendered, line string) {
 	t.Helper()
 	for _, l := range strings.Split(rendered, "\n") {

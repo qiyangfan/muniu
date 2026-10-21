@@ -1,6 +1,4 @@
-// Package bridge 承载异构协议桥接(ADR-0003):Anthropic Messages ↔ OpenAI 形态全翻译。
-// 桥接是唯一允许改写客户端可见字段的适配器(upstream-adapters「字段改写白名单」)。
-// 翻译矩阵见 bridge/README.md;源契约:Anthropic Messages API(2023-06-01 版本头,公开稳定形态)。
+// Package bridge 将规范 chat 请求和响应转换为 Anthropic Messages 形态。
 package bridge
 
 import (
@@ -14,33 +12,31 @@ import (
 	"github.com/solvela/muniu/internal/protocol"
 )
 
-// 编译期契约断言:桥接实现 adapter.Adapter。
+// 编译期断言：桥接实现 adapter.Adapter。
 var _ adapter.Adapter = (*Anthropic)(nil)
 
-// init 向 adapter 注册桥接工厂(应用方 blank import 本包即完成接线)。
+// init 向 adapter 注册桥接工厂，应用方 blank import 本包即完成接线。
 func init() {
 	adapter.SetAnthropicFactory(func(baseURL string, opts adapter.Options) adapter.Adapter {
 		return NewAnthropic(baseURL, opts)
 	})
 }
 
-// anthropicVersion 版本头(公开稳定值;文档区域屏蔽,按公开契约保守实现,见 HANDOFF)。
+// anthropicVersion 是 Anthropic Messages API 要求的版本头。
 const anthropicVersion = "2023-06-01"
 
-// Anthropic 桥接实例(基址绑定;key 由 keypool 每请求提供)。
+// Anthropic 保存 provider 的 API 基址和鉴权选项。
 type Anthropic struct {
 	baseURL string
-	bearer  bool // true=凭证走 Authorization: Bearer(国内分支官方文档口径);缺省 x-api-key(协议标准)
+	bearer  bool // true 时凭证走 Authorization: Bearer，即国内分支官方文档口径；缺省走 x-api-key
 }
 
-// NewAnthropic 构造桥接。opts.Auth=adapter.AuthBearer 时按声明切换鉴权头。
+// NewAnthropic 创建 Anthropic 适配器。
 func NewAnthropic(baseURL string, opts adapter.Options) *Anthropic {
 	return &Anthropic{baseURL: strings.TrimRight(baseURL, "/"), bearer: opts.Auth == adapter.AuthBearer}
 }
 
-// Prepare OpenAI Chat 请求 → Anthropic /v1/messages 请求。
-// 翻译要点:system 提升为顶层;max_tokens 必填(缺省 4096);tools 形态重排;
-// 连续同角色消息合并(Anthropic 要求 user/assistant 交替)。
+// Prepare 将规范 chat 请求转换为 Anthropic 请求：system 移至顶层，max_tokens 缺省为 4096，并合并连续同角色消息。
 func (a *Anthropic) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey string) (*adapter.Outbound, error) {
 	body, err := a.buildRequest(in, upstreamModel)
 	if err != nil {
@@ -49,10 +45,10 @@ func (a *Anthropic) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey stri
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
 	if a.bearer {
-		// 国内分支声明口径:与其官方文档 AUTH_TOKEN(Bearer)形态一致
+		// 国内分支声明口径，与其官方文档 AUTH_TOKEN 的 Bearer 形态一致
 		h.Set("Authorization", "Bearer "+apiKey)
 	} else {
-		// 协议标准形态(官方 Anthropic 与官方 SDK 缺省)
+		// 协议标准形态，官方 Anthropic 与官方 SDK 缺省
 		h.Set("x-api-key", apiKey)
 	}
 	h.Set("anthropic-version", anthropicVersion)
@@ -63,7 +59,6 @@ func (a *Anthropic) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey stri
 	}, nil
 }
 
-// buildRequest 请求体翻译。
 func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string) ([]byte, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(in.Raw, &fields); err != nil {
@@ -74,9 +69,9 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 		maxTokens = *in.MaxTokens
 	}
 
-	// 块级内部形态:aBlock 单结构分族承载 text/tool_use/tool_result(omitempty 分族序列化)。
-	// 发射期:全 text 块 → content 字符串(多块 \n\n 连接,既有合并语义逐字节保持);
-	// 含非 text 块 → content 块数组(工具上下文形态)。
+	// 块级内部形态：aBlock 单结构承载 text、tool_use、tool_result，按 omitempty 分族序列化。
+	// 发射期全为 text 块时 content 发射为字符串，多块以 \n\n 连接，既有合并语义逐字节保持；
+	// 含非 text 块时发射为 content 块数组，即工具上下文形态。
 	type aBlock struct {
 		Type      string          `json:"type"`
 		Text      string          `json:"text,omitempty"`
@@ -90,7 +85,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 		Role   string
 		Blocks []aBlock
 	}
-	// Raw 信封解析(Message 结构不携带 tool_calls/tool_call_id——与 gemini 适配器同缝)
+	// Raw 信封解析；Message 结构不携带 tool_calls/tool_call_id，与 gemini 适配器一致
 	var env struct {
 		Messages []struct {
 			Role      string          `json:"role"`
@@ -112,7 +107,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 	var systemParts []string
 	var msgs []msgAcc
 	seenToolUse := map[string]bool{}
-	// 追加一条消息(与尾消息同角色则块级合并,满足 Anthropic 交替角色约束)
+	// 追加一条消息，与尾消息同角色则块级合并，满足 Anthropic 交替角色约束
 	appendMsg := func(role string, blocks []aBlock) {
 		if len(msgs) > 0 && msgs[len(msgs)-1].Role == role {
 			msgs[len(msgs)-1].Blocks = append(msgs[len(msgs)-1].Blocks, blocks...)
@@ -120,7 +115,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 		}
 		msgs = append(msgs, msgAcc{Role: role, Blocks: blocks})
 	}
-	// role=tool 的 pending 缓冲:tool_result 必须并入单条 user 消息,防连续 user 断裂交替
+	// role=tool 的 pending 缓冲：tool_result 必须并入单条 user 消息，防止连续 user 断裂交替
 	var pendingResults []aBlock
 	flushResults := func() {
 		if len(pendingResults) == 0 {
@@ -142,7 +137,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 				systemParts = append(systemParts, text)
 			}
 		case "tool":
-			// tool_use_id 必须回指本对话已见的 assistant.tool_calls:未配对属结构性非法
+			// tool_use_id 必须回指本对话已见的 assistant.tool_calls，未配对属结构性非法
 			if m.ToolCallID == "" || !seenToolUse[m.ToolCallID] {
 				return nil, fmt.Errorf("messages[%d]: role=tool 的 tool_call_id %q 找不到配对的 assistant.tool_calls", i, m.ToolCallID)
 			}
@@ -170,7 +165,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 			}
 			appendMsg("assistant", blocks)
 		default:
-			continue // 未知角色不在桥接范围,丢弃(既有纪律)
+			continue // 未知角色不在桥接范围，丢弃
 		}
 	}
 	flushResults()
@@ -194,7 +189,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 		if hasNonText {
 			content, _ = json.Marshal(m.Blocks)
 		} else {
-			// 全 text(含空块列表):字符串发射,纯文本 wire 与既有行为逐字节一致
+			// 全为 text 时字符串发射，含空块列表情形，纯文本 wire 与既有行为逐字节一致
 			content, _ = json.Marshal(strings.Join(texts, "\n\n"))
 		}
 		wireMsgs = append(wireMsgs, wireMsg{Role: m.Role, Content: content})
@@ -214,7 +209,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 	if in.Temperature != nil {
 		out["temperature"] = json.RawMessage(mustJSON(*in.Temperature))
 	}
-	// tools:OpenAI function 形态 → Anthropic input_schema 形态
+	// tools 由 OpenAI function 形态翻译为 Anthropic input_schema 形态
 	if raw, ok := fields["tools"]; ok {
 		var oaiTools []struct {
 			Type     string `json:"type"`
@@ -224,7 +219,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 				Parameters  json.RawMessage `json:"parameters"`
 			} `json:"function"`
 		}
-		// 解析失败必须报错(归入站 bad_request):静默吞掉会让上游在无工具状态下作答且无痕迹
+		// 解析失败必须报错并归入站 bad_request；静默吞掉会让上游在无工具状态下作答且无痕迹
 		if err := json.Unmarshal(raw, &oaiTools); err != nil {
 			return nil, fmt.Errorf("tools 形态非法(须为 function 数组): %w", err)
 		}
@@ -250,11 +245,11 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 			}
 		}
 	}
-	// top_p 原样透传(Anthropic 支持同形态采样参数)
+	// top_p 原样透传，Anthropic 支持同形态采样参数
 	if raw, ok := fields["top_p"]; ok {
 		out["top_p"] = raw
 	}
-	// tool_choice:OpenAI 枚举/具名形态 → Anthropic 形态(含 none,冒烟实证)
+	// tool_choice 由 OpenAI 枚举或具名形态翻译为 Anthropic 形态，含 none，已经冒烟实证
 	if raw, ok := fields["tool_choice"]; ok {
 		var tc struct {
 			Type     string `json:"type"`
@@ -266,7 +261,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 		case json.Unmarshal(raw, &tc) == nil && tc.Type == "auto":
 			out["tool_choice"] = json.RawMessage(`{"type":"auto"}`)
 		case json.Unmarshal(raw, &tc) == nil && tc.Type == "none":
-			// Anthropic none 形态(禁用工具强制纯文本作答);真上游冒烟实证接受
+			// Anthropic none 形态，禁用工具强制纯文本作答；真上游冒烟实证接受
 			out["tool_choice"] = json.RawMessage(`{"type":"none"}`)
 		case json.Unmarshal(raw, &tc) == nil && tc.Type == "required":
 			out["tool_choice"] = json.RawMessage(`{"type":"any"}`)
@@ -277,7 +272,7 @@ func (a *Anthropic) buildRequest(in *protocol.ChatRequest, upstreamModel string)
 	return json.Marshal(out)
 }
 
-// Classify 按状态码粗分(与基座同表;Anthropic 529 overloaded 归 5xx)。
+// Classify 按状态码粗分，与基座同表；Anthropic 529 overloaded 归 5xx。
 func (a *Anthropic) Classify(status int, _ []byte) failover.ErrorClass {
 	switch {
 	case status == http.StatusBadRequest:
@@ -293,15 +288,15 @@ func (a *Anthropic) Classify(status int, _ []byte) failover.ErrorClass {
 	}
 }
 
-// NormalizeUsage Anthropic usage → 统一 Usage;同时兼容已是统一形态的输入
-// (流式翻译帧自身即统一形态,取数同缝复用)。
+// NormalizeUsage 将 Anthropic usage 转为统一 Usage，同时兼容已是统一形态的输入；
+// 流式翻译帧自身即统一形态，取数直接复用。
 func (a *Anthropic) NormalizeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return protocol.Usage{}, fmt.Errorf("bridge: 解析 usage: %w", err)
 	}
 	if _, ok := probe["input_tokens"]; !ok {
-		// 统一形态(基座键名),直读
+		// 统一形态键名，直读
 		var u protocol.Usage
 		if err := json.Unmarshal(raw, &u); err != nil {
 			return protocol.Usage{}, err
@@ -321,26 +316,18 @@ func (a *Anthropic) NormalizeUsage(raw json.RawMessage) (protocol.Usage, error) 
 		PromptTokens:     u.Input,
 		CompletionTokens: u.Output,
 		CachedTokens:     u.CacheRead,
-		ReasoningTokens:  0, // thinking token 计入 output,Anthropic 无独立字段(矩阵已登记)
+		ReasoningTokens:  0, // Anthropic 未提供独立 reasoning token 数。
 	}, nil
 }
 
-// StreamEvent Anthropic SSE 事件 → OpenAI chunk 翻译(唯一改写者):
-//   - message_start      → usage 帧(prompt_tokens/cache);meta.IsUsage
-//   - content_block_start(tool_use) → 首个 tool_calls delta(id/name/块序号);meta.HasContent
-//   - content_block_delta(text_delta/thinking_delta/input_json_delta)→ content/reasoning_content/tool_calls 增量
-//   - message_delta      → finish_reason + completion_tokens;meta.IsUsage
-//   - message_stop       → "[DONE]";meta.IsDone
-//   - ping / content_block_start(text) / content_block_stop → 空透传(跳过)
-//   - type=error         → 报错(上层归 mid_stream_fail / 断言出口)
-//
-// 全部翻译保持事件级无状态(Adapter 实例跨请求共享,禁止实例字段);tool_call 的
-// id/name 由 content_block_start 单事件携带,arguments 增量按事件自带块序号拼接。
-//
-// 返回的 passthrough 为 OpenAI 形态 chunk 内容(不含 data: 前缀),由 proxy 负责线上封装。
+// StreamEvent 将 Anthropic SSE 事件翻译为 OpenAI chunk：
+// message_start → usage 帧；tool_use 块起始 → 首个 tool_calls delta（携带 id/name/块序号）；
+// content_block_delta → 文本、思考或工具参数增量；message_delta → finish_reason 与 usage；
+// message_stop → [DONE]；ping 与 text 块的起止空透传；type=error 由上层归 mid_stream_fail。
+// 翻译保持事件级无状态，Adapter 实例跨请求共享；passthrough 不含 data: 前缀，由 proxy 封装。
 func (a *Anthropic) StreamEvent(data []byte) ([]byte, adapter.EventMeta, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
-		// 空 data / 纯注释事件(SSE 心跳):不产出翻译帧也不报错,否则心跳会触发断流出口
+		// 空 data 或纯注释事件是 SSE 心跳，不产出翻译帧也不报错，否则心跳会触发断流出口
 		return nil, adapter.EventMeta{}, nil
 	}
 	var ev struct {
@@ -388,7 +375,7 @@ func (a *Anthropic) StreamEvent(data []byte) ([]byte, adapter.EventMeta, error) 
 		if ev.ContentBlock.Type != "tool_use" {
 			return nil, adapter.EventMeta{}, nil // text 等块起始对客户端不可见
 		}
-		// tool_use 块起始即首个 tool_call delta:必须携带 index/id/name(OpenAI 流式契约)
+		// tool_use 块起始即首个 tool_call delta，必须携带 index/id/name，OpenAI 流式契约
 		b := fmt.Sprintf(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":%d,"id":%s,"type":"function","function":{"name":%s,"arguments":""}}]}}]}`,
 			ev.Index, mustJSON(ev.ContentBlock.ID), mustJSON(ev.ContentBlock.Name))
 		return []byte(b), adapter.EventMeta{HasContent: true}, nil
@@ -400,7 +387,7 @@ func (a *Anthropic) StreamEvent(data []byte) ([]byte, adapter.EventMeta, error) 
 		case "thinking_delta":
 			return chunkBytes(`{"choices":[{"index":0,"delta":{"reasoning_content":` + mustJSON(ev.Delta.Thinking) + `}}]}`), adapter.EventMeta{HasContent: ev.Delta.Thinking != ""}, nil
 		case "input_json_delta":
-			// arguments 增量挂事件自带块序号:并行工具调用各占一段,不得硬编码 0 互相串扰
+			// arguments 增量挂事件自带块序号，并行工具调用各占一段，不得硬编码 0 互相串扰
 			return chunkBytes(fmt.Sprintf(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":%d,"function":{"arguments":`, ev.Index) + mustJSON(ev.Delta.PartialJSON) + `}}]}}]}`), adapter.EventMeta{HasContent: ev.Delta.PartialJSON != ""}, nil
 		default:
 			return nil, adapter.EventMeta{}, nil
@@ -415,12 +402,12 @@ func (a *Anthropic) StreamEvent(data []byte) ([]byte, adapter.EventMeta, error) 
 	case "message_stop":
 		return []byte("[DONE]"), adapter.EventMeta{IsDone: true}, nil
 
-	default: // ping / content_block_start / content_block_stop:对客户端不可见
+	default: // ping / content_block_start / content_block_stop 对客户端不可见
 		return nil, adapter.EventMeta{}, nil
 	}
 }
 
-// RewriteResponse Anthropic 非流式响应 → OpenAI ChatResponse 形态。
+// RewriteResponse 将 Anthropic 非流式响应转换为 OpenAI ChatResponse 形态。
 func (a *Anthropic) RewriteResponse(body []byte) ([]byte, json.RawMessage, error) {
 	var resp struct {
 		ID      string `json:"id"`
@@ -488,12 +475,12 @@ func (a *Anthropic) RewriteResponse(body []byte) ([]byte, json.RawMessage, error
 	usage := map[string]any{
 		"prompt_tokens":     resp.Usage.Input,
 		"completion_tokens": resp.Usage.Output,
-		// 统一形态缓存字段 + OpenAI details 形态并存:客户端 SDK 兼容,计量取数同缝
+		// 统一形态缓存字段与 OpenAI details 形态并存，兼容客户端 SDK，计量取数复用
 		"cached_tokens":         resp.Usage.CacheRead,
 		"prompt_tokens_details": map[string]any{"cached_tokens": resp.Usage.CacheRead},
 	}
 	out := map[string]any{
-		// id/model 源自上游原样透出(客户端 SDK 按其做日志关联/去重,恒空串属翻译残缺)
+		// id/model 源自上游原样透出，客户端 SDK 用其做日志关联和去重，恒空串属翻译残缺
 		"id":      resp.ID,
 		"model":   resp.Model,
 		"object":  "chat.completion",
@@ -508,9 +495,9 @@ func (a *Anthropic) RewriteResponse(body []byte) ([]byte, json.RawMessage, error
 	return outBytes, usageBytes, nil
 }
 
-// stopToFinish Anthropic stop_reason → OpenAI finish_reason。
-// pause_turn/refusal/model_context_window_exceeded 有明确对应语义的显式映射;
-// 其余未知新值兜底 "stop"(保守形态,翻译矩阵已登记该取舍)。
+// stopToFinish 将 Anthropic stop_reason 映射为 OpenAI finish_reason。
+// pause_turn/refusal/model_context_window_exceeded 有明确对应语义的显式映射；
+// 未识别的 stop_reason 按 stop 处理。
 func stopToFinish(stop string) string {
 	switch stop {
 	case "end_turn", "stop_sequence", "pause_turn":
@@ -528,7 +515,7 @@ func stopToFinish(stop string) string {
 	}
 }
 
-// contentText 消息内容抽取:字符串原样;多模态数组取 text 部分拼接(非文本块丢弃,见 README 限制)。
+// contentText 抽取消息内容：字符串原样；多模态数组取 text 部分拼接，非文本块丢弃，见 README 限制。
 func contentText(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
 		return "", nil
@@ -553,7 +540,7 @@ func contentText(raw json.RawMessage) (string, error) {
 	return "", fmt.Errorf("无法识别的 content 形态")
 }
 
-// chunkBytes 为空内容返回 nil(调用方跳过写出)。
+// chunkBytes 对空内容返回 nil，调用方跳过写出。
 func chunkBytes(payload string) []byte {
 	if payload == "" {
 		return nil
@@ -561,7 +548,7 @@ func chunkBytes(payload string) []byte {
 	return []byte(payload)
 }
 
-// mustJSON 极小封装:标准库序列化失败时返回 null(构造的都是可控形态,失败即程序错误)。
+// mustJSON 极小封装，标准库序列化失败时返回 null；构造的都是可控形态，失败即程序错误。
 func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -570,7 +557,6 @@ func mustJSON(v any) string {
 	return string(b)
 }
 
-// pointerVal 安全取值。
 func pointerVal(s *string) string {
 	if s == nil {
 		return ""
@@ -578,20 +564,20 @@ func pointerVal(s *string) string {
 	return *s
 }
 
-// BridgeKind 桥接标记(adapter.Bridger):proxy 对工具多轮流量做适配性豁免的判定依据。
+// BridgeKind 标记 anthropic 桥接，是 proxy 对工具多轮流量做适配性豁免的判定依据。
 func (a *Anthropic) BridgeKind() string { return "anthropic" }
 
-// ToolRoundtripComplete 声明翻正(anthropic-bridge-tool-roundtrip):工具多轮请求侧翻译
-// 完整(tool_calls→tool_use 块/role=tool→合并 tool_result/配对校验),不再落入豁免语义。
+// ToolRoundtripComplete 声明工具多轮请求侧翻译完整：tool_calls 翻译为 tool_use 块、
+// role=tool 合并为 tool_result 并做配对校验，不再落入豁免语义。
 func (a *Anthropic) ToolRoundtripComplete() bool { return true }
 
-// ---- 同构直通能力(adapter.NativePreparer;protocol-native-passthrough) ----
+// ---- 原生协议直通能力 ----
 
-// NativeProto 桥接原生协议 = Anthropic Messages(messages 入站 × anthropic 候选直通)。
+// NativeProto 返回 Anthropic Messages，即 messages 入站对 anthropic 候选直通。
 func (a *Anthropic) NativeProto() protocol.InboundProtocol { return protocol.InboundMessages }
 
-// PrepareNative Anthropic Messages 原始体直通出站:URL/鉴权头/版本头按既有声明,
-// body 仅 model 字段原位手术(RewriteModelInPlace),其余逐字节保留——零翻译零字段丢失。
+// PrepareNative 构造 Anthropic Messages 原始体直通出站，URL、鉴权头、版本头按既有声明；
+// body 仅经 RewriteModelInPlace 改写 model 字段，其余逐字节保留，零翻译零字段丢失。
 func (a *Anthropic) PrepareNative(in *protocol.NativeRequest, upstreamModel, apiKey string) (*adapter.Outbound, error) {
 	if in.Proto != protocol.InboundMessages {
 		return nil, fmt.Errorf("bridge: anthropic 直通仅服务 messages 入站,得到 %q", in.Proto)
@@ -611,13 +597,13 @@ func (a *Anthropic) PrepareNative(in *protocol.NativeRequest, upstreamModel, api
 	return &adapter.Outbound{URL: a.baseURL + "/v1/messages", Header: h, Body: body}, nil
 }
 
-// NativeStreamEvent meta-only 读侧:复用既有事件机的 meta 与翻译字节(翻译字节仅作
-// 内部计量/拼包消费,客户端恒收上游原字节——passthrough 由 proxy 执行,此处不改写 wire)。
+// NativeStreamEvent 复用既有事件机的 meta 与翻译字节；翻译字节仅作内部计量和拼包消费，
+// 客户端恒收上游原字节，passthrough 由 proxy 执行。
 func (a *Anthropic) NativeStreamEvent(data []byte) ([]byte, adapter.EventMeta, error) {
 	return a.StreamEvent(data)
 }
 
-// NormalizeNativeUsage 与翻译路径同缝复用(anthropic 形态与统一形态双兼容)。
+// NormalizeNativeUsage 与翻译路径复用同一实现，anthropic 形态与统一形态双兼容。
 func (a *Anthropic) NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	return a.NormalizeUsage(raw)
 }

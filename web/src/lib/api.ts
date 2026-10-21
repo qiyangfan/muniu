@@ -1,4 +1,4 @@
-// 管理 API 客户端:类型一律来自 openapi-typescript 生成的 api-types.d.ts(禁手写 API 类型,ADR-005 纪律)。
+// API 类型由 openapi-typescript 从 OpenAPI 契约生成。
 import type { components, paths } from "./api-types";
 
 export type AdminActor = components["schemas"]["AdminActor"];
@@ -31,15 +31,14 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
-    /** 后端原始错误文本(未转译),排障用;展示层一律读 message */
+    /** 后端原始错误文本供排障；界面展示 message。 */
     public raw: string,
   ) {
     super(message);
   }
 }
 
-// HTTP 状态码 → 中文兜底文案。仅在响应体没有可读中文 detail 时使用
-// (网关 502/超时等非 JSON 响应、后端英文 detail 都会落到这里)
+// 响应没有可读中文错误时，按 HTTP 状态码生成提示。
 const HTTP_MESSAGES: Record<number, string> = {
   400: "请求有误,请检查后重试",
   401: "登录已过期,请重新登录",
@@ -54,7 +53,7 @@ const HTTP_MESSAGES: Record<number, string> = {
   504: "服务响应超时,请稍后重试",
 };
 
-// detail 含 CJK 即视为后端面向管理员的业务错误文案(管理面错误统一中文),原样展示
+// 保留后端返回的中文业务错误。
 const CJK_RE = /[\u3400-\u4dbf\u4e00-\u9fff]/;
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -70,7 +69,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch (err) {
-    // fetch reject 的 TypeError 文案是浏览器英文("Failed to fetch" 等),不示人
+    // 使用统一中文提示，并将原始错误保留在 raw 字段。
     const e = new Error("网络连接失败,请检查网络后重试") as Error & { raw?: string };
     e.raw = err instanceof Error ? err.message : String(err);
     throw e;
@@ -85,7 +84,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       const env = JSON.parse(text) as { error?: { message?: string } };
       if (env.error?.message) detail = env.error.message;
     } catch {
-      /* 非 JSON 错误体(网关页/空体),走状态码兜底 */
+      /* 非 JSON 错误体使用状态码兜底文案。 */
     }
     const msg = CJK_RE.test(detail)
       ? detail

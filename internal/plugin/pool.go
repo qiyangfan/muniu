@@ -1,6 +1,6 @@
-// 实例池(3.1):每插件池化 wasm 实例,并发复用、空闲回收、trap 后重建。
-// 通道即池:借出=收,归还=发;live 计数约束总量;毒化实例(close)后异步补建,
-// 等待中的 acquire 由补建实例唤醒——任何路径都不会永久卡死(ctx 兜底)。
+// 实例池：每插件池化 wasm 实例，并发复用、空闲回收、trap 后重建。
+// 通道即池：借出即收、归还即发；live 计数约束总量；毒化实例关闭后异步补建，
+// 等待中的 acquire 由补建实例唤醒，任何路径都不会永久卡死，ctx 超时兜底。
 package plugin
 
 import (
@@ -14,7 +14,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
-// instance 单个已就绪的 wasm 实例(导出函数句柄预解析,热路径零查找)。
+// instance 单个已就绪的 wasm 实例，导出函数句柄预解析，热路径零查找。
 type instance struct {
 	mod      api.Module
 	version  api.Function
@@ -23,7 +23,7 @@ type instance struct {
 	freeFn   api.Function
 	hook     api.Function
 	resultFn api.Function
-	lastUsed atomic.Int64 // unix nanos,空闲回收判据
+	lastUsed atomic.Int64 // unix nanos，空闲回收判据。
 }
 
 // instancePool 池本体。
@@ -31,11 +31,11 @@ type instancePool struct {
 	owner *Plugin
 
 	mu      sync.Mutex
-	live    int // 已创建未关闭(含借出)
-	idle    int // 池内待借
+	live    int // 已创建未关闭，含借出。
+	idle    int // 池内待借。
 	closing bool
 
-	ch chan *instance // 待借实例(cap = poolSize,发送方唯一是归还/补建)
+	ch chan *instance // 待借实例，容量 poolSize，发送方唯一是归还与补建。
 
 	createdTotal atomic.Int64
 	closedTotal  atomic.Int64
@@ -43,18 +43,18 @@ type instancePool struct {
 	idleTTL  time.Duration
 	stop     chan struct{}
 	stopOnce sync.Once
-	// kick 唤醒源:补建失败等「无人发实例但池有空间」的场景广播等待者重入循环
-	// 重评 closing/live——否则等待者只能等 caller ctx,Close 链上可演变为死锁。
+	// kick 唤醒源：补建失败等无人发实例但池有空间的场景，广播等待者重入循环
+	// 重评 closing/live；否则等待者只能等 caller ctx，Close 链上可演变为死锁。
 	kick chan struct{}
 }
 
 var errPoolClosed = errors.New("插件实例池已关闭")
 
-// newInstance 用编译产物实例化一个 wasm 实例(资源限制经 ModuleConfig 施加)。
+// newInstance 用编译产物实例化一个 wasm 实例，资源限制经 ModuleConfig 施加。
 func (p *Plugin) newInstance(ctx context.Context) (*instance, error) {
 	modCfg := wazero.NewModuleConfig().
-		WithName("").                     // 匿名实例:同 runtime 可并存多个
-		WithStartFunctions("_initialize") // 只跑 reactor 构造器;绝不跑 _start(Rust command main)
+		WithName("").                     // 匿名实例，同 runtime 可并存多个。
+		WithStartFunctions("_initialize") // 只跑 reactor 构造器，绝不跑 _start（Rust command main）。
 	mod, err := p.rt.InstantiateModule(ctx, p.compiled, modCfg)
 	if err != nil {
 		return nil, err
@@ -101,7 +101,7 @@ func newPool(owner *Plugin, probe *instance, idleTTL time.Duration) *instancePoo
 	return pl
 }
 
-// acquire 取实例:优先复用池内空闲;未满则即建;满则等待归还或补建。
+// acquire 取实例：优先复用池内空闲，未满则即建，满则等待归还或补建。
 func (pl *instancePool) acquire(ctx context.Context) (*instance, error) {
 	for {
 		select {
@@ -133,7 +133,7 @@ func (pl *instancePool) acquire(ctx context.Context) (*instance, error) {
 			return inst, nil
 		}
 		pl.mu.Unlock()
-		// 池满:等归还/补建;Close(kick 关闭广播)与补建失败(kick 单发)也必须能唤醒
+		// 池满：等归还或补建；Close 关闭 kick 广播与补建失败单发 kick 也必须能唤醒。
 		select {
 		case inst := <-pl.ch:
 			pl.mu.Lock()
@@ -142,7 +142,7 @@ func (pl *instancePool) acquire(ctx context.Context) (*instance, error) {
 			inst.lastUsed.Store(time.Now().UnixNano())
 			return inst, nil
 		case <-pl.kick:
-			continue // 重入循环:重评 closing / live<PoolSize
+			continue // 重入循环，重评 closing 与 live<PoolSize。
 		case <-pl.stop:
 			return nil, errPoolClosed
 		case <-ctx.Done():
@@ -160,14 +160,14 @@ func (pl *instancePool) release(inst *instance) {
 	pl.ch <- inst
 }
 
-// poison 丢弃故障实例(close)+异步补建占位,保证池满等待者能被唤醒。
+// poison 丢弃故障实例并异步补建占位，保证池满等待者能被唤醒。
 func (pl *instancePool) poison(ctx context.Context, inst *instance) {
 	_ = inst.mod.Close(context.WithoutCancel(ctx))
 	pl.closedTotal.Add(1)
 	pl.mu.Lock()
 	pl.live--
 	pl.mu.Unlock()
-	// 补建:失败不重试(下一次 acquire 会再建),但必须 kick 唤醒等待者重入循环
+	// 补建失败不重试，下一次 acquire 会再建；但必须 kick 唤醒等待者重入循环。
 	pl.mu.Lock()
 	canFill := !pl.closing && pl.live < pl.owner.opts.PoolSize
 	if canFill {
@@ -184,7 +184,7 @@ func (pl *instancePool) poison(ctx context.Context, inst *instance) {
 			closing := pl.closing
 			pl.live--
 			pl.mu.Unlock()
-			if !closing { // 池仍有空间却建不出:广播等待者自己重试/重评
+			if !closing { // 池仍有空间却建不出，广播等待者自己重试重评。
 				select {
 				case pl.kick <- struct{}{}:
 				default:
@@ -195,7 +195,7 @@ func (pl *instancePool) poison(ctx context.Context, inst *instance) {
 		pl.createdTotal.Add(1)
 		newInst.lastUsed.Store(time.Now().UnixNano())
 		pl.mu.Lock()
-		if pl.closing { // 与 closeAll 竞态:已关停则不留新实例
+		if pl.closing { // 与 closeAll 竞态，已关停则不留新实例。
 			pl.live--
 			pl.mu.Unlock()
 			_ = newInst.mod.Close(context.Background())
@@ -208,7 +208,7 @@ func (pl *instancePool) poison(ctx context.Context, inst *instance) {
 	}()
 }
 
-// recycleLoop 空闲回收:周期把超时未用的空闲实例关掉(design Risks:实例池内存驻留)。
+// recycleLoop 空闲回收：周期把超时未用的空闲实例关掉。
 func (pl *instancePool) recycleLoop() {
 	interval := pl.idleTTL / 2
 	if interval < 10*time.Millisecond {
@@ -229,7 +229,7 @@ func (pl *instancePool) recycleLoop() {
 			select {
 			case inst := <-pl.ch:
 				pl.mu.Lock()
-				pl.idle-- // 出池
+				pl.idle-- // 出池。
 				if now-inst.lastUsed.Load() > pl.idleTTL.Nanoseconds() {
 					pl.mu.Unlock()
 					_ = inst.mod.Close(context.Background())
@@ -240,8 +240,8 @@ func (pl *instancePool) recycleLoop() {
 					continue
 				}
 				pl.mu.Unlock()
-				keep = append(keep, inst) // 未超时,先收起——放回必须在本轮 drain 结束后,
-			default: // 否则同一实例被反复弹出形成自旋
+				keep = append(keep, inst) // 未超时先收起，放回必须等本轮 drain 结束后。
+			default: // 否则同一实例被反复弹出形成自旋。
 				break drain
 			}
 		}
@@ -254,8 +254,8 @@ func (pl *instancePool) recycleLoop() {
 	}
 }
 
-// closeAll 关停:拒新借出,关掉池内与借出无法追踪外的全部实例。
-// 借出实例由 Plugin.Close 的 inflight 等待保证先归还。
+// closeAll 关停：拒新借出，关掉池内全部实例；借出实例由 Plugin.Close 的
+// inflight 等待保证先归还。
 func (pl *instancePool) closeAll(ctx context.Context) {
 	pl.stopOnce.Do(func() { close(pl.stop) })
 	pl.mu.Lock()
@@ -281,7 +281,7 @@ drain:
 	}
 }
 
-// idleSnapshot 池内空闲实例数(指标抓取时一致性要求弱,锁内快照即可)。
+// idleSnapshot 池内空闲实例数，指标一致性要求弱，锁内快照即可。
 func (pl *instancePool) idleSnapshot() int {
 	pl.mu.Lock()
 	defer pl.mu.Unlock()

@@ -22,7 +22,7 @@ checksum:
 
 changelog:
   use: github
-  # 变更说明以 git log 为唯一事实源;feat/fix 分组(兼容有无 scope 两种 conventional 形态),杂项折叠
+  # 变更说明来自 Git 记录，并按 feat、fix 和其他类型分组。
   groups:
     - title: 功能
       regexp: '^feat(\(.*\))?:'

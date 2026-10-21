@@ -1,41 +1,35 @@
-// Package presets 内置「官方端点预设目录」——一手官方厂商的接入参考数据,零运行时行为。
-// 收录标准(docs/design/upstream-adapters.md「官方端点预设目录」):
-//  1. 一手官方:模型厂商自营端点或其官方推理云,第三方中转/聚合站一律不收;
-//  2. 协议可服务:OpenAI 兼容(openai 基座或 quirk 适配器),或已有桥接(anthropic);
-//  3. 可溯源:端点与文档 URL 以官方文档为准(2026-09-26 逐家核对),厂商改端点只改本表。
+// Package presets 内置「官方端点预设目录」，是一手官方厂商的接入参考数据，零运行时行为。
+// 目录只收官方端点，并为每条记录提供官方文档链接。
 //
-// 消费方仅两处:GET /admin/v1/provider-presets 与控制台「供应商」页;用户复制 YAML 片段
-// 填入 muniu.yaml 即完成接入。目录不参与任何转发判定,也不做内置隐式行为(ADR-0010 同哲学)。
+// 管理 API 和控制台展示该目录；用户可复制 YAML 片段配置供应商。
+// 目录不参与转发判定，也不会自动创建供应商配置。
 //
-// Anthropic 分支预设:国内主流厂商普遍设有 Anthropic 协议分支端点(Claude Code 生态),
-// 以 adapter=anthropic + auth=bearer 收录(桥接声明制,按各家官方文档 AUTH_TOKEN 口径发
-// Bearer;官方 Anthropic 缺省 x-api-key)。各分支实际接受头未逐家真上游冒烟,首次接入
-// 前按 HANDOFF 开放项核验;工具多轮中途请求的桥接边界见 upstream-adapters。
+// Anthropic 分支按各供应商要求配置鉴权头；首次接入前应核对其官方文档和实际响应。
 package presets
 
-// 分组码(admin API 契约,openapi enum 同轴):国内官方 / 国际官方 / 本地运行时。
+// 分组码与管理 API 契约、openapi enum 同轴：国内官方 / 国际官方 / 本地运行时。
 const (
 	GroupDomestic = "domestic"
 	GroupGlobal   = "global"
 	GroupLocal    = "local"
 )
 
-// Preset 单条官方端点预设。adapter/base_url/env 与 config.Provider 同轴,可逐字抄进 YAML。
+// Preset 单条官方端点预设。adapter/base_url/env 与 config.Provider 同轴，可逐字抄进 YAML。
 type Preset struct {
-	Alias   string   `json:"alias"`          // 目录内唯一别名,建议直接用作 provider name
-	Display string   `json:"display"`        // 展示名(中文)
+	Alias   string   `json:"alias"`          // 目录内唯一别名，建议直接用作 provider name
+	Display string   `json:"display"`        // 展示名，中文
 	Group   string   `json:"group"`          // domestic|global|local
-	Adapter string   `json:"adapter"`        // 适配器类型;仅收 adapter.Types()(= adapter.For 可实现集合)
-	Auth    string   `json:"auth,omitempty"` // 鉴权形态声明(透传 config.Provider.Auth):bearer=Authorization Bearer(国内分支口径);空=适配器缺省
+	Adapter string   `json:"adapter"`        // 适配器类型；仅收 adapter.Types()，即 adapter.For 可实现集合
+	Auth    string   `json:"auth,omitempty"` // 鉴权形态声明，透传 config.Provider.Auth：bearer 为 Authorization Bearer，国内厂商 Anthropic 兼容分支的通行形态；空为适配器缺省
 	BaseURL string   `json:"base_url"`
-	Env     string   `json:"env"`    // 建议的 key 环境变量名(约定俗成,非强制);本地运行时 = 任意非空占位
+	Env     string   `json:"env"`    // 建议的 key 环境变量名，约定俗成非强制；本地运行时 = 任意非空占位
 	Docs    string   `json:"docs"`   // 官方接入文档入口
-	Models  []string `json:"models"` // 典型模型(示意,以官方模型列表为准;本地运行时留空)
-	Note    string   `json:"note"`   // 接入注意事项(鉴权形态/兼容层状态等),可空
+	Models  []string `json:"models"` // 典型模型，示意，以官方模型列表为准；本地运行时留空
+	Note    string   `json:"note"`   // 接入注意事项，如鉴权形态、兼容层状态等，可空
 }
 
-// catalog 目录本体:声明顺序即 API 输出顺序(国内官方 → 国际官方 → 本地运行时)。
-// 鉴权一律 Bearer anthropic 除外(x-api-key,桥接内部处理);星火为「APIKey:APISecret」拼串(见 note)。
+// catalog 目录本体：声明顺序即 API 输出顺序，国内官方、国际官方、本地运行时。
+// 鉴权一律 Bearer，anthropic 除外，用 x-api-key 由桥接内部处理；星火为「APIKey:APISecret」拼串，见 note。
 var catalog = []Preset{
 	{
 		Alias: "deepseek", Display: "DeepSeek", Group: GroupDomestic,
@@ -195,7 +189,7 @@ var catalog = []Preset{
 	},
 }
 
-// Catalog 返回预设目录(只读;调用方不得修改,修改仅应发生在本表)。
+// Catalog 返回预设目录，只读；调用方不得修改，修改仅应发生在本表。
 func Catalog() []Preset {
 	return catalog
 }

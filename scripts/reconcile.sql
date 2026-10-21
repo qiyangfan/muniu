@@ -1,14 +1,10 @@
--- T5.3 对账查询:muniu usage_logs 与 kongming 用量记录按日对账。
+-- 按日对账 muniu 与 kongming 的用量。
 -- 用法:sqlite3 data/muniu.db < scripts/reconcile.sql
 -- 判据:两侧按日请求数/token 数差异 ≤1%;超限立案(postmortem)。
 -- kongming 侧需以其自身用量表替换 kongming_usage_daily 视图/子查询后对齐口径。
 --
--- 对齐口径(与 metering 实现一致,勿凭直觉改):
---   * usage_logs 是「每次上游尝试一行」:failover 换道 N 次同一 request_id 落 N 行,
---     与 kongming(每请求一行)对账必须按 COUNT(DISTINCT request_id) 计数;
---   * token 只取终态成功行(status='ok',携带上游权威 usage),错误/断连行的 usage 为 0 或估算;
---   * 语义缓存命中行(provider='semantic-cache')未到达上游,kongming 侧无对应,两侧都应剔除;
---   * estimated 行 token 为本地估算,仅进参考列,不进对账 token 口径。
+-- 对账口径：请求按 request_id 去重；token 只计成功上游调用；缓存命中不计入。
+-- 成本只计非 estimated 行；错误分类查询用于定位换道与故障。
 
 -- 1) muniu 侧按日汇总(对账口径:去重请求数 + 终态成功行 token;缓存命中/错误行单列参考)
 SELECT substr(created_at, 1, 10)                AS day,

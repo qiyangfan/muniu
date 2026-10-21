@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// 拓扑拉取源测试(3.2 双驱动的控制面侧 + 3.3 损坏拒绝)。
+// 拓扑拉取源测试：控制面拉取与损坏快照拒绝。
 
 const validPayload = `{
   "providers":[{"name":"alpha","adapter":"openai","base_url":"http://alpha",
@@ -36,7 +36,7 @@ func TestFetchTopology_OK(t *testing.T) {
 	if providers[0].Name != "alpha" || routes["m1"][0].Provider != "alpha" || len(models) != 1 {
 		t.Fatalf("ToTopology 转换异常: %v %v %v", providers, routes, models)
 	}
-	// 条件请求:携带 ETag 且服务端 304
+	// 条件请求：携带 ETag 且服务端 304
 	if sawETag != "" {
 		t.Fatal("首次拉取不应带 If-None-Match")
 	}

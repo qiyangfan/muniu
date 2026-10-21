@@ -1,7 +1,5 @@
-// Gemini 原生协议双向翻译(gemini-native-protocol;契约=proxy-and-streaming「Gemini 入站翻译」
-// 与 upstream-adapters Gemini 归一表):入站 contents→chat 消息序列、响应/流反向映射为
-// GenerateContentResponse。翻译失败以 GeminiUnsupportedError 携带机器码,handler 映射 400
-// Gemini 错误信封;回环对拍(出站翻译 ∘ 入站翻译 = 恒等,可翻译子集域)由 conformance 语料钉死。
+// Gemini generateContent 请求转换为规范 chat 请求，响应和流事件再转换为 Gemini 形态。
+// 不支持的请求通过 GeminiUnsupportedError 返回机器码。
 package protocol
 
 import (
@@ -10,7 +8,7 @@ import (
 	"strings"
 )
 
-// 显式拒绝机器码(handler 映射 400 Gemini 信封;禁散落硬编码)。
+// Gemini 翻译失败的机器码。
 const (
 	CodeGeminiContentPartUnsupported  = "content_part_unsupported"
 	CodeGeminiStreamFormUnsupported   = "stream_form_unsupported"
@@ -20,10 +18,10 @@ const (
 	CodeGeminiPreviousIDNotApplicable = "previous_id_not_applicable"
 )
 
-// GeminiUnsupportedError 显式拒绝(不支持项/非法请求);handler 映射 400 + Gemini 信封。
+// GeminiUnsupportedError 表示请求包含不支持或无效的内容。
 type GeminiUnsupportedError struct {
-	Code   string // 机器码(muniu 追责口径)
-	Status string // Gemini status 字面量(INVALID_ARGUMENT 等,SDK 消费)
+	Code   string // 机器码，muniu 追责口径
+	Status string // Gemini status 字面量，如 INVALID_ARGUMENT，由 SDK 消费
 }
 
 func (e *GeminiUnsupportedError) Error() string { return "gemini: " + e.Code }
@@ -32,7 +30,7 @@ func geminiInvalid() *GeminiUnsupportedError {
 	return &GeminiUnsupportedError{Code: CodeGeminiInputInvalid, Status: "INVALID_ARGUMENT"}
 }
 
-// ---- 请求侧 DTO(入站) ----
+// ---- 入站请求侧 DTO ----
 
 type geminiPart struct {
 	Text       string `json:"text"`
@@ -84,9 +82,7 @@ type geminiRequest struct {
 	GenerationConfig  geminiGenConfig `json:"generationConfig"`
 }
 
-// TranslateGeminiRequest Gemini generateContent 请求 → 规范 chat 请求(模型别名取自路径;
-// stream 由 handler 依 URL 方法注入——Gemini wire 无 stream 字段,流式语义在端点本身)。
-// 返回的 ChatRequest.Raw 即 canonical chat JSON 字节——治理/缓存/计量与等价 chat 请求同构。
+// TranslateGeminiRequest 将 generateContent 请求转换为规范 chat 请求；模型名来自路径，流式模式由端点决定。
 func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRequest, error) {
 	if pathModel == "" {
 		return nil, geminiInvalid()
@@ -104,7 +100,7 @@ func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRe
 	b.Write(mustJSON(pathModel))
 
 	var msgs []string
-	// systemInstruction:字符串快捷形态或 {parts:[...]} 块形态 → 单条 system 消息
+	// systemInstruction：字符串快捷形态或 {parts:[...]} 块形态 → 单条 system 消息
 	if len(gr.SystemInstruction) > 0 && string(gr.SystemInstruction) != "null" {
 		sys, err := geminiSystemToText(gr.SystemInstruction)
 		if err != nil {
@@ -114,7 +110,7 @@ func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRe
 			msgs = append(msgs, `{"role":"system","content":`+string(mustJSON(sys))+`}`)
 		}
 	}
-	// functionCall 合成 id 登记(同名调用按序去重;并行同名调用的 id 配对属登记限制)
+	// functionCall 合成 id：同名调用按序去重，并行同名调用的 id 配对为已知限制
 	callSeq := map[string]int{}
 	lastCallID := map[string]string{}
 	for i := range gr.Contents {
@@ -144,7 +140,7 @@ func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRe
 	if gr.GenerationConfig.TopP != nil {
 		b.WriteString(`,"top_p":` + fmt.Sprint(*gr.GenerationConfig.TopP))
 	}
-	// topK → canonical top_k(qwen 系字段;与 top_p 同缝,治理 Raw 层可裁决)
+	// topK → canonical top_k，qwen 系字段；与 top_p 同路透传，治理 Raw 层可裁决
 	if gr.GenerationConfig.TopK != nil {
 		b.WriteString(`,"top_k":` + fmt.Sprint(*gr.GenerationConfig.TopK))
 	}
@@ -189,11 +185,11 @@ func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRe
 	}
 	b.WriteString(`}`)
 
-	// canonical JSON 经既有解析器回填 typed 字段(单源,避免两套解析)
+	// canonical JSON 经既有解析器回填 typed 字段，避免两套解析。
 	return ParseChatRequest([]byte(b.String()))
 }
 
-// geminiSystemToText systemInstruction → 文本(字符串快捷形态或 text 部件块)。
+// geminiSystemToText systemInstruction → 文本，接受字符串快捷形态或 text 部件块。
 func geminiSystemToText(raw json.RawMessage) (string, error) {
 	if raw[0] == '"' {
 		var s string
@@ -218,10 +214,10 @@ func geminiSystemToText(raw json.RawMessage) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
-// geminiPartsToChat 单 content 的 parts → 0..n 条 chat 消息:
-//   - 纯 text(+inlineData image)→ 同角色消息(多模态经 image_url data URL 承载);
-//   - assistant 的 functionCall → assistant(tool_calls) 消息(id 按名合成,同名按序去重);
-//   - user 的 functionResponse → role:tool 消息(tool_call_id 回指同名最近 functionCall)。
+// geminiPartsToChat 单 content 的 parts → 0..n 条 chat 消息：
+//   - 纯 text 与 inlineData image → 同角色消息，多模态经 image_url data URL 承载；
+//   - assistant 的 functionCall → assistant(tool_calls) 消息，id 按名合成、同名按序去重；
+//   - user 的 functionResponse → role:tool 消息，tool_call_id 回指同名最近的 functionCall。
 func geminiPartsToChat(role string, parts []geminiPart, callSeq map[string]int, lastCallID map[string]string) ([]string, error) {
 	var textParts []string
 	var imageURLs []string
@@ -234,7 +230,7 @@ func geminiPartsToChat(role string, parts []geminiPart, callSeq map[string]int, 
 		if len(imageURLs) == 0 {
 			msgs = append(msgs, `{"role":`+string(mustJSON(role))+`,"content":`+string(mustJSON(strings.Join(textParts, "\n")))+`}`)
 		} else {
-			// 多模态:canonical image_url 形态(data URL 由 inlineData 合成)
+			// 多模态：canonical image_url 形态，data URL 由 inlineData 合成
 			content := `[`
 			for i, u := range imageURLs {
 				if i > 0 {
@@ -251,7 +247,7 @@ func geminiPartsToChat(role string, parts []geminiPart, callSeq map[string]int, 
 		textParts, imageURLs = nil, nil
 	}
 	for _, p := range parts {
-		// 部件字段顺序处理(text 与 inlineData 可并存于同一部件;函数部件互斥)
+		// 按部件字段顺序处理：text 与 inlineData 可并存于同一部件，函数部件互斥
 		if p.Text != "" {
 			textParts = append(textParts, p.Text)
 		}
@@ -283,7 +279,7 @@ func geminiPartsToChat(role string, parts []geminiPart, callSeq map[string]int, 
 			flushText()
 			id, ok := lastCallID[p.FunctionResponse.Name]
 			if !ok {
-				return nil, geminiInvalid() // response 先于 call:非法序列
+				return nil, geminiInvalid() // response 先于 call，非法序列
 			}
 			content := "{}"
 			if len(p.FunctionResponse.Response) > 0 && string(p.FunctionResponse.Response) != "null" {
@@ -291,7 +287,7 @@ func geminiPartsToChat(role string, parts []geminiPart, callSeq map[string]int, 
 			}
 			msgs = append(msgs, `{"role":"tool","tool_call_id":`+string(mustJSON(id))+`,"content":`+string(mustJSON(content))+`}`)
 		}
-		// thought 请求部件:丢弃(签名回传语义不成立,登记限制)
+		// thought 请求部件丢弃，签名回传语义不成立
 	}
 	if len(toolCalls) > 0 {
 		content := "null"
@@ -305,8 +301,8 @@ func geminiPartsToChat(role string, parts []geminiPart, callSeq map[string]int, 
 	return msgs, nil
 }
 
-// translateGeminiToolConfig functionCallingConfig.mode → chat tool_choice(完整映射含 NONE)。
-// allowedFunctionNames 单元素 → 具名形态;多元素/无 mode 无名单 → 静默丢弃(登记限制)。
+// translateGeminiToolConfig functionCallingConfig.mode → chat tool_choice，完整映射含 NONE。
+// allowedFunctionNames 单元素 → 具名形态；多元素或无 mode 无名单 → 静默丢弃。
 func translateGeminiToolConfig(raw json.RawMessage) (string, error) {
 	var cfg struct {
 		FunctionCallingConfig struct {
@@ -328,30 +324,30 @@ func translateGeminiToolConfig(raw json.RawMessage) (string, error) {
 	case "NONE":
 		return `"none"`, nil
 	case "":
-		return "", nil // 未声明 mode:不映射(上游缺省行为)
+		return "", nil // 未声明 mode，不映射，保持上游缺省行为
 	default:
 		return "", geminiInvalid()
 	}
 }
 
-// ---- 响应侧映射(入站反向映射:canonical chat → Gemini 形态) ----
+// ---- 响应侧映射：canonical chat → Gemini 形态 ----
 
-// geminiFinishReasonFromChat chat finish_reason → Gemini finishReason(冻结映射表;
-// 未知值兜底 STOP,与出站适配器映射互为镜像)。
+// geminiFinishReasonFromChat chat finish_reason → Gemini finishReason 的固定映射，
+// 未知值兜底 STOP，与出站适配器映射互为镜像。
 func geminiFinishReasonFromChat(finish string) string {
 	switch finish {
 	case "length":
 		return "MAX_TOKENS"
 	case "content_filter":
 		return "SAFETY"
-	default: // stop(含 tool_calls:Gemini 以 STOP 收束工具调用)
+	default: // stop，含 tool_calls，Gemini 以 STOP 收束工具调用
 		return "STOP"
 	}
 }
 
-// GenerateContentResponseFromChat 非流式:chat.completion → GenerateContentResponse。
-// reasoning_content → thought 部件(展示形态,签名回传语义不成立,登记限制);
-// tool_calls → functionCall 部件(args 反序列化为对象形态)。
+// GenerateContentResponseFromChat 非流式：chat.completion → GenerateContentResponse。
+// reasoning_content → thought 部件，仅展示用，签名回传语义不成立；
+// tool_calls → functionCall 部件，args 反序列化为对象形态。
 func GenerateContentResponseFromChat(chatBody []byte, modelVersion string) ([]byte, error) {
 	var chat struct {
 		Choices []struct {
@@ -409,7 +405,7 @@ func GenerateContentResponseFromChat(chatBody []byte, modelVersion string) ([]by
 	return json.Marshal(resp)
 }
 
-// geminiUsage 统一口径 → usageMetadata(total=prompt+completion;cached/thoughts 非零才带)。
+// geminiUsage 统一口径 → usageMetadata，total=prompt+completion，cached/thoughts 非零才带。
 func geminiUsage(u map[string]int64) map[string]any {
 	out := map[string]any{
 		"promptTokenCount":     u["prompt"],
@@ -425,12 +421,11 @@ func geminiUsage(u map[string]int64) map[string]any {
 	return out
 }
 
-// ---- 流式事件编码器(上游 OpenAI chunk → alt=sse Gemini 帧) ----
+// ---- 流式事件编码器：上游 OpenAI chunk → alt=sse Gemini 帧 ----
 
-// GeminiStreamEncoder 把上游 OpenAI 形态 SSE 帧翻译为 Gemini 流帧
-// (顺序不变式:内容增量帧在前,携带 finishReason+usageMetadata 的终帧收尾;
-// 工具调用按收束帧发出——Gemini functionCall 部件为完整对象,无增量形态,登记限制)。
-// 非并发安全:单请求单实例。
+// GeminiStreamEncoder 把上游 OpenAI 形态 SSE 帧翻译为 Gemini 流帧。顺序不变式：
+// 内容增量帧在前，携带 finishReason+usageMetadata 的终帧收尾；工具调用在收束帧一次性发出，
+// Gemini functionCall 部件为完整对象，无增量形态。非并发安全，单请求单实例。
 type GeminiStreamEncoder struct {
 	modelVersion string
 	usage        *Usage
@@ -441,7 +436,7 @@ type GeminiStreamEncoder struct {
 	done         bool
 }
 
-// NewGeminiStreamEncoder 构造;modelVersion 回显给客户端(展示用)。
+// NewGeminiStreamEncoder 构造；modelVersion 回显给客户端，展示用。
 func NewGeminiStreamEncoder(modelVersion string) *GeminiStreamEncoder {
 	return &GeminiStreamEncoder{
 		modelVersion: modelVersion,
@@ -455,14 +450,13 @@ func (e *GeminiStreamEncoder) event(v map[string]any) []byte {
 	return b
 }
 
-// geminiDeltaFrame 内容增量帧。
 func (e *GeminiStreamEncoder) geminiDeltaFrame(parts []map[string]any) []byte {
 	return e.event(map[string]any{"candidates": []any{map[string]any{
 		"content": map[string]any{"parts": parts, "role": "model"}, "index": 0,
 	}}})
 }
 
-// Feed 消费一帧上游 OpenAI chunk,返回待写的 Gemini 流帧(可空)。
+// Feed 消费一帧上游 OpenAI chunk，返回待写的 Gemini 流帧，可空。
 func (e *GeminiStreamEncoder) Feed(chunk []byte) [][]byte {
 	c, err := ParseStreamChunk(chunk)
 	if err != nil {
@@ -474,7 +468,7 @@ func (e *GeminiStreamEncoder) Feed(chunk []byte) [][]byte {
 	var out [][]byte
 	for _, ch := range c.Choices {
 		if ch.Index != nil && *ch.Index != 0 {
-			continue // 仅映射首 choice(防御多 choice 合流错乱)
+			continue // 仅映射首 choice，防御多 choice 合流错乱
 		}
 		var deltaParts []map[string]any
 		if ch.Delta.ReasoningContent != nil && *ch.Delta.ReasoningContent != "" {
@@ -518,7 +512,7 @@ func (e *GeminiStreamEncoder) Feed(chunk []byte) [][]byte {
 	return out
 }
 
-// flushToolCalls 收束的 functionCall → 独立帧(Gemini 以 STOP 收束工具调用)。
+// flushToolCalls 收束的 functionCall → 独立帧，Gemini 以 STOP 收束工具调用。
 func (e *GeminiStreamEncoder) flushToolCalls() [][]byte {
 	if len(e.toolOrder) == 0 {
 		return nil
@@ -538,7 +532,7 @@ func (e *GeminiStreamEncoder) flushToolCalls() [][]byte {
 	return [][]byte{e.geminiDeltaFrame(parts)}
 }
 
-// Complete 终帧(finishReason+usageMetadata;仅应调用一次)。
+// Complete 终帧，携带 finishReason+usageMetadata，仅应调用一次。
 func (e *GeminiStreamEncoder) Complete() [][]byte {
 	var out [][]byte
 	out = append(out, e.flushToolCalls()...)
@@ -557,7 +551,7 @@ func (e *GeminiStreamEncoder) Complete() [][]byte {
 	}))
 }
 
-// Failed 流中失败:Gemini 错误信封帧(诚实失败,不伪造正常终帧)。
+// Failed 流中失败：Gemini 错误信封帧，不伪造正常终帧。
 func (e *GeminiStreamEncoder) Failed(message string) []byte {
 	return e.event(map[string]any{"error": map[string]any{
 		"code": 500, "message": message, "status": "INTERNAL",

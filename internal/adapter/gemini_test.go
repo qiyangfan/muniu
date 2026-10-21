@@ -1,7 +1,6 @@
-// Gemini 出站适配器契约测试(gemini-native-protocol;测试先行域):
-// Prepare 逐字段 fixture(URL/头/体)、tool_choice 完整映射含 NONE、多模态 inlineData、
-// 工具多轮完整翻译、Classify 判定表、NormalizeUsage、StreamEvent 事件机、RewriteResponse、
-// 回环对拍(出站翻译 ∘ 入站翻译在可翻译子集域恒等)。
+// Gemini 出站适配器契约测试：Prepare 逐字段 fixture，含 URL、头、体，tool_choice 完整映射
+// 含 NONE，多模态 inlineData，工具多轮完整翻译，Classify 分类，NormalizeUsage，
+// StreamEvent 事件机，RewriteResponse，以及回环对拍，出站翻译与入站翻译在可翻译子集域恒等。
 package adapter_test
 
 import (
@@ -28,7 +27,7 @@ func chatFrom(t *testing.T, body string) *protocol.ChatRequest {
 	return req
 }
 
-// TestGemini_Prepare_逐字段 system 提升/tools 形态/tool_choice 含 NONE/generationConfig。
+// TestGemini_Prepare_逐字段 覆盖 system 提升、tools 形态、tool_choice 含 NONE 与 generationConfig。
 func TestGemini_Prepare_逐字段(t *testing.T) {
 	g := geminiAdapter(t)
 
@@ -154,7 +153,7 @@ func TestGemini_Prepare_逐字段(t *testing.T) {
 	})
 }
 
-// TestGemini_Prepare_多模态inlineData data URL → inlineData(mime/base64 与源一致)。
+// TestGemini_Prepare_多模态inlineData 验证 data URL 映射 inlineData，mime 与 base64 和源一致。
 func TestGemini_Prepare_多模态inlineData(t *testing.T) {
 	out, err := geminiAdapter(t).Prepare(chatFrom(t,
 		`{"model":"a","messages":[{"role":"user","content":[{"type":"text","text":"看"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aGk="}}]}]}`), "m", "k")
@@ -166,7 +165,7 @@ func TestGemini_Prepare_多模态inlineData(t *testing.T) {
 	}
 }
 
-// TestGemini_Classify 判定表逐格。
+// TestGemini_Classify 分类逐格断言。
 func TestGemini_Classify(t *testing.T) {
 	g := geminiAdapter(t)
 	cases := []struct {
@@ -189,7 +188,7 @@ func TestGemini_Classify(t *testing.T) {
 	}
 }
 
-// TestGemini_NormalizeUsage 归一表(含 thoughts→reasoning 口径)。
+// TestGemini_NormalizeUsage 归一逐字段断言，含 thoughts 映射 reasoning 的口径。
 func TestGemini_NormalizeUsage(t *testing.T) {
 	u, err := geminiAdapter(t).NormalizeUsage(json.RawMessage(
 		`{"promptTokenCount":13,"candidatesTokenCount":5,"cachedContentTokenCount":3,"thoughtsTokenCount":2,"totalTokenCount":23}`))
@@ -198,7 +197,7 @@ func TestGemini_NormalizeUsage(t *testing.T) {
 	}
 }
 
-// TestGemini_StreamEvent_事件机 fixture 域:增量/工具/终帧/错误帧。
+// TestGemini_StreamEvent_事件机 fixture 域：增量、工具、终帧、错误帧。
 func TestGemini_StreamEvent_事件机(t *testing.T) {
 	g := geminiAdapter(t)
 	delta, meta, err := g.StreamEvent([]byte(`{"candidates":[{"content":{"parts":[{"text":"你好"}],"role":"model"},"index":0}]}`))
@@ -213,14 +212,13 @@ func TestGemini_StreamEvent_事件机(t *testing.T) {
 	if err != nil || !meta3.IsUsage || !strings.Contains(string(final), `"finish_reason":"stop"`) {
 		t.Fatalf("终帧不符: %s %+v %v", final, meta3, err)
 	}
-	// 流内错误帧(HTTP 200 表象下的失真样式,百炼实证):报错交 proxy 归类
+	// 流内错误帧是 HTTP 200 表象下的失真样式，百炼实证；报错交 proxy 归类
 	if _, _, err := g.StreamEvent([]byte(`{"error":{"code":429,"message":"x","status":"RESOURCE_EXHAUSTED"}}`)); err == nil {
 		t.Fatal("流内错误帧应报错")
 	}
 }
 
-// TestGemini_StreamEvent_工具名转义 回归钉:名字含引号/反斜杠时 tool_calls id 不得裸拼接
-// (裸拼接产出非法 JSON 帧,客户端解析失败且计量静默归零)。
+// TestGemini_StreamEvent_工具名转义 验证名称中的引号和反斜杠不会破坏事件 JSON。
 func TestGemini_StreamEvent_工具名转义(t *testing.T) {
 	g := geminiAdapter(t)
 	raw, meta, err := g.StreamEvent([]byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"we\"ath\\er","args":{}}}],"role":"model"},"index":0}]}`))
@@ -276,13 +274,13 @@ func TestGemini_RewriteResponse(t *testing.T) {
 		chat.Usage.PromptTokens != 13 || chat.Usage.CompletionTokens != 5 || chat.Usage.CachedTokens != 3 {
 		t.Fatalf("归一不符: %s %s", out, usageRaw)
 	}
-	// promptFeedback.blockReason → 报错(禁止空内容伪造成功)
+	// promptFeedback.blockReason 时报错，禁止空内容伪造成功
 	if _, _, err := g.RewriteResponse([]byte(`{"promptFeedback":{"blockReason":"SAFETY"}}`)); err == nil {
 		t.Fatal("安全拦截应报错")
 	}
 }
 
-// TestGemini_契约断言 桥接标记/翻译完整声明/流关闭即收尾。
+// TestGemini_契约断言 覆盖桥接标记、翻译完整声明、流关闭即收尾。
 func TestGemini_契约断言(t *testing.T) {
 	g := geminiAdapter(t)
 	if _, ok := adapter.Adapter(g).(adapter.Bridger); !ok {
@@ -299,11 +297,7 @@ func TestGemini_契约断言(t *testing.T) {
 	}
 }
 
-// TestGemini_StreamSequencer_跨帧并行工具与同帧聚合 回归钉组:
-// ①每流测序跨帧 functionCall index 连续、同名 id 去重(Gemini wire 无工具序号);
-// ②同帧双调用聚合为单 delta 的 tool_calls 数组;
-// ③内容与 finishReason 同帧时产出单一合法 JSON(裸拼接曾产出非法 SSE data 行);
-// ④非流式 RewriteResponse 同名 id 去重。
+// TestGemini_StreamSequencer_跨帧并行工具与同帧聚合 验证跨帧编号、同帧聚合、JSON 有效性和同名调用去重。
 func TestGemini_StreamSequencer_跨帧并行工具与同帧聚合(t *testing.T) {
 	g := geminiAdapter(t)
 	seq := adapter.Adapter(g).(adapter.StreamSequencer).NewStreamSequencer()
@@ -346,14 +340,14 @@ func TestGemini_StreamSequencer_跨帧并行工具与同帧聚合(t *testing.T) 
 		t.Fatalf("同名调用 id 应按序去重: %s", c3[0].ID)
 	}
 
-	// 同帧双调用:单 delta 携带 tool_calls 数组(禁止多 JSON 对象裸拼接进同一 data 行)
+	// 同帧双调用为单 delta 携带 tool_calls 数组，禁止多 JSON 对象裸拼接进同一 data 行
 	raw, _, err := g.StreamEvent([]byte(`{"candidates":[{"content":{"parts":[{"functionCall":{"name":"a","args":{}}},{"functionCall":{"name":"b","args":{}}}],"role":"model"},"index":0}]}`))
 	calls := parse(t, raw, err)
 	if len(calls) != 2 || calls[0].Index != 0 || calls[1].Index != 1 || calls[1].Function.Name != "b" {
 		t.Fatalf("同帧双调用应为单 delta 数组: %s", raw)
 	}
 
-	// 内容与 finishReason 同帧:单一合法 JSON 且 meta 双置位
+	// 内容与 finishReason 同帧：单一合法 JSON 且 meta 双置位
 	raw, meta, err := g.StreamEvent([]byte(`{"candidates":[{"content":{"parts":[{"text":"收尾"}],"role":"model"},"index":0,"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}`))
 	if err != nil || !meta.HasContent || !meta.IsUsage {
 		t.Fatalf("同帧聚合 meta 不符: %+v %v", meta, err)

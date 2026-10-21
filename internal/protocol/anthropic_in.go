@@ -1,7 +1,5 @@
-// Anthropic Messages 入站翻译(ADR-0013;契约=proxy-and-streaming.md「Anthropic 入站翻译」):
-// POST /v1/messages 边缘翻译为规范 chat 请求后复用既有管道;响应/流式事件反向映射为
-// Anthropic message 对象与 SSE 事件序列。翻译失败以 MessagesUnsupportedError 携带机器码,
-// handler 映射 400;全程零 float 运算(仅透传客户端数值)。
+// Anthropic Messages 请求在入口处转换为规范 chat 请求，响应和流事件再转换回 Anthropic 形态。
+// 不支持的请求通过 MessagesUnsupportedError 返回机器码。
 package protocol
 
 import (
@@ -10,18 +8,17 @@ import (
 	"strings"
 )
 
-// 显式拒绝机器码(handler 映射 400;禁散落硬编码)。
+// Messages 翻译失败的机器码。
 const (
 	CodeContentBlockUnsupported = "content_block_unsupported"
 )
 
-// MessagesUnsupportedError 显式拒绝(不支持的内容块/非法请求);handler 映射 400 + code。
+// MessagesUnsupportedError 表示请求包含不支持或无效的内容。
 type MessagesUnsupportedError struct{ Code string }
 
 func (e *MessagesUnsupportedError) Error() string { return "messages: " + e.Code }
 
-// msgBlock Anthropic content block:仅 text/tool_use/tool_result 可翻译;
-// thinking 请求块丢弃(v1 已登记限制:签名回传语义不成立);其余显式拒绝。
+// msgBlock 是 Anthropic 消息中的内容块。
 type msgBlock struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
@@ -39,7 +36,7 @@ type msgMessage struct {
 	Content json.RawMessage `json:"content"`
 }
 
-// msgTool Anthropic 顶层工具(input_schema 在 chat 侧更名 parameters)。
+// msgTool 是 Anthropic 顶层工具定义。
 type msgTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
@@ -59,8 +56,7 @@ type messagesRequest struct {
 	ToolChoice    json.RawMessage `json:"tool_choice"`
 }
 
-// translateMessagesRequest Anthropic Messages 请求 → 规范 chat 请求(映射表见设计文档)。
-// 返回的 ChatRequest.Raw 即 canonical chat JSON 字节——治理/缓存/计量与等价 chat 请求同构。
+// translateMessagesRequest 将 Anthropic Messages 请求转换为规范 chat 请求。
 func translateMessagesRequest(body []byte) (*ChatRequest, error) {
 	var mr messagesRequest
 	if err := json.Unmarshal(body, &mr); err != nil {
@@ -75,7 +71,7 @@ func translateMessagesRequest(body []byte) (*ChatRequest, error) {
 	b.Write(mustJSON(mr.Model))
 
 	var msgs []string
-	// system:字符串或 text 块数组 → 单条 system 消息(多块以换行合并)
+	// system：字符串或 text 块数组 → 单条 system 消息，多块以换行合并。
 	if len(mr.System) > 0 && string(mr.System) != "null" {
 		sys, err := systemToText(mr.System)
 		if err != nil {
@@ -137,11 +133,11 @@ func translateMessagesRequest(body []byte) (*ChatRequest, error) {
 	}
 	b.WriteString(`}`)
 
-	// canonical JSON 经既有解析器回填 typed 字段(单源,避免两套解析)
+	// canonical JSON 经既有解析器回填 typed 字段，避免两套解析。
 	return ParseChatRequest([]byte(b.String()))
 }
 
-// systemToText system 字段 → 文本(字符串快捷形态或 text 块数组;其余拒绝)。
+// systemToText 将 system 字段中的字符串或 text 块数组转换为文本。
 func systemToText(raw json.RawMessage) (string, error) {
 	if raw[0] == '"' {
 		var s string
@@ -164,11 +160,8 @@ func systemToText(raw json.RawMessage) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
-// messageToChat 单条 Anthropic 消息 → 0..n 条 chat 消息:
-//   - 纯文本块 → 单条同角色消息(多块换行合并);
-//   - assistant 的 text+tool_use 混合 → assistant(text) + assistant(tool_calls) 两条
-//     (chat 语义的等价拆分,桥接/quirk 层均按此消费);
-//   - user 的 tool_result 块 → role:"tool" 消息(多条 tool_result 各自一条)。
+// messageToChat 单条 Anthropic 消息 → 0..n 条 chat 消息：
+// 纯文本块合并为同角色消息；assistant 的 text+tool_use 拆为两条；tool_result 各转一条 role:"tool"。
 func messageToChat(m *msgMessage) ([]string, error) {
 	if m.Role != "user" && m.Role != "assistant" {
 		return nil, &MessagesUnsupportedError{Code: CodeInputInvalid}
@@ -201,7 +194,7 @@ func messageToChat(m *msgMessage) ([]string, error) {
 		case "text":
 			textParts = append(textParts, bl.Text)
 		case "thinking":
-			// 丢弃:v1 不回传签名 thinking 块(登记于设计文档「显式拒绝与丢弃清单」)
+			// 丢弃：v1 不回传签名 thinking 块。
 		case "tool_use":
 			flushText()
 			args := "{}"
@@ -232,7 +225,7 @@ func messageToChat(m *msgMessage) ([]string, error) {
 	return msgs, nil
 }
 
-// toolResultToText tool_result.content(字符串或块数组)→ 文本;image 等拒绝。
+// toolResultToText tool_result.content → 文本，接受字符串或块数组，image 等拒绝。
 func toolResultToText(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "", nil
@@ -258,8 +251,8 @@ func toolResultToText(raw json.RawMessage) (string, error) {
 	return strings.Join(parts, "\n"), nil
 }
 
-// translateToolChoice tool_choice → chat 形态:auto/none 直通,any→required,
-// 具名 tool → function 嵌套;其余拒绝。
+// translateToolChoice tool_choice → chat 形态：auto/none 直通，any→required，
+// 具名 tool → function 嵌套，其余拒绝。
 func translateToolChoice(raw json.RawMessage) (string, error) {
 	var tc struct {
 		Type string `json:"type"`
@@ -285,10 +278,10 @@ func translateToolChoice(raw json.RawMessage) (string, error) {
 	}
 }
 
-// ---- 响应侧映射(非流式) ----
+// ---- 非流式响应侧映射 ----
 
 // MessageFromChat chat.completion → Anthropic message 对象。
-// msgID = "msg_" + request_id;fallbackModel 供上游未回显 model 时兜底(客户端仅展示用)。
+// msgID = "msg_" + request_id；fallbackModel 供上游未回显 model 时兜底，客户端仅展示用。
 func MessageFromChat(chatBody []byte, msgID, fallbackModel string) ([]byte, error) {
 	var chat struct {
 		Model   string `json:"model"`
@@ -360,8 +353,8 @@ func stopReasonFromChat(finish string) any {
 	}
 }
 
-// messagesUsage chat usage → Anthropic usage(cached 命中入 cache_read_input_tokens;
-// reasoning_tokens 是 completion 子集,不另立字段)。
+// messagesUsage chat usage → Anthropic usage，cached 命中入 cache_read_input_tokens；
+// reasoning_tokens 是 completion 子集，不另立字段。
 func messagesUsage(u *Usage) map[string]int64 {
 	out := map[string]int64{"input_tokens": 0, "output_tokens": 0}
 	if u == nil {
@@ -377,7 +370,7 @@ func messagesUsage(u *Usage) map[string]int64 {
 
 // ---- 流式事件编码器 ----
 
-// msgToolBlock 流式工具块的累积态(按上游 tool_calls[].index 跟踪,并行工具各自独立)。
+// msgToolBlock 流式工具块的累积态，按上游 tool_calls[].index 跟踪，并行工具各自独立。
 type msgToolBlock struct {
 	blockIndex int
 	callID     string
@@ -386,25 +379,24 @@ type msgToolBlock struct {
 	started    bool
 }
 
-// MessagesStreamEncoder 把上游 OpenAI 形态 SSE 帧翻译为 Anthropic 事件序列
-// (顺序不变式:message_start 首帧、message_stop 终帧、content_block_* 仅出现于两者之间;
-// 块索引按发出顺序递增,文本/思考/工具切换时先收束前一块)。
-// 已知偏差(登记于设计文档):message_start.usage.input_tokens 恒 0(上游 usage 在流尾才知),
-// 真实用量在 message_delta.usage 补全。非并发安全:单请求单实例。
+// MessagesStreamEncoder 把上游 OpenAI 形态 SSE 帧翻译为 Anthropic 事件序列。
+// 顺序不变式：message_start 首帧、message_stop 终帧，content_block_* 只在期间，块索引递增。
+// 已知偏差：message_start.usage.input_tokens 恒为 0，真实用量在 message_delta.usage 补全。
+// 非并发安全，单请求单实例。
 type MessagesStreamEncoder struct {
 	id, model  string
 	started    bool
 	done       bool
 	nextIndex  int
-	textOpen   int // 打开中的 text 块索引;-1 = 未打开
-	thinkOpen  int // 打开中的 thinking 块索引;-1 = 未打开
+	textOpen   int // 打开中的 text 块索引，-1 表示未打开
+	thinkOpen  int // 打开中的 thinking 块索引，-1 表示未打开
 	tools      map[int]*msgToolBlock
 	toolOrder  []int
 	stopReason string
 	usage      *Usage
 }
 
-// NewMessagesStreamEncoder 构造;id 应传 msg_<request_id>。
+// NewMessagesStreamEncoder 构造，id 应传 msg_<request_id>。
 func NewMessagesStreamEncoder(id, model string) *MessagesStreamEncoder {
 	return &MessagesStreamEncoder{
 		id: id, model: model, textOpen: -1, thinkOpen: -1,
@@ -417,7 +409,7 @@ func (e *MessagesStreamEncoder) event(v map[string]any) []byte {
 	return b
 }
 
-// Init 首帧 message_start(在任一内容事件之前恰好调用一次)。
+// Init 首帧 message_start，在任一内容事件之前恰好调用一次。
 func (e *MessagesStreamEncoder) Init() []byte {
 	e.started = true
 	return e.event(map[string]any{"type": "message_start", "message": map[string]any{
@@ -427,7 +419,6 @@ func (e *MessagesStreamEncoder) Init() []byte {
 	}})
 }
 
-// ensureStarted 惰性补发首帧。
 func (e *MessagesStreamEncoder) ensureStarted(out *[][]byte) {
 	if !e.started {
 		*out = append(*out, e.Init())
@@ -446,8 +437,8 @@ func (e *MessagesStreamEncoder) closeBlock(out *[][]byte) {
 	}
 }
 
-// Feed 消费一帧上游 OpenAI chunk,返回待写的 Anthropic 事件序列。
-// usage 恒捕获(finish 帧与独立 usage 帧均兼容);仅消费 Index==0 或缺省的 choice。
+// Feed 消费一帧上游 OpenAI chunk，返回待写的 Anthropic 事件序列。
+// usage 恒捕获，兼容 finish 帧与独立 usage 帧；仅消费 Index==0 或缺省的 choice。
 func (e *MessagesStreamEncoder) Feed(chunk []byte) [][]byte {
 	c, err := ParseStreamChunk(chunk)
 	if err != nil {
@@ -463,10 +454,10 @@ func (e *MessagesStreamEncoder) Feed(chunk []byte) [][]byte {
 	e.ensureStarted(&out)
 	for _, ch := range c.Choices {
 		if ch.Index != nil && *ch.Index != 0 {
-			continue // 仅映射首 choice(契约未定义多 choice 映射,防御性忽略)
+			continue // 仅映射首 choice，多 choice 映射未定义，防御性忽略
 		}
 		if ch.Delta.ReasoningContent != nil && *ch.Delta.ReasoningContent != "" {
-			e.closeBlock(&out) // 思考与文本互斥出现(anthropic 上游同款语义),切换前收束
+			e.closeBlock(&out) // 思考与文本互斥，与 Anthropic 上游一致，切换前收束
 			if e.thinkOpen < 0 {
 				e.thinkOpen = e.nextIndex
 				e.nextIndex++
@@ -514,7 +505,7 @@ func (e *MessagesStreamEncoder) Feed(chunk []byte) [][]byte {
 				tb.name = tc.Function.Name
 			}
 			if !tb.started {
-				// call_id/name 允许后续帧补齐(args 先到不丢——与 Responses 编码器同款防御)
+				// call_id/name 允许后续帧补齐，args 先到不丢
 				e.closeBlock(&out)
 				tb.blockIndex = e.nextIndex
 				e.nextIndex++
@@ -541,7 +532,7 @@ func (e *MessagesStreamEncoder) Feed(chunk []byte) [][]byte {
 	return out
 }
 
-// Complete 终态两连发:message_delta(stop_reason+usage) + message_stop(仅应调用一次)。
+// Complete 终态两连发：message_delta(stop_reason+usage) 与 message_stop，仅应调用一次。
 func (e *MessagesStreamEncoder) Complete() [][]byte {
 	var out [][]byte
 	e.ensureStarted(&out)
@@ -559,7 +550,7 @@ func (e *MessagesStreamEncoder) Complete() [][]byte {
 	return out
 }
 
-// Failed 流中失败:error 事件(诚实失败,不伪造 message_stop)。
+// Failed 流中失败：error 事件，不伪造 message_stop。
 func (e *MessagesStreamEncoder) Failed(message string) []byte {
 	return e.event(map[string]any{"type": "error",
 		"error": map[string]any{"type": "api_error", "message": message}})

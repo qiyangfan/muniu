@@ -1,7 +1,7 @@
 version: "2"
 
 linters:
-  # standard = errcheck + govet + ineffassign + staticcheck + unused
+  # standard 包含常用正确性、静态分析和未使用代码检查。
   default: standard
   enable:
     - misspell
@@ -11,8 +11,7 @@ linters:
     revive:
       severity: warning
       rules:
-        # 仅显式启用 exported(导出符号必须有注释,项目约定为中文);
-        # golangci-lint 2.13 内置 revive 的 exported 无 sayRepetitive flag,故不传 arguments。
+        # 导出符号必须有简体中文注释；使用默认参数以兼容内置规则。
         - name: exported
 
 formatters:

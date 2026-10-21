@@ -5,11 +5,10 @@ import (
 	"testing"
 
 	"github.com/solvela/muniu/internal/adapter"
-	_ "github.com/solvela/muniu/internal/adapter/bridge" // 接线 anthropic 桥接工厂(与 cmd/muniu/main.go 同方式)
+	_ "github.com/solvela/muniu/internal/adapter/bridge" // 接线 anthropic 桥接工厂，与 cmd/muniu/main.go 同方式
 )
 
-// TestTypes_每个值都可被For构造 值域单源的防漂移钉子:
-// 列进 Types() 的类型必须真能构造出来,否则「清单有、实现没有」当场变红。
+// TestTypes_每个值都可被For构造 验证 Types 返回的每个类型都有对应工厂。
 func TestTypes_每个值都可被For构造(t *testing.T) {
 	for _, typ := range adapter.Types() {
 		ad, err := adapter.For(typ, "https://example.com/v1", "sk-test")
@@ -22,7 +21,7 @@ func TestTypes_每个值都可被For构造(t *testing.T) {
 	}
 }
 
-// TestTypes_排序且无重复 报错文案由该集合渲染:顺序抖动会让提示不稳定,重复项会印出重复取值。
+// TestTypes_排序且无重复 验证类型列表稳定且不含重复项。
 func TestTypes_排序且无重复(t *testing.T) {
 	got := adapter.Types()
 	if len(got) == 0 {

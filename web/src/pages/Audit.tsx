@@ -75,8 +75,7 @@ export default function Audit() {
   const [next, setNext] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  // 纯取数:setState 全部落在 promise 回调(effect 首挂直呼不触发 set-state-in-effect;
-  // 初挂 loading=true/err="" 初始态已等价)
+  // 初始加载态已由 state 初始化；请求结果在 Promise 回调中更新。
   const fetchPage = useCallback((cursor = "") => {
     const current = ++version.current;
     return api
@@ -100,8 +99,7 @@ export default function Audit() {
     void fetchPage(cursor);
   };
   useEffect(() => {
-    // 竞态由 fetchPage 的单调版本号 + 严格相等判定独立把守(版本号只增,旧响应必过期);
-    // cleanup 不再自增版本号:卸载后 setState 本身是 no-op,自增无可观测效果(评审循环 1 收敛)
+    // 请求序号阻止较早响应覆盖较新的数据。
     void fetchPage();
   }, [fetchPage]);
   const cols: DataCol<AdminAudit>[] = [

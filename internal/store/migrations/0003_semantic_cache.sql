@@ -1,5 +1,5 @@
--- 0003_semantic_cache.sql — 语义缓存(Phase 4,semantic-cache.md「迁移」)+ 租户级缓存开关。
--- 禁改 0001/0002,只追加。
+-- 0003_semantic_cache.sql — 语义缓存表与租户级缓存开关。
+-- 禁改旧迁移,只追加。
 ALTER TABLE tenants ADD COLUMN semantic_cache_enabled INTEGER NOT NULL DEFAULT 0; -- 0=关(默认关,契约)
 
 CREATE TABLE semantic_cache (

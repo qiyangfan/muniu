@@ -1,5 +1,5 @@
-// Package logging 装配 slog 与跨层公共字段(conventions「日志」节)。
-// 结构化字段一律 snake_case;request_id 是每请求必带字段,经 context 传导。
+// Package logging 装配 slog 与跨层公共日志字段。
+// 结构化字段一律 snake_case；request_id 是每请求必带字段，经 context 传导。
 package logging
 
 import (
@@ -9,11 +9,11 @@ import (
 	"strings"
 )
 
-// ctxKey 非导出键类型,防跨包键冲突。
+// ctxKey 非导出键类型，防跨包键冲突。
 type ctxKey struct{}
 
-// New 按配置装配 slog Logger:level ∈ debug|info|warn|error,format ∈ json|text。
-// 非法值已在 config 校验拦截,此处按 info/json 兜底(防御性,不 panic)。
+// New 按配置装配 slog Logger，level 取 debug|info|warn|error，format 取 json|text。
+// 非法值已在 config 校验拦截，此处按 info/json 兜底，不 panic。
 func New(level, format string) *slog.Logger {
 	var lv slog.Level
 	switch strings.ToLower(level) {
@@ -36,12 +36,12 @@ func New(level, format string) *slog.Logger {
 	return slog.New(handler)
 }
 
-// WithRequestID 把 request_id 写入 context(生命周期第 1 步签发后全程携带)。
+// WithRequestID 把 request_id 写入 context，请求入口签发后全程携带。
 func WithRequestID(ctx context.Context, requestID string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, requestID)
 }
 
-// RequestIDFrom 从 context 取 request_id;缺失返回空串(启动期/系统日志无请求上下文)。
+// RequestIDFrom 从 context 取 request_id，缺失返回空串；启动期或系统日志没有请求上下文。
 func RequestIDFrom(ctx context.Context) string {
 	if v, ok := ctx.Value(ctxKey{}).(string); ok {
 		return v

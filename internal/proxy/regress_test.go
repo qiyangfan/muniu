@@ -1,6 +1,4 @@
-// 评审回归钉子(2026-09 代码审查循环):钉住本轮修复的缺陷,防回退。
-// 覆盖:桥接流式 usage 计量缝、断连已开闸的估算计量与 key 免记失败、
-// 早退信封单次写出、回放切段 rune 边界、流式缓存体拼装。
+// 覆盖桥接流式计量、断连计量、错误信封、回放切段和流式缓存组装。
 package proxy
 
 import (
@@ -26,7 +24,7 @@ import (
 	"github.com/solvela/muniu/internal/testkit"
 )
 
-// regressUpstream 启动一个按剧本吐 SSE 的 fake 上游(payload 任意,原样封装为 data 事件)。
+// regressStreamUpstream 启动一个按剧本吐 SSE 的 fake 上游，payload 任意，原样封装为 data 事件。
 func regressStreamUpstream(t *testing.T, payloads []string, lastDelay time.Duration) *testkit.Upstream {
 	t.Helper()
 	events := make([]testkit.Event, 0, len(payloads))
@@ -40,8 +38,8 @@ func regressStreamUpstream(t *testing.T, payloads []string, lastDelay time.Durat
 	return testkit.StartStreamUpstream(t, events)
 }
 
-// TestRegress_桥接流式usage计量 桥接流式的 usage 抽取必须走适配器翻译帧:
-// Anthropic 原始事件 usage 嵌套于 message 之下/键名不同,按原始 payload 抽取会整体归零落账。
+// TestRegress_桥接流式usage计量 钉住桥接流式的 usage 抽取必须走适配器翻译帧：
+// Anthropic 原始事件 usage 嵌套于 message 之下且键名不同，按原始 payload 抽取会整体归零落账。
 func TestRegress_桥接流式usage计量(t *testing.T) {
 	up := regressStreamUpstream(t, []string{
 		`{"type":"message_start","message":{"usage":{"input_tokens":21,"cache_read_input_tokens":4}}}`,
@@ -89,14 +87,14 @@ func TestRegress_桥接流式usage计量(t *testing.T) {
 	}
 }
 
-// TestRegress_断连已开闸_估算计量且key免记失败 判定表 context_canceled:
-// 静默退出不换道不计失败;已过首 token 的已转发部分按估算计量。
+// TestRegress_断连已开闸_估算计量且key免记失败 钉住判定表 context_canceled：
+// 静默退出不换道不计失败，已过首 token 的已转发部分按估算计量。
 func TestRegress_断连已开闸_估算计量且key免记失败(t *testing.T) {
 	up := regressStreamUpstream(t, []string{
 		`{"id":"1","choices":[{"index":0,"delta":{"role":"assistant"}}]}`,
 		`{"id":"1","choices":[{"index":0,"delta":{"content":"断连前已转发的内容"}}]}`,
 		`{"id":"1","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":6}}`,
-	}, 30*time.Second) // usage 帧迟迟不到,客户端在此之前断连
+	}, 30*time.Second) // usage 帧迟迟不到，客户端在此之前断连
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
@@ -151,8 +149,8 @@ func TestRegress_断连已开闸_估算计量且key免记失败(t *testing.T) {
 	}
 }
 
-// TestRegress_早退信封单次写出 attempt 内已写信封的早退路径(桥接无 embeddings 能力)
-// 必须只产出一个信封且不再换道:双写会产生拼接 JSON,「已写头再换道」会产出 502 头+成功体。
+// TestRegress_早退信封单次写出 钉住桥接无 embeddings 能力的早退路径必须只产出一个信封
+// 且不再换道：双写会产生拼接 JSON，已写头再换道会产出 502 头加成功体。
 func TestRegress_早退信封单次写出(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
 	reg := adapter.NewRegistry()
@@ -192,7 +190,7 @@ func TestRegress_早退信封单次写出(t *testing.T) {
 	if resp.StatusCode != 400 {
 		t.Fatalf("应 400: %d", resp.StatusCode)
 	}
-	// 信封必须是单一合法 JSON:第二个 Decode 必须命中 EOF(双信封在此暴露)
+	// 信封必须是单一合法 JSON：第二个 Decode 必须命中 EOF，双信封在此暴露。
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	var env protocol.ErrorEnvelope
 	if err := dec.Decode(&env); err != nil {
@@ -206,10 +204,10 @@ func TestRegress_早退信封单次写出(t *testing.T) {
 	}
 }
 
-// TestRegress_回放切段rune边界 语义缓存流式回放按字节切段不得劈开多字节字符:
-// 非法 UTF-8 经 json.Marshal 被替换为 U+FFFD,命中回放的中文正文永久乱码。
+// TestRegress_回放切段rune边界 钉住语义缓存流式回放按字节切段不得劈开多字节字符：
+// 非法 UTF-8 经 json.Marshal 被替换为 U+FFFD，命中回放的中文正文永久乱码。
 func TestRegress_回放切段rune边界(t *testing.T) {
-	content := strings.Repeat("木牛流式回放", 100) // 3 字节/字,64 字节边界必然落在字中间
+	content := strings.Repeat("木牛流式回放", 100) // 3 字节/字，64 字节边界必然落在字中间
 	segs := splitForReplay(content, 64)
 	joined := ""
 	for _, s := range segs {
@@ -223,8 +221,8 @@ func TestRegress_回放切段rune边界(t *testing.T) {
 	}
 }
 
-// TestRegress_流式缓存体拼装 流式成功后按累计 content 拼标准响应体供缓存入库;
-// 非 stop 终态与空内容不产出(宁缺勿错)。
+// TestRegress_流式缓存体拼装 钉住流式成功后按累计 content 拼标准响应体供缓存入库，
+// 非 stop 终态与空内容不产出，宁缺勿错。
 func TestRegress_流式缓存体拼装(t *testing.T) {
 	norm := func(raw json.RawMessage) (protocol.Usage, error) {
 		return protocol.Usage{PromptTokens: 21, CompletionTokens: 9}, nil
@@ -257,7 +255,7 @@ func TestRegress_流式缓存体拼装(t *testing.T) {
 		t.Fatalf("缓存体 usage 应并入上游帧: %+v", parsed.Usage)
 	}
 
-	// 非 stop 终态与空内容不产出(宁缺勿错)
+	// 非 stop 终态与空内容不产出，宁缺勿错。
 	if m2 := (&meterState{finishReason: "length"}); m2.assembleStreamBody("m") != nil {
 		t.Fatal("非 stop 终态不得入库")
 	}
@@ -266,8 +264,8 @@ func TestRegress_流式缓存体拼装(t *testing.T) {
 	}
 }
 
-// TestRegress_SSE心跳不可见 空 data/注释心跳不得把原始字节透给客户端,也不得触发断流出口
-// (wireOf 必须先判「适配器不可见」,否则空载荷事件的 bytes.Equal 恒真会漏透原字节)。
+// TestRegress_SSE心跳不可见 空 data 与注释心跳不得把原始字节透给客户端，也不得触发断流出口；
+// wireOf 必须先判适配器不可见，否则空载荷事件的 bytes.Equal 恒真会漏透原字节。
 func TestRegress_SSE心跳不可见(t *testing.T) {
 	events := []testkit.Event{
 		{Data: ": keep-alive\n\n"},
@@ -305,15 +303,13 @@ func TestRegress_SSE心跳不可见(t *testing.T) {
 	if strings.Contains(body, "keep-alive") {
 		t.Fatalf("注释心跳原始字节不得透传给客户端: %q", body)
 	}
-	// 空 data 事件同样不得透传(正常输出不含「data: +空行」序列)
+	// 空 data 事件同样不得透传，正常输出不含 data 加空行序列。
 	if strings.Contains(body, "data: \n\n") {
 		t.Fatalf("空 data 心跳不得透传给客户端: %q", body)
 	}
 }
 
-// TestRegress_分时段倍率落账 分时段倍率窗必须在计量行真实生效(端到端):
-// 全天半价窗下 cost_credits = 缺省价的一半(usage prompt 7 / completion 9,input 2μ/tok output 8μ/tok
-// → 基准 86μ,半价 43μ),钉住 record() → PricingTable.At 的接线。
+// TestRegress_分时段倍率落账 验证分时段倍率会反映在最终计量行中。
 func TestRegress_分时段倍率落账(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
 	reg := adapter.NewRegistry()
@@ -353,7 +349,7 @@ func TestRegress_分时段倍率落账(t *testing.T) {
 		t.Fatalf("应 200: %d", code)
 	}
 	rows := waitRows(t, db, 1)
-	// 基准 8600 credit = ceil(7×2e8/1e6)+ceil(9×8e8/1e6);半价 4300
+	// 基准 8600 credit 为 ceil(7×2e8/1e6)+ceil(9×8e8/1e6)，半价 4300。
 	if rows[0].CostCredits != 43 {
 		t.Fatalf("半价窗应落账 4300 credit(43μ×100),实际 %d", rows[0].CostCredits)
 	}

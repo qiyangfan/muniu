@@ -1,5 +1,4 @@
-// 密钥页 Key ID 展示/复制行为测试(openspec fix-api-key-binding-identifiers):
-// 缺 ID 不回退(prefix/序号不得充当 ID)、签发结果提供 Key ID 复制、secret 无新增持久化。
+// 覆盖 Key ID 展示、复制、缺失处理和签发后的明文保密。
 import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 
@@ -46,14 +45,12 @@ describe("密钥页 Key ID", () => {
     render(<Keys />);
 
     const uuid = "0192f3a1-6c8b-7d2e-9a4f-5b6c7d8e9f0a";
-    // 列表显示截短,title 悬停保留全值(桌面表格与移动卡片双形态)
     await vi.waitFor(() => expect(screen.getAllByTitle(uuid).length).toBeGreaterThanOrEqual(1));
     fireEvent.click(screen.getAllByRole("button", { name: "复制 api-key 的 Key ID" })[0]);
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(uuid));
     expect(writeText).not.toHaveBeenCalledWith("mk-abcdefghijk");
 
-    // 缺 ID 行:明确「ID 不可用」(桌面表格+移动卡片双形态);其复制按钮禁用;
-    // prefix 不得出现在 ID 语义位(移动卡片截短除外)
+    // 缺失 ID 不得回退到 prefix。
     const unavailable = await screen.findAllByText("ID 不可用");
     expect(unavailable.length).toBeGreaterThanOrEqual(1);
     const legacyBtn = screen.getAllByRole("button", {
@@ -124,11 +121,9 @@ describe("密钥页启停与状态徽章", () => {
     vi.mocked(api.patchKey).mockResolvedValue(keyWithID({}));
     render(<Keys />);
 
-    // 徽章三态如实渲染(双形态=桌面表格+移动卡片,同文本成对出现)
     expect((await screen.findAllByText("已吊销")).length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("已停用").length).toBeGreaterThanOrEqual(1);
 
-    // 启用中的 key → 停用;已停用的 key → 启用(patchKey 载荷即契约)
     fireEvent.click(screen.getAllByRole("button", { name: "停用" })[0]);
     await vi.waitFor(() =>
       expect(api.patchKey).toHaveBeenCalledWith("0192f3a1-6c8b-7d2e-9a4f-5b6c7d8e9f0a", {
@@ -142,8 +137,7 @@ describe("密钥页启停与状态徽章", () => {
       }),
     );
 
-    // 吊销终态:启停按钮缺席(启用/停用按钮只属于前两把 key;双形态成对出现 ×2),
-    // 吊销按钮三把俱在 ×2
+    // 吊销状态不可启停；每条记录在桌面和移动视图各渲染一次。
     expect(screen.getAllByRole("button", { name: "停用" }).length).toBe(2);
     expect(screen.getAllByRole("button", { name: "启用" }).length).toBe(2);
     expect(screen.getAllByRole("button", { name: "吊销" }).length).toBe(6);
