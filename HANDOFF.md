@@ -2,7 +2,7 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
-## 当前状态(2026-10-21,全仓注释简化批完成含复审;已获提交/push 指令)
+## 当前状态(2026-10-21,全仓注释简化批完成含复审;已提交推送,CI 主流程全绿)
 
 - **复审续改(2026-10-21)**:在 53 批基础上补扫残留套话/过程引用、迁移头、12 个未覆盖新文件与复述型短注释;终态 237 文件(+3309/−3884,净 −575 行)。验证见验收记录 53 续条。
 - **范围**:按 comment-cleanup skill 收尾上一会话中断的注释简化,227 文件(+3303/−3838,净 −535 行):Go 175、web TS 33、Rust 4、配置/脚本 15。口径:删复述与过程性引用(ADR/Phase/change 名/日期叙事),中文全角标点,行为契约与陷阱语义逐条保留;字符串字面量零触碰。约 12 处注释与代码不符已按代码修正(如 1e8→1e9、RFC3339→RFC3339Nano、29600→296000 credit)。
@@ -203,7 +203,7 @@
 - 判据:diff 为纯注释 + make check 等价门禁全绿(lint/vet/race/coverage/web)+ gofmt/cargo check。
 - 证据:①逐 hunk「剥 // 后代码 multiset 对称」:92 文件代码行逐字对称、其余为纯注释行增删;字符串内 `//` 盲区扫描 0 命中;`//go:`/`//nolint`/构建标签零丢失。②lint 0 issues(本地 go1.27.2 自建 2.15.0,见当前状态环境回归条)、vet 0、`go test -race` 全包 ok、coverage gate PASS 70.3%、web typecheck/lint/lint:css/test/format exit 0、`cargo check`(plugins/sdk)exit 0、`gofmt -l` 全仓空。③终扫:ADR/Phase/change 名/日期叙事全仓 grep 清零;降级纪律、ABI 不变量、治理链序、wire 不变式等契约语义逐条保留。
 - 取舍留痕:迁移编号引用按 schema 出处事实保留;`(nat=nil)`、`(ms)`、`[base, base+end_needed)` 等纯代码/数字括号保留半角;「国内分支口径」改写为「国内厂商 Anthropic 兼容分支的通行形态」(presets 实证:deepseek-anthropic/moonshot-anthropic 均 bearer)。
-- **续条(2026-10-21 复审)**:补扫清零「链路/本次」类套话与迁移头 Phase/change/ADR 引用,处理 12 个未覆盖新文件及复述型短注释;终态 237 文件(+3309/−3884)。证据:①Go 175 文件经 go/scanner 去注释后 token 流与 HEAD 逐一相同,`//go:`/`//nolint`/构建标签零丢失;web 30 文件 `transpileModule(removeComments)` 输出与 HEAD 一致,eslint-disable/@ts- 指令零丢失;②`PATH=/tmp/gclbin:$PATH make check` EXIT:0(lint 0 issues,web 6 文件 15 测试全过,coverage gate PASS 70.3%);③`vite build --outDir /tmp/dist-check` ✓ 673ms、`cargo check` EXIT:0、`CGO_ENABLED=0 go build ./...` 过、`git diff --check` 过。`web/src/lib/api-types.d.ts` 为 OpenAPI 生成物,其 ADR 文案未手改以免与契约源漂移。
+- **续条(2026-10-21 复审)**:补扫清零「链路/本次」类套话与迁移头 Phase/change/ADR 引用,处理 12 个未覆盖新文件及复述型短注释;终态 237 文件(+3309/−3884)。证据:①Go 175 文件经 go/scanner 去注释后 token 流与 HEAD 逐一相同,`//go:`/`//nolint`/构建标签零丢失;web 30 文件 `transpileModule(removeComments)` 输出与 HEAD 一致,eslint-disable/@ts- 指令零丢失;②`PATH=/tmp/gclbin:$PATH make check` EXIT:0(lint 0 issues,web 6 文件 15 测试全过,coverage gate PASS 70.3%);③`vite build --outDir /tmp/dist-check` ✓ 673ms、`cargo check` EXIT:0、`CGO_ENABLED=0 go build ./...` 过、`git diff --check` 过;④CI 实跑:run 39521905063 `check`+`web-check` 双 job 全绿;run 39521905076 `plugins` 构建与 Rust 测试过,仅 `upload-artifact` 撞账号存储配额失败(非代码缺陷,6-12h 重算)。`web/src/lib/api-types.d.ts` 为 OpenAPI 生成物,其 ADR 文案未手改以免与契约源漂移。
 
 **52. 全栈技术底座刷新(2026-10-18,openspec `tech-stack-refresh-2026-10` 12/12;调研→立项→实施→验收单会话闭环,owner「全权调研并决策」授权)**
 - 判据:逐任务门禁各自全绿(Go=`make check`,web=四件套+build /tmp)+ hnsw bench 对比 + embed 冒烟 + 真上游数据面单笔 + 三档×亮暗走查。
