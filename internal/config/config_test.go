@@ -476,6 +476,72 @@ model_routes:
 	}
 }
 
+func TestLoad_nativeMultimodalEmbeddingURL声明(t *testing.T) {
+	valid := writeTemp(t, `
+providers:
+  - name: dashscope
+    adapter: qwen
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    native_multimodal_embeddings_url: "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+    keys:
+      - env: DASHSCOPE_API_KEY
+    weight: 1
+model_routes:
+  qwen3-vl-embedding:
+    - { provider: dashscope, model: qwen3-vl-embedding, priority: 0 }
+`)
+	cfg, err := Load(valid)
+	if err != nil {
+		t.Fatalf("Qwen 原生 URL 应通过: %v", err)
+	}
+	if got := cfg.Providers[0].NativeMultimodalEmbeddingsURL; got != "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding" {
+		t.Fatalf("原生 URL 未解析: %q", got)
+	}
+
+	for name, provider := range map[string]string{
+		"unsupported adapter": `adapter: openai\n    native_multimodal_embeddings_url: "https://api.example.com/native"`,
+		"invalid scheme":      `adapter: qwen\n    native_multimodal_embeddings_url: "ftp://api.example.com/native"`,
+		"relative URL":        `adapter: qwen\n    native_multimodal_embeddings_url: "/native"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			yaml := strings.Replace(provider, `\n`, "\n    ", 1)
+			path := writeTemp(t, `
+providers:
+  - name: dashscope
+    `+yaml+`
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    keys:
+      - env: DASHSCOPE_API_KEY
+    weight: 1
+model_routes:
+  alias:
+    - { provider: dashscope, model: qwen3-vl-embedding, priority: 0 }
+`)
+			if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "native_multimodal_embeddings_url") {
+				t.Fatalf("错误声明应在配置加载期被拒: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_pricingVisionInput(t *testing.T) {
+	path := writeTemp(t, minimalYAML("error")+`
+pricing:
+  alias-a:
+    currency: CNY
+    input: "1.00"
+    vision_input: "2.50"
+    output: "3.00"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Pricing["alias-a"].VisionInput; got != "2.50" {
+		t.Fatalf("YAML vision_input 未解析: %q", got)
+	}
+}
+
 // TestLoad_alerts配置面：URL 形态校验与窗口非负。
 func TestLoad_alerts配置面(t *testing.T) {
 	write := func(alerts string) string {

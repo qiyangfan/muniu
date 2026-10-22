@@ -116,6 +116,39 @@ func CostWithCached(promptTokens, cachedTokens, outTokens, inCreditsPerM, cached
 	return total
 }
 
+// CostWithVision 在输入中拆分文本、缓存和视觉 token，各段独立向上取整。
+// 视觉单价为 0 时回落 input；合法纯文本用量复用旧公式，避免改变既有费用。
+func CostWithVision(promptTokens, cachedTokens, visionTokens, outTokens,
+	inCreditsPerM, cachedCreditsPerM, visionCreditsPerM, outCreditsPerM int64) int64 {
+	if promptTokens < 0 || cachedTokens < 0 || visionTokens < 0 || outTokens < 0 ||
+		cachedTokens > promptTokens || visionTokens > promptTokens-cachedTokens || visionCreditsPerM < 0 {
+		return -1
+	}
+	if visionTokens == 0 {
+		return CostWithCached(promptTokens, cachedTokens, outTokens, inCreditsPerM, cachedCreditsPerM, outCreditsPerM)
+	}
+	if cachedCreditsPerM <= 0 {
+		cachedCreditsPerM = inCreditsPerM
+	}
+	if visionCreditsPerM == 0 {
+		visionCreditsPerM = inCreditsPerM
+	}
+	var total int64
+	for _, part := range [4]struct{ tokens, price int64 }{
+		{promptTokens - cachedTokens - visionTokens, inCreditsPerM},
+		{cachedTokens, cachedCreditsPerM},
+		{visionTokens, visionCreditsPerM},
+		{outTokens, outCreditsPerM},
+	} {
+		amount, valid := CostForTokens(uint64(part.tokens), part.price)
+		if !valid || amount > math.MaxInt64-total {
+			return -1
+		}
+		total += amount
+	}
+	return total
+}
+
 // ceilDiv 非负整数除法向上取整；0 除以任何正数得 0。
 func ceilDiv(n, d int64) int64 {
 	q, r := n/d, n%d

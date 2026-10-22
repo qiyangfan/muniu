@@ -49,7 +49,8 @@ const (
 
 // Options 保存适配器构造选项；零值表示协议默认值。
 type Options struct {
-	Auth string
+	Auth                         string
+	NativeMultimodalEmbeddingURL string
 }
 
 // Types 返回可由 For 构造的适配器类型，config 校验与错误提示复用此列表。
@@ -66,7 +67,10 @@ func For(adapterType, baseURL, apiKey string, opts ...Options) (Adapter, error) 
 		opt = opts[0]
 	}
 	switch adapterType {
-	case "openai", "qwen", "doubao":
+	case "openai", "doubao":
+		return base, nil
+	case "qwen":
+		base.nativeMultimodalEmbeddingURL = opt.NativeMultimodalEmbeddingURL
 		return base, nil
 	case "deepseek":
 		return newDeepseek(base), nil
@@ -101,6 +105,13 @@ func SetAnthropicFactory(f func(baseURL string, opts Options) Adapter) {
 // EmbeddingPreparer 是适配器可选的 embeddings 出站能力。
 type EmbeddingPreparer interface {
 	PrepareEmbeddings(in *protocol.EmbeddingRequest, upstreamModel, apiKey string) (*Outbound, error)
+}
+
+// MultimodalEmbeddingPreparer 是显式配置原生端点时可选的多模态向量出站能力。
+type MultimodalEmbeddingPreparer interface {
+	SupportsMultimodalEmbeddings(upstreamModel string) bool
+	PrepareMultimodalEmbeddings(in *protocol.MultimodalEmbeddingRequest, upstreamModel, apiKey string) (*Outbound, error)
+	NormalizeMultimodalEmbeddingUsage(raw json.RawMessage, upstreamModel string) (protocol.Usage, error)
 }
 
 // NativePreparer 是适配器可选的原生协议直通能力。

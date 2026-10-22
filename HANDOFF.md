@@ -2,6 +2,30 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-22,百炼原生多模态 Embeddings 已实现并归档)
+
+- OpenSpec `dashscope-multimodal-embeddings` 1.1–1.9 全部完成，已归档并同步主规格；本 change 无待实现项。执行报告与冻结快照见验收记录。
+- 本地实现及代码审查修复已完成；Phase 0 T0.9 已核验远端 main、v0.3.0 tag 与 README CI badge。
+
+## 下一步动作序列
+
+- 当前 change 无后续实现动作；先解决下列待确认项，再决定是否新增跨仓或发版任务。
+
+## 开放决策项
+
+- 原生请求重复顶层 `model` 键：Go 入站按最后一个值路由并改写，早先重复键仍留在原始 JSON；尚未确认 Qwen/Tongyi 对重复键的解析规则。先核对供应商文档或用真实端点验证，再裁决是否拒绝重复键。
+- Phase 5 T5.2：缺 Kongming 当前 `make check` 与评估基线证据；跨仓范围待确认。
+- Phase 5 T5.6：v2 发版判据及 tag/push 时机待确认。
+- 全量 OpenSpec strict 有范围外既存 `protocol-native-passthrough` requirement 长度警告；本轮未改写。
+
+## 验收记录
+
+- 冻结快照与逐项报告：`docs/acceptance/2026-10-22-task-snapshot.md`、`docs/acceptance/2026-10-22-task-report.md`。
+- 归档已核实：`openspec list` 显示无活动 change；归档前 change strict 通过。归档后 `openspec validate --all --strict` 为 23/24，唯一失败是上述范围外长度警告。
+- `PATH=/tmp/gclbin:$PATH make check` 通过：vet/lint、web 7 文件 16 测试、Go 全包 race、coverage 70.7%；`make build` 通过。
+- `pnpm exec vite build --outDir /tmp/dist-check` 通过；有 chunk >500 kB 提醒。DashScope 真上游 smoke 未运行（仅手动档）。
+- 复审修复 4 项行为缺陷：3xx 耗尽透传、禁止跟随重定向、保留压缩响应 wire、限制支持模型快照；OpenAPI 已同步 2XX/3XX。修复后聚焦回归、全量 `make check`、构建和 `git diff --check` 均通过。
+
 ## 当前状态(2026-10-21,全仓注释简化批完成含复审;已提交推送,CI 主流程全绿)
 
 - **复审续改(2026-10-21)**:在 53 批基础上补扫残留套话/过程引用、迁移头、12 个未覆盖新文件与复述型短注释;终态 237 文件(+3309/−3884,净 −575 行)。验证见验收记录 53 续条。

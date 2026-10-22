@@ -129,6 +129,7 @@ components:
         requests: { type: integer, format: int64 }
         prompt_tokens: { type: integer, format: int64 }
         completion_tokens: { type: integer, format: int64 }
+        vision_tokens: { type: integer, format: int64, description: 视觉输入 token 子集 }
         cache_hits: { type: integer, format: int64 }
         cost_credits: { type: integer, format: int64 }
     ProviderInfo:
@@ -209,6 +210,7 @@ components:
         currency: { type: string, enum: [CNY, USD] }
         input: { type: string, description: "峰时(缺省)价,十进制 ≤9 位小数(元/百万 Token)" }
         cached_input: { type: string, description: "缓存命中价;空=缺省同 input" }
+        vision_input: { type: string, description: "视觉输入价;空=缺省同 input" }
         output: { type: string }
         timezone: { type: string, description: "UTC 或 ±HH:MM 固定偏移" }
         time_windows:
@@ -267,6 +269,32 @@ paths:
         - { name: Authorization, in: header, required: true, schema: { type: string } }
       responses:
         "200": { description: 嵌入向量 }
+  /api/v1/services/embeddings/multimodal-embedding/multimodal-embedding:
+    post:
+      summary: 百炼原生多模态向量化
+      description: model 为 muniu 路由别名；仅顶层 model 会改写为上游模型名，其余原生请求字段透传。
+      parameters:
+        - { name: Authorization, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, input]
+              properties:
+                model: {type: string, description: muniu 路由别名}
+                input:
+                  type: object
+                  required: [contents]
+                  properties:
+                    contents: {type: array, minItems: 1, items: {type: object, additionalProperties: true}}
+              additionalProperties: true
+      responses:
+        "2XX": { description: 上游百炼原生向量响应及状态码、端到端响应头 }
+        "3XX": { description: 候选耗尽时原样透传的上游重定向响应 }
+        "4XX": { description: 本地统一错误信封或未换道的原生上游错误 }
+        "5XX": { description: 未换道的原生上游错误 }
   /v1/responses:
     post:
       summary: OpenAI Responses API 入站(无状态翻译 v1,ADR-0012;鉴权/配额/限流与 chat 同规)

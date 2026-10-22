@@ -208,9 +208,10 @@ func TestPricingTable_At(t *testing.T) {
 		}
 	})
 
-	t.Run("倍率作用于三段价且 cached 缺省语义保持", func(t *testing.T) {
-		// def 的 cached=0 表示缺省=input：缩放后仍为 0，CostWithCached 的缺省解析不受影响。
-		defWithCached := Pricing{Currency: "CNY", InputCreditsPerM: 999_999, CachedInputCreditsPerM: 0, OutputCreditsPerM: 3}
+	t.Run("倍率作用于四段价且可选价缺省语义保持", func(t *testing.T) {
+		// cached/vision=0 表示各自缺省=input：缩放后仍为 0，计价回落语义不受影响。
+		defWithCached := Pricing{Currency: "CNY", InputCreditsPerM: 999_999, CachedInputCreditsPerM: 0,
+			VisionInputCreditsPerM: 200_000, OutputCreditsPerM: 3}
 		tbl, err := NewPricingTable(defWithCached, utc, []WindowSpec{
 			{StartMin: 0, EndMin: 1440, BasisPoints: 5000},
 		})
@@ -218,8 +219,8 @@ func TestPricingTable_At(t *testing.T) {
 			t.Fatal(err)
 		}
 		got := tbl.At(time.Date(2026, 9, 11, 1, 0, 0, 0, time.UTC))
-		if got.InputCreditsPerM != 500_000 || got.CachedInputCreditsPerM != 0 || got.OutputCreditsPerM != 2 {
-			t.Fatalf("窗口三段缩放不符(999999×0.5 ceil=500000, 3×0.5 ceil=2): %+v", got)
+		if got.InputCreditsPerM != 500_000 || got.CachedInputCreditsPerM != 0 || got.VisionInputCreditsPerM != 100_000 || got.OutputCreditsPerM != 2 {
+			t.Fatalf("窗口四段缩放不符(999999×0.5 ceil=500000, vision=100000, 3×0.5 ceil=2): %+v", got)
 		}
 	})
 }

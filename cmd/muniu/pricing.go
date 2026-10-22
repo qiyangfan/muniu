@@ -58,6 +58,7 @@ func pricingTableFromRecord(r store.PricingRecord, settlement string, fxCnyPerUs
 		Currency:               r.Currency,
 		InputCreditsPerM:       r.InputCredits,
 		CachedInputCreditsPerM: r.CachedInputCredits,
+		VisionInputCreditsPerM: r.VisionInputCredits,
 		OutputCreditsPerM:      r.OutputCredits,
 	}
 	def, ok := metering.SettlePrice(quote, settlement, fxCnyPerUsdMilli)

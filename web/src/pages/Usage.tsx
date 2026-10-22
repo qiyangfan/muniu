@@ -149,6 +149,12 @@ function UsageReport({ dim, days }: { dim: Dim; days: RangeDays }) {
       render: (p) => formatNumber(p.completion_tokens),
     },
     {
+      key: "vision",
+      label: "视觉 Tokens",
+      numeric: true,
+      render: (p) => formatNumber(p.vision_tokens),
+    },
+    {
       key: "cache",
       label: "缓存命中",
       numeric: true,

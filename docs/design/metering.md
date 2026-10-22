@@ -23,13 +23,19 @@
   `cost_credits = ceil(in_tokens × pin / 1e6) + ceil(out_tokens × pout / 1e6)`(pin/pout 单位 credit/百万Token;逐段向上取整,误差 ≤2 credit = 2e-9 本币/请求;规则进 conformance 断言)。
 - cached/reasoning 差异价(Phase 3 落地):pricing 增列 `cached_input`(缺省=input),计价扩为三段
   `ceil(未命中输入×input) + ceil(缓存命中×cached_input) + ceil(输出×output)`(实现 `metering.CostWithCached`,逐段独立取整)。
+- 视觉输入差异价(迁移 0014):可选 `vision_input`(缺省同 input);用量中的 `vision_tokens` 是 `prompt_tokens` 的图像/视频子集。
+  多模态输入拆为文本、缓存和视觉段,各自按对应单价向上取整后再加输出段;视觉 token 为 0 时沿用原三段计价。
+  若 `cached_tokens + vision_tokens > prompt_tokens`,该行保留 usage、标记未结算/estimated,不写精确成本。
+  Qwen 原生 `input_tokens`/`image_tokens` 分别提供文本和视觉数量;Tongyi 用 `input_tokens` 总量和
+  `input_tokens_details.image_tokens` 提供视觉子集。Tongyi 明细缺失或 usage 非法时透传原响应,不猜视觉 token,
+  用量行标记 `estimated=true`。
 - **分时段倍率**(2026-09-11 开放):pricing 增 `timezone`("UTC" 或 ±HH:MM 固定偏移,缺省 UTC;不引 tzdata——
   单二进制零外联纪律,受 DST 影响的时区应换算为 UTC 表达)与 `time_windows[{window, multiplier}]`:
   `window` 形如 "HH:MM-HH:MM"(终点 `24:00`=当日末;start>end 为跨午夜窗,如 `16:30-00:30`);
-  `multiplier` ≤4 位小数、取值 (0,10],作用于整张价目卡(三段统一缩放)。
+  `multiplier` ≤4 位小数、取值 (0,10],作用于整张价目卡(各已配置费率统一缩放)。
   换算发生在**加载期一次性完成**(基点整数运算,有效价向上取整——窗口价永不低估),运行时零浮点查表;
   多窗按**声明顺序先匹配优先**(重叠即声明序 precedence),无命中回落缺省价;
-  `cached_input` 缺省=input 的语义在窗口内保持(0 值缩放仍为 0,由 CostWithCached 统一解析)。
+  `cached_input`/`vision_input` 缺省=input 的语义在窗口内保持(0 值缩放仍为 0,由计价函数统一解析)。
   设计取舍记录:选倍率而非逐窗全价(厂商错峰价的真实形态是整卡折扣,配置最简);
   chat 编排路径（含 messages/responses/gemini 入站）在请求入口固定有效价目，预检、所有候选尝试、流中预算与落账共用该快照；跨时段或在线改价不重定价在途请求，入口无价目也保持零成本。images 同样按入口价目计价；embeddings 保持完成时刻选窗。行内价目为实际结算快照，对账可逐行复核。
 - **整数边界**：token 计费的中间乘积使用 128 位宽整数，逐段除以百万并向上取整后再检查 int64 总金额；输入/缓存/输出三段、预算与落账共用该算法，不降低 credit 精度。实际费用无法表示时，保留原始 usage，观测行标记 `status=error`、`error_class=cost_overflow`、`estimated=true`、`cost_credits=0`（未结算，不代表免费）；同时输出请求身份、usage、结算价格及原上游错误类的结构化错误日志供核对，HTTP 响应不变。原 `Cost/CostWithCached` 签名不变，返回 -1 仅表示计价失败，不得直接写入或展示为费用；CLI 对该信号拒绝输出费用。
@@ -74,7 +80,7 @@
 
 - `estimated=false` 的行为唯一对账口径;`estimated=true` 仅成本参考。
 - 聚合读侧(auth/quota 中间件消费):当日已耗 = `SUM(cost_credits) WHERE created_at ≥ 当日 AND estimated=false`,进程内缓存 30s(配额一致性声明见 traffic-governance)。
-- 每请求 slog 成本字段:`prompt_tokens/completion_tokens/reasoning_tokens/cached_tokens/cost_credits/estimated`。
+- 每请求 slog 成本字段:`prompt_tokens/completion_tokens/reasoning_tokens/cached_tokens/vision_tokens/cost_credits/estimated`。
 
 ## 测试要求(测试先行域)
 

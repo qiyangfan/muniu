@@ -41,12 +41,13 @@ type meterState struct {
 	usageFrames  []json.RawMessage // 上游 usage 原始对象，可多帧，流式 start/delta 各一
 	outBody      []byte            // 成功响应体，非流式为改写产物、流式为拼包结果，缓存入库候选
 	// 直通路径专用字段，翻译路径恒零值
-	upstreamBody   []byte // 不换道类上游错误体，原样透传客户端，零归一改写
-	upstreamStatus int    // 配套状态码
-	upstreamCT     string // 配套 Content-Type，缺省 application/json
-	nativePath     bool   // 本 attempt 实际走直通，缓存双存侧判定
-	nativeRespID   string // 直通 responses 成功响应 id，亲和回写载体
-	canonicalBody  []byte // 直通双存的 canonical 侧，可 nil，降级为跨协议不可命中
+	upstreamBody    []byte // 不换道类上游错误体，原样透传客户端，零归一改写
+	upstreamStatus  int    // 配套状态码
+	upstreamCT      string // 配套 Content-Type，缺省 application/json
+	upstreamHeaders http.Header
+	nativePath      bool   // 本 attempt 实际走直通，缓存双存侧判定
+	nativeRespID    string // 直通 responses 成功响应 id，亲和回写载体
+	canonicalBody   []byte // 直通双存的 canonical 侧，可 nil，降级为跨协议不可命中
 
 	// 请求级成本预算：budget<=0 或价目缺失时闸整体旁路零开销。
 	// 输入/输出各取 usage 帧真值优先、估算兜底；逐帧估算有轻微保守高估，预算宁紧勿松。
@@ -121,13 +122,13 @@ func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failov
 	if len(m.usageFrames) > 0 && m.normalize != nil {
 		for _, raw := range m.usageFrames {
 			u, err := m.normalize(raw)
+			usage = mergeUsage(usage, u)
 			if err != nil {
-				p.logger.Warn("usage 归一失败,该帧跳过",
+				p.logger.Warn("usage 归一失败,保留可确认字段并标记估算",
 					"request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
 				estimated = true
 				continue
 			}
-			usage = mergeUsage(usage, u)
 		}
 	}
 	if (estimated || m.class == failover.ClassCostBudget) && m.budgetOut > 0 && m.output.Len() > m.outputAtUsage {
@@ -247,6 +248,9 @@ func mergeUsage(base, next protocol.Usage) protocol.Usage {
 	}
 	if v := next.CachedTokens; v != 0 {
 		base.CachedTokens = v
+	}
+	if v := next.VisionTokens; v != 0 {
+		base.VisionTokens = v
 	}
 	return base
 }

@@ -183,6 +183,10 @@ func NewPricingTable(def Pricing, zone *time.Location, specs []WindowSpec) (*Pri
 		if err != nil {
 			return nil, fmt.Errorf("metering: 时段窗 %d-%d cached_input 价缩放: %w", sp.StartMin, sp.EndMin, err)
 		}
+		vision, err := ScalePrice(def.VisionInputCreditsPerM, sp.BasisPoints)
+		if err != nil {
+			return nil, fmt.Errorf("metering: 时段窗 %d-%d vision_input 价缩放: %w", sp.StartMin, sp.EndMin, err)
+		}
 		out, err := ScalePrice(def.OutputCreditsPerM, sp.BasisPoints)
 		if err != nil {
 			return nil, fmt.Errorf("metering: 时段窗 %d-%d output 价缩放: %w", sp.StartMin, sp.EndMin, err)
@@ -191,7 +195,7 @@ func NewPricingTable(def Pricing, zone *time.Location, specs []WindowSpec) (*Pri
 			spec: sp,
 			pricing: Pricing{
 				Currency: def.Currency, InputCreditsPerM: in,
-				CachedInputCreditsPerM: cached, OutputCreditsPerM: out,
+				CachedInputCreditsPerM: cached, VisionInputCreditsPerM: vision, OutputCreditsPerM: out,
 			},
 		})
 	}

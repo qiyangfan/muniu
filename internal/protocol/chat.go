@@ -78,6 +78,7 @@ type Delta struct {
 // Usage 统一 usage 形态，metering 归一化的对齐基准；缺失字段为 0。
 type Usage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
+	VisionTokens     int64 `json:"vision_tokens,omitempty"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	ReasoningTokens  int64 `json:"reasoning_tokens,omitempty"`
 	CachedTokens     int64 `json:"cached_tokens,omitempty"`

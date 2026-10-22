@@ -138,6 +138,7 @@ type UsagePoint struct {
 	Requests         int64  `json:"requests"`
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
+	VisionTokens     int64  `json:"vision_tokens"`
 	CacheHits        int64  `json:"cache_hits"` // provider='semantic-cache' 的行数
 	CostCredits      int64  `json:"cost_credits"`
 }
@@ -160,6 +161,7 @@ func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) 
 	}
 	q := `SELECT ` + expr + ` AS dim, COUNT(*) AS reqs,
 			COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+			COALESCE(SUM(vision_tokens),0),
 			COALESCE(SUM(CASE WHEN provider='semantic-cache' THEN 1 ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN estimated=0 THEN cost_credits ELSE 0 END),0)
 		FROM usage_logs WHERE created_at >= ? AND created_at <= ?`
@@ -181,7 +183,7 @@ func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) 
 	var out []UsagePoint
 	for rows.Next() {
 		var p UsagePoint
-		if err := rows.Scan(&p.Dim, &p.Requests, &p.PromptTokens, &p.CompletionTokens, &p.CacheHits, &p.CostCredits); err != nil {
+		if err := rows.Scan(&p.Dim, &p.Requests, &p.PromptTokens, &p.CompletionTokens, &p.VisionTokens, &p.CacheHits, &p.CostCredits); err != nil {
 			return nil, fmt.Errorf("store: 扫聚合行: %w", err)
 		}
 		out = append(out, p)

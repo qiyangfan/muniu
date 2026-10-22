@@ -61,6 +61,21 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 
 **直通不属「字段改写白名单」约束域**:白名单治理的是翻译路径的字段改写;直通零改写(仅 model 手术),保真即其契约。bridgegate(工具多轮边界)仅作用于翻译路径——直通候选按原生协议正常服务工具多轮。
 
+### 百炼原生多模态 Embeddings
+
+新 lane 使用百炼原生 `POST /api/v1/services/embeddings/multimodal-embedding/multimodal-embedding`，不进入 OpenAI `/v1/embeddings` 基座。当前范围只有 `qwen3-vl-embedding` 和 `tongyi-embedding-vision-flash`：
+
+| 模型快照 | 当前输入与向量模式 | 官方参数边界（百炼校验） |
+|---|---|---|
+| `qwen3-vl-embedding` | text、image、video；支持多个 image 条目；默认独立向量，`parameters.enable_fusion=true` 时融合 | text 最长 32,000 Token；图片单张 ≤10 MB；视频 ≤50 MB；一次最多 20 个内容元素、10 张图片、1 个视频；维度为 2560/2048/1536/1024/768/512/256（默认 2560） |
+| `tongyi-embedding-vision-flash` | text、image、video、`multi_images`；当前快照仅独立向量 | 固定 768 维，不接受 `dimension`；媒体格式、批次 token 及数量限制以当前所用区域的百炼 API 文档为准 |
+
+图片可使用官方允许格式的 URL 或 Base64 Data URI；视频使用可公开访问的 URL，具体格式随模型而异。网关不下载媒体，也不仿制模型参数表：除解析非空路由 `model` 与 `input.contents`、执行 16 MiB HTTP 请求体上限外，`parameters`、媒体 URL/格式/尺寸/数量、token 上限与维度均由百炼校验。原始 JSON 保留未知字段，只原位替换顶层 `model`；成功和上游错误响应均按 native wire 透传。超出网关请求体上限的 Base64 请求在上游调用前被拒绝，使用媒体 URL 可避免把媒体字节放进网关请求体。
+
+`tongyi-embedding-vision-flash-2026-03-06` 是不同模型快照，支持融合向量且有不同参数边界，当前不在路由范围内。不要把旧快照别名自动升级到新快照；新增快照须单独核对模型能力、usage 口径和 conformance fixture。
+
+官方核对来源（2026-10-22）：[百炼多模态向量 API](https://help.aliyun.com/zh/model-studio/multimodal-embedding-api-reference)、[百炼向量化与兼容接口说明](https://help.aliyun.com/zh/model-studio/embedding)、[Tongyi Embedding Vision Flash 模型信息](https://help.aliyun.com/zh/model-studio/tongyi-embedding-vision-flash)。参数边界可能随区域和模型快照调整，改动前应复核官方文档；网关保持透明，由上游返回参数错误。
+
 ## 请求参数治理(ADR-0010,请求侧;与上方响应侧白名单正交)
 
 上节白名单管的是**响应/流事件侧**,原文不变。**请求侧**新增模型能力治理,分界口诀:同一供应商的不同模型行为不同 → 能力层;同一参数跨协议表达不同 → 方言层(仍归 quirk/bridge,不入目录)。

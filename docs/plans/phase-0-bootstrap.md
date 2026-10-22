@@ -1,6 +1,6 @@
 # Phase 0:工具链与仓库初始化(bootstrap)
 
-> 状态:已完成(T0.1–T0.8,2026-09-09;T0.9 待用户执行) · 前置:无 · 版本:— · 允许新增依赖:**无(仅标准库)**
+> 状态:已完成(T0.1–T0.9;远端交付证据见 HANDOFF 验收记录) · 前置:无 · 版本:— · 允许新增依赖:**无(仅标准库)**
 
 ## 目标
 
@@ -22,12 +22,7 @@
   - `tokenctl chars < file` → 字节数/字符数/中文字符数与「粗估 token(中文 ≈ 字符数×0.7,英文 ≈ 单词数×1.3)」并**明示这是粗估非 BPE**;
   - 复用 T0.6 函数;`go build ./cmd/tokenctl` 通过;三条命令实录进 HANDOFF。
 - [x] **T0.8 门禁与交接**:`make check` 全绿;更新 HANDOFF(状态/验收记录),把「用户侧待办」列清:GitHub 建仓查名(`solvela/muniu` → 备选 `muniu-gateway`,需同步改 go.mod 模块路径与 Makefile `PKG`)、首提交、push。
-- [ ] **T0.9 用户执行项(agent 只准备命令,不执行)**:
-  ```bash
-  git add -A && git commit -m "chore: 仓库初始化——治理文档、设计契约、六阶段计划与可编译骨架"
-  git remote add origin git@github.com:solvela/muniu.git && git push -u origin main
-  ```
-  push 后 README 顶部补 CI badge(`https://github.com/solvela/muniu/actions/workflows/ci.yml/badge.svg`)——此为 push 后的一次 docs 改动,随 Phase 1 提交搭车。
+- [x] **T0.9 远端交付(已由用户完成)**:实际仓库为 `qiyangfan/muniu`(以实际 remote 为准),`origin/main` 与本地 HEAD 均为 `6de1614`;远端 `v0.3.0` tag 存在;README 顶部 CI badge 指向实际仓库。核验日期:2026-10-22;历史执行记录见 HANDOFF 验收记录 21。
 
 ## 设计指针
 

@@ -1,0 +1,6 @@
+{
+  "model": "tongyi-embedding-vision-flash",
+  "input": {"contents": [{"multi_images": ["https://example.invalid/a.png", "https://example.invalid/b.png"]}]},
+  "parameters": {"dimension": 768, "instruct": "比较两张图片"},
+  "unknown_native_field": {"preserve": "exactly"}
+}

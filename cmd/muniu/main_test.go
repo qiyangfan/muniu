@@ -67,6 +67,7 @@ pricing:
   ` + e2eAlias + `:
     currency: CNY
     input: "2.00"
+    vision_input: "4.00"
     output: "8.00"
 `
 	if err := os.WriteFile(cfgPath, []byte(cfgContent), 0o600); err != nil {

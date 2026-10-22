@@ -188,7 +188,9 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 			}
 			inputs = append(inputs, keypool.KeyInput{ID: kr.Env, Value: v, Weight: kr.Weight})
 		}
-		ad, err := adapter.For(prov.Adapter, prov.BaseURL, first, adapter.Options{Auth: prov.Auth})
+		ad, err := adapter.For(prov.Adapter, prov.BaseURL, first, adapter.Options{
+			Auth: prov.Auth, NativeMultimodalEmbeddingURL: prov.NativeMultimodalEmbeddingsURL,
+		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("provider %s: %w", prov.Name, err)
 		}
@@ -229,10 +231,18 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 				return nil, nil, nil, fmt.Errorf("pricing[%s].cached_input: %w", alias, err)
 			}
 		}
+		visionMicro := int64(0) // 缺省视觉价回落 input，由 CostWithVision 处理
+		if pr.VisionInput != "" {
+			visionMicro, err = metering.ParsePrice(pr.VisionInput)
+			if err != nil {
+				return nil, nil, nil, fmt.Errorf("pricing[%s].vision_input: %w", alias, err)
+			}
+		}
 		def := metering.Pricing{
 			Currency:               strings.ToUpper(pr.Currency),
 			InputCreditsPerM:       inMicro,
 			CachedInputCreditsPerM: cachedMicro,
+			VisionInputCreditsPerM: visionMicro,
 			OutputCreditsPerM:      outMicro,
 		}
 		zone := time.UTC
@@ -466,6 +476,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		{"POST /v1/chat/completions", server.Chain(chatProxy.Handler(), dataPlaneMW...)},
 		{"POST /v1/images/generations", server.Chain(chatProxy.HandlerImages(), dataPlaneMW...)},
 		{"POST /v1/embeddings", server.Chain(chatProxy.HandlerEmbeddings(), dataPlaneMW...)},
+		{"POST /api/v1/services/embeddings/multimodal-embedding/multimodal-embedding", server.Chain(chatProxy.HandlerMultimodalEmbeddings(), dataPlaneMW...)},
 		// Responses 入站：翻译后进同一管道，鉴权/配额/限流与 chat 同规。
 		{"POST /v1/responses", server.Chain(chatProxy.HandlerResponses(), dataPlaneMW...)},
 		// Anthropic Messages 入站：同款边缘翻译；鉴权头适配仅挂本路由，先于 verifier。
@@ -631,7 +642,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 					// 内容未变化则跳过，避免 updated_at 失去最后真实变更语义并产生无谓写放大
 					if existing, gerr := store.GetPricing(db, rec.Alias); gerr == nil &&
 						existing.Currency == rec.Currency && existing.InputCredits == rec.InputCredits &&
-						existing.CachedInputCredits == rec.CachedInputCredits && existing.OutputCredits == rec.OutputCredits &&
+						existing.CachedInputCredits == rec.CachedInputCredits && existing.VisionInputCredits == rec.VisionInputCredits && existing.OutputCredits == rec.OutputCredits &&
 						existing.Timezone == rec.Timezone && windowsEqual(existing.Windows, rec.Windows) {
 						continue
 					}

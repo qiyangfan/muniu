@@ -294,7 +294,7 @@ func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 func TestAdmin_动态改价全流程(t *testing.T) {
 	db := openDB(t)
 	staticDefs := map[string]metering.Pricing{
-		"alias-yaml": {Currency: "USD", InputCreditsPerM: 440_000_000, OutputCreditsPerM: 1_320_000_000},
+		"alias-yaml": {Currency: "USD", InputCreditsPerM: 440_000_000, VisionInputCreditsPerM: 88_000_000, OutputCreditsPerM: 1_320_000_000},
 	}
 	// 复刻装配层合并：静态兜底 + DB 覆盖 → 目录整体替换
 	rebuild := func() *metering.PricingDirectory {
@@ -325,7 +325,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 			}
 			tbl, err := metering.NewPricingTable(metering.Pricing{
 				Currency: r.Currency, InputCreditsPerM: r.InputCredits,
-				CachedInputCreditsPerM: r.CachedInputCredits, OutputCreditsPerM: r.OutputCredits,
+				CachedInputCreditsPerM: r.CachedInputCredits, VisionInputCreditsPerM: r.VisionInputCredits, OutputCreditsPerM: r.OutputCredits,
 			}, tz, wins)
 			if err != nil {
 				t.Fatal(err)
@@ -357,23 +357,23 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 	}
 
 	// 2) PUT 运行态覆盖为半价加时段窗：持久化 + 刷新，目录即时生效
-	putBody := `{"currency":"USD","input":"0.22","output":"0.66","timezone":"+08:00","time_windows":[{"window":"00:30-08:30","multiplier":"0.5"}]}`
+	putBody := `{"currency":"USD","input":"0.22","vision_input":"0.33","output":"0.66","timezone":"+08:00","time_windows":[{"window":"00:30-08:30","multiplier":"0.5"}]}`
 	code, body = call(t, h, "PUT", "/admin/v1/pricing/alias-yaml", "t", putBody)
 	if code != 200 || !strings.Contains(body, `"ok":true`) {
 		t.Fatalf("PUT 应成功: %d %s", code, body)
 	}
 	code, body = call(t, h, "GET", "/admin/v1/pricing", "t", "")
-	if code != 200 || !strings.Contains(body, `"source":"db"`) || !strings.Contains(body, `"input":"0.22"`) ||
+	if code != 200 || !strings.Contains(body, `"source":"db"`) || !strings.Contains(body, `"input":"0.22"`) || !strings.Contains(body, `"vision_input":"0.33"`) ||
 		!strings.Contains(body, `"multiplier":"0.5"`) {
 		t.Fatalf("PUT 后 GET 应显示 db 来源与新价: %d %s", code, body)
 	}
 	// 目录已刷新：PUT 的 input/output 为缺省峰时价，窗口按倍率缩放。
 	// 窗内北京 04:00 = 0.22×0.5 = 0.11；窗外北京 12:00 = 缺省 0.22
 	cst := time.FixedZone("cst", 8*3600)
-	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputCreditsPerM != 110_000_000 {
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputCreditsPerM != 110_000_000 || got.VisionInputCreditsPerM != 165_000_000 {
 		t.Fatalf("刷新后窗内应 0.22×0.5=0.11: %+v", got)
 	}
-	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 12, 0, 0, 0, cst)); got.InputCreditsPerM != 220_000_000 {
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 12, 0, 0, 0, cst)); got.InputCreditsPerM != 220_000_000 || got.VisionInputCreditsPerM != 330_000_000 {
 		t.Fatalf("窗外应为 DB 缺省价 0.22: %+v", got)
 	}
 
@@ -383,8 +383,16 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 	if code != 400 {
 		t.Fatalf("非法 multiplier 应 400: %d", code)
 	}
-	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputCreditsPerM != 110_000_000 {
-		t.Fatalf("拒绝后目录不应变化(窗内仍 0.11): %+v", got)
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.InputCreditsPerM != 110_000_000 || got.VisionInputCreditsPerM != 165_000_000 {
+		t.Fatalf("拒绝后目录不应变化(窗内仍保留 0.11/0.165): %+v", got)
+	}
+	code, _ = call(t, h, "PUT", "/admin/v1/pricing/alias-yaml", "t",
+		`{"currency":"USD","input":"0.22","vision_input":"-0.1","output":"0.66"}`)
+	if code != 400 {
+		t.Fatalf("非法 vision_input 应 400: %d", code)
+	}
+	if got := dir.Get("alias-yaml").At(time.Date(2026, 9, 11, 4, 0, 0, 0, cst)); got.VisionInputCreditsPerM != 165_000_000 {
+		t.Fatalf("拒绝非法 vision_input 后价目不应改变: %+v", got)
 	}
 
 	// 4) DELETE 撤销覆盖：回落 yaml 静态价；重复删除 404
@@ -392,7 +400,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("DELETE 应成功: %d", code)
 	}
-	if got := dir.Get("alias-yaml").At(time.Now()); got.InputCreditsPerM != 440_000_000 {
+	if got := dir.Get("alias-yaml").At(time.Now()); got.InputCreditsPerM != 440_000_000 || got.VisionInputCreditsPerM != 88_000_000 {
 		t.Fatalf("删除后应回落 yaml 静态价: %+v", got)
 	}
 	code, _ = call(t, h, "DELETE", "/admin/v1/pricing/alias-yaml", "t", "")

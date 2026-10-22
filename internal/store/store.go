@@ -264,6 +264,7 @@ type UsageRow struct {
 	CompletionTokens    int64
 	ReasoningTokens     int64
 	CachedTokens        int64
+	VisionTokens        int64
 	Estimated           bool
 	CostCredits         int64
 	Currency            string
@@ -285,9 +286,9 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO usage_logs (
 		id, request_id, tenant_id, api_key_id, provider, model_alias, upstream_model,
 		stream, status, error_class,
-		prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens,
+		prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens, vision_tokens,
 		estimated, cost_credits, currency, latency_first_token_ms, latency_total_ms, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return fmt.Errorf("store: 预编译计量插入: %w", err)
 	}
@@ -307,7 +308,7 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 		}
 		if _, err := stmt.Exec(r.ID, r.RequestID, r.TenantID, r.APIKeyID, r.Provider,
 			r.ModelAlias, r.UpstreamModel, stream, r.Status, nullIfEmpty(r.ErrorClass),
-			r.PromptTokens, r.CompletionTokens, r.ReasoningTokens, r.CachedTokens,
+			r.PromptTokens, r.CompletionTokens, r.ReasoningTokens, r.CachedTokens, r.VisionTokens,
 			estimated, r.CostCredits, r.Currency, firstToken, r.LatencyTotalMs,
 			r.CreatedAt.UTC().Format(time.RFC3339)); err != nil {
 			return fmt.Errorf("store: 写计量行 %s: %w", r.ID, err)

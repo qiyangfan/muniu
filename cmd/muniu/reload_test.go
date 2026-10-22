@@ -28,12 +28,14 @@ func TestSIGHUP_热加载与保持旧态(t *testing.T) {
 	dbPath := filepath.Join(dir, "test.db")
 	up1 := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
 	up2 := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
+	nativeUp1 := testkit.StartJSONUpstream(t, 200, `{"output":{"embeddings":[]},"usage":{"input_tokens":2,"image_tokens":1,"total_tokens":3}}`)
+	nativeUp2 := testkit.StartJSONUpstream(t, 200, `{"output":{"embeddings":[]},"usage":{"input_tokens":4,"image_tokens":1,"total_tokens":5}}`)
 	t.Setenv("MUNIU_ADMIN_TOKEN", "reload-admin")
 	t.Setenv("SIGHUP_TEST_KEY_1", "k1")
 	t.Setenv("SIGHUP_TEST_KEY_2", "k2")
 
 	providerName := "p1"
-	writeCfg := func(baseURL, keyEnv string) {
+	writeCfg := func(baseURL, keyEnv, nativeURL string) {
 		body := fmt.Sprintf(`server:
   addr: "127.0.0.1:0"
 storage:
@@ -43,20 +45,23 @@ metrics:
   enabled: true
 providers:
   - name: %s
-    adapter: openai
+    adapter: qwen
     weight: 1
     base_url: %q
+    native_multimodal_embeddings_url: %q
     keys:
       - env: %s
 model_routes:
   alias-a:
     - { provider: %s, model: up-a, priority: 0 }
-`, dbPath, providerName, baseURL, keyEnv, providerName)
+  multimodal-alias:
+    - { provider: %s, model: qwen3-vl-embedding, priority: 0 }
+`, dbPath, providerName, baseURL, nativeURL, keyEnv, providerName, providerName)
 		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeCfg(up1.URL(), "SIGHUP_TEST_KEY_1")
+	writeCfg(up1.URL(), "SIGHUP_TEST_KEY_1", nativeUp1.URL()+"/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding")
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -101,10 +106,26 @@ model_routes:
 	if up1.RequestCount() != 1 {
 		t.Fatalf("初态应触达 up1 一次: %d", up1.RequestCount())
 	}
+	postNative := func() (int, string) {
+		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+			strings.NewReader(`{"model":"multimodal-alias","input":{"contents":[{"text":"hi"}]}}`))
+		req.Header.Set("Authorization", "Bearer "+plaintext)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := postNative(); code != 200 || nativeUp1.RequestCount() != 1 {
+		t.Fatalf("初态原生端点未走 nativeUp1: status=%d calls=%d body=%s", code, nativeUp1.RequestCount(), body)
+	}
 
 	// 合法新配置 provider 指向 up2 → SIGHUP → 新请求走 up2，轮询等待热替换落地。
 	providerName = "p2"
-	writeCfg(up2.URL(), "SIGHUP_TEST_KEY_2")
+	writeCfg(up2.URL(), "SIGHUP_TEST_KEY_2", nativeUp2.URL()+"/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding")
 	if err := syscall.Kill(os.Getpid(), syscall.SIGHUP); err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +141,19 @@ model_routes:
 	}
 	if !swapped {
 		t.Fatal("SIGHUP 后新请求应走新 provider(up2)")
+	}
+	nativeSwapped := false
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_, _ = postNative()
+		if nativeUp2.RequestCount() > 0 {
+			nativeSwapped = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !nativeSwapped {
+		t.Fatal("SIGHUP 后新请求应走新的 native_multimodal_embeddings_url")
 	}
 
 	// 管理页与 gauge 必须与数据面的同一快照收敛，不能继续呈现启动 provider。

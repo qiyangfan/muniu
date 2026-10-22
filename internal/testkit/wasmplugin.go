@@ -39,6 +39,8 @@ const (
 	FixtureStartLoop
 	// FixtureFreeLoop free 中死循环，用于 free 超时守卫测试：宿主必须有界中断并丢弃实例。
 	FixtureFreeLoop
+	// FixtureModifyMultimodalModel 改写为包含 input.contents 的原生向量请求，model=alias-b。
+	FixtureModifyMultimodalModel
 )
 
 // ABI 常量与宿主实现的 plugin 包单向对齐，此处仅复制 fixture 所需字面量，
@@ -62,6 +64,8 @@ const (
 // fxModelBody FixtureModifyModel 的常量改写产物，合法 chat 体；model 为白名单外
 // 别名 alias-b，与 proxy 白名单测试的别名约定耦合，属测试设施内契约。
 const fxModelBody = `{"model":"alias-b","messages":[{"role":"user","content":"hi"}]}`
+
+const fxMultimodalModelBody = `{"model":"alias-b","input":{"contents":[{"text":"hi"}]}}`
 
 // FixturePlugin 装配一个最小插件二进制。
 func FixturePlugin(kind PluginFixtureKind) []byte {
@@ -274,7 +278,7 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 	// hook_request_body
 	b = &wasmBin{}
 	switch kind {
-	case FixtureModify, FixtureModifyModel:
+	case FixtureModify, FixtureModifyModel, FixtureModifyMultimodalModel:
 		b.u8(0x00)
 		b.i32const(fxVerdictModified)
 		b.u8(0x0b)
@@ -327,6 +331,8 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		b.i64const(int64(fxResultOff)<<32 | 6) // "MASKED"
 	case FixtureModifyModel:
 		b.i64const(int64(fxResultOff)<<32 | int64(len(fxModelBody))) // 常量合法 chat 体，model=alias-b。
+	case FixtureModifyMultimodalModel:
+		b.i64const(int64(fxResultOff)<<32 | int64(len(fxMultimodalModelBody)))
 	case FixtureReject:
 		b.i64const(int64(fxResultOff)<<32 | 12) // "pii detected"
 	case FixtureModifyEcho:
@@ -361,6 +367,8 @@ func FixturePlugin(kind PluginFixtureKind) []byte {
 		segs = [][2]any{{fxResultOff, "MASKED"}}
 	case FixtureModifyModel:
 		segs = [][2]any{{fxResultOff, fxModelBody}}
+	case FixtureModifyMultimodalModel:
+		segs = [][2]any{{fxResultOff, fxMultimodalModelBody}}
 	case FixtureReject:
 		segs = [][2]any{{fxResultOff, "pii detected"}}
 	case FixtureCfg:

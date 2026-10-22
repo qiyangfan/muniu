@@ -5,16 +5,17 @@ package metering
 import "testing"
 
 func TestSettlePrice_同币种透传(t *testing.T) {
-	in := Pricing{Currency: "CNY", InputCreditsPerM: 3_000_000, OutputCreditsPerM: 9_000_000}
+	in := Pricing{Currency: "CNY", InputCreditsPerM: 3_000_000, VisionInputCreditsPerM: 2_000_000, OutputCreditsPerM: 9_000_000}
 	out, ok := SettlePrice(in, "CNY", 7200)
-	if !ok || out != (Pricing{Currency: "CNY", InputCreditsPerM: 3_000_000, OutputCreditsPerM: 9_000_000}) {
+	if !ok || out != (Pricing{Currency: "CNY", InputCreditsPerM: 3_000_000, VisionInputCreditsPerM: 2_000_000, OutputCreditsPerM: 9_000_000}) {
 		t.Fatalf("同币种应原样透传: ok=%v %+v", ok, out)
 	}
 }
 
 func TestSettlePrice_USD报价转CNY本位(t *testing.T) {
 	// $0.003/M → 3e6 credits/M；fx 7.200 → ×7.2 = 21.6e6 → ceil 21_600_000。
-	quote := Pricing{Currency: "USD", InputCreditsPerM: 3_000_000, CachedInputCreditsPerM: 300_000, OutputCreditsPerM: 9_000_000}
+	quote := Pricing{Currency: "USD", InputCreditsPerM: 3_000_000, CachedInputCreditsPerM: 300_000,
+		VisionInputCreditsPerM: 600_000, OutputCreditsPerM: 9_000_000}
 	out, ok := SettlePrice(quote, "CNY", 7200)
 	if !ok {
 		t.Fatal("应成功")
@@ -24,6 +25,9 @@ func TestSettlePrice_USD报价转CNY本位(t *testing.T) {
 	}
 	if out.InputCreditsPerM != 21_600_000 {
 		t.Fatalf("input 应 ×7.2 = 21_600_000: %d", out.InputCreditsPerM)
+	}
+	if out.VisionInputCreditsPerM != 4_320_000 {
+		t.Fatalf("vision_input 应 ×7.2 = 4_320_000: %d", out.VisionInputCreditsPerM)
 	}
 	// 逐段 ceil：0.3e6×7.2 = 2_160_000 整除；构造不整除情形。
 	out2, _ := SettlePrice(Pricing{Currency: "USD", InputCreditsPerM: 1}, "CNY", 7200)

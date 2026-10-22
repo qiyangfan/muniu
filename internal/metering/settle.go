@@ -42,12 +42,14 @@ func SettlePrice(quote Pricing, settlement string, fxCnyPerUsdMilli int64) (Pric
 	// 乘法溢出会生成负价格；任一段越界即拒绝整张价目。
 	if quote.InputCreditsPerM > math.MaxInt64/num ||
 		quote.CachedInputCreditsPerM > math.MaxInt64/num ||
+		quote.VisionInputCreditsPerM > math.MaxInt64/num ||
 		quote.OutputCreditsPerM > math.MaxInt64/num {
 		return Pricing{}, false
 	}
 	out := Pricing{Currency: settlement}
 	out.InputCreditsPerM = ceilDiv(quote.InputCreditsPerM*num, denom)
 	out.CachedInputCreditsPerM = ceilDiv(quote.CachedInputCreditsPerM*num, denom)
+	out.VisionInputCreditsPerM = ceilDiv(quote.VisionInputCreditsPerM*num, denom)
 	out.OutputCreditsPerM = ceilDiv(quote.OutputCreditsPerM*num, denom)
 	return out, true
 }

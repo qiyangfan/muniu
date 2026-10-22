@@ -97,6 +97,15 @@ providers:
   #   base_url: "https://api.openai.com/v1"
   #   keys:
   #     - env: OPENAI_API_KEY_1
+  # 百炼原生多模态向量端点与兼容模式 base_url 分开配置。
+  # - name: dashscope-native
+  #   adapter: qwen
+  #   base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  #   native_multimodal_embeddings_url: "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+  #   keys:
+  #     - env: DASHSCOPE_API_KEY
+  #   weight: 1
+  #   priority: 0
 
 # 模型路由键是入站别名；候选按 priority 顺序尝试。
 model_routes:
@@ -107,6 +116,11 @@ model_routes:
   # Anthropic 桥接适配器示例：
   # claude-sonnet:
   #   - { provider: anthropic, model: claude-sonnet-4-5, priority: 0 }
+  # 百炼多模态向量只走显式声明原生 URL 的候选。
+  # qwen3-vl-embedding:
+  #   - { provider: dashscope-native, model: qwen3-vl-embedding, priority: 0 }
+  # tongyi-embedding-vision-flash:
+  #   - { provider: dashscope-native, model: tongyi-embedding-vision-flash, priority: 0 }
 
 # 价目按每百万 token 配置，启动时转换为整数 credit 参与计费。
 pricing:
@@ -114,6 +128,7 @@ pricing:
     currency: USD
     input: 0.44        # $0.44 / 百万输入 Token(峰时,缓存未命中)
     cached_input: 0.014 # $0.014 / 百万缓存命中输入(峰时);缺省=input
+    # vision_input: 0.88 # 视觉输入单价/百万 token；缺省时同 input
     output: 1.32       # $1.32 / 百万输出 Token(峰时)
     # 可选时段倍率；按声明顺序匹配，支持跨午夜。
     # timezone: "UTC"   # "UTC" 或 ±HH:MM 固定偏移(北京时间用 "+08:00");缺省 UTC

@@ -37,6 +37,17 @@ conformance/
   被 `internal/protocol` 两个方向反向消费(入站翻译产 canonical / 出站适配器消费 canonical
   产 wire),回环对拍(出站∘入站=恒等,可翻译子集域)作漂移探测器;含「HTTP 200 + 流内
   错误帧」负面形态(百炼实证的上游失真样式)。
+- `qwen/native/multimodal-independent.json`、`multimodal-fusion.json` 与
+  `tongyi/native/multimodal-multi-images.json`:百炼原生多模态 Embeddings 请求语料，分别覆盖
+  Qwen 独立/融合模式、Tongyi Flash 多图输入和未知字段保留。它们由 protocol/proxy 原生
+  handler 测试消费，不属于通用 adapter conformance schema；媒体 URL 使用 `.invalid`，避免
+  fixture 回放或测试触发外部请求。请求体上限为 16 MiB；模型参数、媒体格式/尺寸/数量、
+  token 上限及维度由上游百炼按模型快照校验，网关只解析路由字段并原样透传其他字段。
+
+当前只支持 `qwen3-vl-embedding` 与旧快照 `tongyi-embedding-vision-flash`。Qwen 支持独立及
+`enable_fusion=true` 融合向量；Tongyi Flash 支持独立向量与 `multi_images`。不包含
+`tongyi-embedding-vision-flash-2026-03-06`。上游能力和参数边界见
+[百炼原生多模态 Embeddings 契约](../design/upstream-adapters.md#百炼原生多模态-embeddings)。
 
 ## 贡献规范
 

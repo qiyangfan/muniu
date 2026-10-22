@@ -183,6 +183,25 @@ func TestNewRow_计价与价目币种(t *testing.T) {
 	}
 }
 
+func TestNewRow_视觉token计价与保留(t *testing.T) {
+	usage := protocol.Usage{PromptTokens: 5, CachedTokens: 1, VisionTokens: 2, CompletionTokens: 1}
+	row := NewRow(RowParams{
+		RequestID: "vision", Status: "ok", Usage: usage,
+		Pricing: &Pricing{Currency: "CNY", InputCreditsPerM: 500_000, CachedInputCreditsPerM: 250_000,
+			VisionInputCreditsPerM: 1_500_000},
+	})
+	if row.CostCredits != 5 || row.VisionTokens != 2 || row.Estimated {
+		t.Fatalf("四段费用和视觉 token 应准确保留: %+v", row)
+	}
+	invalid := NewRow(RowParams{
+		RequestID: "invalid-vision", Status: "ok", Usage: protocol.Usage{PromptTokens: 1, CachedTokens: 1, VisionTokens: 1},
+		Pricing: &Pricing{Currency: "CNY", InputCreditsPerM: 1},
+	})
+	if invalid.Status != "error" || invalid.ErrorClass != CostOverflowClass || !invalid.Estimated || invalid.CostCredits != 0 || invalid.VisionTokens != 1 {
+		t.Fatalf("非法 token 子集须留作未结算观测: %+v", invalid)
+	}
+}
+
 func TestNewRow_成本溢出保留未结算观测(t *testing.T) {
 	usage := protocol.Usage{PromptTokens: 1_000_000, CompletionTokens: 1}
 	row := NewRow(RowParams{RequestID: "overflow", Status: "ok", Usage: usage, Pricing: &Pricing{Currency: "USD", InputCreditsPerM: math.MaxInt64, OutputCreditsPerM: 1}})

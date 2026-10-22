@@ -42,7 +42,7 @@ func (f *fakeRemote) snapshot() [][]store.UsageRow {
 }
 
 func row(id string) store.UsageRow {
-	return store.UsageRow{ID: id, RequestID: "req-" + id, PromptTokens: 1, CompletionTokens: 2}
+	return store.UsageRow{ID: id, RequestID: "req-" + id, PromptTokens: 1, VisionTokens: 4, CompletionTokens: 2}
 }
 
 // openSinkDB 与产品 store.Open 对齐：busy_timeout 兜住 flushLoop 写与测试读的锁竞争，
@@ -137,7 +137,7 @@ func TestBufferStore_容量与往返(t *testing.T) {
 		t.Fatalf("超容量应 ErrBufferFull: %v", err)
 	}
 	items, skipped, err := buf.Pending(10)
-	if err != nil || len(items) != 1 || len(skipped) != 0 || items[0].Row.ID != "a" {
+	if err != nil || len(items) != 1 || len(skipped) != 0 || items[0].Row.ID != "a" || items[0].Row.VisionTokens != 4 {
 		t.Fatalf("Pending 不符: %+v %v", items, err)
 	}
 	if err := buf.Delete([]int64{items[0].Seq}); err != nil {

@@ -1,0 +1,6 @@
+{
+  "model": "qwen3-vl-embedding",
+  "input": {"contents": [{"text": "描述图片"}, {"image": "https://example.invalid/cat.png"}]},
+  "parameters": {"dimension": 1024, "enable_fusion": true, "fps": 2},
+  "vendor_extension": [1, 2, 3]
+}

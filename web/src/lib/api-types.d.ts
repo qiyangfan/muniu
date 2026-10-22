@@ -117,6 +117,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 百炼原生多模态向量化
+         * @description model 为 muniu 路由别名；仅顶层 model 会改写为上游模型名，其余原生请求字段透传。
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description muniu 路由别名 */
+                        model: string;
+                        input: {
+                            contents: {
+                                [key: string]: unknown;
+                            }[];
+                        };
+                    } & {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            responses: {
+                /** @description 上游百炼原生向量响应及状态码、端到端响应头 */
+                "2XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 候选耗尽时原样透传的上游重定向响应 */
+                "3XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 本地统一错误信封或未换道的原生上游错误 */
+                "4XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 未换道的原生上游错误 */
+                "5XX": {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/responses": {
         parameters: {
             query?: never;
@@ -1683,6 +1757,11 @@ export interface components {
             prompt_tokens?: number;
             /** Format: int64 */
             completion_tokens?: number;
+            /**
+             * Format: int64
+             * @description 视觉输入 token 子集
+             */
+            vision_tokens?: number;
             /** Format: int64 */
             cache_hits?: number;
             /** Format: int64 */
@@ -1764,6 +1843,8 @@ export interface components {
             input: string;
             /** @description 缓存命中价;空=缺省同 input */
             cached_input?: string;
+            /** @description 视觉输入价;空=缺省同 input */
+            vision_input?: string;
             output: string;
             /** @description UTC 或 ±HH:MM 固定偏移 */
             timezone?: string;

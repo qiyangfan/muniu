@@ -23,6 +23,7 @@ type PricingView struct {
 	Currency    string              `json:"currency"`
 	Input       string              `json:"input"`
 	CachedInput string              `json:"cached_input"`
+	VisionInput string              `json:"vision_input,omitempty"`
 	Output      string              `json:"output"`
 	Timezone    string              `json:"timezone"`
 	TimeWindows []PricingWindowView `json:"time_windows"`
@@ -52,6 +53,7 @@ func pricingList(d Deps) http.HandlerFunc {
 				Alias: rec.Alias, Source: "db", Currency: rec.Currency,
 				Input:       metering.FormatPrice(rec.InputCredits),
 				CachedInput: metering.FormatPrice(rec.CachedInputCredits),
+				VisionInput: optionalPrice(rec.VisionInputCredits),
 				Output:      metering.FormatPrice(rec.OutputCredits),
 				Timezone:    rec.Timezone,
 				TimeWindows: windowsView(rec.Windows),
@@ -66,6 +68,7 @@ func pricingList(d Deps) http.HandlerFunc {
 				Alias: alias, Source: "yaml", Currency: entry.Def.Currency,
 				Input:       metering.FormatPrice(entry.Def.InputCreditsPerM),
 				CachedInput: metering.FormatPrice(entry.Def.CachedInputCreditsPerM),
+				VisionInput: optionalPrice(entry.Def.VisionInputCreditsPerM),
 				Output:      metering.FormatPrice(entry.Def.OutputCreditsPerM),
 				Timezone:    entry.Timezone,
 				TimeWindows: entry.TimeWindows,
@@ -124,7 +127,8 @@ func pricingPut(d Deps) http.HandlerFunc {
 		writeJSON(w, 200, map[string]any{"ok": true, "pricing": PricingView{
 			Alias: rec.Alias, Source: "db", Currency: rec.Currency,
 			Input: metering.FormatPrice(rec.InputCredits), CachedInput: metering.FormatPrice(rec.CachedInputCredits),
-			Output: metering.FormatPrice(rec.OutputCredits), Timezone: rec.Timezone,
+			VisionInput: optionalPrice(rec.VisionInputCredits),
+			Output:      metering.FormatPrice(rec.OutputCredits), Timezone: rec.Timezone,
 			TimeWindows: windowsView(rec.Windows), UpdatedAt: rec.UpdatedAt,
 		}})
 	}
@@ -193,6 +197,12 @@ func ParsePricingRecord(alias string, v PricingView, now time.Time) (store.Prici
 			return store.PricingRecord{}, fmt.Errorf("cached_input 非法(十进制 ≤9 位小数)")
 		}
 	}
+	visionCredits := int64(0)
+	if v.VisionInput != "" {
+		if visionCredits, err = metering.ParsePrice(v.VisionInput); err != nil {
+			return store.PricingRecord{}, fmt.Errorf("vision_input 非法(十进制 ≤9 位小数)")
+		}
+	}
 	tz := v.Timezone
 	if tz == "" {
 		tz = "UTC"
@@ -213,7 +223,15 @@ func ParsePricingRecord(alias string, v PricingView, now time.Time) (store.Prici
 	}
 	return store.PricingRecord{
 		Alias: alias, Currency: cur, InputCredits: outCredits, CachedInputCredits: cachedCredits,
-		OutputCredits: outputCredits, Timezone: tz, Windows: windows,
+		VisionInputCredits: visionCredits,
+		OutputCredits:      outputCredits, Timezone: tz, Windows: windows,
 		UpdatedAt: now.UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func optionalPrice(credits int64) string {
+	if credits == 0 {
+		return ""
+	}
+	return metering.FormatPrice(credits)
 }

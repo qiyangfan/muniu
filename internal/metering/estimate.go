@@ -87,12 +87,12 @@ func EstimateOutputTokens(text, model string) int64 {
 	return n
 }
 
-// Pricing 单别名价目，μ/百万Token 经 ParsePrice 换算后的整数形态。
-// CachedInputCreditsPerM=0 表示缓存命中与输入同价。
+// Pricing 单别名价目，credit/百万 Token 的整数形态；缓存与视觉价为 0 时各自回落 input。
 type Pricing struct {
 	Currency               string
 	InputCreditsPerM       int64
 	CachedInputCreditsPerM int64
+	VisionInputCreditsPerM int64
 	OutputCreditsPerM      int64
 }
 
@@ -128,8 +128,8 @@ func NewRow(p RowParams) UsageRow {
 	}
 	if p.Pricing != nil {
 		currency = p.Pricing.Currency
-		cost = CostWithCached(p.Usage.PromptTokens, p.Usage.CachedTokens, p.Usage.CompletionTokens,
-			p.Pricing.InputCreditsPerM, p.Pricing.CachedInputCreditsPerM, p.Pricing.OutputCreditsPerM)
+		cost = CostWithVision(p.Usage.PromptTokens, p.Usage.CachedTokens, p.Usage.VisionTokens, p.Usage.CompletionTokens,
+			p.Pricing.InputCreditsPerM, p.Pricing.CachedInputCreditsPerM, p.Pricing.VisionInputCreditsPerM, p.Pricing.OutputCreditsPerM)
 		if cost < 0 {
 			cost = 0
 			p.Status, p.ErrorClass, p.Estimated = "error", CostOverflowClass, true
@@ -150,6 +150,7 @@ func NewRow(p RowParams) UsageRow {
 		CompletionTokens:    p.Usage.CompletionTokens,
 		ReasoningTokens:     p.Usage.ReasoningTokens,
 		CachedTokens:        p.Usage.CachedTokens,
+		VisionTokens:        p.Usage.VisionTokens,
 		Estimated:           p.Estimated,
 		CostCredits:         cost,
 		Currency:            currency,

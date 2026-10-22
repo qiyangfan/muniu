@@ -99,7 +99,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 	rows := []UsageRow{
 		{ID: uuid.NewV7().String(), RequestID: "r1", TenantID: "t1", APIKeyID: "k1",
 			Provider: "deepseek", ModelAlias: "m1", UpstreamModel: "u", Status: "ok",
-			PromptTokens: 100, CompletionTokens: 50, CostCredits: 500, Currency: "CNY",
+			PromptTokens: 100, CompletionTokens: 50, VisionTokens: 7, CostCredits: 500, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
 		{ID: uuid.NewV7().String(), RequestID: "r2", TenantID: "t1", APIKeyID: "k1",
 			Provider: "semantic-cache", ModelAlias: "m1", UpstreamModel: "u", Status: "ok",
@@ -107,7 +107,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 			LatencyTotalMs: 1, CreatedAt: now},
 		{ID: uuid.NewV7().String(), RequestID: "r3", TenantID: "t1", APIKeyID: "k2",
 			Provider: "deepseek", ModelAlias: "m2", UpstreamModel: "u", Status: "error",
-			PromptTokens: 10, CompletionTokens: 0, Estimated: true, CostCredits: 999, Currency: "CNY",
+			PromptTokens: 10, CompletionTokens: 0, VisionTokens: 1, Estimated: true, CostCredits: 999, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
 	}
 	if err := InsertUsageBatch(db, rows); err != nil {
@@ -129,7 +129,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 		byProv[p.Dim] = p
 	}
 	ds := byProv["deepseek"]
-	if ds.Requests != 2 || ds.CostCredits != 500 {
+	if ds.Requests != 2 || ds.CostCredits != 500 || ds.VisionTokens != 8 {
 		t.Fatalf("deepseek 聚合不符(estimated 须剔除): %+v", ds)
 	}
 	sc := byProv["semantic-cache"]

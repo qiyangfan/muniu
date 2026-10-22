@@ -21,10 +21,11 @@ type topologyCandidate struct {
 
 // topologyProvider 供应商定义接收形态，与 YAML Provider 同义；key 以 env 引用形态下发。
 type topologyProvider struct {
-	Name    string `json:"name"`
-	Adapter string `json:"adapter"`
-	BaseURL string `json:"base_url"`
-	Keys    []struct {
+	Name                          string `json:"name"`
+	Adapter                       string `json:"adapter"`
+	BaseURL                       string `json:"base_url"`
+	NativeMultimodalEmbeddingsURL string `json:"native_multimodal_embeddings_url,omitempty"`
+	Keys                          []struct {
 		Env    string `json:"env"`
 		Weight int    `json:"weight"`
 	} `json:"keys"`
@@ -47,7 +48,8 @@ func (p TopologyPayload) ToTopology() (providers []Provider,
 	for _, tp := range p.Providers {
 		prov := Provider{
 			Name: tp.Name, Adapter: tp.Adapter, BaseURL: tp.BaseURL,
-			Weight: tp.Weight, Priority: tp.Priority,
+			NativeMultimodalEmbeddingsURL: tp.NativeMultimodalEmbeddingsURL,
+			Weight:                        tp.Weight, Priority: tp.Priority,
 		}
 		for _, k := range tp.Keys {
 			prov.Keys = append(prov.Keys, KeyRef{Env: k.Env, Weight: k.Weight})

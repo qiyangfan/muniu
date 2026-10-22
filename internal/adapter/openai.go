@@ -14,7 +14,8 @@ import (
 
 // OpenAI 是 OpenAI 兼容适配器，保存 provider 的 API 基址。
 type OpenAI struct {
-	baseURL string
+	baseURL                      string
+	nativeMultimodalEmbeddingURL string
 }
 
 // NewOpenAI 创建 OpenAI 兼容适配器。
@@ -94,6 +95,34 @@ func (o *OpenAI) PrepareEmbeddings(in *protocol.EmbeddingRequest, upstreamModel,
 		Header: h,
 		Body:   body,
 	}, nil
+}
+
+// SupportsMultimodalEmbeddings 仅支持显式声明原生 URL 的已核对模型快照。
+func (o *OpenAI) SupportsMultimodalEmbeddings(upstreamModel string) bool {
+	if o.nativeMultimodalEmbeddingURL == "" {
+		return false
+	}
+	switch upstreamModel {
+	case "qwen3-vl-embedding", "tongyi-embedding-vision-flash":
+		return true
+	default:
+		return false
+	}
+}
+
+// PrepareMultimodalEmbeddings 构造原生多模态向量请求，只原位替换顶层 model。
+func (o *OpenAI) PrepareMultimodalEmbeddings(in *protocol.MultimodalEmbeddingRequest, upstreamModel, apiKey string) (*Outbound, error) {
+	if !o.SupportsMultimodalEmbeddings(upstreamModel) {
+		return nil, fmt.Errorf("adapter: 未配置原生多模态向量 endpoint")
+	}
+	body, err := protocol.RewriteModelInPlace(in.Raw, upstreamModel)
+	if err != nil {
+		return nil, fmt.Errorf("adapter: 改写原生多模态向量 body: %w", err)
+	}
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("Authorization", "Bearer "+apiKey)
+	return &Outbound{URL: o.nativeMultimodalEmbeddingURL, Header: h, Body: body}, nil
 }
 
 // RewriteResponse 原样返回响应体，并提取 usage。

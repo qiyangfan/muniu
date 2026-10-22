@@ -20,7 +20,7 @@ func TestBuildPricingTables_合并语义(t *testing.T) {
 
 	static := map[string]staticPricing{
 		"alias-a": {
-			def:   metering.Pricing{Currency: "CNY", InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000},
+			def:   metering.Pricing{Currency: "CNY", InputCreditsPerM: 2_000_000, VisionInputCreditsPerM: 4_000_000, OutputCreditsPerM: 8_000_000},
 			zone:  time.UTC,
 			specs: []metering.WindowSpec{{StartMin: 0, EndMin: 1440, BasisPoints: 5000}},
 		},
@@ -31,13 +31,13 @@ func TestBuildPricingTables_合并语义(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tables["alias-a"].At(time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)); got.InputCreditsPerM != 1_000_000 {
+	if got := tables["alias-a"].At(time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)); got.InputCreditsPerM != 1_000_000 || got.VisionInputCreditsPerM != 2_000_000 {
 		t.Fatalf("YAML 窗内应半价: %+v", got)
 	}
 
 	// 2) DB 覆盖同别名：0.22 缺省价且无窗，YAML 窗被整体取代。
 	if err := store.UpsertPricing(db, store.PricingRecord{
-		Alias: "alias-a", Currency: "CNY", InputCredits: 220_000, OutputCredits: 660_000,
+		Alias: "alias-a", Currency: "CNY", InputCredits: 220_000, VisionInputCredits: 330_000, OutputCredits: 660_000,
 		Timezone: "UTC", UpdatedAt: "2026-09-11T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestBuildPricingTables_合并语义(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := tables["alias-a"].At(time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)); got.InputCreditsPerM != 220_000 {
+	if got := tables["alias-a"].At(time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)); got.InputCreditsPerM != 220_000 || got.VisionInputCreditsPerM != 330_000 {
 		t.Fatalf("DB 覆盖后应 0.22: %+v", got)
 	}
 	if tables["alias-b"] == nil {

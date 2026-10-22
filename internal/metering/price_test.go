@@ -141,6 +141,31 @@ func TestCostWithCached_基本语义(t *testing.T) {
 	}
 }
 
+func TestCostWithVision_分段计价与兼容(t *testing.T) {
+	if got, want := CostWithVision(1000, 0, 400, 0, 1, 0, 2, 0), int64(2); got != want {
+		t.Fatalf("文本与视觉需分别向上取整: got=%d want=%d", got, want)
+	}
+	if got, want := CostWithVision(5, 2, 2, 0, 500_000, 250_000, 1_500_000, 0), int64(5); got != want {
+		t.Fatalf("文本/缓存/视觉三段成本不符: got=%d want=%d", got, want)
+	}
+	legacy := CostWithCached(1000, 300, 0, 2_000_000, 500_000, 0)
+	if got := CostWithVision(1000, 300, 0, 0, 2_000_000, 500_000, 0, 0); got != legacy {
+		t.Fatalf("无视觉用量必须复用旧计价结果: got=%d legacy=%d", got, legacy)
+	}
+	if got, want := CostWithVision(1000, 0, 500, 0, 2_000_000, 0, 0, 0), int64(2000); got != want {
+		t.Fatalf("视觉价缺省应回落 input: got=%d want=%d", got, want)
+	}
+	if got := CostWithVision(1000, 500, 600, 0, 2_000_000, 1_000_000, 1_000_000, 0); got >= 0 {
+		t.Fatalf("cached+vision 超出 prompt 必须拒绝精确计价: %d", got)
+	}
+	if got := CostWithVision(1000, 1001, 0, 0, 2_000_000, 1_000_000, 0, 0); got >= 0 {
+		t.Fatalf("无视觉用量的 cached 子集越界也必须拒绝: %d", got)
+	}
+	if got := CostWithVision(math.MaxInt64, 0, 1, 0, math.MaxInt64, 0, math.MaxInt64, 0); got >= 0 {
+		t.Fatalf("token/价格溢出必须拒绝结算: %d", got)
+	}
+}
+
 func TestCostWithCached_宽乘积精确计价(t *testing.T) {
 	for _, c := range []struct {
 		name                                                               string

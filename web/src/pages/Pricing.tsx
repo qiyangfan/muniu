@@ -34,6 +34,7 @@ const EMPTY: PricingEntry = {
   currency: "CNY",
   input: "",
   cached_input: "",
+  vision_input: "",
   output: "",
   timezone: "UTC",
   time_windows: [],
@@ -126,6 +127,7 @@ export default function Pricing() {
         currency: form.currency ?? "CNY",
         input: form.input ?? "",
         cached_input: form.cached_input ?? "",
+        vision_input: form.vision_input ?? "",
         output: form.output ?? "",
         timezone: form.timezone ?? "UTC",
         time_windows: windows,
@@ -197,6 +199,15 @@ export default function Pricing() {
       cellClassName: "font-mono",
       valueClassName: "font-mono",
       render: (p) => p.cached_input || <span className="text-muted-foreground">=输入</span>,
+    },
+    {
+      key: "vision",
+      label: "视觉输入价",
+      numeric: true,
+      headTitle: "单价:本币 / 百万 Tokens",
+      cellClassName: "font-mono",
+      valueClassName: "font-mono",
+      render: (p) => p.vision_input || <span className="text-muted-foreground">=输入</span>,
     },
     {
       key: "output",
@@ -320,6 +331,18 @@ export default function Pricing() {
                   value={form.cached_input ?? ""}
                   placeholder="0.014"
                   onChange={(e) => setForm({ ...form, cached_input: e.target.value })}
+                />
+              </FormRow>
+              <FormRow
+                label={`视觉输入价(${unit}/百万 Tokens;空=同输入价)`}
+                htmlFor="pricing-vision-input"
+                className="w-full sm:w-52"
+              >
+                <Input
+                  id="pricing-vision-input"
+                  value={form.vision_input ?? ""}
+                  placeholder="同输入价"
+                  onChange={(e) => setForm({ ...form, vision_input: e.target.value })}
                 />
               </FormRow>
             </div>

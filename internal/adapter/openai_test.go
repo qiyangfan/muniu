@@ -4,6 +4,8 @@ package adapter
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -200,6 +202,87 @@ func TestOpenAI_PrepareEmbeddings(t *testing.T) {
 	_ = json.Unmarshal(fields["input"], &inp)
 	if m != "text-embedding-3-small" || inp != "你好" {
 		t.Fatalf("改写不符: model=%q input=%s", m, inp)
+	}
+}
+
+func TestQwen_PrepareMultimodalEmbeddings_PreservesNativeBody(t *testing.T) {
+	path := filepath.Join("..", "..", "conformance", "qwen", "native", "multimodal-fusion.json")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := protocol.ParseMultimodalEmbeddingRequest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const endpoint = "https://dashscope.aliyuncs.com/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+	gotAdapter, err := For("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "", Options{NativeMultimodalEmbeddingURL: endpoint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prep, ok := gotAdapter.(MultimodalEmbeddingPreparer)
+	if !ok || !prep.SupportsMultimodalEmbeddings("qwen3-vl-embedding") ||
+		!prep.SupportsMultimodalEmbeddings("tongyi-embedding-vision-flash") || prep.SupportsMultimodalEmbeddings("qwen-plus") {
+		t.Fatal("Qwen 显式配置原生端点后应声明多模态向量能力")
+	}
+	out, err := prep.PrepareMultimodalEmbeddings(req, "qwen3-vl-embedding", "sk-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := protocol.RewriteModelInPlace(body, "qwen3-vl-embedding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.URL != endpoint || out.Header.Get("Authorization") != "Bearer sk-test" || string(out.Body) != string(want) {
+		t.Fatalf("原生出站请求错误: url=%q auth=%q body=%s", out.URL, out.Header.Get("Authorization"), out.Body)
+	}
+	withoutURL, err := For("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, ok := withoutURL.(MultimodalEmbeddingPreparer); !ok || p.SupportsMultimodalEmbeddings("qwen3-vl-embedding") {
+		t.Fatal("未配置原生 URL 的 Qwen 不得声明多模态向量能力")
+	}
+}
+
+func TestQwen_NormalizeMultimodalEmbeddingUsage(t *testing.T) {
+	a, err := For("qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "", Options{
+		NativeMultimodalEmbeddingURL: "https://dashscope.aliyuncs.com/native",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := a.(MultimodalEmbeddingPreparer)
+	cases := []struct {
+		name       string
+		model      string
+		raw        string
+		wantTotal  int64
+		wantVision int64
+		wantError  bool
+	}{
+		{"Qwen split plus total", "qwen3-vl-embedding", `{"input_tokens":10,"image_tokens":3,"total_tokens":13}`, 13, 3, false},
+		{"Qwen optional total", "qwen3-vl-embedding", `{"input_tokens":10,"image_tokens":3}`, 13, 3, false},
+		{"Qwen inconsistent total", "qwen3-vl-embedding", `{"input_tokens":10,"image_tokens":3,"total_tokens":14}`, 13, 3, true},
+		{"Qwen missing image", "qwen3-vl-embedding", `{"input_tokens":10}`, 10, 0, true},
+		{"Qwen invalid image", "qwen3-vl-embedding", `{"input_tokens":10,"image_tokens":"3"}`, 10, 0, true},
+		{"Qwen negative image", "qwen3-vl-embedding", `{"input_tokens":10,"image_tokens":-1}`, 10, 0, true},
+		{"Tongyi details", "tongyi-embedding-vision-flash", `{"input_tokens":13,"input_tokens_details":{"image_tokens":3}}`, 13, 3, false},
+		{"Tongyi missing details", "tongyi-embedding-vision-flash", `{"input_tokens":13}`, 13, 0, true},
+		{"Tongyi image exceeds total", "tongyi-embedding-vision-flash", `{"input_tokens":2,"input_tokens_details":{"image_tokens":3}}`, 2, 0, true},
+		{"unknown model", "unknown", `{"input_tokens":10,"image_tokens":3}`, 0, 0, true},
+		{"missing usage", "qwen3-vl-embedding", `null`, 0, 0, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			usage, err := p.NormalizeMultimodalEmbeddingUsage(json.RawMessage(c.raw), c.model)
+			if (err != nil) != c.wantError {
+				t.Fatalf("estimated 状态不符: usage=%+v err=%v", usage, err)
+			}
+			if usage.PromptTokens != c.wantTotal || usage.VisionTokens != c.wantVision || usage.CompletionTokens != 0 || usage.CachedTokens != 0 {
+				t.Fatalf("原生 usage 归一不符: %+v", usage)
+			}
+		})
 	}
 }
 

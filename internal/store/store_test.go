@@ -104,7 +104,8 @@ func TestInsertUsageBatch_批量写入与幂等(t *testing.T) {
 		TenantID: "01900000-0000-7000-8000-000000000001", APIKeyID: "key-1",
 		Provider: "deepseek", ModelAlias: "alias-a", UpstreamModel: "up-a",
 		Stream: true, Status: "ok", PromptTokens: 10, CompletionTokens: 20,
-		Estimated: false, CostCredits: 8800, Currency: "CNY",
+		VisionTokens: 3,
+		Estimated:    false, CostCredits: 8800, Currency: "CNY",
 		LatencyFirstTokenMs: &first, LatencyTotalMs: 500,
 		CreatedAt: time.Now().UTC(),
 	}
@@ -121,12 +122,33 @@ func TestInsertUsageBatch_批量写入与幂等(t *testing.T) {
 
 	var stream int64
 	var errClass any
-	err = db.QueryRow(`SELECT stream, error_class FROM usage_logs WHERE id = ?`, row.ID).Scan(&stream, &errClass)
+	var visionTokens int64
+	err = db.QueryRow(`SELECT stream, error_class, vision_tokens FROM usage_logs WHERE id = ?`, row.ID).Scan(&stream, &errClass, &visionTokens)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stream != 1 || errClass != nil {
-		t.Fatalf("布尔/可空列写入不符: stream=%d err=%v", stream, errClass)
+	if stream != 1 || errClass != nil || visionTokens != 3 {
+		t.Fatalf("布尔/可空/视觉 token 列写入不符: stream=%d err=%v vision=%d", stream, errClass, visionTokens)
+	}
+}
+
+func TestMigrate_旧用量行视觉token默认零(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "legacy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`INSERT INTO usage_logs
+		(id, request_id, tenant_id, api_key_id, provider, model_alias, upstream_model, stream, status, latency_total_ms, created_at)
+		VALUES ('legacy', 'legacy', 't', 'k', 'qwen', 'alias', 'upstream', 0, 'ok', 1, '2026-10-22T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	var visionTokens int64
+	if err := db.QueryRow(`SELECT vision_tokens FROM usage_logs WHERE id='legacy'`).Scan(&visionTokens); err != nil {
+		t.Fatal(err)
+	}
+	if visionTokens != 0 {
+		t.Fatalf("旧形态插入的行应默认视觉 token 为 0,实际 %d", visionTokens)
 	}
 }
 
@@ -186,7 +208,7 @@ func TestPricing_CRUD(t *testing.T) {
 	db := openTestStore(t)
 	rec := PricingRecord{
 		Alias: "alias-a", Currency: "USD",
-		InputCredits: 440_000, CachedInputCredits: 14_000, OutputCredits: 1_320_000,
+		InputCredits: 440_000, CachedInputCredits: 14_000, VisionInputCredits: 22_000, OutputCredits: 1_320_000,
 		Timezone: "+08:00",
 		Windows:  []PricingWindowRecord{{Window: "00:30-08:30", BasisPoints: 5000}},
 	}
@@ -197,7 +219,7 @@ func TestPricing_CRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Currency != "USD" || got.InputCredits != 440_000 || got.Timezone != "+08:00" ||
+	if got.Currency != "USD" || got.InputCredits != 440_000 || got.VisionInputCredits != 22_000 || got.Timezone != "+08:00" ||
 		len(got.Windows) != 1 || got.Windows[0] != (PricingWindowRecord{Window: "00:30-08:30", BasisPoints: 5000}) {
 		t.Fatalf("读回不符: %+v", got)
 	}
@@ -221,6 +243,14 @@ func TestPricing_CRUD(t *testing.T) {
 	got2, _ := GetPricing(db, "alias-b")
 	if got2.Timezone != "UTC" {
 		t.Fatalf("空时区应缺省 UTC: %+v", got2)
+	}
+	if _, err := db.Exec(`INSERT INTO model_pricing (alias, currency, input_credits, output_credits, updated_at)
+		VALUES ('legacy-price', 'CNY', 1, 1, '2026-10-22T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := GetPricing(db, "legacy-price")
+	if err != nil || legacy.VisionInputCredits != 0 {
+		t.Fatalf("旧价目视觉单价应默认为 0(回落 input): %+v %v", legacy, err)
 	}
 	// 删除：行消失，再读 ErrNotFound。
 	n, err := DeletePricing(db, "alias-a")

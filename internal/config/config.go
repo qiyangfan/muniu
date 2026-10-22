@@ -59,13 +59,14 @@ func (t Timeouts) ChunkIdleDuration() time.Duration { return time.Duration(t.Chu
 
 // Provider 上游供应商静态拓扑。
 type Provider struct {
-	Name     string   `yaml:"name"`
-	Adapter  string   `yaml:"adapter"`
-	BaseURL  string   `yaml:"base_url"`
-	Auth     string   `yaml:"auth"` // 鉴权声明；空按适配器缺省，bearer 发 Authorization Bearer，仅 anthropic 适配器消费
-	Keys     []KeyRef `yaml:"keys"`
-	Weight   int      `yaml:"weight"`
-	Priority int      `yaml:"priority"`
+	Name                          string   `yaml:"name"`
+	Adapter                       string   `yaml:"adapter"`
+	BaseURL                       string   `yaml:"base_url"`
+	Auth                          string   `yaml:"auth"` // 鉴权声明；空按适配器缺省，bearer 发 Authorization Bearer，仅 anthropic 适配器消费
+	NativeMultimodalEmbeddingsURL string   `yaml:"native_multimodal_embeddings_url"`
+	Keys                          []KeyRef `yaml:"keys"`
+	Weight                        int      `yaml:"weight"`
+	Priority                      int      `yaml:"priority"`
 	// NativeResponses responses 原生端点声明，声明制直通门控：缺省 false 时
 	// responses 入站对该 provider 走既有 chat 翻译兜底。OpenAI 兼容不代表 responses 端点可用。
 	NativeResponses bool `yaml:"native_responses"`
@@ -97,12 +98,13 @@ type PriceWindow struct {
 }
 
 // Price 人类可读价目，按百万 Token 计；数值换算在装配期经 metering.ParsePrice 完成。
-// CachedInput 缺省同 Input。
+// CachedInput 与 VisionInput 缺省时均同 Input。
 // TimeWindows 缺省时恒用缺省价；配置后按时区判定窗口，先声明先匹配，无命中回落缺省价。
 type Price struct {
 	Currency    string        `yaml:"currency"`
 	Input       string        `yaml:"input"`
 	CachedInput string        `yaml:"cached_input"`
+	VisionInput string        `yaml:"vision_input"`
 	Output      string        `yaml:"output"`
 	Timezone    string        `yaml:"timezone"` // "UTC" 或 ±HH:MM 固定偏移；缺省 UTC，不引 tzdata，DST 时区请换算为 UTC 表达
 	TimeWindows []PriceWindow `yaml:"time_windows"`
@@ -420,6 +422,15 @@ func (c *Config) validate() error {
 		}
 		if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			add("providers[%d](%s) base_url 非法: %q", i, p.Name, p.BaseURL)
+		}
+		if p.NativeMultimodalEmbeddingsURL != "" {
+			u, err := url.Parse(p.NativeMultimodalEmbeddingsURL)
+			if p.Adapter != "qwen" {
+				add("providers[%d](%s) native_multimodal_embeddings_url 仅 qwen 适配器支持", i, p.Name)
+			}
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Fragment != "" {
+				add("providers[%d](%s) native_multimodal_embeddings_url 非法: %q(须为 http(s) 绝对 URL)", i, p.Name, p.NativeMultimodalEmbeddingsURL)
+			}
 		}
 		if p.Auth != "" {
 			// 仅 Anthropic 支持声明鉴权方式；bearer 值须与 adapter.AuthBearer 一致。

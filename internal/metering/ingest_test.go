@@ -30,7 +30,8 @@ type fakeControlPlane struct {
 	persisted     map[string]bool
 	billed        map[string]int
 	requestIDSeqs [][]string // 每次请求收到的用量 ID 序列，断言重放不换 ID。
-	alwaysSkipped bool       // 2xx 响应体携带 skipped_insufficient>0，模拟钱包待结算上下文。
+	visionTokens  []int64
+	alwaysSkipped bool // 2xx 响应体携带 skipped_insufficient>0，模拟钱包待结算上下文。
 }
 
 func newFakeControlPlane(failFirstN, persistPrefix int) *fakeControlPlane {
@@ -57,6 +58,7 @@ func (f *fakeControlPlane) handler() http.Handler {
 		ids := make([]string, 0, len(req.Rows))
 		for _, row := range req.Rows {
 			ids = append(ids, row.ID)
+			f.visionTokens = append(f.visionTokens, row.VisionTokens)
 		}
 		f.requestIDSeqs = append(f.requestIDSeqs, ids)
 
@@ -113,7 +115,9 @@ func TestIngestSink_2xx待结算不制造传输重试(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	sink := &IngestSink{URL: srv.URL}
-	if err := sink.Write([]store.UsageRow{row("w1"), row("w2")}); err != nil {
+	first := row("w1")
+	first.VisionTokens = 9
+	if err := sink.Write([]store.UsageRow{first, row("w2")}); err != nil {
 		t.Fatalf("2xx 含待结算行仍应视为投递成功: %v", err)
 	}
 	// 不重试、不改判网络失败：静默一个投递周期后请求次数仍为 1。
@@ -124,6 +128,9 @@ func TestIngestSink_2xx待结算不制造传输重试(t *testing.T) {
 	}
 	if len(persisted) != 2 {
 		t.Fatalf("控制面应已持久接收整批: %v", persisted)
+	}
+	if len(cp.visionTokens) != 2 || cp.visionTokens[0] != 9 || cp.visionTokens[1] != 4 {
+		t.Fatalf("远端汇 JSON 往返须保留视觉 tokens: %v", cp.visionTokens)
 	}
 }
 

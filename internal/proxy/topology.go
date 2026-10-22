@@ -5,6 +5,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
@@ -53,6 +54,12 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 	old := p.topo.Load()
 	// 拓扑可能来自控制面，须限制在本机 int 可安全处理的数值范围内。
 	for _, prov := range cfg.Providers {
+		if prov.NativeMultimodalEmbeddingsURL != "" {
+			u, err := url.Parse(prov.NativeMultimodalEmbeddingsURL)
+			if prov.Adapter != "qwen" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Fragment != "" {
+				return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q native_multimodal_embeddings_url 非法或适配器不支持", prov.Name)
+			}
+		}
 		if prov.Weight <= 0 || int64(prov.Weight) > config.MaxTopologyInt {
 			return TopologyStats{}, fmt.Errorf(
 				"拓扑替换被拒绝: provider %q weight 必须 >0 且 ≤%d, 实际 %d", prov.Name, config.MaxTopologyInt, prov.Weight)
@@ -147,6 +154,7 @@ func providerByName(s *topologySnapshot) map[string]config.Provider {
 // providersEqual 比较 provider 的拓扑配置，包括 key 引用列表。
 func providersEqual(a, b config.Provider) bool {
 	if a.Name != b.Name || a.Adapter != b.Adapter || a.BaseURL != b.BaseURL ||
+		a.NativeMultimodalEmbeddingsURL != b.NativeMultimodalEmbeddingsURL ||
 		a.Weight != b.Weight || a.Priority != b.Priority || len(a.Keys) != len(b.Keys) {
 		return false
 	}

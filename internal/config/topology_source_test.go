@@ -10,7 +10,8 @@ import (
 // 拓扑拉取源测试：控制面拉取与损坏快照拒绝。
 
 const validPayload = `{
-  "providers":[{"name":"alpha","adapter":"openai","base_url":"http://alpha",
+  "providers":[{"name":"alpha","adapter":"qwen","base_url":"http://alpha",
+    "native_multimodal_embeddings_url":"https://alpha/native-embeddings",
     "keys":[{"env":"ALPHA_KEY","weight":1}],"weight":1,"priority":1}],
   "model_routes":{"m1":[{"provider":"alpha","model":"model-x","priority":1,"weight":1}]},
   "models":[{"provider":"alpha","model":"model-x","max_output_tokens":4096}]
@@ -33,7 +34,7 @@ func TestFetchTopology_OK(t *testing.T) {
 		t.Fatalf("拉取结果异常: notModified=%v etag=%q payload=%+v", notModified, etag, payload)
 	}
 	providers, routes, models := payload.ToTopology()
-	if providers[0].Name != "alpha" || routes["m1"][0].Provider != "alpha" || len(models) != 1 {
+	if providers[0].Name != "alpha" || providers[0].NativeMultimodalEmbeddingsURL != "https://alpha/native-embeddings" || routes["m1"][0].Provider != "alpha" || len(models) != 1 {
 		t.Fatalf("ToTopology 转换异常: %v %v %v", providers, routes, models)
 	}
 	// 条件请求：携带 ETag 且服务端 304

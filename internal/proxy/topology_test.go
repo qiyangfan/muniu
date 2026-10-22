@@ -49,6 +49,33 @@ func TestTopology_InitialSnapshotFromNew(t *testing.T) {
 	}
 }
 
+func TestTopology_原生向量URL变更触发原子替换(t *testing.T) {
+	initial := topoConfig("alpha", "http://alpha")
+	initial.Providers[0].Adapter = "qwen"
+	initial.Providers[0].NativeMultimodalEmbeddingsURL = "https://alpha/native-v1"
+	p := New(initial)
+	oldPool := p.topo.Load().pools["alpha"]
+
+	next := topoConfig("alpha", "http://alpha")
+	next.Providers[0].Adapter = "qwen"
+	next.Providers[0].NativeMultimodalEmbeddingsURL = "https://alpha/native-v2"
+	called := 0
+	stats, err := p.ReplaceTopology(next, func(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
+		called++
+		if prov.NativeMultimodalEmbeddingsURL != "https://alpha/native-v2" {
+			t.Fatalf("构建回调未收到新 URL: %+v", prov)
+		}
+		return keypool.NewPool([]keypool.KeyInput{{ID: "new", Value: "new", Weight: 1}}), adapter.NewOpenAI(prov.BaseURL, ""), nil
+	})
+	if err != nil || called != 1 || stats.Created != 1 || stats.Reused != 0 {
+		t.Fatalf("URL 变更应重建 provider 快照: stats=%+v called=%d err=%v", stats, called, err)
+	}
+	providers, pools := p.Topology()
+	if providers[0].NativeMultimodalEmbeddingsURL != "https://alpha/native-v2" || pools["alpha"] == oldPool {
+		t.Fatalf("新快照未原子生效: provider=%+v", providers[0])
+	}
+}
+
 func TestTopology_Replace_CreatedAndReplaced(t *testing.T) {
 	cfg := topoConfig("alpha", "http://alpha")
 	p := New(cfg)
