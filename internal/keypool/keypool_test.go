@@ -222,3 +222,31 @@ func Test并发_Pick与Report无race(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestSnapshot_只读枚举与数据面解耦(t *testing.T) {
+	pool := NewPool([]KeyInput{{ID: "KEY_A", Value: "va", Weight: 1}, {ID: "KEY_B", Value: "vb", Weight: 3}})
+	now := time.Now()
+	// 禁用 KEY_A(401 语义),不影响 KEY_B
+	pool.Report(&Key{ID: "KEY_A"}, OutcomeAuthFailed, now, 0)
+	snap := pool.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("快照键数失真: %+v", snap)
+	}
+	byID := map[string]KeyView{}
+	for _, kv := range snap {
+		byID[kv.ID] = kv
+	}
+	if !byID["KEY_A"].Disabled || byID["KEY_A"].Value != "va" {
+		t.Fatalf("KEY_A 观测失真: %+v", byID["KEY_A"])
+	}
+	if byID["KEY_B"].Disabled || byID["KEY_B"].Value != "vb" {
+		t.Fatalf("KEY_B 观测失真: %+v", byID["KEY_B"])
+	}
+	// 只读性:多次 Snapshot 不改变 WRR 行为——KEY_B 权重 3,连续 Pick 应恒选 KEY_B
+	for i := 0; i < 5; i++ {
+		k := pool.Pick(now)
+		if k == nil || k.ID != "KEY_B" {
+			t.Fatalf("Snapshot 后 WRR 行为被扰动: %+v", k)
+		}
+	}
+}

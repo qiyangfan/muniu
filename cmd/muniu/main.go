@@ -23,6 +23,7 @@ import (
 	"github.com/solvela/muniu/internal/admin"
 	"github.com/solvela/muniu/internal/alerting"
 	"github.com/solvela/muniu/internal/auth"
+	"github.com/solvela/muniu/internal/balance"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
@@ -442,6 +443,99 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		}
 	}()
 
+	// 余额观测评估循环:渠道级余额源声明驱动,声明变更属非热更域(需重启生效)。
+	// 凭证解析与查询器构造一次性完成于装配期(缺凭证启动即失败,与 key env 同纪律);
+	// 运行期经拓扑快照动态映射 key(热替换感知),余额查询不触 Pick/Report。
+	var balanceSvc *balance.Service
+	if cfg.Balance.Enabled == nil || *cfg.Balance.Enabled {
+		bindingBase := map[string]balance.ChannelBinding{}
+		for _, p := range cfg.Providers {
+			pb := p.Balance
+			if pb == nil {
+				continue
+			}
+			src := pb.Source
+			if src == "" || src == balance.SourceNone {
+				continue
+			}
+			binding := balance.ChannelBinding{Kind: src}
+			if pb.Below != "" {
+				v, perr := metering.ParsePrice(pb.Below)
+				if perr != nil { // config 校验已保证,防御分支
+					return nil, nil, nil, fmt.Errorf("渠道 %s balance.below 解析失败: %w", p.Name, perr)
+				}
+				binding.BelowCredits = &v
+			}
+			switch {
+			case balance.IsBearer(src):
+				// billing-compat 的币种不可自描述(new-api 随站点显示配置而变),经配置显式声明;
+				// 其余 Bearer 源忽略该字段(config 校验已拒绝)。
+				q, qerr := balance.For(src, balance.SourceConfig{
+					BaseURL:  p.BaseURL,
+					Currency: strings.ToUpper(pb.Currency),
+				})
+				if qerr != nil {
+					return nil, nil, nil, fmt.Errorf("渠道 %s 余额源构造失败: %w", p.Name, qerr)
+				}
+				binding.Querier = q
+			case src == balance.SourceManual:
+				binding.Currency = strings.ToUpper(pb.Currency)
+			default: // 云账务:凭证只经环境变量进内存,不入日志与配置态
+				ak, sk := os.Getenv(pb.AccessKeyEnv), os.Getenv(pb.SecretKeyEnv)
+				if ak == "" || sk == "" {
+					return nil, nil, nil, fmt.Errorf("渠道 %s 的余额凭证环境变量未设置(%s/%s)", p.Name, pb.AccessKeyEnv, pb.SecretKeyEnv)
+				}
+				q, qerr := balance.For(src, balance.SourceConfig{AccessKey: ak, SecretKey: sk})
+				if qerr != nil {
+					return nil, nil, nil, fmt.Errorf("渠道 %s 余额源构造失败: %w", p.Name, qerr)
+				}
+				binding.Querier = q
+			}
+			bindingBase[p.Name] = binding
+		}
+		if len(bindingBase) > 0 {
+			balanceSvc = balance.NewService(balance.Options{
+				DB: db, Notifier: alerts, Logger: logger,
+				Interval:         time.Duration(cfg.Balance.EvalIntervalSec) * time.Second,
+				PollTimeout:      time.Duration(cfg.Balance.PollTimeoutSec) * time.Second,
+				WindowDays:       cfg.Balance.BurnWindowDays,
+				MinSampleDays:    cfg.Balance.BurnMinDays,
+				TierHours:        cfg.Balance.TierHours,
+				RearmMilli:       cfg.Balance.RearmRatioMilli,
+				FailureThreshold: cfg.Balance.FailureThreshold,
+				Settlement:       settlement,
+				Sources: func() map[string]balance.ChannelBinding {
+					providers, pools := chatProxy.Topology()
+					out := make(map[string]balance.ChannelBinding, len(bindingBase))
+					for _, p := range providers {
+						base, ok := bindingBase[p.Name]
+						if !ok {
+							// 热替换新声明的余额源不热生效(查询器与凭证是装配期产物);
+							// 未声明余额源的渠道属常态,静默跳过不产生日志噪音
+							if pb := p.Balance; pb != nil && pb.Source != "" && pb.Source != balance.SourceNone {
+								logger.Warn("渠道余额源声明需重启生效", "provider", p.Name)
+							}
+							continue
+						}
+						binding := base
+						if balance.IsBearer(base.Kind) {
+							for _, kv := range pools[p.Name].Snapshot() {
+								binding.Keys = append(binding.Keys,
+									balance.ChannelKey{ID: kv.ID, Value: kv.Value, Disabled: kv.Disabled})
+							}
+						} else {
+							binding.Keys = []balance.ChannelKey{{ID: store.AccountKeyID}}
+						}
+						out[p.Name] = binding
+					}
+					return out
+				},
+			})
+			balanceSvc.Start()
+			logger.Info("余额观测已启用", "providers", len(bindingBase))
+		}
+	}
+
 	// 业务路由中间件顺序敏感：request_id → recover → access_log → auth → quota → ratelimit。
 	platformSecrets := make([][]byte, 0, len(cfg.Auth.PlatformKeySecrets))
 	for _, sec := range cfg.Auth.PlatformKeySecrets {
@@ -524,7 +618,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	}
 	adminDeps := admin.Deps{
 		DB: db, Token: adminToken, AdminAuth: adminSvc, Providers: cfg.Providers, Pools: pools,
-		Verifier: verifier, Logger: logger,
+		Verifier: verifier, Logger: logger, Balance: balanceSvc,
 		Topology:           chatProxy.Topology,
 		PricingDir:         pricingDir,
 		StaticImagePricing: staticImages,
@@ -683,6 +777,9 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		})
 		if pluginReg != nil {
 			pluginReg.Close() // 等待在途插件调用完成后关停，与热替换同一语义
+		}
+		if balanceSvc != nil {
+			balanceSvc.Close() // 取消在途余额查询,状态已随评估落库
 		}
 		verifier.Close()
 		_ = pipeline.Close() // 退出前排干计量存量

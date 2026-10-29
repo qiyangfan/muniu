@@ -15,6 +15,9 @@ export type ProviderPreset = components["schemas"]["ProviderPreset"];
 export type CacheStats = components["schemas"]["CacheStats"];
 export type PricingEntry = components["schemas"]["PricingView"];
 export type PricingWindow = components["schemas"]["PricingWindow"];
+export type BalancesResponse = components["schemas"]["BalancesResponse"];
+export type BalanceOverview = components["schemas"]["BalanceOverview"];
+export type BalanceManualRequest = components["schemas"]["BalanceManualRequest"];
 
 const TOKEN_KEY = "muniu-admin-token";
 let authRevision = 0;
@@ -165,6 +168,15 @@ export const api = {
   providerPresets: () => call<{ presets: ProviderPreset[] }>("GET", "/admin/v1/provider-presets"),
   cacheStats: () => call<CacheStats>("GET", "/admin/v1/cache/stats"),
   listPricing: () => call<{ pricing: PricingEntry[] }>("GET", "/admin/v1/pricing"),
+  balances: () => call<BalancesResponse>("GET", "/admin/v1/balances"),
+  balanceManual: (provider: string, body: BalanceManualRequest) =>
+    call<{ ok: boolean }>(
+      "POST",
+      `/admin/v1/balances/${encodeURIComponent(provider)}/manual`,
+      body,
+    ),
+  balanceRefresh: (provider: string) =>
+    call<{ ok: boolean }>("POST", `/admin/v1/balances/${encodeURIComponent(provider)}/refresh`),
   putPricing: (alias: string, body: PricingEntry) =>
     call<{ ok: boolean }>("PUT", `/admin/v1/pricing/${encodeURIComponent(alias)}`, body),
   deletePricing: (alias: string) =>

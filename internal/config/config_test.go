@@ -580,3 +580,144 @@ alerts:
 		t.Fatalf("负窗口应拒绝: %v", err)
 	}
 }
+
+func TestBalance_缺省值与manual合法声明(t *testing.T) {
+	// 手工拼装:balance 顶层节 + 渠道 manual 声明
+	full := `
+balance: {}
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+    balance:
+      source: manual
+      currency: CNY
+      below: "10.00"
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+	cfg, err := Load(writeTemp(t, full))
+	if err != nil {
+		t.Fatalf("合法 balance 配置应通过: %v", err)
+	}
+	if cfg.Balance.Enabled == nil || !*cfg.Balance.Enabled {
+		t.Fatalf("enabled 缺省应为 true")
+	}
+	if cfg.Balance.EvalIntervalSec != 3600 || cfg.Balance.PollTimeoutSec != 10 ||
+		cfg.Balance.BurnWindowDays != 7 || cfg.Balance.BurnMinDays != 2 ||
+		cfg.Balance.FailureThreshold != 3 || cfg.Balance.RearmRatioMilli != 1200 {
+		t.Fatalf("全局缺省值失真: %+v", cfg.Balance)
+	}
+	if len(cfg.Balance.TierHours) != 5 || cfg.Balance.TierHours[0] != 720 || cfg.Balance.TierHours[4] != 24 {
+		t.Fatalf("档位缺省失真: %v", cfg.Balance.TierHours)
+	}
+	if cfg.Providers[0].Balance == nil || cfg.Providers[0].Balance.Source != "manual" {
+		t.Fatalf("渠道级声明失真: %+v", cfg.Providers[0].Balance)
+	}
+}
+
+func TestBalance_校验错误一次报全(t *testing.T) {
+	full := `
+balance:
+  rearm_ratio_milli: 900
+  tier_hours: [24, 720]
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+    balance:
+      source: deepseek
+      below: "abc"
+  - name: b
+    adapter: openai
+    base_url: "https://api.b.com/v1"
+    keys:
+      - env: K2
+    weight: 10
+    balance:
+      source: gemini
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+	_, err := Load(writeTemp(t, full))
+	if err == nil {
+		t.Fatalf("非法配置应拒绝")
+	}
+	for _, frag := range []string{"rearm_ratio_milli", "tier_hours", "balance.source 非法", "below 非法", "providers[1](b)"} {
+		if !strings.Contains(err.Error(), frag) {
+			t.Fatalf("错误须一次性报全 %q: %v", frag, err)
+		}
+	}
+}
+
+func TestBalance_渠道级来源字段约束(t *testing.T) {
+	cases := []struct {
+		name string
+		bal  string
+		want string
+	}{
+		{"none带字段", "balance:\n      source: none\n      below: \"1.00\"", "其余字段不得声明"},
+		{"bearer带币种", "balance:\n      source: deepseek\n      currency: CNY", "currency 仅 manual/billing-compat 源声明"},
+		{"billing-compat币种合法", "balance:\n      source: billing-compat\n      currency: CNY", ""},
+		{"billing-compat币种非法", "balance:\n      source: billing-compat\n      currency: EUR", "currency 非法"},
+		{"manual缺币种", "balance:\n      source: manual", "currency 非法"},
+		{"manual带凭证", "balance:\n      source: manual\n      currency: CNY\n      access_key_env: AK", "凭证字段仅云账务源"},
+		{"cloud缺凭证", "balance:\n      source: aliyun-bss", "access_key_env 必填"},
+		{"cloud凭证名非法", "balance:\n      source: volc-bss\n      access_key_env: 9AK\n      secret_key_env: SK", "须为环境变量名"},
+	}
+	for _, c := range cases {
+		full := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+    ` + c.bal + `
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+		_, err := Load(writeTemp(t, full))
+		if c.want == "" { // 空期望=合法声明须通过校验
+			if err != nil {
+				t.Fatalf("%s: 应通过校验,实际 %v", c.name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s: 应报 %q,实际 %v", c.name, c.want, err)
+		}
+	}
+}
+
+func TestBalance_source_none缺省零声明(t *testing.T) {
+	full := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+	cfg, err := Load(writeTemp(t, full))
+	if err != nil {
+		t.Fatalf("无 balance 声明应通过: %v", err)
+	}
+	if cfg.Providers[0].Balance != nil {
+		t.Fatalf("未声明渠道 Balance 应为 nil")
+	}
+}

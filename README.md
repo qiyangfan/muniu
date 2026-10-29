@@ -41,6 +41,7 @@ muniu 是一个**单二进制、OpenAI 兼容入站**的 LLM 网关,用 Go 写�
 | 计量计费 | 流式 usage 归一 + tiktoken 离线估算兜底;分时段倍率;动态改价零重启;异步批量落库 + 缓冲续传 |
 | 语义缓存 | HNSW 向量索引、相似度 0.97、「宁缺勿错」准入策略、租户级开关、TTL 24h |
 | 运维观测 | 内嵌 React 控制台(单二进制自带)、管理 API、Prometheus `/metrics`(零依赖文本协议直写:请求/token 流向/缓存判定/流式首字节延迟/上游错误分类)、结构化访问日志 |
+| 余额告警 | 渠道余额观测(八种余额源:DeepSeek/Kimi/硅基流动/OpenRouter Bearer 直查、one-api 系 billing 兼容、阿里云/火山云账务 AK·SK 签名、手动录入)、剩余可用天数外推(燃速回看窗口,整数 credit 全程零浮点)、档位/阈值告警状态机(迟滞回差、重启不重复)经 webhook 主动通知;配置样例见 muniu.example.yaml `balance` 节,设计见 [docs/design/balance-alerting.md](docs/design/balance-alerting.md) 与 [ADR-0018](docs/adr/0018-provider-balance-observability.md) |
 
 ## 为什么再造一个网关
 

@@ -237,6 +237,28 @@ func (p *Pool) EMARate(id string) float64 {
 	return k.emaRate()
 }
 
+// KeyView 键的只读观测形态:余额观测等旁路消费逐 key 枚举用。
+// 经 Snapshot 取得,不走 Pick/Report,与数据面 WRR/冷却语义完全解耦。
+type KeyView struct {
+	ID       string
+	Value    string
+	Disabled bool
+}
+
+// Snapshot 池内全部键的只读快照,顺序稳定,零运行态副作用。
+func (p *Pool) Snapshot() []KeyView {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]KeyView, 0, len(p.keys))
+	for _, k := range p.keys {
+		out = append(out, KeyView{ID: k.id, Value: k.value, Disabled: k.disabled})
+	}
+	return out
+}
+
 // byID 查键状态，调用方须持 mu。
 func (p *Pool) byID(id string) *keyState {
 	for _, k := range p.keys {

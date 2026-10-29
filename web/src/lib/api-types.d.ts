@@ -1119,6 +1119,139 @@ export interface paths {
         };
         trace?: never;
     };
+    "/admin/v1/balances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 余额观测总览(每渠道每 key 余额/有效余额/燃速/剩余估算/告警态;未启用时 enabled=false) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 渠道余额总览 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BalancesResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/balances/{provider}/manual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 手动录入余额快照(manual 余额源唯一入口;录入即生效并触发立即评估) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    provider: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BalanceManualRequest"];
+                };
+            };
+            responses: {
+                /** @description 已录入(异步评估,结果经总览可见) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 金额/币种非法,或渠道余额源非 manual,或币种与配置声明不一致,或余额观测未启用 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/balances/{provider}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 立即触发该渠道余额查询(异步;余额源为 manual 时仅重估不外呼) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    provider: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已受理(async=true,结果经总览可见) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 余额观测未启用 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 渠道未声明余额源 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/images/generations": {
         parameters: {
             query?: never;
@@ -1885,6 +2018,69 @@ export interface components {
             binary_bytes?: number;
             /** @description true=版本替换(新请求热生效,在途请求旧版本完成) */
             replaced?: boolean;
+        };
+        BalancesResponse: {
+            /** @description 余额观测是否启用(未配置任何渠道余额源时 false) */
+            enabled?: boolean;
+            /** @description 结算币种(CNY|USD),燃速计价口径 */
+            settlement?: string;
+            providers?: components["schemas"]["BalanceOverview"][];
+        };
+        BalanceOverview: {
+            provider?: string;
+            /** @description 余额源 kind:deepseek|moonshot|openrouter|billing-compat|aliyun-bss|volc-bss|manual */
+            source?: string;
+            /** @description 绝对告警阈值(余额币种十进制串);空=未声明 */
+            below?: string;
+            /** @description 渠道主币种(首个可知余额 key 的币种);空=尚无余额 */
+            currency?: string;
+            /** @description manual 源的声明币种(录入校验基准);查询源为空 */
+            manual_currency?: string;
+            keys?: components["schemas"]["BalanceKeyView"][];
+            /** @description 池内最小有效余额(快照−快照后消耗)十进制串;null=无可知余额 */
+            min_effective?: string | null;
+            /** @description 窗口日均已结算消耗(结算币种 credit 整数) */
+            burn_per_day_credits?: number;
+            burn_window_days?: number;
+            /** @description 窗口内有消耗的自然日数(最小样本判定依据) */
+            days_with_usage?: number;
+            /** @description 剩余可用小时估算;null=无估算,原因见 estimate_reason */
+            remaining_hours?: number | null;
+            /** @description 空=有估算;no_usage=零消耗;insufficient_data=样本不足;currency_mismatch=币种不一致(天数估算禁用);unknown_balance=余额不可知;balance_overflow=余额超出可估算量级(任何档位都触不到) */
+            estimate_reason?: string;
+            alerts?: components["schemas"]["BalanceAlertView"][];
+            /** @description 最近一次余额查询/评估时刻(RFC3339);空=从未评估 */
+            last_checked_at?: string;
+        };
+        BalanceKeyView: {
+            /** @description 渠道 key 标识;__account__ 为账户级源(manual/云账务) */
+            key_id?: string;
+            /** @description 有效余额(快照−衰减)十进制串;null=余额不可知(不限额键/查询未成功) */
+            balance?: string | null;
+            /** @description 快照余额(credit 归一化十进制串,非录入原文) */
+            snapshot?: string | null;
+            currency?: string;
+            /** @description 快照观测时刻(RFC3339);空串=尚未成功查询(失败占位行) */
+            as_of_at?: string;
+            /** @description 连续失败计数(成功清零) */
+            consecutive_failures?: number;
+            /** @description 最近失败归类(timeout|network|http|parse|credential|upstream);空=无失败 */
+            last_error?: string;
+        };
+        BalanceAlertView: {
+            /** @description below=绝对阈值;tier:<hours>=剩余时间档位;source_error=余额源连续失败 */
+            rule_key?: string;
+            firing?: boolean;
+            /** @description info|warning|critical */
+            severity?: string;
+            /** @description 最近触发时刻(RFC3339) */
+            last_fired_at?: string | null;
+        };
+        BalanceManualRequest: {
+            /** @description 余额金额十进制串(≤9 位小数,不接受符号;首尾空白会被剥离),须为正数 */
+            amount: string;
+            /** @description 币种(CNY|USD),须与渠道配置声明一致 */
+            currency: string;
         };
     };
     responses: never;

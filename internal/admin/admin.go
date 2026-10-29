@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/solvela/muniu/internal/auth"
+	"github.com/solvela/muniu/internal/balance"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
@@ -52,6 +53,7 @@ type Deps struct {
 	StaticPricing      map[string]StaticEntry
 	RefreshPricing     func() error
 	Plugins            *plugin.Registry // WASM 插件注册表；nil = 端点返回禁用态
+	Balance            *balance.Service // 余额观测服务;nil = 观测未启用,端点返回禁用/空态
 
 	Logger *slog.Logger
 }
@@ -92,6 +94,9 @@ var adminRouteTable = []adminRouteEntry{
 	{"GET /admin/v1/plugins", pluginsList},
 	{"PUT /admin/v1/plugins/{name}", pluginPut},
 	{"PATCH /admin/v1/plugins/{name}", pluginPatch},
+	{"GET /admin/v1/balances", balancesOverview},
+	{"POST /admin/v1/balances/{provider}/manual", balanceManual},
+	{"POST /admin/v1/balances/{provider}/refresh", balanceRefresh},
 }
 
 // New 按共享令牌或活跃账号开放管理面，认证装配失败不暴露空壳。

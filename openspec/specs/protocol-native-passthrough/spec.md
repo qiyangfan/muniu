@@ -51,7 +51,12 @@
 #### Scenario: Responses 对象与事件流原样透传
 
 - **WHEN** 直通路径服务 Responses 请求(非流式对象与 SSE 事件流两形态,状态与无状态请求均含)
-- **THEN** 客户端收到的响应与上游逐字节一致(含上游原生 usage 形态);状态请求的粘性语义见「有状态粘性路由」
+- **THEN** 客户端收到的响应与上游逐字节一致(含上游原生 usage 形态);状态请求的粘性语义见「有状态粘性路由与候选域收缩」与「亲和未知与归属不匹配的不可区分拒绝」
+
+#### Scenario: 重复顶层 model 键收敛为单键
+
+- **WHEN** 客户端原始体携带重复顶层 `model` 键(真实上游对该形态均拒绝:百炼兼容模式报缺参、deepseek 报 duplicate field)
+- **THEN** 出站体收敛为单个 `model` 键(值为路由上游模型),摘除仅触及 model 字段字节,其余字段逐字节保留,上游正常服务
 
 ### Requirement: 控制面等价性
 
@@ -72,14 +77,18 @@
 - **WHEN** 直通(anthropic 候选)成功的流式响应入库后,同别名收到同构 messages 请求且表单兼容(流式对流式)
 - **THEN** 回放直通原始响应体(逐字节等于上游原生形态),不经 canonical 反向映射
 
-### Requirement: 有状态粘性路由
+### Requirement: 有状态粘性路由与候选域收缩
 
-携带 `previous_response_id` 的请求必须 (MUST) 仅由原生 lane 服务:别名不含原生 responses 候选时必须 (MUST) 返回 400 `previous_response_id_unsupported` 自解释信封(翻译路径维持既有拒绝,chat 上游无服务端状态)。原生 lane 上必须 (MUST) 经亲和表路由:成功响应的 id 记录 id→provider→**归属 key**(创建请求的鉴权 key 标识,`mk-` 与 `mk2-` 同规;进程内 TTL + LRU 容量上限,集群形态复用共享后端);状态请求的候选域必须 (MUST) 收缩至亲和 provider——域内 key/候选 failover 照常,跨 provider 换道不发生(服务端状态定向单上游的显式语义)。亲和未知(网关重启丢失/非本网关创建)**或归属不匹配(记录的归属 key ≠ 当前请求的鉴权 key)**时必须 (MUST) 返回自解释错误,两类必须 (MUST) 不可区分(同码同文案族,不泄露存在性),禁止 (MUST NOT) 盲发上游;鉴权信息缺失按归属不匹配同语义 fail-closed。状态请求必须 (MUST) 旁路语义缓存检索与入库(上下文在服务端,指纹无意义)。粘性请求数与亲和命中率必须 (MUST) 进指标可观测。
+携带 `previous_response_id` 的请求必须 (MUST) 仅由原生 lane 服务:别名不含原生 responses 候选时必须 (MUST) 返回 400 `previous_response_id_unsupported` 自解释信封(翻译路径维持既有拒绝,chat 上游无服务端状态)。原生 lane 上必须 (MUST) 经亲和表路由:成功响应的 id 记录 id→provider→**归属 key**(创建请求的鉴权 key 标识,`mk-` 与 `mk2-` 同规;进程内 TTL + LRU 容量上限,集群形态复用共享后端)。状态请求的候选域必须 (MUST) 收缩至亲和 provider——域内 key/候选 failover 照常,跨 provider 换道不发生(服务端状态定向单上游的显式语义)。粘性请求数与亲和命中率必须 (MUST) 进指标可观测。
 
 #### Scenario: 粘性路由与域内故障转移
 
 - **WHEN** 携带 `previous_response_id` 的请求命中亲和 provider,其首选 key 处于冷却
 - **THEN** 在该 provider 域内取可用 key/候选服务成功,不跨 provider 换道
+
+### Requirement: 亲和未知与归属不匹配的不可区分拒绝
+
+亲和未知(网关重启丢失/非本网关创建)**或归属不匹配(记录的归属 key ≠ 当前请求的鉴权 key)**时必须 (MUST) 返回自解释错误,两类必须 (MUST) 不可区分(同码同文案族,不泄露存在性),禁止 (MUST NOT) 盲发上游;鉴权信息缺失按归属不匹配同语义 fail-closed。状态请求必须 (MUST) 旁路语义缓存检索与入库(上下文在服务端,指纹无意义)。
 
 #### Scenario: 亲和未知自解释
 

@@ -222,3 +222,64 @@ func TestRewriteModelInPlace_原位手术(t *testing.T) {
 		t.Fatal("顶层非对象应报错")
 	}
 }
+
+// TestRewriteModelInPlace_重复键收敛单键 真实上游对重复顶层 model 键均拒绝
+// (dashscope 报缺参、deepseek 报 duplicate field),直通改写必须收敛为单键;
+// 摘除仅触及 model 字段字节,其余部分逐字节保留。
+func TestRewriteModelInPlace_重复键收敛单键(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			"首键即model双重复",
+			`{"model":"alias-a","model":"alias-b","messages":[{"role":"user","content":"hi"}]}`,
+			`{"model":"up-model-x","messages":[{"role":"user","content":"hi"}]}`,
+		},
+		{
+			"model非首位双重复",
+			`{"zoo":1 ,"model":"alias-a","model":"alias-b","stream":true}`,
+			`{"zoo":1 ,"model":"up-model-x","stream":true}`,
+		},
+		{
+			"三重复含空白变体",
+			`{"model": "a" ,  "model":"b",  "model" :  "c" , "x":1}`,
+			`{"model": "up-model-x" , "x":1}`,
+		},
+		{
+			// 键序为序列化器常见形态:嵌套数组在前,model 在后——平坦扫描会脱轨误拒
+			"model在嵌套数组之后且重复",
+			`{"messages":[{"role":"u"}],"model":"alias-a","model":"alias-b"}`,
+			`{"messages":[{"role":"u"}],"model":"up-model-x"}`,
+		},
+		{
+			"重复键跨嵌套对象字段",
+			`{"model":"alias-a","x":{"a":1},"model":"alias-b"}`,
+			`{"model":"up-model-x","x":{"a":1}}`,
+		},
+		{
+			// 嵌套内部的同名键不是顶层键,不产生 span 也不得被改写
+			"嵌套内部model不产生span",
+			`{"cfg":{"model":"inner","model":"inner2"},"model":"alias-a"}`,
+			`{"cfg":{"model":"inner","model":"inner2"},"model":"up-model-x"}`,
+		},
+	}
+	for _, c := range cases {
+		out, err := RewriteModelInPlace([]byte(c.raw), "up-model-x")
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if string(out) != c.want {
+			t.Fatalf("%s:\n got=%s\nwant=%s", c.name, out, c.want)
+		}
+	}
+	// 收敛结果必须是合法 JSON 且单键语义可解析(防摘除区间计算回归)
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(cases[2].want), &probe); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RewriteModelInPlace([]byte(`{"model":123,"model":"b"}`), "m"); err == nil {
+		t.Fatal("重复键任一处值非字符串仍应报错")
+	}
+}

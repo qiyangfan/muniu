@@ -71,6 +71,12 @@ func New(opts Options) *Notifier {
 
 // Emit 异步发射事件，同事件键在去重窗口内静默；永不 panic、不阻塞调用方。
 func (n *Notifier) Emit(eventKey, severity, summary string) {
+	n.EmitContext(eventKey, severity, summary, nil)
+}
+
+// EmitContext 带结构化上下文的发射:payload 增补可选 context 对象(渠道名/余额/估算等),
+// 事件键去重窗口语义不变;context 为 nil 时载荷与 Emit 完全一致(既有接入点零变化)。
+func (n *Notifier) EmitContext(eventKey, severity, summary string, context map[string]any) {
 	if n == nil {
 		return
 	}
@@ -82,15 +88,19 @@ func (n *Notifier) Emit(eventKey, severity, summary string) {
 	}
 	n.lastSeen[eventKey] = now
 	n.mu.Unlock()
-	go n.deliver(eventKey, severity, summary, now)
+	go n.deliver(eventKey, severity, summary, context, now)
 }
 
 // deliver 退避重试投递；全部失败则放弃并留日志，告警丢失不能拖垮网关。
-func (n *Notifier) deliver(eventKey, severity, summary string, at time.Time) {
-	payload, err := json.Marshal(map[string]any{
+func (n *Notifier) deliver(eventKey, severity, summary string, context map[string]any, at time.Time) {
+	payload := map[string]any{
 		"event": eventKey, "severity": severity, "summary": summary,
 		"occurred_at": at.UTC().Format(time.RFC3339),
-	})
+	}
+	if context != nil {
+		payload["context"] = context
+	}
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return
 	}
@@ -99,7 +109,7 @@ func (n *Notifier) deliver(eventKey, severity, summary string, at time.Time) {
 		if wait > 0 {
 			time.Sleep(wait)
 		}
-		resp, err := client.Post(n.url, "application/json", bytes.NewReader(payload))
+		resp, err := client.Post(n.url, "application/json", bytes.NewReader(encoded))
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {

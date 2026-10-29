@@ -145,6 +145,35 @@ pricing:
 #   webhook_url: "https://hooks.example.com/muniu"
 #   dedup_window_sec: 300
 
+# 渠道余额观测:按渠道声明余额源后,定时查询上游余额并外推剩余可用天数,穿越档位/阈值经
+# alerts.webhook_url 告警(管理面 GET /admin/v1/balances 总览,manual 源经管理 API 录入)。
+# 未声明的渠道零行为。kind 值域: none(缺省)|manual|deepseek|moonshot|
+# openrouter|billing-compat(one-api/new-api 家族)|aliyun-bss|volc-bss。
+# (siliconflow 不在值域:官方余额 API 已于 2026-08-14 退役且替代 API 未发布,恢复接入见 docs/design/balance-alerting.md)
+# balance:
+#   enabled: true                # 总开关,缺省 true;无任何渠道声明来源时整体零开销
+#   eval_interval_sec: 3600      # 评估间隔
+#   poll_timeout_sec: 10         # 单次上游余额查询超时
+#   burn_window_days: 7          # 燃速回看窗口(天)
+#   burn_min_days: 2             # 窗口内消耗天数不足时判定「数据不足」,不臆测估算
+#   rearm_ratio_milli: 1200      # 告警迟滞回差(毫单位,1200=1.2 倍),低于 1000 会在触发线附近抖动
+#   tier_hours: [720, 336, 168, 72, 24]   # 剩余时间档位,须严格降序;缺省 30/14/7/3/1 天
+#   failure_threshold: 3         # 余额源连续失败多少次发一次运维告警
+# 渠道级声明示例(挂到对应 provider 下):
+#     balance:
+#       source: deepseek                          # Bearer 直查族
+#       below: "10.00"                            # 绝对阈值(余额币种),可选
+#     balance:
+#       source: manual                            # 无公开接口的渠道手动录入快照
+#       currency: CNY                             # manual 必填;查询源币种由上游响应决定
+#     balance:
+#       source: billing-compat                    # one-api/new-api 家族聚合中转
+#       currency: CNY                             # 可选;站点按人民币显示额度时必须声明(new-api 随显示配置产出 CNY 数值),缺省 USD
+#     balance:
+#       source: aliyun-bss                        # 云账务签名源(火山为 volc-bss)
+#       access_key_env: ALIYUN_ACCESS_KEY_ID      # 只写环境变量名,建议只授账务只读权限
+#       secret_key_env: ALIYUN_ACCESS_KEY_SECRET
+
 # 语义缓存默认关闭；启用时还需打开租户开关。
 # embedding_model 必须已配置在 model_routes 中。
 # semantic:

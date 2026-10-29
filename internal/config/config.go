@@ -14,6 +14,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/solvela/muniu/internal/adapter"
+	"github.com/solvela/muniu/internal/balance"
 	"github.com/solvela/muniu/internal/metering"
 )
 
@@ -57,6 +58,34 @@ func (t Timeouts) FirstTokenDuration() time.Duration {
 // ChunkIdleDuration 帧间空闲超时。
 func (t Timeouts) ChunkIdleDuration() time.Duration { return time.Duration(t.ChunkIdle) * time.Second }
 
+// ProviderBalance 渠道级余额源声明;nil = 不观测(零行为)。
+// kind 值域单一事实点在 internal/balance(BalanceSourceTypes),非法值启动期拒绝。
+type ProviderBalance struct {
+	// Source 余额源:empty/none 缺省,manual 手动快照,其余为上游查询源。
+	Source string `yaml:"source"`
+	// Below 绝对告警阈值,余额币种十进制串(如 "10.00");可选。
+	Below string `yaml:"below"`
+	// Currency 币种声明(CNY|USD):manual 必填(录入校验基准);billing-compat 可选
+	// (*_usd 字段族币种不可自描述,缺省 USD);其余源上游自述币种,声明即校验期拒绝。
+	Currency string `yaml:"currency"`
+	// AccessKeyEnv/SecretKeyEnv 云账务源(aliyun-bss/volc-bss)的凭证环境变量引用名
+	// (与 keys[].env 同语义:存变量名不存明文);运行期 os.Getenv 解析,只存活于内存。
+	AccessKeyEnv string `yaml:"access_key_env"`
+	SecretKeyEnv string `yaml:"secret_key_env"`
+}
+
+// BalanceCfg 渠道余额观测全局参数;渠道级来源声明在 providers[].balance。
+type BalanceCfg struct {
+	Enabled          *bool   `yaml:"enabled"`           // 缺省 true;nil 区分未配置与显式关闭
+	EvalIntervalSec  int     `yaml:"eval_interval_sec"` // 评估间隔,缺省 3600
+	PollTimeoutSec   int     `yaml:"poll_timeout_sec"`  // 单次上游查询超时,缺省 10
+	BurnWindowDays   int     `yaml:"burn_window_days"`  // 燃速回看窗口,缺省 7
+	BurnMinDays      int     `yaml:"burn_min_days"`     // 最小消耗样本天数,不足则「数据不足」,缺省 2
+	RearmRatioMilli  int64   `yaml:"rearm_ratio_milli"` // 告警迟滞回差,毫单位:1200=1.2 倍,须 [1000,10000],缺省 1200
+	TierHours        []int64 `yaml:"tier_hours"`        // 剩余时间告警档位(小时),降序正值;缺省 30/14/7/3/1 天
+	FailureThreshold int     `yaml:"failure_threshold"` // 余额源连续失败多少次发一次运维告警,缺省 3
+}
+
 // Provider 上游供应商静态拓扑。
 type Provider struct {
 	Name                          string   `yaml:"name"`
@@ -70,6 +99,8 @@ type Provider struct {
 	// NativeResponses responses 原生端点声明，声明制直通门控：缺省 false 时
 	// responses 入站对该 provider 走既有 chat 翻译兜底。OpenAI 兼容不代表 responses 端点可用。
 	NativeResponses bool `yaml:"native_responses"`
+	// Balance 余额观测声明;nil = 不观测,数据面零行为变化。
+	Balance *ProviderBalance `yaml:"balance"`
 }
 
 // KeyRef 环境变量引用名，绝不存明文；weight 参与 key 池 WRR。
@@ -177,6 +208,7 @@ type Config struct {
 		WebhookURL     string `yaml:"webhook_url"`      // 告警 webhook 端点；空为告警关闭，零开销
 		DedupWindowSec int    `yaml:"dedup_window_sec"` // 同事件键静默窗口，缺省 300s
 	} `yaml:"alerts"`
+	Balance      BalanceCfg `yaml:"balance"`
 	ControlPlane struct {
 		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点；空为不拉取(standalone)
 		TopologyURL     string `yaml:"topology_url"`      // 控制面拓扑端点；空为文件源
@@ -221,6 +253,9 @@ func (c *Config) ProviderByName(name string) (Provider, bool) {
 
 // varPattern 只展开 ${VAR} 引用形式，裸 $VAR 不动以避免误伤。
 var varPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// envNamePattern 凭证环境变量引用名形态(与 keys[].env 同纪律:存名不存值)。
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Load 定位(-c > MUNIU_CONFIG > ./muniu.yaml)、展开、解析、校验，任何一步失败立即返回 error；
 // 校验错误一次性列全。
@@ -359,6 +394,49 @@ func (c *Config) validate() error {
 	if c.Alerts.DedupWindowSec < 0 {
 		add("alerts.dedup_window_sec 不可为负")
 	}
+
+	// ---- balance 余额观测:全局参数缺省与校验 ----
+	if c.Balance.Enabled == nil {
+		v := true
+		c.Balance.Enabled = &v
+	}
+	if c.Balance.EvalIntervalSec < 0 || c.Balance.PollTimeoutSec < 0 ||
+		c.Balance.BurnWindowDays < 0 || c.Balance.BurnMinDays < 0 || c.Balance.FailureThreshold < 0 {
+		add("balance 数值配置不可为负(eval_interval_sec/poll_timeout_sec/burn_window_days/burn_min_days/failure_threshold)")
+	}
+	if c.Balance.EvalIntervalSec == 0 {
+		c.Balance.EvalIntervalSec = 3600
+	}
+	if c.Balance.PollTimeoutSec == 0 {
+		c.Balance.PollTimeoutSec = 10
+	}
+	if c.Balance.BurnWindowDays == 0 {
+		c.Balance.BurnWindowDays = 7
+	}
+	if c.Balance.BurnMinDays == 0 {
+		c.Balance.BurnMinDays = 2
+	}
+	if c.Balance.FailureThreshold == 0 {
+		c.Balance.FailureThreshold = 3
+	}
+	if c.Balance.RearmRatioMilli == 0 {
+		c.Balance.RearmRatioMilli = 1200
+	}
+	if c.Balance.RearmRatioMilli < 1000 || c.Balance.RearmRatioMilli > 10000 {
+		add("balance.rearm_ratio_milli(%d) 须在 [1000,10000]:低于 1000 无迟滞回差,告警会在触发线附近抖动", c.Balance.RearmRatioMilli)
+	}
+	if len(c.Balance.TierHours) == 0 {
+		c.Balance.TierHours = []int64{720, 336, 168, 72, 24} // 30 天/14 天/7 天/3 天/1 天
+	}
+	for j, h := range c.Balance.TierHours {
+		if h <= 0 {
+			add("balance.tier_hours[%d] 须为正小时数,实际 %d", j, h)
+			continue
+		}
+		if j > 0 && h >= c.Balance.TierHours[j-1] {
+			add("balance.tier_hours 须严格降序(索引 0 为剩余最多的最浅档),%d 处失序", j)
+		}
+	}
 	if c.ControlPlane.PollIntervalSec < 0 {
 		add("control_plane.poll_interval_sec 不可为负")
 	}
@@ -446,6 +524,7 @@ func (c *Config) validate() error {
 			// gemini 为桥接翻译型，无原生直通 lane；静默 no-op 会让误声明看起来已生效
 			add("providers[%d](%s) native_responses 仅 openai 系适配器可声明(anthropic/gemini 为桥接型)", i, p.Name)
 		}
+		validateProviderBalance(i, p, add)
 		if len(p.Keys) == 0 {
 			add("providers[%d](%s) keys 不能为空", i, p.Name)
 		}
@@ -605,4 +684,79 @@ func (c *Config) validate() error {
 		return errors.New("配置校验失败(全部列出):\n  - " + strings.Join(problems, "\n  - "))
 	}
 	return nil
+}
+
+// validateProviderBalance 渠道级余额源声明校验:kind 合法性、按来源类的字段约束
+// 与阈值金额解析在此 fail-fast,问题并入整体校验一次报全。
+func validateProviderBalance(i int, p Provider, add func(format string, args ...any)) {
+	if p.Balance == nil {
+		return
+	}
+	b := p.Balance
+	src := b.Source
+	if src == "" {
+		src = balance.SourceNone
+	}
+	legal := false
+	for _, k := range balance.Types() {
+		if k == src {
+			legal = true
+			break
+		}
+	}
+	if !legal {
+		add("providers[%d](%s) balance.source 非法 %q(允许 %s)", i, p.Name, b.Source, strings.Join(balance.Types(), "|"))
+		return
+	}
+	if src == balance.SourceNone {
+		if b.Below != "" || b.Currency != "" || b.AccessKeyEnv != "" || b.SecretKeyEnv != "" {
+			add("providers[%d](%s) balance.source 为 none 时其余字段不得声明", i, p.Name)
+		}
+		return
+	}
+	if b.Below != "" {
+		if _, err := metering.ParsePrice(b.Below); err != nil {
+			add("providers[%d](%s) balance.below 非法 %q(须为余额币种十进制串,≤9 位小数,不接受符号与空白)", i, p.Name, b.Below)
+		}
+	}
+	notCloud := b.AccessKeyEnv != "" || b.SecretKeyEnv != ""
+	switch {
+	case balance.IsBearer(src):
+		// 币种声明纪律:其余 Bearer 源上游自述币种,声明即谎报,拒绝;
+		// billing-compat 的 *_usd 字段族不自带可信币种语义——new-api 随站点显示配置
+		// (QuotaDisplayType)可产出 CNY 数值,协议面无法自动判定,故允许显式声明(缺省 USD)。
+		if b.Currency != "" {
+			if src != balance.SourceBillingCompat {
+				add("providers[%d](%s) balance.currency 仅 manual/billing-compat 源声明(%s 币种由上游响应决定)", i, p.Name, src)
+			} else if !legalCurrency[strings.ToUpper(b.Currency)] {
+				add("providers[%d](%s) balance.currency 非法 %q(billing-compat 可选声明,允许 CNY|USD,缺省 USD)", i, p.Name, b.Currency)
+			}
+		}
+		if notCloud {
+			add("providers[%d](%s) balance 凭证字段仅云账务源(aliyun-bss/volc-bss)接受", i, p.Name)
+		}
+	case src == balance.SourceManual:
+		if !legalCurrency[strings.ToUpper(b.Currency)] {
+			add("providers[%d](%s) balance.currency 非法 %q(manual 源必填,允许 CNY|USD)", i, p.Name, b.Currency)
+		}
+		if notCloud {
+			add("providers[%d](%s) balance 凭证字段仅云账务源(aliyun-bss/volc-bss)接受", i, p.Name)
+		}
+	default: // 云账务:凭证环境变量引用成对必填
+		if b.Currency != "" {
+			add("providers[%d](%s) balance.currency 仅 manual/billing-compat 源声明(云账务币种由上游响应决定)", i, p.Name)
+		}
+		for _, pair := range [][2]string{
+			{"access_key_env", b.AccessKeyEnv},
+			{"secret_key_env", b.SecretKeyEnv},
+		} {
+			if pair[1] == "" {
+				add("providers[%d](%s) balance.%s 必填(云账务源)", i, p.Name, pair[0])
+				continue
+			}
+			if !envNamePattern.MatchString(pair[1]) {
+				add("providers[%d](%s) balance.%s 非法 %q(须为环境变量名,存名不存值)", i, p.Name, pair[0], pair[1])
+			}
+		}
+	}
 }

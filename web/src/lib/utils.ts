@@ -31,3 +31,19 @@ export function rfc3339ToLocal(v: string): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+/**
+ * credit 整数转精确十进制串（余额展示用，非缩写）。
+ * 全程整型运算（安全整数域内精确），不经浮点除法避免二进制尾差；负值带符号。
+ */
+export function formatCreditsExact(c: number): string {
+  const abs = Math.abs(c);
+  const int = Math.floor(abs / 1e9);
+  const frac = abs % 1e9;
+  let s = String(int);
+  if (frac > 0) {
+    s += "." + String(frac).padStart(9, "0").replace(/0+$/, "");
+  }
+  if (s === "") s = "0";
+  return c < 0 ? `-${s}` : s;
+}

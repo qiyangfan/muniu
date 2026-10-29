@@ -170,13 +170,18 @@ func itoa(i int) string {
 // RewriteModelInPlace 顶层 model 字段的原位替换：仅改该字段值字节，键序、空白、转义风格
 // 与未知字段逐字节保留。RewriteModel 的 map 往返会重排键序，不适用于直通 wire。
 // 顶层非对象或缺 model 字段报错。
+// 重复顶层 model 键收敛为单键：首处换值、其余整段摘除（仅触及 model 字段字节，维持
+// 「除 model 字段外逐字节一致」不变式）。真实上游对重复键均拒绝（dashscope 报缺参、
+// deepseek 报 duplicate field），只改末键会恰好产出该形态，故必须收敛。
 func RewriteModelInPlace(body []byte, upstreamModel string) ([]byte, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	tok, err := dec.Token()
 	if err != nil || (func() bool { d, ok := tok.(json.Delim); return !ok || d != '{' })() {
 		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 顶层须为 JSON 对象"))
 	}
-	vs, ve := -1, -1
+	type modelSpan struct{ valStart, valEnd, dropFrom int }
+	var spans []modelSpan
+	prevEnd := -1 // 前一个顶层值的结束偏移；重复键摘除区间从这里开始，恰含其前导逗号
 	for dec.More() {
 		keyTok, err := dec.Token()
 		if err != nil {
@@ -188,21 +193,30 @@ func RewriteModelInPlace(body []byte, upstreamModel string) ([]byte, error) {
 		if err != nil {
 			return nil, errors.Join(ErrInvalidRequest, err)
 		}
+		if delim, isDelim := valTok.(json.Delim); isDelim && (delim == '{' || delim == '[') {
+			// 值为嵌套容器：整段消费到配对闭括号。Token 流是平坦的，
+			// 不跳过会把容器内部的键值当顶层键处理（误拒/误改/重复键漏收敛）。
+			if err := skipContainer(dec); err != nil {
+				return nil, errors.Join(ErrInvalidRequest, err)
+			}
+		}
 		offAfter := dec.InputOffset()
 		if key == "model" {
 			if _, isStr := valTok.(string); !isStr {
 				return nil, errors.Join(ErrInvalidRequest, errors.New("model: 须为字符串"))
 			}
-			vs, ve = int(offBefore), int(offAfter)
+			spans = append(spans, modelSpan{valStart: int(offBefore), valEnd: int(offAfter), dropFrom: prevEnd})
 		}
+		prevEnd = int(offAfter)
 	}
 	if _, err := dec.Token(); err != nil { // 收尾 '}'
 		return nil, errors.Join(ErrInvalidRequest, err)
 	}
-	if vs < 0 {
+	if len(spans) == 0 {
 		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 原始体缺 model 字段"))
 	}
 	// 值起点为跳过 key 后的空白、冒号与空白，终点为 Token 读毕位置，即值最后一字节之后
+	vs, ve := spans[0].valStart, spans[0].valEnd
 	for vs < ve && (body[vs] == ' ' || body[vs] == '\t' || body[vs] == '\n' || body[vs] == '\r') {
 		vs++
 	}
@@ -216,6 +230,34 @@ func RewriteModelInPlace(body []byte, upstreamModel string) ([]byte, error) {
 	out := make([]byte, 0, len(body)-(ve-vs)+len(newVal))
 	out = append(out, body[:vs]...)
 	out = append(out, newVal...)
-	out = append(out, body[ve:]...)
+	// 摘除后续重复键：区间 [dropFrom, valEnd) 覆盖「前值结束 → 本值结束」，
+	// 各区间与首键替换互不重叠且按序遍历。
+	last := ve
+	for _, s := range spans[1:] {
+		out = append(out, body[last:s.dropFrom]...)
+		last = s.valEnd
+	}
+	out = append(out, body[last:]...)
 	return out, nil
+}
+
+// skipContainer 从已读入的开括号起成对消费嵌套容器直至配对闭括号，
+// 返回后 InputOffset 位于闭括号之后。容器内的标量 token 原样跳过。
+func skipContainer(dec *json.Decoder) error {
+	depth := 1
+	for depth > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok {
+			switch d {
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+		}
+	}
+	return nil
 }

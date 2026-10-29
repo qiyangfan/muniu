@@ -2,6 +2,14 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-10-30,provider-balance-alerting 已实施评审归档并提交推送)
+
+- OpenSpec `provider-balance-alerting` 26/26 任务完成,双独立代理评审循环收口(0 P0;4 P1 + 4 P2 全根修 + 回归测试,P3 修 4 登记 7),已归档 `archive/2026-10-30-provider-balance-alerting`,主 specs 新建 provider-balance-alerting(+14 Requirement)并扩 webhook-alerting 事件覆盖(+1);归档后 strict 24/25,唯一失败为范围外既存 protocol-native-passthrough 长度警告(归档前既有)。
+- 能力:七种余额源(deepseek/moonshot/openrouter/billing-compat Bearer 直查、aliyun-bss/volc-bss 云账务签名、manual 手动录入)、有效余额=快照−计量衰减、燃速外推剩余天数、档位/阈值持久状态机(迟滞+重启不重复),复用 webhook-alerting 管道;零新增依赖;ADR-0018 已立。
+- 门禁:`PATH=/tmp/gclbin:$PATH make check` EXIT=0(coverage gate PASS 71.9%)、web 四件套+vitest 22/22+vite build(/tmp)、六帧视觉终裁 6/6(1280/768/375 × 亮暗,visual-judge);活体冒烟:临时实例 :18799 manual 全链(录入→衰减→燃速→档位 firing→凭证失败留痕)已实证,实例已拆。
+- 【同日续批,owner 委任裁决「3/4 你自己决策一下」】四条遗留项全部收口(证据见验收记录 55):①重复顶层 model 键真端点实证两上游均拒→直通改写收敛单键;②billing-compat 币种语义经 new-api 源码实证后开放显式声明;③T5.2 销案(集成已验收,跨仓基线归 kongming HANDOFF 单源);④strict 长度警告修复,`validate --all --strict` 25/25;T5.6 判「具备发版条件」,tag/push 仍待 owner 逐次指令。
+- DeepSeek 真上游余额冒烟全链过(临时实例 :18795 已拆):真余额 2.28 CNY 与直查分毫不差、below(10) firing critical、启动即评。Bearer 族四家全部真上游实证(owner 供 key,临时实例 :18796 已拆):moonshot 20.49481 CNY 分毫不差;openrouter 免费键 limit=null → Unavailable 活体(落库不失败、零告警);**siliconflow 余额端点 `/v1/user/info` 被上游正式退役(HTTP 410,替代端点探测 7 个均不存在)**,失败容忍路径活体留痕不误报。另修 Balances.tsx effect 同步 setState 违 react-hooks 规则(改渲染期派生),make check 复绿 72.0%。
+
 ## 当前状态(2026-10-22,百炼原生多模态 Embeddings 已实现并归档)
 
 - OpenSpec `dashscope-multimodal-embeddings` 1.1–1.9 全部完成，已归档并同步主规格；本 change 无待实现项。执行报告与冻结快照见验收记录。
@@ -9,14 +17,13 @@
 
 ## 下一步动作序列
 
-- 当前 change 无后续实现动作；先解决下列待确认项，再决定是否新增跨仓或发版任务。
+- 【2026-10-30】provider-balance-alerting 归档完成;同日续批(billing-compat 币种声明/重复键收敛/云签名适配/siliconflow 移除/增量评审两缺陷根修)已落;**owner 指令下单笔提交推送**(哈希见 git log),CI 实跑结果补记验收记录。
+- volc-bss/aliyun-bss 已真机销案(AK 申请姿势见记忆与验收记录 55 续条二);siliconflow 已整档移除(续条三),恢复条件=官方替代 API 公告后重新立项接入。
+- T5.6:具备发版条件;tag v1.0.0 与 push 由 owner 逐次指令,届时按 docs/v1-release-checklist.md 当版复跑门禁与冒烟。
 
 ## 开放决策项
 
-- 原生请求重复顶层 `model` 键：Go 入站按最后一个值路由并改写，早先重复键仍留在原始 JSON；尚未确认 Qwen/Tongyi 对重复键的解析规则。先核对供应商文档或用真实端点验证，再裁决是否拒绝重复键。
-- Phase 5 T5.2：缺 Kongming 当前 `make check` 与评估基线证据；跨仓范围待确认。
-- Phase 5 T5.6：v2 发版判据及 tag/push 时机待确认。
-- 全量 OpenSpec strict 有范围外既存 `protocol-native-passthrough` requirement 长度警告；本轮未改写。
+- 【2026-10-30 全部收口】重复顶层 model 键(真端点实证→直通收敛单键)/strict 长度警告(拆分修复)/T5.2(销案:集成 2026-09-11 已验收,跨仓基线归 kongming 仓 HANDOFF 单源,本仓不再挂账)三项销案,理由与证据见验收记录 55;T5.6 判具备发版条件,tag v1.0.0 与 push 仍由 owner 逐次指令。
 
 ## 验收记录
 
@@ -220,8 +227,25 @@
 | 2026-10-13 | gRPC 入站二次裁决(原理由「瓦解 stdlib 旗舰论点」只计成本未答收益) | 补收益侧后结论更硬:LLM 行业无标准 gRPC API,自造 `muniu.proto` = 语义真空,协议保真转译核心卖点零锻炼;REST-only 与 LiteLLM/one-api/Kong 同赛道对照无缺口 | 维持不引入;关键词留简历 skills 行,学习主场在微服务语境项目 | **已终裁(2026-10-13 owner 确认重裁)**:维持拒绝;翻旧账以本行与 ROADMAP 注记为准 |
 | 2026-10-13 | SSO/OIDC 二次裁决(原理由「ADR-0005 边界」经不起追问:网关为何不能有自己的身份面) | 拆分后重裁:SSO 本体维持拒绝(锦官 OIDC 学习主场组合冗余 + standalone 零外联先验假设 + 自研 JOSE 密码学危险);被捆绑的多管理员+审计独立价值成立 | SSO 不引入;多管理员+操作审计拆出立项(ADR-0017 + openspec `admin-operators-audit`) | **已终裁(2026-10-13)**:一拒一立,论证沉淀 ADR-0017 备选节 |
 | 2026-10-13 | key-model-allowlist 评审登记双边界:①状态 lane(GET/DELETE /v1/responses/{id})不受白名单约束(请求无别名可校验,跨 key 可读为既有形态);②messages 流式管道错误信封硬编码 api_error(proxy-and-streaming v1 登记),forbidden 类型 HTTP 403 正确但类型字段落 api_error | 均既有语义非白名单批引入;收紧=契约级变更 | ①亲和条目绑 key/租户归属或按创建时模型回溯校验;②管道错误类型映射升级(与 model_not_found/quota 同批)——均待真实治理/消费诉求触发 | **已裁决并落地(2026-10-14 owner 委任裁决)**:①修——根因是亲和条目缺归属维度(跨用户读取/不可逆删除/上下文续写=安全洞,零消费话术不适用),独立 change `responses-state-ownership` 落地(亲和绑 apiKeyID per-key,三消费点不匹配≡未知不可区分,DELETE 先拒后出站);②修——同 lane 一套错误形态(翻译期本就发 Anthropic 原生类型),流式 finish 按类型映射五类精确映射+api_error 兜底,原「待真实消费者」条款由 Anthropic SDK 实际消费满足;登记详见 proxy-and-streaming.md 两处与 change design |
+| 2026-10-30 | ~~volc-bss `QueryBalanceAcct` 响应余额字段形态未真机实证~~ | ~~失败归 parse 显式留痕,不误报余额~~ | 真机 AK 冒烟后定字段 | **已销案(2026-10-30,owner 供 AK)**:真机 200,`Result` 直挂 `AvailableBalance`+`Currency`(CNY);顺带真机实证 V4 密钥链终止符应为 `request`(官方 SDK 对拍,旧实现 "volcengine" 单测自洽测不出)已根修;阿里云真机 39.44 CNY 同批销案(business.aliyuncs.com 端点+Code:200 成功信封两处适配) |
+| 2026-10-30 | Bearer 族真上游余额冒烟:deepseek/moonshot/openrouter 已实证(验收记录 55);**siliconflow `/v1/user/info` 上游 HTTP 410 正式退役**(官方公告:2026-08-14 停服,「适时提供账户层面替代 API」截至 2026-10-30 未发布) | 见续条三裁决 | —— | **已销案(续条三)**:owner 提议删除+技术论证一致,`siliconflow` kind 整档移除(值域/查询器/解析/夹具/spec 场景),不保留过渡形态——替代 API 是账户体系重建后的新形态,旧解析零复用;恢复条件=官方新 API 公告,按 deepseek 同款 Bearer 配方重新立项接入 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**55. 遗留项裁决批(2026-10-30,owner「3 你自己能搞定不/4 你也自己决策一下」委任;两修复+真上游冒烟+规格收口)**
+- 判据:真实端点/源码实证先行;修复带回归测试;`make check` + `validate --all --strict` + web 门禁全绿;DeepSeek 真上游活体冒烟;实例用毕即拆。
+- 证据:①重复键真端点实验:dashscope 兼容模式两种键序均 400「you must provide a model parameter」、deepseek 400「duplicate field \`model\`」→ `RewriteModelInPlace` 收敛单键(首处换值、余段摘除,仅触 model 字节),protocol 3 形态用例+非法值回归;②new-api `controller/billing.go` 源码实证 `*_usd` 字段随站点 `QuotaDisplayType` 换算(CNY=÷QuotaPerUnit×汇率)→ billing-compat 唯一开放 `balance.currency` 显式声明(CNY|USD,缺省 USD),config 校验/For 工厂/装配三层+4 用例(含 CNY 声明记账),规格 requirement 改写+CNY 场景;③strict 长度警告:粘性路由 requirement 拆二(路由与域收缩/亲和拒绝),加重复键 scenario,`validate --all --strict` **25/25**;④DeepSeek 冒烟(临时实例 :18795,已拆):直查 API 2.28 CNY → muniu 启动即评读回 `balance:"2.28"/currency:CNY` 分毫不差,below(10) firing critical,`estimate_reason:no_usage`,零失败计数;⑤Balances.tsx R2 引入的 effect 同步 setState 违 react-hooks 规则(首轮 make check 挂 web-check)→ 改渲染期派生,effect 删除,web typecheck/lint/vitest 8/8 绿。
+- 门禁:复跑 `PATH=/tmp/gclbin:$PATH make check` **EXIT=0(coverage gate PASS 72.0%)**;web 四件套绿。改动未提交(等 owner 指令)。
+- **续条(同日,owner 供三家 key)**:Bearer 族全族真上游实证(临时实例 :18796 已拆)——moonshot `20.49481` CNY 与直查分毫不差;openrouter 免费键 `limit:null` → Unavailable 活体(落库不失败、无告警、不参与估算);**siliconflow `/v1/user/info` 上游 HTTP 410 Gone 正式退役**,失败容忍路径活体留痕(`consecutive_failures:1, last_error:"http"`),替代端点探测 7 个均不存在、官方文档站当日不可达 → 登记开放项待上游,kind 维持不删。
+- **续条二(同日,owner 供云 AK)**:云账务两家真机销案并根修两处签名缺陷——①火山 `SignatureDoesNotMatch`:官方 volc-sdk-golang `base/sign.go` 对拍实证 V4 密钥链终止符为 **`request`**(旧实现 "volcengine" 与测试链同源自洽,单测测不出),修正后真机 200,`Result` 直挂 `AvailableBalance`+`Currency`(0 CNY,新户未充值);②阿里云旧端点 `bssopenapi.aliyuncs.com` 已 NXDOMAIN 退役(阿里公共 DNS 同证)→ 现行 `business.aliyuncs.com`,且成功信封带 `Code:"200"`(非旧惯例无 Code)→ 解析判定改「只认非 200 非空 Code」;真机 39.44 CNY 双绿(临时实例 :18797 已拆)。AMBED:RAM 策略挂载后首笔可能 NotAuthorized(授权传播延迟),复试即愈。
+- **续条三(同日,owner 提议「删掉 siliconflow 或保留到接入层」)**:裁决**整档移除** `siliconflow` 余额 kind——依据:①官方退役理由是「无法适配平台用户账户体系」,替代 API 必为新形态,旧传输/解析代码零复用价值;②余额功能未提交未发版,删除零兼容包袱;③「值域内永不成功」的声明比删除更污染语义与告警面。同步删除面:值域枚举/查询器分派/querySiliconflow+Resp/测试夹具/spec 三处/契约与样例注释/api-types 再生;strict 25/25。恢复路径:官方 release-notes 出现新账户 API → 按 deepseek 同款 Bearer 配方重新立项(约数十行)。
+- **续条四(同日,增量评审轮,owner 问「需要增量 review 吗」→ 需要并已执行)**:双独立代理评审 R3 收敛后的增量(billing-compat 币种/重复键收敛/云签名适配/siliconflow 删除/web 派生重构)。抓出并修复 1 缺陷——**RewriteModelInPlace 平坦 Token 扫描遇嵌套容器脱轨**(model 在嵌套键后误拒 400/重复键静默不收敛/嵌套同名键误改;语料嵌套全在 model 后,与实现同源自洽测不出;修=值遇容器 skipContainer 深度消费,失败测试三形态先红后绿)+1 风险——**Balances 回退用例空转**(rerender 不触发重取数,断言恒真;重写为录入提交驱动三轮真实 reload,突变验证确认敏感性)+5 细节(config 币种文案与注释两处/spec 交叉引用悬空/spec 配置契约补 currency 约束/HANDOFF 状态区两处过期)。1 误报核验排除(manual_currency「泄漏」实为装配路径误读,binding.Currency 仅 manual 分支赋值)。复验:make check EXIT=0(72.0%)+strict 25/25+web 四件套+vitest 8/8。
+
+**54. 渠道余额告警(2026-10-30,openspec `provider-balance-alerting` 26/26;评审归档,主 specs 已同步)**
+- 判据:26 任务逐项「实现+测试+验证」;测试先行域(五家解析器/燃速估算/状态机)先红后绿;make check 全绿 + validate --all + 视觉走查终裁 + 双独立代理评审循环收敛。
+- 证据:①`PATH=/tmp/gclbin:$PATH make check` EXIT=0(lint 0 issues、23 包 race ok、coverage gate PASS 71.9%);②`openspec validate --all` 25/25(归档前)→ 归档后 strict 24/25(唯一失败=范围外既存 protocol-native-passthrough 长度警告);③web 四件套+vite build(/tmp/dist-check 244ms)+vitest 22/22+api-types 再生逐字节一致;④活体冒烟(临时实例 :18799,真二进制+SQLite,用毕即拆):manual 渠道录入 30 CNY→种子 3 天消耗→refresh→总览「约 7 天」+ tier:168/72/336/720 四档 firing+below 未触发,dsx dummy key→「连续失败 1(凭证被拒)」失败留痕——查询→落库→评估→告警态全链实证;⑤六帧截图(1280/768/375 × 亮暗)visual-judge 终裁 6/6 pass(移动卡片范式/底部 7 列导航/暗色对比度)。
+- 评审循环(双独立代理:Go 后端域 / web+契约域):0 P0;修 4 P1——manual 对未声明渠道放行(拒绝+404+负面测试)、aliyun 非 2xx+body Code 凭证归类不可达(读 body 归类+用例)、key 残留行污染 min-估算与失败判定(评估前 Prune+回归)、openapi flow 映射三处 description 逗号截断(加引号+YAML 解析断言);修 5 P2——ctx 超时穿透归 timeout(QueryError Unwrap+%w)、Sources 闭包 Warn 噪音收窄、below 跨币种混取(主币种 min 口径)、disabled 400 未入契约(补记)、aliyun 数值形态 UseNumber 回归;P3 修 4(targets 空跳过 source_error/overview 吞错记日志/htmlFor 死引用/tier_hours 措辞),登记 7(tier 状态遗留无清理、SpendSince N+1、setTimeout 卸载、Radix act 警告、错峰以顺序评估等价实现等)。
+- 契约与文档:contracts/openapi.yaml +3 路径 6 schema(含 settlement/manual_currency 增补)、web/src/lib/api-types.d.ts 再生;ADR-0018、docs/design/balance-alerting.md、README 功能全景行、muniu.example.yaml balance 节样例。**26 文件未提交(等 owner 逐次指令)。**
 
 **53. 全仓注释简化收尾(2026-10-20,owner「根据注释简化的 skill,简化当前项目的注释」;承接中断半成品)**
 - 判据:diff 为纯注释 + make check 等价门禁全绿(lint/vet/race/coverage/web)+ gofmt/cargo check。

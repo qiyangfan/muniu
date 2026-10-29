@@ -248,6 +248,58 @@ components:
         fail_open: { type: boolean }
         binary_bytes: { type: integer }
         replaced: { type: boolean, description: "true=版本替换(新请求热生效,在途请求旧版本完成)" }
+    BalancesResponse:
+      type: object
+      properties:
+        enabled: { type: boolean, description: "余额观测是否启用(未配置任何渠道余额源时 false)" }
+        settlement: { type: string, description: "结算币种(CNY|USD),燃速计价口径" }
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/BalanceOverview" }
+    BalanceOverview:
+      type: object
+      properties:
+        provider: { type: string }
+        source: { type: string, description: "余额源 kind:deepseek|moonshot|openrouter|billing-compat|aliyun-bss|volc-bss|manual" }
+        below: { type: string, description: "绝对告警阈值(余额币种十进制串);空=未声明" }
+        currency: { type: string, description: "渠道主币种(首个可知余额 key 的币种);空=尚无余额" }
+        manual_currency: { type: string, description: "manual 源的声明币种(录入校验基准);查询源为空" }
+        keys:
+          type: array
+          items: { $ref: "#/components/schemas/BalanceKeyView" }
+        min_effective: { type: string, nullable: true, description: "池内最小有效余额(快照−快照后消耗)十进制串;null=无可知余额" }
+        burn_per_day_credits: { type: integer, description: "窗口日均已结算消耗(结算币种 credit 整数)" }
+        burn_window_days: { type: integer }
+        days_with_usage: { type: integer, description: "窗口内有消耗的自然日数(最小样本判定依据)" }
+        remaining_hours: { type: integer, nullable: true, description: "剩余可用小时估算;null=无估算,原因见 estimate_reason" }
+        estimate_reason: { type: string, description: "空=有估算;no_usage=零消耗;insufficient_data=样本不足;currency_mismatch=币种不一致(天数估算禁用);unknown_balance=余额不可知;balance_overflow=余额超出可估算量级(任何档位都触不到)" }
+        alerts:
+          type: array
+          items: { $ref: "#/components/schemas/BalanceAlertView" }
+        last_checked_at: { type: string, description: "最近一次余额查询/评估时刻(RFC3339);空=从未评估" }
+    BalanceKeyView:
+      type: object
+      properties:
+        key_id: { type: string, description: "渠道 key 标识;__account__ 为账户级源(manual/云账务)" }
+        balance: { type: string, nullable: true, description: "有效余额(快照−衰减)十进制串;null=余额不可知(不限额键/查询未成功)" }
+        snapshot: { type: string, nullable: true, description: "快照余额(credit 归一化十进制串,非录入原文)" }
+        currency: { type: string }
+        as_of_at: { type: string, description: "快照观测时刻(RFC3339);空串=尚未成功查询(失败占位行)" }
+        consecutive_failures: { type: integer, description: "连续失败计数(成功清零)" }
+        last_error: { type: string, description: "最近失败归类(timeout|network|http|parse|credential|upstream);空=无失败" }
+    BalanceAlertView:
+      type: object
+      properties:
+        rule_key: { type: string, description: "below=绝对阈值;tier:<hours>=剩余时间档位;source_error=余额源连续失败" }
+        firing: { type: boolean }
+        severity: { type: string, description: "info|warning|critical" }
+        last_fired_at: { type: string, nullable: true, description: "最近触发时刻(RFC3339)" }
+    BalanceManualRequest:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount: { type: string, description: "余额金额十进制串(≤9 位小数,不接受符号;首尾空白会被剥离),须为正数" }
+        currency: { type: string, description: "币种(CNY|USD),须与渠道配置声明一致" }
 paths:
   /healthz:
     get:
@@ -528,6 +580,40 @@ paths:
       responses:
         "200": { description: 已切换 }
         "404": { description: 插件不存在 }
+
+  /admin/v1/balances:
+    get:
+      summary: 余额观测总览(每渠道每 key 余额/有效余额/燃速/剩余估算/告警态;未启用时 enabled=false)
+      responses:
+        "200":
+          description: 渠道余额总览
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BalancesResponse" }
+
+  /admin/v1/balances/{provider}/manual:
+    post:
+      summary: 手动录入余额快照(manual 余额源唯一入口;录入即生效并触发立即评估)
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BalanceManualRequest" }
+      responses:
+        "200": { description: "已录入(异步评估,结果经总览可见)" }
+        "400": { description: "金额/币种非法,或渠道余额源非 manual,或币种与配置声明不一致,或余额观测未启用" }
+
+  /admin/v1/balances/{provider}/refresh:
+    post:
+      summary: 立即触发该渠道余额查询(异步;余额源为 manual 时仅重估不外呼)
+      parameters:
+        - { name: provider, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: "已受理(async=true,结果经总览可见)" }
+        "400": { description: "余额观测未启用" }
+        "404": { description: "渠道未声明余额源" }
 
   /v1/images/generations:
     post:
