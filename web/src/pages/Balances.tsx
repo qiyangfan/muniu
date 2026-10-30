@@ -56,6 +56,8 @@ function ruleLabel(ruleKey: string | undefined): string {
   if (!ruleKey) return "告警";
   if (ruleKey === "below") return "低于阈值";
   if (ruleKey === "source_error") return "余额源故障";
+  if (ruleKey === "burn_spike") return "消耗突增";
+  if (ruleKey.startsWith("cliff:")) return "余额骤降";
   if (ruleKey.startsWith("tier:")) {
     const hours = Number(ruleKey.slice(5));
     return Number.isFinite(hours) ? `剩 ${humanRemaining(hours)}` : ruleKey;

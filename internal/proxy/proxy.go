@@ -18,6 +18,7 @@ import (
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/failover"
+	"github.com/solvela/muniu/internal/health"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
@@ -37,6 +38,8 @@ type Timeouts struct {
 	ChunkIdle  time.Duration
 }
 
+const providerCircuitOpenCode = "provider_circuit_open"
+
 // Config 代理装配参数，由 New 消费，结构化形态避免参数膨胀。
 type Config struct {
 	Registry         *adapter.Registry
@@ -55,6 +58,7 @@ type Config struct {
 	StrictGovernance bool                     // true 表示命中能力约束即 400，缺省宽松放行并留痕
 	Plugins          *plugin.Registry         // WASM 插件注册表；nil 表示插件禁用，主路径零开销
 	Alerts           *alerting.Notifier       // 告警通知器；nil 表示关闭，Emit 零开销
+	Health           *health.Manager          // 渠道健康熔断管理器；nil = 关闭,候选域零收缩
 	RandIntn         func(int) int            // 候选起点随机源；nil 用全局随机，测试可注入
 	Logger           *slog.Logger
 }
@@ -74,6 +78,7 @@ type Proxy struct {
 	strictGov    bool
 	plugins      *plugin.Registry
 	alerts       *alerting.Notifier
+	health       *health.Manager
 	randIntn     func(int) int
 	logger       *slog.Logger
 	client       *http.Client
@@ -116,6 +121,7 @@ func New(cfg Config) *Proxy {
 		tenantSw:     cfg.TenantSwitch,
 		plugins:      cfg.Plugins,
 		alerts:       cfg.Alerts,
+		health:       cfg.Health,
 		strictGov:    cfg.StrictGovernance,
 		randIntn:     randIntn,
 		logger:       logger,
@@ -322,7 +328,11 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	// 直通候选正常服务，不受此边界约束
 	midLoop := chatToolLoopInflight(req)
 	bridgeSkipped := false
-	otherSkipped := false // 非桥接原因的候选跳过，如 key 池全冷却
+	otherSkipped := false   // 非桥接原因的候选跳过，如 key 池全冷却
+	circuitSkipped := false // 健康熔断收缩的候选跳过;唯一跳过原因时快速失败
+	if p.health != nil {
+		p.health.AliasRequest(req.Model) // 换道率分母:每请求一次
+	}
 	for {
 		cand, ok := iter.Next()
 		if !ok {
@@ -338,12 +348,26 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 					"Anthropic 桥接暂不支持工具多轮对话(role=tool / tool_calls),请改用原生兼容上游或去除工具上下文")
 				return
 			}
+			// 仅当健康收缩是唯一跳过原因时快速失败:零上游调用,不空走全超时链
+			if circuitSkipped && last == "" && !otherSkipped {
+				p.writeError(tw, r, protocol.TypeUnavailable, providerCircuitOpenCode,
+					"上游渠道处于健康熔断期,请稍后重试;可为该别名配置多候选实现透明降级")
+				return
+			}
 			typ := classToType(last)
 			p.alerts.Emit("all_candidates_failed", "critical",
 				"别名 "+req.Model+" 全部候选失败(最后错误: "+string(last)+")")
 			p.writeError(tw, r, typ, "all_candidates_failed",
 				"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
 			return
+		}
+		// 健康熔断收缩:降级渠道整路跳过,先于路径判定与取 key,不计错误类;
+		// 半开相位 Contracted 为 false,放行流量作试探(试探结果经 TrialResult 回填)
+		if p.health != nil && p.health.Contracted(cand.Provider) {
+			circuitSkipped = true
+			p.logger.Warn("provider 健康熔断中,跳过候选",
+				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+			continue
 		}
 		// 每 attempt 直通或翻译路径判定，决策点唯一，chat 入站恒翻译
 		path := decideNativePath(nat, topo.adapters, topo.nativeResps, cand, pluginModified)
@@ -385,6 +409,10 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			p.reportKeyOutcome(pool, key, class, handled, m)
 		}
 		if class == "" {
+			if p.health != nil {
+				p.health.ProviderTraffic(cand.Provider, false) // 被动失败窗口
+				p.health.TrialResult(cand.Provider, true)      // 半开试探成功即恢复
+			}
 			// 直通成功：responses 入站回写亲和，供粘性路由使用，TTL+LRU 见 affinity.go
 			if nat != nil && nat.proto == protocol.InboundResponses && m.nativeRespID != "" {
 				p.affinity.Put(m.nativeRespID, cand.Provider, apiKeyIDOf(r))
@@ -399,6 +427,11 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		switch failover.Decide(class, m.firstSet, req.Stream) {
 		case failover.ActionNextCandidate:
 			last = class
+			if p.health != nil {
+				p.health.AliasSwitch(req.Model)               // 换道率分子
+				p.health.ProviderTraffic(cand.Provider, true) // 被动失败窗口
+				p.health.TrialResult(cand.Provider, false)    // 半开试探失败回降
+			}
 			continue
 		case failover.ActionReturn:
 			if path.native && len(m.upstreamBody) > 0 {

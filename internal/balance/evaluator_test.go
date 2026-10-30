@@ -178,3 +178,140 @@ func TestEvaluate_透支档位摘要无语病(t *testing.T) {
 		t.Fatalf("状态失真")
 	}
 }
+
+// ---- 燃速突变(burn_spike)与余额骤降(cliff)规则 ----
+
+func spikeIn(rules []Rule, prev map[string]RuleState, ratioMilli *int64) EvaluateInput {
+	in := evalIn(rules, prev, Estimate{}, nil)
+	in.SpikeRatioMilli = ratioMilli
+	in.PrevBurnPerDay = 1_500_000_000 // 1.5 CNY/天
+	in.CurBurnPerDay = 10_000_000_000 // 10 CNY/天(比值 ≈6.67 倍)
+	return in
+}
+
+func TestEvaluate_燃速突变触发单次与基线不足(t *testing.T) {
+	rules := []Rule{RuleBurnSpike(5000)}
+	// 基线不足(判据不可得):不判定
+	states, firings := Evaluate(spikeIn(rules, nil, nil))
+	if len(firings) != 0 || states["burn_spike"].Firing {
+		t.Fatalf("判据不可得不得触发: %+v", firings)
+	}
+	// 比值 6667 ≥ 5000:触发一次 warning,载荷含两窗口日均
+	ratio := int64(6667)
+	states, firings = Evaluate(spikeIn(rules, states, &ratio))
+	if len(firings) != 1 || firings[0].RuleKey != "burn_spike" || firings[0].Severity != "warning" {
+		t.Fatalf("突变应触发一次 warning: %+v", firings)
+	}
+	if firings[0].Context["prev_burn_per_day_credits"] != int64(1_500_000_000) ||
+		firings[0].Context["cur_burn_per_day_credits"] != int64(10_000_000_000) {
+		t.Fatalf("载荷缺两窗口日均: %+v", firings[0].Context)
+	}
+	// 持续越线:不重复发射
+	states2, firings2 := Evaluate(spikeIn(rules, states, &ratio))
+	if len(firings2) != 0 || !states2["burn_spike"].Firing {
+		t.Fatalf("持续越线不得重复发射: %+v", firings2)
+	}
+}
+
+func TestEvaluate_燃速突变迟滞解除与重武装(t *testing.T) {
+	rules := []Rule{RuleBurnSpike(5000)}
+	ratio := int64(6000)
+	states, _ := Evaluate(spikeIn(rules, nil, &ratio))
+	if !states["burn_spike"].Firing {
+		t.Fatalf("前置 firing 未建立")
+	}
+	// 迟滞区内(4300 ≥ 5000÷1.2≈4166):保持 firing
+	r2 := int64(4300)
+	states, firings := Evaluate(spikeIn(rules, states, &r2))
+	if len(firings) != 0 || !states["burn_spike"].Firing {
+		t.Fatalf("迟滞区内不得解除: %+v", firings)
+	}
+	// 回落 4000(<4166):解除
+	r3 := int64(4000)
+	states, _ = Evaluate(spikeIn(rules, states, &r3))
+	if states["burn_spike"].Firing {
+		t.Fatalf("回落超迟滞线应解除")
+	}
+	// 再次越线:重新武装发射
+	_, firings = Evaluate(spikeIn(rules, states, &ratio))
+	if len(firings) != 1 {
+		t.Fatalf("解除后再越线应重新发射: %+v", firings)
+	}
+}
+
+func cliffIn(rules []Rule, prev map[string]RuleState, tr *CliffTransition) EvaluateInput {
+	in := evalIn(rules, prev, Estimate{}, nil)
+	if tr != nil {
+		in.CliffTransitions = map[string]CliffTransition{"k1": *tr}
+	}
+	return in
+}
+
+func testTr(prev, cur int64, sameCur bool) *CliffTransition {
+	return &CliffTransition{KeyID: "k1", PrevCredits: prev, CurrCredits: cur, SameCurrency: sameCur, Currency: "CNY"}
+}
+
+func TestEvaluate_骤降触发与平稳重武装(t *testing.T) {
+	rules := []Rule{RuleCliff("k1", 500)}
+	// 无转移(键缺失):不判定
+	states, firings := Evaluate(cliffIn(rules, nil, nil))
+	if len(firings) != 0 || states["cliff:k1"].Firing {
+		t.Fatalf("无转移不得触发: %+v", firings)
+	}
+	// 自然小跌幅(3%):不触发
+	states, firings = Evaluate(cliffIn(rules, states, testTr(100_000_000_000, 97_000_000_000, true)))
+	if len(firings) != 0 {
+		t.Fatalf("自然消耗不得触发: %+v", firings)
+	}
+	// 骤降 60%:触发一次 warning,载荷含 key 与前后余额
+	states, firings = Evaluate(cliffIn(rules, states, testTr(100_000_000_000, 40_000_000_000, true)))
+	if len(firings) != 1 || firings[0].RuleKey != "cliff:k1" || firings[0].Severity != "warning" {
+		t.Fatalf("骤降应触发一次 warning: %+v", firings)
+	}
+	if firings[0].Context["key_id"] != "k1" {
+		t.Fatalf("载荷应含 key_id: %+v", firings[0].Context)
+	}
+	// 已触发态持续(无新转移/仍骤降):不重复发射
+	states2, firings2 := Evaluate(cliffIn(rules, states, nil))
+	if len(firings2) != 0 || !states2["cliff:k1"].Firing {
+		t.Fatalf("已触发态不得重复发射: %+v", firings2)
+	}
+	// 平稳观测(跌幅 3%):解除重武装
+	states3, _ := Evaluate(cliffIn(rules, states, testTr(100_000_000_000, 97_000_000_000, true)))
+	if states3["cliff:k1"].Firing {
+		t.Fatalf("平稳观测应解除")
+	}
+	// 再次骤降:重新发射
+	_, firings = Evaluate(cliffIn(rules, states3, testTr(100_000_000_000, 40_000_000_000, true)))
+	if len(firings) != 1 {
+		t.Fatalf("重武装后再骤降应发射: %+v", firings)
+	}
+}
+
+func TestEvaluate_骤降不判定形态(t *testing.T) {
+	rules := []Rule{RuleCliff("k1", 500)}
+	// 币种不一致:不判定
+	_, firings := Evaluate(cliffIn(rules, nil, testTr(100, 40, false)))
+	if len(firings) != 0 {
+		t.Fatalf("币种不一致不得触发: %+v", firings)
+	}
+	// 前值非正(欠费负值/零):不判定
+	_, firings = Evaluate(cliffIn(rules, nil, testTr(-5, -9, true)))
+	if len(firings) != 0 {
+		t.Fatalf("前值非正不得触发: %+v", firings)
+	}
+	// 余额上升(充值):不触发(armed 侧)
+	_, firings = Evaluate(cliffIn(rules, nil, testTr(100, 200, true)))
+	if len(firings) != 0 {
+		t.Fatalf("余额上升不得触发: %+v", firings)
+	}
+	// firing 态遇余额上升(充值):平稳语义解除重武装
+	states, _ := Evaluate(cliffIn(rules, nil, testTr(100, 40, true)))
+	if !states["cliff:k1"].Firing {
+		t.Fatalf("前置 firing 未建立")
+	}
+	states, _ = Evaluate(cliffIn(rules, states, testTr(40, 200, true)))
+	if states["cliff:k1"].Firing {
+		t.Fatalf("充值应视为平稳观测解除")
+	}
+}

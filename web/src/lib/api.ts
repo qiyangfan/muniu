@@ -18,6 +18,9 @@ export type PricingWindow = components["schemas"]["PricingWindow"];
 export type BalancesResponse = components["schemas"]["BalancesResponse"];
 export type BalanceOverview = components["schemas"]["BalanceOverview"];
 export type BalanceManualRequest = components["schemas"]["BalanceManualRequest"];
+export type AlertDeliveryStatus = components["schemas"]["AlertDeliveryStatusResponse"];
+export type UpstreamHealthResponse = components["schemas"]["UpstreamHealthResponse"];
+export type UpstreamHealthProvider = components["schemas"]["UpstreamHealthProvider"];
 
 const TOKEN_KEY = "muniu-admin-token";
 let authRevision = 0;
@@ -177,6 +180,8 @@ export const api = {
     ),
   balanceRefresh: (provider: string) =>
     call<{ ok: boolean }>("POST", `/admin/v1/balances/${encodeURIComponent(provider)}/refresh`),
+  alertDeliveryStatus: () => call<AlertDeliveryStatus>("GET", "/admin/v1/alerts/delivery-status"),
+  upstreamHealth: () => call<UpstreamHealthResponse>("GET", "/admin/v1/upstream-health"),
   putPricing: (alias: string, body: PricingEntry) =>
     call<{ ok: boolean }>("PUT", `/admin/v1/pricing/${encodeURIComponent(alias)}`, body),
   deletePricing: (alias: string) =>

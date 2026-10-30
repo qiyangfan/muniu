@@ -9,6 +9,7 @@ const (
 	TypeForbidden     = "forbidden" // 访问拒绝，key 级模型白名单等治理语义，与 400 的请求畸形可区分
 	TypeRateLimited   = "rate_limited"
 	TypeNotFound      = "not_found"
+	TypeUnavailable   = "unavailable" // 上游健康熔断期(503):渠道被收缩出候选域且无其余候选
 	TypeTimeout       = "timeout"
 	TypeUpstreamError = "upstream_error"
 	TypeInternal      = "internal"
@@ -45,6 +46,7 @@ var statusByType = map[string]int{
 	TypeForbidden:     403,
 	TypeRateLimited:   429,
 	TypeNotFound:      404,
+	TypeUnavailable:   503,
 	TypeTimeout:       504,
 	TypeUpstreamError: 502,
 	TypeInternal:      500,

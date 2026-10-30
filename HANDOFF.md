@@ -2,13 +2,21 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
-## 当前状态(2026-10-30,provider-balance-alerting 已实施评审归档并提交推送)
+## 当前状态(2026-10-30,三 change 实施+评审+归档+提交推送完毕)
+
+- openspec `alert-delivery-monitoring`/`consumption-anomaly-alerting`/`upstream-health-probing` 三 change 全任务勾选,经评审迭代循环(6 处修复:探针 URL 尾斜杠归一、无 key 渠道入 Sources 防被动降级永久熔断、gemini+probe_model 过探针能力闸、healthMgr.Close 外提 balance 条件、投递自监控空错误归类 NOT NULL 直存、管理面补探针配置字段+状态 GC 防幽灵渠道)后全部归档 `archive/2026-10-30-*`;主 specs 同步(webhook-alerting +8 事件/端点、provider-balance-alerting +2 告警 requirement +旋钮拆分、新建 upstream-health +7),配置契约长文本拆出「异常消耗告警旋钮」requirement,strict 全量 26/26。
+- 门禁:`PATH=/tmp/gclbin:$PATH make check` EXIT=0(coverage gate PASS 72.3%,race 全包),web typecheck/lint/lint:css/format/vitest 31 测试/vite build(/tmp)全绿,裸元素自检 0;新增回归测试 5 项突变验证全红复绿(尾斜杠 //models、能力闸、GC、advanceTick 饿死、NOT NULL 约束)。提交推送完成,哈希见 git log。
+- 实施与评审共修九处真缺陷:实施期三处(探针循环启动竞态、测试夹具探针污染、alerting 回调测试数据竞态)+ 评审期六处(见上)。
+
+## 上一状态(2026-10-30,provider-balance-alerting 已实施评审归档并提交推送)
 
 - OpenSpec `provider-balance-alerting` 26/26 任务完成,双独立代理评审循环收口(0 P0;4 P1 + 4 P2 全根修 + 回归测试,P3 修 4 登记 7),已归档 `archive/2026-10-30-provider-balance-alerting`,主 specs 新建 provider-balance-alerting(+14 Requirement)并扩 webhook-alerting 事件覆盖(+1);归档后 strict 24/25,唯一失败为范围外既存 protocol-native-passthrough 长度警告(归档前既有)。
 - 能力:七种余额源(deepseek/moonshot/openrouter/billing-compat Bearer 直查、aliyun-bss/volc-bss 云账务签名、manual 手动录入)、有效余额=快照−计量衰减、燃速外推剩余天数、档位/阈值持久状态机(迟滞+重启不重复),复用 webhook-alerting 管道;零新增依赖;ADR-0018 已立。
 - 门禁:`PATH=/tmp/gclbin:$PATH make check` EXIT=0(coverage gate PASS 71.9%)、web 四件套+vitest 22/22+vite build(/tmp)、六帧视觉终裁 6/6(1280/768/375 × 亮暗,visual-judge);活体冒烟:临时实例 :18799 manual 全链(录入→衰减→燃速→档位 firing→凭证失败留痕)已实证,实例已拆。
 - 【同日续批,owner 委任裁决「3/4 你自己决策一下」】四条遗留项全部收口(证据见验收记录 55):①重复顶层 model 键真端点实证两上游均拒→直通改写收敛单键;②billing-compat 币种语义经 new-api 源码实证后开放显式声明;③T5.2 销案(集成已验收,跨仓基线归 kongming HANDOFF 单源);④strict 长度警告修复,`validate --all --strict` 25/25;T5.6 判「具备发版条件」,tag/push 仍待 owner 逐次指令。
 - DeepSeek 真上游余额冒烟全链过(临时实例 :18795 已拆):真余额 2.28 CNY 与直查分毫不差、below(10) firing critical、启动即评。Bearer 族四家全部真上游实证(owner 供 key,临时实例 :18796 已拆):moonshot 20.49481 CNY 分毫不差;openrouter 免费键 limit=null → Unavailable 活体(落库不失败、零告警);**siliconflow 余额端点 `/v1/user/info` 被上游正式退役(HTTP 410,替代端点探测 7 个均不存在)**,失败容忍路径活体留痕不误报。另修 Balances.tsx effect 同步 setState 违 react-hooks 规则(改渲染期派生),make check 复绿 72.0%。
+
+- 【同日续批,openspec 提案】新立三个待实施 change:`consumption-anomaly-alerting`(燃速突变+逐 key 骤降,扩展 provider-balance-alerting)、`alert-delivery-monitoring`(投递失败落库+解除+端点+横幅,扩展 webhook-alerting)、`upstream-health-probing`(探针分两层:免费控制面 GET /models 族缺省全开、渠道可退订;付费推理探针 probe_model 声明制;被动统计熔断状态机+候选域收缩/单候选快速失败+同层恢复判据+切换率越线告警+管理端点,新 capability upstream-health 并扩展 webhook-alerting 事件族;被动熔断缺省生效为路由行为变化,ADR 记录)。三 change validate --strict 全绿;**实施待 owner 指令后走 apply 流程**。
 
 ## 当前状态(2026-10-22,百炼原生多模态 Embeddings 已实现并归档)
 
@@ -17,6 +25,7 @@
 
 ## 下一步动作序列
 
+- 【2026-10-30】三 change(投递自监控/异常消耗告警/上游健康熔断)实施+评审+归档+单笔提交推送全部完成(哈希见 git log),无待办遗留;CI 实跑结果如有异常再补记验收记录。
 - 【2026-10-30】provider-balance-alerting 归档完成;同日续批(billing-compat 币种声明/重复键收敛/云签名适配/siliconflow 移除/增量评审两缺陷根修)已落;**owner 指令下单笔提交推送**(哈希见 git log),CI 实跑结果补记验收记录。
 - volc-bss/aliyun-bss 已真机销案(AK 申请姿势见记忆与验收记录 55 续条二);siliconflow 已整档移除(续条三),恢复条件=官方替代 API 公告后重新立项接入。
 - T5.6:具备发版条件;tag v1.0.0 与 push 由 owner 逐次指令,届时按 docs/v1-release-checklist.md 当版复跑门禁与冒烟。

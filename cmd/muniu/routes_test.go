@@ -50,6 +50,8 @@ func TestRoutes_与OpenAPI契约无漂移(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "muniu.yaml")
 	cfgContent := `
+health:
+  enabled: false
 providers:
   - name: openai
     adapter: openai

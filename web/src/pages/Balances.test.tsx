@@ -89,6 +89,24 @@ describe("余额告警页", () => {
     expect(screen.queryByText("低于阈值")).toBeNull();
   });
 
+  it("异常消耗规则徽章文案:burn_spike 与 cliff:<key_id> 转中文标签", async () => {
+    renderPage({
+      enabled: true,
+      providers: [
+        overview({
+          alerts: [
+            { rule_key: "burn_spike", firing: true, severity: "warning", last_fired_at: null },
+            { rule_key: "cliff:k1", firing: true, severity: "warning", last_fired_at: null },
+          ],
+        }),
+      ],
+    });
+    await vi.waitFor(() =>
+      expect(screen.getAllByText("消耗突增").length).toBeGreaterThanOrEqual(1),
+    );
+    expect(screen.getAllByText("余额骤降").length).toBeGreaterThanOrEqual(1);
+  });
+
   it("manual 录入以渠道声明币种提交载荷", async () => {
     vi.mocked(api.balanceManual).mockResolvedValueOnce({ ok: true });
     renderPage({ enabled: true, providers: [overview({})] });

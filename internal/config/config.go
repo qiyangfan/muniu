@@ -84,6 +84,12 @@ type BalanceCfg struct {
 	RearmRatioMilli  int64   `yaml:"rearm_ratio_milli"` // 告警迟滞回差,毫单位:1200=1.2 倍,须 [1000,10000],缺省 1200
 	TierHours        []int64 `yaml:"tier_hours"`        // 剩余时间告警档位(小时),降序正值;缺省 30/14/7/3/1 天
 	FailureThreshold int     `yaml:"failure_threshold"` // 余额源连续失败多少次发一次运维告警,缺省 3
+	// BurnSpikeRatioMilli 燃速突变告警倍数,毫单位:5000=当前窗口日均 ≥ 上一窗口日均 5 倍触发;
+	// nil=缺省 5000,0=禁用,负值校验期拒绝(指针区分「未配置」与「显式禁用」)。
+	BurnSpikeRatioMilli *int64 `yaml:"burn_spike_ratio_milli"`
+	// DropRatioMilli 余额骤降告警比例,毫单位:500=相邻成功快照间跌幅 ≥ 50% 触发(逐 key,Bearer 源);
+	// nil=缺省 500,0=禁用,负值校验期拒绝。
+	DropRatioMilli *int64 `yaml:"drop_ratio_milli"`
 }
 
 // Provider 上游供应商静态拓扑。
@@ -101,6 +107,29 @@ type Provider struct {
 	NativeResponses bool `yaml:"native_responses"`
 	// Balance 余额观测声明;nil = 不观测,数据面零行为变化。
 	Balance *ProviderBalance `yaml:"balance"`
+	// Health 渠道健康探针声明;nil = 渠道级全部跟随全局(free_probe 跟随 free_probe_enabled)。
+	Health *ProviderHealth `yaml:"health"`
+}
+
+// ProviderHealth 渠道级健康探针声明。
+type ProviderHealth struct {
+	// FreeProbe 渠道级免费控制面探针退订开关;nil = 跟随全局 health.free_probe_enabled。
+	FreeProbe *bool `yaml:"free_probe"`
+	// ProbeModel 付费推理探针模型(声明制);空 = 零推理探针,零付费请求。
+	ProbeModel string `yaml:"probe_model"`
+}
+
+// HealthCfg 上游健康观测全局参数;渠道级探针声明在 providers[].health。
+type HealthCfg struct {
+	Enabled          *bool `yaml:"enabled"`            // 总开关(被动统计+熔断+探针),缺省 true;false 时路由行为与无此能力逐字节一致
+	FreeProbeEnabled *bool `yaml:"free_probe_enabled"` // 免费控制面探针总闸,缺省 true;持 key 且适配器支持探针的渠道缺省全开
+	ProbeIntervalSec int   `yaml:"probe_interval_sec"` // 探针间隔,缺省 300
+	ProbeTimeoutSec  int   `yaml:"probe_timeout_sec"`  // 探针单次超时,缺省 10
+	FailureThreshold int   `yaml:"failure_threshold"`  // 连续失败阈值,缺省 2
+	OpenSeconds      int   `yaml:"open_seconds"`       // 熔断时长(degraded 计时),缺省 300
+	SwitchWindowSec  int   `yaml:"switch_window_sec"`  // 别名换道率窗口,缺省 300
+	SwitchRateMilli  int64 `yaml:"switch_rate_milli"`  // 换道率越线阈值,缺省 300(毫单位)
+	SwitchMinSamples int   `yaml:"switch_min_samples"` // 换道率最低样本数,缺省 20(小分母不判定)
 }
 
 // KeyRef 环境变量引用名，绝不存明文；weight 参与 key 池 WRR。
@@ -209,6 +238,7 @@ type Config struct {
 		DedupWindowSec int    `yaml:"dedup_window_sec"` // 同事件键静默窗口，缺省 300s
 	} `yaml:"alerts"`
 	Balance      BalanceCfg `yaml:"balance"`
+	Health       HealthCfg  `yaml:"health"`
 	ControlPlane struct {
 		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点；空为不拉取(standalone)
 		TopologyURL     string `yaml:"topology_url"`      // 控制面拓扑端点；空为文件源
@@ -419,6 +449,19 @@ func (c *Config) validate() error {
 	if c.Balance.FailureThreshold == 0 {
 		c.Balance.FailureThreshold = 3
 	}
+	// 异常消耗告警旋钮:nil=缺省,0=禁用是合法形态,负值拒绝(指针区分未配置与显式禁用)
+	if c.Balance.BurnSpikeRatioMilli == nil {
+		v := int64(5000)
+		c.Balance.BurnSpikeRatioMilli = &v
+	} else if *c.Balance.BurnSpikeRatioMilli < 0 {
+		add("balance.burn_spike_ratio_milli(%d) 不可为负(非负毫单位,0=禁用)", *c.Balance.BurnSpikeRatioMilli)
+	}
+	if c.Balance.DropRatioMilli == nil {
+		v := int64(500)
+		c.Balance.DropRatioMilli = &v
+	} else if *c.Balance.DropRatioMilli < 0 {
+		add("balance.drop_ratio_milli(%d) 不可为负(非负毫单位,0=禁用)", *c.Balance.DropRatioMilli)
+	}
 	if c.Balance.RearmRatioMilli == 0 {
 		c.Balance.RearmRatioMilli = 1200
 	}
@@ -435,6 +478,55 @@ func (c *Config) validate() error {
 		}
 		if j > 0 && h >= c.Balance.TierHours[j-1] {
 			add("balance.tier_hours 须严格降序(索引 0 为剩余最多的最浅档),%d 处失序", j)
+		}
+	}
+
+	// ---- health 上游健康观测:全局参数缺省与校验 ----
+	if c.Health.Enabled == nil {
+		v := true
+		c.Health.Enabled = &v
+	}
+	if c.Health.FreeProbeEnabled == nil {
+		v := true
+		c.Health.FreeProbeEnabled = &v
+	}
+	if c.Health.ProbeIntervalSec == 0 {
+		c.Health.ProbeIntervalSec = 300
+	}
+	if c.Health.ProbeTimeoutSec == 0 {
+		c.Health.ProbeTimeoutSec = 10
+	}
+	if c.Health.FailureThreshold == 0 {
+		c.Health.FailureThreshold = 2
+	}
+	if c.Health.OpenSeconds == 0 {
+		c.Health.OpenSeconds = 300
+	}
+	if c.Health.SwitchWindowSec == 0 {
+		c.Health.SwitchWindowSec = 300
+	}
+	if c.Health.SwitchMinSamples == 0 {
+		c.Health.SwitchMinSamples = 20
+	}
+	for name, v := range map[string]int{
+		"probe_interval_sec": c.Health.ProbeIntervalSec, "probe_timeout_sec": c.Health.ProbeTimeoutSec,
+		"failure_threshold": c.Health.FailureThreshold, "open_seconds": c.Health.OpenSeconds,
+		"switch_window_sec": c.Health.SwitchWindowSec, "switch_min_samples": c.Health.SwitchMinSamples,
+	} {
+		if v < 0 {
+			add("health.%s(%d) 不可为负(正整数秒/次)", name, v)
+		}
+	}
+	if c.Health.SwitchRateMilli == 0 {
+		c.Health.SwitchRateMilli = 300
+	}
+	if c.Health.SwitchRateMilli < 0 {
+		add("health.switch_rate_milli(%d) 不可为负(非负毫单位)", c.Health.SwitchRateMilli)
+	}
+	// 渠道级:声明 probe_model 的渠道必须持 key(无 key 渠道探针无从发起)
+	for i, p := range c.Providers {
+		if p.Health != nil && p.Health.ProbeModel != "" && len(p.Keys) == 0 {
+			add("providers[%d](%s) 声明 health.probe_model 但 keys 为空(无 key 渠道探针无从发起)", i, p.Name)
 		}
 	}
 	if c.ControlPlane.PollIntervalSec < 0 {

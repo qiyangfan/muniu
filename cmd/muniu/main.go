@@ -25,6 +25,7 @@ import (
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/balance"
 	"github.com/solvela/muniu/internal/config"
+	"github.com/solvela/muniu/internal/health"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
@@ -127,10 +128,21 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		return nil, nil, nil, fmt.Errorf("打开存储: %w", err)
 	}
 	// 告警通知器：未配置 webhook_url 时为 nil，各接入点 Emit 零开销。
+	// 投递终局回调落库自监控:通道挂了不能再用通道自报(递归陷阱),失败事实只落库走管理面可见。
 	alerts := alerting.New(alerting.Options{
 		WebhookURL:  cfg.Alerts.WebhookURL,
 		DedupWindow: time.Duration(cfg.Alerts.DedupWindowSec) * time.Second,
 		Logger:      logger,
+		OnDeliveryFailure: func(f alerting.DeliveryFailure) {
+			if err := store.RecordAlertDeliveryFailure(db, f.EventKey, f.Severity, f.Summary, f.ErrorClass, f.At); err != nil {
+				logger.Error("告警投递失败落库失败", "error_detail", err.Error())
+			}
+		},
+		OnDeliverySuccess: func(eventKey string, at time.Time) {
+			if err := store.RecordAlertDeliverySuccess(db, at); err != nil {
+				logger.Error("告警投递解除落库失败", "error_detail", err.Error())
+			}
+		},
 	})
 	// 刷盘参数接线，缺省值已在 config.validate 兜底。
 	// sink=ingest 时为远端汇加本地缓冲：投递失败整批落缓冲，恢复后按序续传。
@@ -350,7 +362,74 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		}
 	}
 
-	chatProxy := proxy.New(proxy.Config{
+	// 上游健康观测与熔断:免费控制面探针(缺省开,渠道可退订,适配器能力闸)+ 付费推理探针
+	// (probe_model 声明制)+ 被动统计;降级渠道由 proxy 候选域收缩自动降级路由。
+	// Sources 运行期经拓扑快照动态映射 key(热替换感知),探针零触碰 Pick/Report。
+	var chatProxy *proxy.Proxy
+	var healthMgr *health.Manager
+	if cfg.Health.Enabled == nil || *cfg.Health.Enabled {
+		channelBase := map[string]health.Channel{}
+		for _, p := range cfg.Providers {
+			// 全渠道入 Sources:无 key 渠道零探针载体,但被动统计与状态推进(open 计时到期转半开)
+			// 依赖周期 tick 触达——排除在外会让被动降级永不进入试探期,即永久熔断。
+			ch := health.Channel{Name: p.Name, Adapter: p.Adapter, BaseURL: p.BaseURL, Auth: p.Auth}
+			free := cfg.Health.FreeProbeEnabled == nil || *cfg.Health.FreeProbeEnabled
+			if p.Health != nil && p.Health.FreeProbe != nil {
+				free = *p.Health.FreeProbe
+			}
+			// 探针闸:适配器不支持探针(gemini 原生 v1,登记限制)或无 key 载体时静默跳过,被动统计照常
+			probes := health.ProbeSupported(p.Adapter) && len(p.Keys) > 0
+			ch.FreeProbe = free && probes
+			if p.Health != nil && p.Health.ProbeModel != "" && probes {
+				ch.ProbeModel = p.Health.ProbeModel
+			}
+			channelBase[p.Name] = ch
+		}
+		healthMgr = health.NewManager(health.Options{
+			Interval:         time.Duration(cfg.Health.ProbeIntervalSec) * time.Second,
+			Timeout:          time.Duration(cfg.Health.ProbeTimeoutSec) * time.Second,
+			FailureThreshold: cfg.Health.FailureThreshold,
+			OpenFor:          time.Duration(cfg.Health.OpenSeconds) * time.Second,
+			SwitchWindow:     time.Duration(cfg.Health.SwitchWindowSec) * time.Second,
+			SwitchMinSamples: cfg.Health.SwitchMinSamples,
+			SwitchRateMilli:  cfg.Health.SwitchRateMilli,
+			Logger:           logger,
+			Sources: func() map[string]health.Channel {
+				if chatProxy == nil {
+					return nil // 首轮探针早于 proxy 装配完成:空集跳过,下一轮拓扑已就绪
+				}
+				providers, pools := chatProxy.Topology()
+				out := make(map[string]health.Channel, len(channelBase))
+				for _, p := range providers {
+					base, ok := channelBase[p.Name]
+					if !ok {
+						continue // 热替换新增渠道的探针声明需重启生效(与余额源同口径)
+					}
+					ch := base
+					for _, kv := range pools[p.Name].Snapshot() {
+						ch.Keys = append(ch.Keys, health.ChannelKey{ID: kv.ID, Value: kv.Value})
+					}
+					out[p.Name] = ch
+				}
+				return out
+			},
+			Emit: func(e health.Event) {
+				switch e.Kind {
+				case "provider_degraded":
+					alerts.EmitContext("provider_degraded:"+e.Provider, "warning", e.Summary,
+						map[string]any{"provider": e.Provider, "reason": e.Reason})
+				case "provider_recovered":
+					alerts.EmitContext("provider_recovered:"+e.Provider, "info", e.Summary,
+						map[string]any{"provider": e.Provider})
+				case "switch_rate_exceeded":
+					alerts.EmitContext("switch_rate_exceeded:"+e.Provider, "warning", e.Summary,
+						map[string]any{"alias": e.Provider})
+				}
+			},
+		})
+		logger.Info("上游健康观测已启用", "free_probe", cfg.Health.FreeProbeEnabled == nil || *cfg.Health.FreeProbeEnabled)
+	}
+	chatProxy = proxy.New(proxy.Config{
 		Registry:     registry,
 		Providers:    cfg.Providers,
 		Routes:       cfg.ModelRoutes,
@@ -371,8 +450,14 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		StrictGovernance: cfg.StrictGovernance,
 		Plugins:          pluginReg,
 		Alerts:           alerts,
+		Health:           healthMgr,
 		Logger:           logger,
 	})
+	// 健康循环在 proxy 装配完成后启动:Sources 闭包读 chatProxy,先赋值再 Start
+	// 保证 happens-before(探针首轮不会与装配写竞争,也不会打到装配前的 nil 拓扑)
+	if healthMgr != nil {
+		healthMgr.Start()
+	}
 
 	// 控制面拓扑热替换：文件源为缺省，配置 topology_url 后启用。
 	// 启动即拉，ETag 条件请求（304 跳过），失败或损坏保持当前快照并告警降级；
@@ -503,6 +588,8 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 				TierHours:        cfg.Balance.TierHours,
 				RearmMilli:       cfg.Balance.RearmRatioMilli,
 				FailureThreshold: cfg.Balance.FailureThreshold,
+				SpikeRatioMilli:  *cfg.Balance.BurnSpikeRatioMilli,
+				DropRatioMilli:   *cfg.Balance.DropRatioMilli,
 				Settlement:       settlement,
 				Sources: func() map[string]balance.ChannelBinding {
 					providers, pools := chatProxy.Topology()
@@ -619,13 +706,15 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	adminDeps := admin.Deps{
 		DB: db, Token: adminToken, AdminAuth: adminSvc, Providers: cfg.Providers, Pools: pools,
 		Verifier: verifier, Logger: logger, Balance: balanceSvc,
-		Topology:           chatProxy.Topology,
-		PricingDir:         pricingDir,
-		StaticImagePricing: staticImages,
-		UpdateImagePricing: updateImages,
-		StaticPricing:      staticHuman,
-		RefreshPricing:     refreshPricing,
-		Plugins:            pluginReg,
+		AlertWebhookConfigured: cfg.Alerts.WebhookURL != "",
+		Health:                 healthMgr,
+		Topology:               chatProxy.Topology,
+		PricingDir:             pricingDir,
+		StaticImagePricing:     staticImages,
+		UpdateImagePricing:     updateImages,
+		StaticPricing:          staticHuman,
+		RefreshPricing:         refreshPricing,
+		Plugins:                pluginReg,
 	}
 	if cacheInst != nil {
 		adminDeps.CacheStats = cacheInst.Stats
@@ -780,6 +869,9 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		}
 		if balanceSvc != nil {
 			balanceSvc.Close() // 取消在途余额查询,状态已随评估落库
+		}
+		if healthMgr != nil {
+			healthMgr.Close() // 停探针循环,在途探针随 ctx 取消(与余额观测启用与否无关)
 		}
 		verifier.Close()
 		_ = pipeline.Close() // 退出前排干计量存量

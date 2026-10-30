@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -44,8 +45,13 @@ type Options struct {
 	TierHours        []int64       // 缺省 30/14/7/3/1 天
 	RearmMilli       int64         // 缺省 1200
 	FailureThreshold int           // 缺省 3
-	Settlement       string        // CNY|USD,缺省 CNY
-	Now              func() time.Time
+	// SpikeRatioMilli 燃速突变触发线(毫单位,当前/上一窗口日均比值);0 = 禁用。
+	// 缺省值由配置层兜底(nil→5000),此处 0 视为显式禁用,不再二次兜底。
+	SpikeRatioMilli int64
+	// DropRatioMilli 余额骤降触发线(毫单位,相邻成功快照跌幅,仅 Bearer 源);0 = 禁用。
+	DropRatioMilli int64
+	Settlement     string // CNY|USD,缺省 CNY
+	Now            func() time.Time
 	// Sources 每次评估动态取渠道绑定(感知拓扑热替换):渠道名 → 绑定。
 	Sources func() map[string]ChannelBinding
 }
@@ -336,14 +342,84 @@ func (s *Service) burnOf(provider string, now time.Time) (int64, int) {
 	return total, withUsage
 }
 
+// spikeRatioOf 燃速突变判据合成:当前窗口日均 ÷ 上一等长窗口日均(毫单位)与基线日均。
+// 判据不可得(禁用/零消耗/任一窗口样本不足/零基线)返回 nil,状态机保持原态——
+// 基线窗口零消耗=无基线不臆测,与档位估算「数据不足」同一诚实纪律。
+func (s *Service) spikeRatioOf(provider string, est Estimate, now time.Time) (*int64, int64) {
+	if s.opts.SpikeRatioMilli <= 0 {
+		return nil, 0
+	}
+	if est.BurnPerDay <= 0 || est.DaysWithUsage < s.opts.MinSampleDays {
+		return nil, 0
+	}
+	from := now.UTC().AddDate(0, 0, -2*s.opts.WindowDays).Format(time.RFC3339)
+	to := now.UTC().AddDate(0, 0, -s.opts.WindowDays).Format(time.RFC3339)
+	days, err := store.BurnWindowRange(s.opts.DB, provider, from, to)
+	if err != nil {
+		s.log.Error("上一燃速窗口聚合失败", "provider", provider, "error_detail", err.Error())
+		return nil, 0
+	}
+	prevTotal := int64(0)
+	prevDays := 0
+	for _, d := range days {
+		prevTotal += d.Credits
+		if d.Credits > 0 {
+			prevDays++
+		}
+	}
+	if prevTotal <= 0 || prevDays < s.opts.MinSampleDays {
+		return nil, 0
+	}
+	prevPerDay := prevTotal / int64(s.opts.WindowDays)
+	ratio := est.BurnPerDay * 1000 / prevPerDay
+	return &ratio, prevPerDay
+}
+
+// cliffTransitionsOf 逐 key 相邻转移集(骤降判据):仅 Bearer 查询源参与——manual 人工录入
+// 天然跳变、云账务有月账单周期性大跌,均不适用;转移取快照行的 prev_* 平移列,
+// 由查询成功写入时平移维护,失败查询不产生新转移。
+func (s *Service) cliffTransitionsOf(provider string, binding ChannelBinding) map[string]CliffTransition {
+	if s.opts.DropRatioMilli <= 0 || !IsBearer(binding.Kind) {
+		return nil
+	}
+	rows, err := store.ListBalanceSnapshots(s.opts.DB, provider)
+	if err != nil {
+		s.log.Error("骤降转移快照读取失败", "provider", provider, "error_detail", err.Error())
+		return nil
+	}
+	out := make(map[string]CliffTransition, len(rows))
+	for _, r := range rows {
+		if r.KeyID == store.AccountKeyID || !r.HasPrevTransition() || r.BalanceCredits == nil {
+			continue // 无前值/无现值:转移不可判
+		}
+		out[r.KeyID] = CliffTransition{
+			KeyID:        r.KeyID,
+			PrevCredits:  *r.PrevBalanceCredits,
+			CurrCredits:  *r.BalanceCredits,
+			SameCurrency: r.Currency != "" && r.PrevCurrency == r.Currency,
+			Currency:     r.Currency,
+		}
+	}
+	return out
+}
+
 // estimateAndAlert 燃速估算 → 状态机 → 全量状态落库 + 发射。
 func (s *Service) estimateAndAlert(provider string, binding ChannelBinding, now time.Time) {
 	est, _ := s.observe(provider, now)
 	prev := s.prevStates(provider)
-	rules := RulesFor(s.opts.TierHours, binding.BelowCredits)
+	cliffTrans := s.cliffTransitionsOf(provider, binding)
+	cliffKeys := make([]string, 0, len(cliffTrans))
+	for k := range cliffTrans {
+		cliffKeys = append(cliffKeys, k)
+	}
+	sort.Strings(cliffKeys) // 规则集顺序稳定,便于测试与状态表可读
+	spike, prevPerDay := s.spikeRatioOf(provider, est, now)
+	rules := RulesFor(s.opts.TierHours, binding.BelowCredits, s.opts.SpikeRatioMilli, cliffKeys, s.opts.DropRatioMilli)
 	states, firings := Evaluate(EvaluateInput{
 		Provider: provider, Rules: rules, Prev: prev, Est: est,
 		BelowValue: est.MinEffective, RearmMilli: s.opts.RearmMilli, Now: now,
+		SpikeRatioMilli: spike, PrevBurnPerDay: prevPerDay, CurBurnPerDay: est.BurnPerDay,
+		CliffTransitions: cliffTrans,
 	})
 	for ruleKey, st := range states {
 		sst := store.AlertState{
@@ -391,6 +467,10 @@ func EventKey(provider, ruleKey string) string {
 		return "balance_below:" + provider
 	case ruleKey == ruleKeySourceError:
 		return "balance_source_error:" + provider
+	case ruleKey == RuleKeyBurnSpike:
+		return "balance_burn_spike:" + provider
+	case strings.HasPrefix(ruleKey, RuleKeyCliffPrefix):
+		return "balance_cliff:" + provider + ":" + strings.TrimPrefix(ruleKey, RuleKeyCliffPrefix)
 	case strings.HasPrefix(ruleKey, RuleKeyTierPrefix):
 		return "balance_tier:" + provider + ":" + strings.TrimPrefix(ruleKey, RuleKeyTierPrefix) + "h"
 	default:

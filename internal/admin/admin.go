@@ -15,6 +15,7 @@ import (
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/balance"
 	"github.com/solvela/muniu/internal/config"
+	"github.com/solvela/muniu/internal/health"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
@@ -47,13 +48,15 @@ type Deps struct {
 	Topology   func() ([]config.Provider, map[string]*keypool.Pool)
 	Verifier   *auth.Verifier
 
-	StaticImagePricing map[string]metering.ImagePrice
-	UpdateImagePricing func(string, *store.ImagePricingRecord) error
-	PricingDir         *metering.PricingDirectory
-	StaticPricing      map[string]StaticEntry
-	RefreshPricing     func() error
-	Plugins            *plugin.Registry // WASM 插件注册表；nil = 端点返回禁用态
-	Balance            *balance.Service // 余额观测服务;nil = 观测未启用,端点返回禁用/空态
+	StaticImagePricing     map[string]metering.ImagePrice
+	UpdateImagePricing     func(string, *store.ImagePricingRecord) error
+	PricingDir             *metering.PricingDirectory
+	StaticPricing          map[string]StaticEntry
+	RefreshPricing         func() error
+	Plugins                *plugin.Registry // WASM 插件注册表；nil = 端点返回禁用态
+	Balance                *balance.Service // 余额观测服务;nil = 观测未启用,端点返回禁用/空态
+	Health                 *health.Manager  // 上游健康管理器;nil = 观测未启用,端点返回空态
+	AlertWebhookConfigured bool             // webhook_url 是否配置;false 时投递自监控端点返回关闭态
 
 	Logger *slog.Logger
 }
@@ -97,6 +100,8 @@ var adminRouteTable = []adminRouteEntry{
 	{"GET /admin/v1/balances", balancesOverview},
 	{"POST /admin/v1/balances/{provider}/manual", balanceManual},
 	{"POST /admin/v1/balances/{provider}/refresh", balanceRefresh},
+	{"GET /admin/v1/alerts/delivery-status", alertDeliveryStatus},
+	{"GET /admin/v1/upstream-health", upstreamHealth},
 }
 
 // New 按共享令牌或活跃账号开放管理面，认证装配失败不暴露空壳。

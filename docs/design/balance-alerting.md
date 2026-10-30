@@ -30,6 +30,8 @@
 - **档位**:缺省 30/14/7/3/1 天,配置 `tier_hours` 任意降序正小时数组;子天档位技术上允许、缺省不给(日粒度燃速推出的小时级估算误差主导信号)。
 - **状态机**:armed → firing(跌破触发线,单次发射)→ armed(回升超 触发线×`rearm_ratio_milli`);判据不可得时状态保持(不误触发也不误解除);状态持久于 `balance_alert_states`,重启不重复告警。
 - **失败容忍**:单次失败保持旧快照;渠道级连续失败(全部 key 失败,取各 key 行失败计数最小值)达 `failure_threshold` 发一次 `balance_source_error`,成功即清零解除。
+- **燃速突变(burn_spike)**:当前回看窗口日均 ÷ 上一等长窗口日均 ≥ `burn_spike_ratio_milli`(缺省 5000,0=禁用)触发 warning;两窗口消耗天数均须达 `burn_min_days`(零基线不臆测);回落到触发线 ÷ 迟滞系数以下解除。燃速取自网关自身计量(usage_logs),key 被外部盗刷不经网关计量、此规则不可见——外部盗刷由骤降规则捕捉,两条规则互补不可互替。
+- **余额骤降(cliff:<key_id>)**:仅 Bearer 源逐 key 判定(manual 人工录入天然跳变、云账务月账单周期大跌,均排除);判据为相邻两次成功快照(同币种)跌幅 ≥ `drop_ratio_milli`(缺省 500 即 50%,0=禁用),前值由 `provider_balances` 平移列(成功写入时平移,失败不动)承载;一次骤降只发一次,须一次平稳观测(跌幅低于阈值,含充值上升)才重新武装;币种不一致/前值非正不判定。
 - **解耦铁律**:余额查询不触 key 池 Pick/Report(不扰动 WRR 与冷却),异步于数据面,单渠道 panic 隔离。
 
 ## 事件与通知
@@ -41,10 +43,15 @@
 | `balance_below:<provider>` | critical | provider/rule/balance/currency |
 | `balance_tier:<provider>:<h>h` | 30d/14d→info、7d/3d→warning、≤1d→critical | +remaining_hours |
 | `balance_source_error:<provider>` | warning | consecutive_failures |
+| `balance_burn_spike:<provider>` | warning | prev/cur_burn_per_day_credits、ratio_milli |
+| `balance_cliff:<provider>:<key_id>` | warning | key_id、prev/curr_balance、drop_ratio_milli |
+
+**投递自监控**:投递经退避重试仍最终失败时,失败事实(事件键/severity/摘要/错误归类/时刻)经 Notifier 终局回调落库单行表 `alert_delivery_status`;失败期重复失败推进计数,任一次投递成功置解除并保留失败事实;新失败期重置计数。递归纪律:失败状态绝不经 webhook 外发(通道已断,外发即递归),唯一可见面是 `GET /admin/v1/alerts/delivery-status` 与总览页警示横幅(未解除时渲染,恢复自动消失)。事件本体不回放——通道恢复后失败期间的告警不补发,尽力通知语义不变。
 
 ## 管理 API 与控制台
 
 - `GET /admin/v1/balances` 总览(每 key 快照/有效余额、燃速、剩余估算或禁用原因、告警态、失败计数与归类);金额一律十进制串,量数出 number。
+- `GET /admin/v1/alerts/delivery-status` 投递自监控(configured/failing/最近失败事实/解除时刻);总览页在存在未解除失败时渲染警示横幅。
 - `POST /admin/v1/balances/{provider}/manual` 录入快照(金额十进制串 + 币种须与配置一致);录入即生效并触发立即评估。
 - `POST /admin/v1/balances/{provider}/refresh` 单渠道立即查询(异步)。
 - 控制台「余额告警」页:桌面表格 ↔ 移动实体卡片(manual 源页头录入表单)。
@@ -55,4 +62,4 @@
 - **估算口径**:网关计价与上游真实扣费存在口径差(上游分时计价、缓存价近似),上游定期查询天然校正衰减累计误差;界面与告警文案一律「≈」。
 - **安全清单**:云凭证只经 `${VAR}` 同款环境变量引用注入(字段存变量名);建议云侧 RAM/IAM 子账号最小授权账务只读;凭证不落日志、告警载荷、存储。billing-compat 需上游开启货币显示(one-api 关闭货币显示时金额字段为 quota 原始值,实现侧量级护栏会判失败)。
 - **billing-compat 币种纪律**(2026-10-30 真源码实证):`*_usd` 字段族不自带可信币种语义——new-api `controller/billing.go` 按站点 `QuotaDisplayType` 换算,人民币显示站点产出 CNY 数值、token 显示站点产出 token 数,协议面不可自动判定。故币种缺省 USD(OpenAI 官方端点语义),站点显示币种非 USD 时必须显式声明 `balance.currency`,否则 below 阈值错档、天数估算被币种纪律误拦;其余 Bearer 源上游自述币种,声明 currency 仍被拒绝。
-- **存储**:迁移 `0015_balance.sql` 两表(`provider_balances` 每 key 最新快照、`balance_alert_states` 每规则状态);不存历史曲线,日耗由 `usage_logs` 现算。
+- **存储**:迁移 `0015_balance.sql` 两表 + `0017_balance_prev.sql`(骤降前值三列):`provider_balances` 每 key 最新快照(含 prev_* 平移列)、`balance_alert_states` 每规则状态;不存历史曲线,日耗由 `usage_logs` 现算。

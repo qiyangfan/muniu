@@ -159,6 +159,8 @@ pricing:
 #   rearm_ratio_milli: 1200      # 告警迟滞回差(毫单位,1200=1.2 倍),低于 1000 会在触发线附近抖动
 #   tier_hours: [720, 336, 168, 72, 24]   # 剩余时间档位,须严格降序;缺省 30/14/7/3/1 天
 #   failure_threshold: 3         # 余额源连续失败多少次发一次运维告警
+#   burn_spike_ratio_milli: 5000 # 燃速突变告警倍数(毫单位):当前窗口日均 ≥ 上一等长窗口日均 5 倍触发;0=禁用
+#   drop_ratio_milli: 500        # 余额骤降告警比例(毫单位):相邻成功快照间跌幅 ≥ 50% 触发(逐 key,仅 Bearer 源);0=禁用
 # 渠道级声明示例(挂到对应 provider 下):
 #     balance:
 #       source: deepseek                          # Bearer 直查族
@@ -173,6 +175,24 @@ pricing:
 #       source: aliyun-bss                        # 云账务签名源(火山为 volc-bss)
 #       access_key_env: ALIYUN_ACCESS_KEY_ID      # 只写环境变量名,建议只授账务只读权限
 #       secret_key_env: ALIYUN_ACCESS_KEY_SECRET
+
+# 上游健康观测与熔断降级(ADR-0019):免费控制面探针缺省全开(零货币成本,渠道可退订),
+# 付费推理探针声明制(probe_model 非空才启用);被动统计缺省开启,渠道劣化自动收缩出候选域
+# (多候选透明切换、单候选 503 provider_circuit_open 快速失败),恢复自动扩回并通知。
+# health:
+#   enabled: true             # 总开关;false 时路由行为与无此能力逐字节一致
+#   free_probe_enabled: true  # 免费控制面探针总闸(gemini 原生渠道不支持探针,被动统计照常)
+#   probe_interval_sec: 300   # 探针间隔
+#   probe_timeout_sec: 10     # 探针单次超时
+#   failure_threshold: 2      # 连续失败阈值
+#   open_seconds: 300         # 熔断时长(到期转半开,由探针或真实流量试探恢复)
+#   switch_window_sec: 300    # 别名换道率窗口
+#   switch_rate_milli: 300    # 换道率越线阈值(毫单位,300=30%)
+#   switch_min_samples: 20    # 换道率最低样本数(小分母不判定)
+# 渠道级声明示例(挂到对应 provider 下):
+#     health:
+#       free_probe: false     # 渠道级退订免费探针
+#       probe_model: up-a     # 声明即启用付费推理探针(企业按需;个人项目零付费)
 
 # 语义缓存默认关闭；启用时还需打开租户开关。
 # embedding_model 必须已配置在 model_routes 中。

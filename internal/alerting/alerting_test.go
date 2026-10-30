@@ -90,3 +90,48 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("条件未在时限内达成")
 }
+
+func TestAlerting_终局回调失败与成功(t *testing.T) {
+	var fails atomic.Int32
+	failCh := make(chan DeliveryFailure, 4)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	n := New(Options{WebhookURL: srv.URL, Backoff: []time.Duration{time.Millisecond},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnDeliveryFailure: func(f DeliveryFailure) { fails.Add(1); failCh <- f }})
+
+	n.Emit("e", "warning", "s")
+	waitFor(t, func() bool { return fails.Load() == 1 })
+	got := <-failCh // 通道传递规避跨 goroutine 数据竞态
+	time.Sleep(20 * time.Millisecond)
+	if fails.Load() != 1 {
+		t.Fatalf("失败回调应恰一次: %d", fails.Load())
+	}
+	if got.EventKey != "e" || got.Severity != "warning" || got.ErrorClass != "http_status_500" {
+		t.Fatalf("失败事实不符: %+v", got)
+	}
+
+	var oks atomic.Int32
+	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	t.Cleanup(srv2.Close)
+	n2 := New(Options{WebhookURL: srv2.URL, Backoff: []time.Duration{time.Millisecond},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnDeliverySuccess: func(eventKey string, at time.Time) { oks.Add(1) }})
+	n2.Emit("ok", "info", "s")
+	waitFor(t, func() bool { return oks.Load() == 1 })
+}
+
+func TestAlerting_回调panic不反噬投递(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+	}))
+	t.Cleanup(srv.Close)
+	n := New(Options{WebhookURL: srv.URL, Backoff: []time.Duration{time.Millisecond},
+		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		OnDeliverySuccess: func(string, time.Time) { panic("boom") }})
+	n.Emit("p", "info", "s")
+	waitFor(t, func() bool { return hits.Load() >= 1 }) // 投递完成即证明回调 panic 未反噬
+}

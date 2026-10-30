@@ -1,10 +1,11 @@
-// 总览展示按日用量、成本和语义缓存统计。
+// 总览展示按日用量、成本和语义缓存统计,以及告警通道投递失败的显著警示。
 import { useEffect, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { api, type CacheStats, type UsagePoint } from "../lib/api";
+import { api, type AlertDeliveryStatus, type CacheStats, type UsagePoint } from "../lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { ErrorAlert } from "../components/error-alert";
 import { EmptyState } from "../components/empty-state";
+import { NoticeBanner } from "../components/notice-banner";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/stat-card";
 import { formatNumber } from "../lib/datetime";
@@ -13,6 +14,7 @@ import { fmtCredits } from "../lib/utils";
 export default function Overview() {
   const [points, setPoints] = useState<UsagePoint[]>([]);
   const [stats, setStats] = useState<CacheStats | null>(null);
+  const [delivery, setDelivery] = useState<AlertDeliveryStatus | null>(null);
   const [err, setErr] = useState("");
   // 加载期间与零数据状态分开显示。
   const [loaded, setLoaded] = useState(false);
@@ -27,11 +29,25 @@ export default function Overview() {
       .cacheStats()
       .then(setStats)
       .catch(() => setStats(null));
+    // 投递状态加载失败静默降级(横幅是辅助面,不为它挡总览)
+    api
+      .alertDeliveryStatus()
+      .then(setDelivery)
+      .catch(() => setDelivery(null));
   }, []);
 
   if (err) return <ErrorAlert text={`错误:${err}`} />;
   return (
     <div className="space-y-4">
+      {/* 通道挂了不能再用通道自报:投递失败只在此落库可见,恢复后自动消失 */}
+      {delivery?.configured && delivery.failing && (
+        <NoticeBanner role="alert">
+          告警通知发送失败({delivery.failure_count} 次,最近 {delivery.last_failure_at}):
+          {delivery.last_summary}
+          {delivery.last_error ? ` · 错误归类 ${delivery.last_error}` : ""}
+          。恢复后此提示自动消失;失败期间的告警不会补发。
+        </NoticeBanner>
+      )}
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
           label="语义缓存条目"

@@ -34,6 +34,7 @@
 | context_canceled | 客户端断连 | 静默退出,不换道不计失败 | 静默退出,计量已发生部分 |
 | cost_budget_exceeded | 网关策略:单请求成本预算超限(request-cost-budget) | 静默终结,不换道不计失败(同别名跨候选价目相同,换道无解) | 静默终结(中断出口已自行写流内错误帧/402 信封) |
 | **候选适配性豁免(桥接工具限制;防御性保留)** | 请求含 role=tool / assistant.tool_calls 且候选为**未声明工具翻译完整的桥接型**(Bridger ∧ ToolRoundtripComplete=false) | **跳过候选,不计 key EMA/冷却**(适配性不匹配≠上游故障);候选取 key 之前生效 | —(检测在候选循环,先于 attempt;anthropic 桥接已声明完整不再触发,机制经测试替身钉住) |
+| **健康熔断收缩(ADR-0019;防御性降级)** | 候选渠道处于健康降级态(免费/付费探针或被动统计触发) | **跳过候选,不计错误类**(先于路径判定与取 key;半开相位放行流量作试探);跳过不计别名换道率;全部候选被收缩且无真实上游错误 → 503 `provider_circuit_open` 快速失败信封 | —(检测在候选循环,先于 attempt;细节见 docs/design/upstream-health.md) |
 
 候选耗尽仍失败 → 最终错误信封 `code=all_candidates_failed`;候选列表耗尽的 429/401 类错误在信封 `message` 中如实说明「已尝试全部候选」。**全部候选因桥接豁免跳过且无任何真实上游错误** → 最终信封 `code=bridge_tool_roundtrip_unsupported`(400,自解释文案;upstream-egress-batch 契约)。非流式请求没有「已过首 token」态(首字节前全部可重放)。
 

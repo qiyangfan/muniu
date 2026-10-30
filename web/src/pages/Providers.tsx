@@ -1,6 +1,11 @@
 // 查看已接入供应商状态并复制官方端点配置。
 import { useEffect, useState } from "react";
-import { api, type ProviderInfo, type ProviderPreset } from "../lib/api";
+import {
+  api,
+  type ProviderInfo,
+  type ProviderPreset,
+  type UpstreamHealthProvider,
+} from "../lib/api";
 import { Badge } from "../components/ui/badge";
 import { StatusBadge, type StatusMeta } from "../components/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -23,6 +28,19 @@ const STATE_META: StatusMeta = {
   cooldown: { label: "冷却中", variant: "warning" },
   disabled: { label: "已停用", variant: "destructive" },
   unknown: { label: "未知", variant: "secondary" },
+};
+
+// 渠道健康相位徽标:healthy 不渲染(健康是常态,零噪音)。
+const HEALTH_META: StatusMeta = {
+  degraded: { label: "健康熔断中", variant: "destructive" },
+  half_open: { label: "恢复试探中", variant: "warning" },
+};
+
+// 降级原因的用户事实文案。
+const HEALTH_REASON_LABELS: Record<string, string> = {
+  control_plane: "控制面探针失败",
+  inference: "推理面探针失败",
+  passive: "真实流量失败率越线",
 };
 
 // 可配置适配器的展示名。
@@ -204,6 +222,9 @@ function PresetCatalog() {
 
 export default function Providers() {
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [healthByProvider, setHealthByProvider] = useState<Record<string, UpstreamHealthProvider>>(
+    {},
+  );
   const [err, setErr] = useState("");
   // 区分加载中与空数据，避免请求完成前显示空状态。
   const [loaded, setLoaded] = useState(false);
@@ -216,6 +237,17 @@ export default function Providers() {
       })
       .catch((e) => setErr(e.message))
       .finally(() => setLoaded(true));
+    // 健康观测未启用时端点返回 enabled=false,不渲染任何健康元素
+    api
+      .upstreamHealth()
+      .then((r) => {
+        const map: Record<string, UpstreamHealthProvider> = {};
+        for (const pv of r.providers ?? []) {
+          if (pv.provider != null) map[pv.provider] = pv;
+        }
+        setHealthByProvider(map);
+      })
+      .catch(() => setHealthByProvider({}));
   }, []);
   return (
     <div className="space-y-4">
@@ -233,34 +265,54 @@ export default function Providers() {
           <EmptyState>暂无供应商</EmptyState>
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
-            {providers.map((p) => (
-              <Card key={p.name} className="space-y-2 p-4">
-                <div className="flex justify-between">
-                  <span className="font-semibold">{p.name}</span>
-                  <span className="text-xs text-muted-foreground">{adapterLabel(p.adapter)}</span>
-                </div>
-                <div className="text-xs break-all text-muted-foreground">{p.base_url}</div>
-                <div className="text-xs text-muted-foreground">
-                  权重 {p.weight} · 优先级 {p.priority}
-                </div>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                  {(p.keys ?? []).map((k) => (
-                    <span key={k.id} className="flex items-center gap-1.5 text-xs">
-                      <span className="font-mono">{k.id}</span>
-                      <StatusBadge
-                        meta={STATE_META}
-                        value={k.state ?? "unknown"}
-                        fallbackVariant="secondary"
-                      />
+            {providers.map((p) => {
+              const name = p.name ?? "";
+              const hv = healthByProvider[name];
+              return (
+                <Card key={p.name} className="space-y-2 p-4">
+                  <div className="flex justify-between">
+                    <span className="font-semibold">{p.name}</span>
+                    <span className="flex items-center gap-2">
+                      <HealthBadge view={hv} />
+                      <span className="text-xs text-muted-foreground">
+                        {adapterLabel(p.adapter)}
+                      </span>
                     </span>
-                  ))}
-                </div>
-              </Card>
-            ))}
+                  </div>
+                  {hv != null && hv.phase === "degraded" && hv.reason != null && (
+                    <div className="text-xs text-destructive">
+                      降级原因:{HEALTH_REASON_LABELS[hv.reason] ?? hv.reason}
+                    </div>
+                  )}
+                  <div className="text-xs break-all text-muted-foreground">{p.base_url}</div>
+                  <div className="text-xs text-muted-foreground">
+                    权重 {p.weight} · 优先级 {p.priority}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                    {(p.keys ?? []).map((k) => (
+                      <span key={k.id} className="flex items-center gap-1.5 text-xs">
+                        <span className="font-mono">{k.id}</span>
+                        <StatusBadge
+                          meta={STATE_META}
+                          value={k.state ?? "unknown"}
+                          fallbackVariant="secondary"
+                        />
+                      </span>
+                    ))}
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </section>
       <PresetCatalog />
     </div>
   );
+}
+
+// HealthBadge 渠道健康相位徽标;健康态与未启用观测不渲染(健康是常态,零噪音)。
+function HealthBadge({ view }: { view?: UpstreamHealthProvider }) {
+  if (!view || view.phase === "healthy" || !view.phase) return null;
+  return <StatusBadge meta={HEALTH_META} value={view.phase} fallbackVariant="secondary" />;
 }

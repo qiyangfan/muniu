@@ -1252,6 +1252,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/v1/upstream-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 上游健康总览(各渠道健康相位/降级原因/探针结果与各别名换道率;未启用时 enabled=false) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 渠道健康总览 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["UpstreamHealthResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/alerts/delivery-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 告警投递自监控(webhook 投递最终失败的单行事实;失败中/已解除/从未失败;未配置时 configured=false) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 投递状态(失败事实与解除时刻,历史失败保留) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AlertDeliveryStatusResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/images/generations": {
         parameters: {
             query?: never;
@@ -2025,6 +2097,62 @@ export interface components {
             /** @description 结算币种(CNY|USD),燃速计价口径 */
             settlement?: string;
             providers?: components["schemas"]["BalanceOverview"][];
+        };
+        UpstreamHealthResponse: {
+            /** @description 上游健康观测是否启用(总开关关闭或未装配时 false) */
+            enabled?: boolean;
+            providers?: components["schemas"]["UpstreamHealthProvider"][];
+            aliases?: components["schemas"]["UpstreamHealthAlias"][];
+        };
+        UpstreamHealthProvider: {
+            provider?: string;
+            /** @description healthy|degraded|half_open */
+            phase?: string;
+            /** @description 降级原因:control_plane(免费控制面探针)|inference(付费推理探针)|passive(被动统计);健康态为空 */
+            reason?: string;
+            /** @description 渠道免费控制面探针是否生效(适配器能力与退订声明归一后) */
+            free_probe?: boolean;
+            /** @description 付费推理探针模型;非空=已启用(声明制),空=零付费探针 */
+            probe_model?: string;
+            /** @description 降级时刻(RFC3339);空=未降级 */
+            degraded_at?: string;
+            /** @description 熔断计时到期(RFC3339,到期转半开);空=非降级态 */
+            open_until?: string;
+            /** @description 最近一次恢复时刻(RFC3339);空=从未恢复 */
+            recovered_at?: string;
+            /** @description 最近探针时刻(RFC3339);空=尚无探针结果 */
+            last_probe_at?: string;
+            /** @description 最近探针成败;null=尚无探针结果 */
+            last_probe_ok?: boolean | null;
+            /** @description 最近探针错误归类(http_status_NNN/network/timeout);空=最近成功 */
+            last_probe_class?: string;
+        };
+        UpstreamHealthAlias: {
+            alias?: string;
+            /** @description 当前窗口换道率(毫单位) */
+            ratio_milli?: number;
+            /** @description 当前窗口样本数(低于最低样本数不判定越线) */
+            samples?: number;
+            /** @description 是否越线(样本不足时恒 false) */
+            breached?: boolean;
+        };
+        AlertDeliveryStatusResponse: {
+            /** @description webhook_url 是否配置(false 时无投递面,其余字段不出现) */
+            configured?: boolean;
+            /** @description 是否存在未解除的投递失败 */
+            failing?: boolean;
+            /** @description 最近一次最终失败的事件键;无失败历史时不出现 */
+            last_event_key?: string;
+            last_severity?: string;
+            last_summary?: string;
+            /** @description 错误归类:http_status_<code> 或 network */
+            last_error?: string;
+            /** @description 当前失败期连续失败次数(成功解除后重置) */
+            failure_count?: number;
+            /** @description 最近一次最终失败时刻(RFC3339);空=无 */
+            last_failure_at?: string;
+            /** @description 最近一次解除时刻(RFC3339);空=从未解除 */
+            last_resolved_at?: string;
         };
         BalanceOverview: {
             provider?: string;

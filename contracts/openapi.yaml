@@ -256,6 +256,49 @@ components:
         providers:
           type: array
           items: { $ref: "#/components/schemas/BalanceOverview" }
+    UpstreamHealthResponse:
+      type: object
+      properties:
+        enabled: { type: boolean, description: "上游健康观测是否启用(总开关关闭或未装配时 false)" }
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/UpstreamHealthProvider" }
+        aliases:
+          type: array
+          items: { $ref: "#/components/schemas/UpstreamHealthAlias" }
+    UpstreamHealthProvider:
+      type: object
+      properties:
+        provider: { type: string }
+        phase: { type: string, description: "healthy|degraded|half_open" }
+        reason: { type: string, description: "降级原因:control_plane(免费控制面探针)|inference(付费推理探针)|passive(被动统计);健康态为空" }
+        free_probe: { type: boolean, description: "渠道免费控制面探针是否生效(适配器能力与退订声明归一后)" }
+        probe_model: { type: string, description: "付费推理探针模型;非空=已启用(声明制),空=零付费探针" }
+        degraded_at: { type: string, description: "降级时刻(RFC3339);空=未降级" }
+        open_until: { type: string, description: "熔断计时到期(RFC3339,到期转半开);空=非降级态" }
+        recovered_at: { type: string, description: "最近一次恢复时刻(RFC3339);空=从未恢复" }
+        last_probe_at: { type: string, description: "最近探针时刻(RFC3339);空=尚无探针结果" }
+        last_probe_ok: { type: boolean, nullable: true, description: "最近探针成败;null=尚无探针结果" }
+        last_probe_class: { type: string, description: "最近探针错误归类(http_status_NNN/network/timeout);空=最近成功" }
+    UpstreamHealthAlias:
+      type: object
+      properties:
+        alias: { type: string }
+        ratio_milli: { type: integer, description: "当前窗口换道率(毫单位)" }
+        samples: { type: integer, description: "当前窗口样本数(低于最低样本数不判定越线)" }
+        breached: { type: boolean, description: "是否越线(样本不足时恒 false)" }
+    AlertDeliveryStatusResponse:
+      type: object
+      properties:
+        configured: { type: boolean, description: "webhook_url 是否配置(false 时无投递面,其余字段不出现)" }
+        failing: { type: boolean, description: "是否存在未解除的投递失败" }
+        last_event_key: { type: string, description: "最近一次最终失败的事件键;无失败历史时不出现" }
+        last_severity: { type: string }
+        last_summary: { type: string }
+        last_error: { type: string, description: "错误归类:http_status_<code> 或 network" }
+        failure_count: { type: integer, description: "当前失败期连续失败次数(成功解除后重置)" }
+        last_failure_at: { type: string, description: "最近一次最终失败时刻(RFC3339);空=无" }
+        last_resolved_at: { type: string, description: "最近一次解除时刻(RFC3339);空=从未解除" }
     BalanceOverview:
       type: object
       properties:
@@ -614,6 +657,26 @@ paths:
         "200": { description: "已受理(async=true,结果经总览可见)" }
         "400": { description: "余额观测未启用" }
         "404": { description: "渠道未声明余额源" }
+
+  /admin/v1/upstream-health:
+    get:
+      summary: 上游健康总览(各渠道健康相位/降级原因/探针结果与各别名换道率;未启用时 enabled=false)
+      responses:
+        "200":
+          description: 渠道健康总览
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpstreamHealthResponse" }
+
+  /admin/v1/alerts/delivery-status:
+    get:
+      summary: 告警投递自监控(webhook 投递最终失败的单行事实;失败中/已解除/从未失败;未配置时 configured=false)
+      responses:
+        "200":
+          description: 投递状态(失败事实与解除时刻,历史失败保留)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AlertDeliveryStatusResponse" }
 
   /v1/images/generations:
     post:

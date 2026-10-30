@@ -43,6 +43,8 @@ storage:
     path: %q
 metrics:
   enabled: true
+health:
+  enabled: false
 providers:
   - name: %s
     adapter: qwen
@@ -196,6 +198,8 @@ storage:
     path: %q
 metrics:
   enabled: true
+health:
+  enabled: false
 providers:
   - name: %s
     adapter: nosuch-adapter

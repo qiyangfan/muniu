@@ -612,6 +612,10 @@ model_routes:
 		cfg.Balance.FailureThreshold != 3 || cfg.Balance.RearmRatioMilli != 1200 {
 		t.Fatalf("全局缺省值失真: %+v", cfg.Balance)
 	}
+	if cfg.Balance.BurnSpikeRatioMilli == nil || *cfg.Balance.BurnSpikeRatioMilli != 5000 ||
+		cfg.Balance.DropRatioMilli == nil || *cfg.Balance.DropRatioMilli != 500 {
+		t.Fatalf("异常消耗旋钮缺省失真: %+v", cfg.Balance)
+	}
 	if len(cfg.Balance.TierHours) != 5 || cfg.Balance.TierHours[0] != 720 || cfg.Balance.TierHours[4] != 24 {
 		t.Fatalf("档位缺省失真: %v", cfg.Balance.TierHours)
 	}
@@ -673,6 +677,26 @@ func TestBalance_渠道级来源字段约束(t *testing.T) {
 		{"cloud缺凭证", "balance:\n      source: aliyun-bss", "access_key_env 必填"},
 		{"cloud凭证名非法", "balance:\n      source: volc-bss\n      access_key_env: 9AK\n      secret_key_env: SK", "须为环境变量名"},
 	}
+	// 异常消耗旋钮:显式 0=禁用是合法形态,负值拒绝
+	base := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+	if _, lerr := Load(writeTemp(t, "balance:\n  burn_spike_ratio_milli: 0\n  drop_ratio_milli: 0\n"+base)); lerr != nil {
+		t.Fatalf("旋钮显式 0=禁用应通过: %v", lerr)
+	}
+	_, nerr := Load(writeTemp(t, "balance:\n  burn_spike_ratio_milli: -1\n  drop_ratio_milli: -500\n"+base))
+	if nerr == nil || !strings.Contains(nerr.Error(), "burn_spike_ratio_milli") || !strings.Contains(nerr.Error(), "drop_ratio_milli") {
+		t.Fatalf("负旋钮应一次报全两处: %v", nerr)
+	}
 	for _, c := range cases {
 		full := `
 providers:
@@ -719,5 +743,83 @@ model_routes:
 	}
 	if cfg.Providers[0].Balance != nil {
 		t.Fatalf("未声明渠道 Balance 应为 nil")
+	}
+}
+
+func TestHealth_缺省与校验(t *testing.T) {
+	base := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+	cfg, err := Load(writeTemp(t, base))
+	if err != nil {
+		t.Fatalf("无 health 节应通过: %v", err)
+	}
+	if cfg.Health.Enabled == nil || !*cfg.Health.Enabled || cfg.Health.FreeProbeEnabled == nil || !*cfg.Health.FreeProbeEnabled {
+		t.Fatalf("health 开关缺省应全 true: %+v", cfg.Health)
+	}
+	if cfg.Health.ProbeIntervalSec != 300 || cfg.Health.ProbeTimeoutSec != 10 ||
+		cfg.Health.FailureThreshold != 2 || cfg.Health.OpenSeconds != 300 ||
+		cfg.Health.SwitchWindowSec != 300 || cfg.Health.SwitchRateMilli != 300 ||
+		cfg.Health.SwitchMinSamples != 20 {
+		t.Fatalf("health 缺省值失真: %+v", cfg.Health)
+	}
+
+	// 渠道级声明:free_probe 退订 + probe_model 声明制合法
+	withCh := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+    health:
+      free_probe: false
+      probe_model: up-a
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+	if _, err := Load(writeTemp(t, withCh)); err != nil {
+		t.Fatalf("渠道级探针声明应通过: %v", err)
+	}
+
+	// 无 key 渠道声明推理探针:校验期拒绝
+	noKey := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    weight: 10
+    health:
+      probe_model: up-a
+model_routes:
+  alias-a:
+    - { provider: a, model: upstream-a, priority: 0 }
+`
+	_, err = Load(writeTemp(t, noKey))
+	if err == nil || !strings.Contains(err.Error(), "keys 为空") {
+		t.Fatalf("无 key 声明推理探针应拒绝: %v", err)
+	}
+
+	// 负值拒绝(一次报全)
+	_, err = Load(writeTemp(t, "health:\n  probe_interval_sec: -1\n  switch_rate_milli: -5\n"+base))
+	if err == nil || !strings.Contains(err.Error(), "probe_interval_sec") || !strings.Contains(err.Error(), "switch_rate_milli") {
+		t.Fatalf("负值应一次报全: %v", err)
+	}
+
+	// 总开关关闭:合法
+	_, err = Load(writeTemp(t, "health:\n  enabled: false\n"+base))
+	if err != nil {
+		t.Fatalf("总开关关闭应通过: %v", err)
 	}
 }
