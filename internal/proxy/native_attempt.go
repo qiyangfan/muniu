@@ -19,7 +19,7 @@ import (
 
 // attemptNativeNonStream 直通非流式：2xx 整包原样回写、原生 usage 归一、canonical 侧双存衍生；
 // 非 2xx 归类并暂存原样错误体，ActionReturn 时透传，换道类交候选循环。
-func (p *Proxy) attemptNativeNonStream(w http.ResponseWriter, r *http.Request, ad adapter.Adapter,
+func (p *Proxy) attemptNativeNonStream(w http.ResponseWriter, r *http.Request, upstream *http.Client, ad adapter.Adapter,
 	np adapter.NativePreparer, out *adapter.Outbound, m *meterState, nat *inboundNative, cand failover.Candidate) (bool, failover.ErrorClass) {
 	m.stream, m.normalize, m.nativePath = false, np.NormalizeNativeUsage, true
 	defer func() { p.record(r, nat.model, cand.Model, cand, string(nat.raw), m) }()
@@ -37,7 +37,7 @@ func (p *Proxy) attemptNativeNonStream(w http.ResponseWriter, r *http.Request, a
 		p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
 		return true, failover.ClassUnknown
 	}
-	resp, err := p.client.Do(upReq)
+	resp, err := upstream.Do(upReq)
 	if err != nil {
 		return p.classifyTransportErr(w, r, err, &firstTokFired, m)
 	}
@@ -46,6 +46,7 @@ func (p *Proxy) attemptNativeNonStream(w http.ResponseWriter, r *http.Request, a
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
 		class := ad.Classify(resp.StatusCode, b)
+		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
 		m.status, m.class = "error", class
 		if class == failover.ClassRateLimited {
 			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
@@ -96,7 +97,7 @@ func (p *Proxy) attemptNativeNonStream(w http.ResponseWriter, r *http.Request, a
 
 // attemptNativeStream 直通流式：逐事件原字节透传，meta-only 读侧供计量与首 token 判定；
 // 流内失败帧诚实透传后终止，不合成任何非上游形态的帧，错误信封按路径分域。
-func (p *Proxy) attemptNativeStream(w http.ResponseWriter, r *http.Request, ad adapter.Adapter,
+func (p *Proxy) attemptNativeStream(w http.ResponseWriter, r *http.Request, upstream *http.Client, ad adapter.Adapter,
 	np adapter.NativePreparer, out *adapter.Outbound, m *meterState, nat *inboundNative, cand failover.Candidate) (bool, failover.ErrorClass) {
 	m.stream, m.normalize, m.nativePath = true, np.NormalizeNativeUsage, true
 	defer func() { p.record(r, nat.model, cand.Model, cand, string(nat.raw), m) }()
@@ -114,7 +115,7 @@ func (p *Proxy) attemptNativeStream(w http.ResponseWriter, r *http.Request, ad a
 		p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
 		return true, failover.ClassUnknown
 	}
-	resp, err := p.client.Do(upReq)
+	resp, err := upstream.Do(upReq)
 	if err != nil {
 		return p.classifyTransportErr(w, r, err, &firstTokFired, m)
 	}
@@ -124,6 +125,7 @@ func (p *Proxy) attemptNativeStream(w http.ResponseWriter, r *http.Request, ad a
 		// 流未开始：读错误体归类，换道类交循环，不换道类由循环透传原样信封
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
 		class := ad.Classify(resp.StatusCode, b)
+		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
 		m.status, m.class = "error", class
 		if class == failover.ClassRateLimited {
 			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))

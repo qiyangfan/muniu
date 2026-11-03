@@ -5,6 +5,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -20,6 +21,7 @@ type topologySnapshot struct {
 	routes      map[string][]config.Candidate // priority 升序已排序
 	pools       map[string]*keypool.Pool
 	adapters    map[string]adapter.Adapter // provider 到出站适配器，与池同生命周期
+	clients     map[string]*http.Client    // provider 到声明代理的出站 client（缺项 = 默认 client，env 语义）
 	caps        map[governKey]config.ModelCapability
 	nativeResps map[string]bool // provider 到 native_responses 声明，responses 直通资格，声明制
 	loadedAt    time.Time
@@ -60,6 +62,17 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 				return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q native_multimodal_embeddings_url 非法或适配器不支持", prov.Name)
 			}
 		}
+		if prov.ProxyURL != "" {
+			u, err := url.Parse(prov.ProxyURL)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				redacted := prov.ProxyURL
+				if err == nil {
+					redacted = u.Redacted() // 允许内嵌凭证,拒绝文案不回显原文
+				}
+				return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法（须为 http/https 绝对 URL）: %q",
+					prov.Name, redacted)
+			}
+		}
 		if prov.Weight <= 0 || int64(prov.Weight) > config.MaxTopologyInt {
 			return TopologyStats{}, fmt.Errorf(
 				"拓扑替换被拒绝: provider %q weight 必须 >0 且 ≤%d, 实际 %d", prov.Name, config.MaxTopologyInt, prov.Weight)
@@ -91,14 +104,33 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 
 	stats := TopologyStats{}
 	oldByName := providerByName(old)
+	// 旧声明代理 URL 表:控制面拓扑载荷不含 proxy_url 字段(表达力缺口),InheritProxy=true
+	// 时入站声明为空的渠道沿用旧值并物化进新快照——否则控制面首次同步即静默摘除代理,
+	// 且探针面与数据面各读各源(劈叉)。配置文件源(SIGHUP)不走沿用:用户从 yaml 删除
+	// proxy_url 是显式清空,沿用会吞掉变更(清代理在配置源语义下即时生效)。
+	oldProxyBy := make(map[string]string, len(old.providers))
+	for _, prev := range old.providers {
+		oldProxyBy[prev.Name] = prev.ProxyURL
+	}
+	providersOut := make([]config.Provider, len(cfg.Providers))
+	copy(providersOut, cfg.Providers)
 	pools := make(map[string]*keypool.Pool, len(cfg.Providers))
 	adapters := make(map[string]adapter.Adapter, len(cfg.Providers))
-	for _, prov := range cfg.Providers {
+	clients := make(map[string]*http.Client, len(cfg.Providers))
+	for i := range cfg.Providers {
+		prov := cfg.Providers[i]
+		if cfg.InheritProxy && prov.ProxyURL == "" && oldProxyBy[prov.Name] != "" {
+			prov.ProxyURL = oldProxyBy[prov.Name]
+			providersOut[i] = prov
+		}
 		if prev, ok := oldByName[prov.Name]; ok {
 			delete(oldByName, prov.Name)
 			if providersEqual(prev, prov) {
 				pools[prov.Name] = old.pools[prov.Name] // 运行态无损保留
 				adapters[prov.Name] = old.adapters[prov.Name]
+				if oc := old.clients[prov.Name]; oc != nil {
+					clients[prov.Name] = oc // 代理 client 与池同语义复用，连接池不折腾
+				}
 				stats.Reused++
 				continue
 			}
@@ -109,15 +141,37 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		}
 		pools[prov.Name] = pool
 		adapters[prov.Name] = ad
+		// 代理 client 迁移:URL 未变且旧 client 在 → 复用(连接池无损);其余场景
+		// (新建代理/换代理/清空代理)关旧空闲连接,防换道后泄漏。
+		if oc := old.clients[prov.Name]; oc != nil {
+			if prov.ProxyURL != "" && oldProxyBy[prov.Name] == prov.ProxyURL {
+				clients[prov.Name] = oc
+			} else {
+				oc.CloseIdleConnections()
+			}
+		}
+		if prov.ProxyURL != "" && clients[prov.Name] == nil {
+			cl, cerr := ProxiedClient(prov.ProxyURL, p.timeouts.Dial)
+			if cerr != nil {
+				return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法: %v", prov.Name, cerr)
+			}
+			clients[prov.Name] = cl
+		}
 		stats.Created++
 	}
-	stats.Removed = len(oldByName) // 旧有新无：池与适配器随旧快照释放，在途请求持旧快照完成
+	stats.Removed = len(oldByName) // 旧有新无：池与适配器随旧快照释放，在途请求持旧池完成
+	for name, oc := range old.clients {
+		if _, gone := oldByName[name]; gone {
+			oc.CloseIdleConnections() // 拓扑中消失的渠道代理 client：关空闲连接防泄漏
+		}
+	}
 
 	p.topo.Store(&topologySnapshot{
-		providers:   append([]config.Provider(nil), cfg.Providers...),
+		providers:   providersOut,
 		routes:      sortRoutes(cfg.Routes),
 		pools:       pools,
 		adapters:    adapters,
+		clients:     clients,
 		caps:        buildCaps(cfg.Capabilities),
 		nativeResps: buildNativeResps(cfg.Providers),
 		loadedAt:    time.Now(),
@@ -151,10 +205,13 @@ func providerByName(s *topologySnapshot) map[string]config.Provider {
 	return out
 }
 
-// providersEqual 比较 provider 的拓扑配置，包括 key 引用列表。
+// providersEqual 比较 provider 的拓扑配置（含出站代理声明），包括 key 引用列表。
+// proxy_url 必须入比较：SIGHUP 仅改代理声明时，复用分支会让变更静默失效、探针面与
+// 数据面各读各源劈叉（评审 A1）。
 func providersEqual(a, b config.Provider) bool {
 	if a.Name != b.Name || a.Adapter != b.Adapter || a.BaseURL != b.BaseURL ||
 		a.NativeMultimodalEmbeddingsURL != b.NativeMultimodalEmbeddingsURL ||
+		a.ProxyURL != b.ProxyURL ||
 		a.Weight != b.Weight || a.Priority != b.Priority || len(a.Keys) != len(b.Keys) {
 		return false
 	}

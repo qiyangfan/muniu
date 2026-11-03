@@ -2,6 +2,15 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-11-03,四 change 归档提交推送完毕:outbound-proxy / keypool-credit-bucket / session-cache-affinity / responses-stream-reasoning)
+
+- 快照冻结一次性执行 + owner「归档/提交/push/盯 CI」逐次指令闭环:四 change(三立项+reasoning 流式透传插话立项)任务全勾,评审迭代循环两轮收敛,openspec 归档至 `archive/2026-11-03-*` 四件,主 specs 新建三 capability+扩 responses-inbound(+3 Requirement),Purpose 均为实文非占位,strict 29/29。
+- 门禁:`PATH=/tmp/gclbin:$PATH make check` EXIT=0(vet+lint 0 issues+race 全包+coverage gate PASS 72.3%);`openspec validate --all --strict` 29/29;web 门禁零改动复用既有绿(本批零 web 文件);三 change 突变验证 5 项全红复绿(渠道>顶层优先级、欠费白名单文案负面、2h 封顶、worth 闸门移除、失败即清)。
+- 快照遗留项收口:CI lint 核查=action@v9 自解析版本+setup-go 按 go.mod 定编译链,本地 mise 失配不外溢 CI(开放项 2026-10-20 子问销案);T5.6 tag/push 仍待 owner 逐次指令;Responses 流式 reasoning 事件仍按契约待确认登记;外部条件搁置集(GEMINI_API_KEY/MiniMax key/siliconflow 替代/hnsw tag/TS7)原状。
+
+## 当前状态(2026-11-03,Magpie 竞品考察+二次裁决:立项三、剔除五)
+- 【同日续】三 change 提案已立齐(`outbound-proxy-per-provider`/`keypool-credit-bucket`/`session-cache-affinity`,proposal+specs delta+design+tasks 四件套,测试先行域逐任务标注,突变验证入 tasks;`openspec validate --all --strict` 29/29 全绿),待实施按 ①→②→③ 走 apply 流程。
+
 ## 当前状态(2026-10-30,三 change 实施+评审+归档+提交推送完毕)
 
 - openspec `alert-delivery-monitoring`/`consumption-anomaly-alerting`/`upstream-health-probing` 三 change 全任务勾选,经评审迭代循环(6 处修复:探针 URL 尾斜杠归一、无 key 渠道入 Sources 防被动降级永久熔断、gemini+probe_model 过探针能力闸、healthMgr.Close 外提 balance 条件、投递自监控空错误归类 NOT NULL 直存、管理面补探针配置字段+状态 GC 防幽灵渠道)后全部归档 `archive/2026-10-30-*`;主 specs 同步(webhook-alerting +8 事件/端点、provider-balance-alerting +2 告警 requirement +旋钮拆分、新建 upstream-health +7),配置契约长文本拆出「异常消耗告警旋钮」requirement,strict 全量 26/26。
@@ -25,6 +34,10 @@
 
 ## 下一步动作序列
 
+- 【2026-11-03 三 change 实施完成,35/35 任务全勾(验收记录 57),**代码未提交,git 写操作等 owner 逐次指令**;openspec 归档(archive+主 specs sync)与评审迭代循环按惯例待 owner 点头后走——本批先如实登记终态】①②③ 摘要与实现落点见验收记录 57。
+- 【快照遗留待确认(不阻塞)】T5.6 tag v1.0.0 待 owner 指令(本批 push 已含全部代码,见验收记录 57 续条);Responses 流式 reasoning 事件=按现行 v1 事件契约待确认(开放项 2026-09-12 行);外部条件搁置集原状(GEMINI_API_KEY/MiniMax key/siliconflow 替代 API/hnsw 新 tag/TS7·node26/低频依赖复查)。
+- 【2026-11-03 剔除记录(维持,理由已修正)】模型目录自动发现(目录与拓扑同源→独立展示即第二目录源违反预设单源裁决+价目无法自动推导;backlog,升格条件=上游下架致流量失败无人预警的真实场景,薄片版探针已在拉 /models 近零成本)/上下文超限换道(400 如实返回是多租户正确语义+识别面=厂商方言陷阱,契约不变)/规则路由+意图分类器(租户产品面爆炸,分类器工程契约留 magpie 记忆当情报)/日配额 Reserve 预扣(超扣窗口亚秒级,复杂度全在失败路径)/PII 遮盖 fail-closed(假设性合规诉求)。
+- 【2026-11-03 剔除记录】模型目录自动发现(理由修正 2026-11-03:原记「与声明制治理反向」不严谨——「纳管进服务面」反向成立,「发现展示」本身不违反治理;真正理由=目录与拓扑同源(model-discovery 规格明文)→独立展示即第二目录源,违反预设单源裁决,且价目无法自动推导、计量闭环拒绝社区价目源;backlog,升格条件=出现「上游下架声明模型致流量失败无人预警」的真实场景,届时按薄片版立项(探针已在拉 /models,近零成本)/上下文超限换道(400 如实返回是多租户正确语义,识别面=厂商方言陷阱,契约不变)/规则路由+意图分类器(租户产品面爆炸,分类器工程契约留 magpie 记忆当情报)/日配额 Reserve 预扣(超扣窗口亚秒级,复杂度全在失败路径,backlog)/PII 遮盖 fail-closed(假设性合规诉求,backlog)。
 - 【2026-10-30】三 change(投递自监控/异常消耗告警/上游健康熔断)实施+评审+归档+单笔提交推送全部完成(哈希见 git log),无待办遗留;CI 实跑结果如有异常再补记验收记录。
 - 【2026-10-30】provider-balance-alerting 归档完成;同日续批(billing-compat 币种声明/重复键收敛/云签名适配/siliconflow 移除/增量评审两缺陷根修)已落;**owner 指令下单笔提交推送**(哈希见 git log),CI 实跑结果补记验收记录。
 - volc-bss/aliyun-bss 已真机销案(AK 申请姿势见记忆与验收记录 55 续条二);siliconflow 已整档移除(续条三),恢复条件=官方替代 API 公告后重新立项接入。
@@ -240,6 +253,27 @@
 | 2026-10-30 | Bearer 族真上游余额冒烟:deepseek/moonshot/openrouter 已实证(验收记录 55);**siliconflow `/v1/user/info` 上游 HTTP 410 正式退役**(官方公告:2026-08-14 停服,「适时提供账户层面替代 API」截至 2026-10-30 未发布) | 见续条三裁决 | —— | **已销案(续条三)**:owner 提议删除+技术论证一致,`siliconflow` kind 整档移除(值域/查询器/解析/夹具/spec 场景),不保留过渡形态——替代 API 是账户体系重建后的新形态,旧解析零复用;恢复条件=官方新 API 公告,按 deepseek 同款 Bearer 配方重新立项接入 |
 
 ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
+
+**57. 三 change 全量实施批(2026-11-03,快照冻结一次性执行;35/35 任务,代码未提交)**
+- 判据:三 change(①outbound-proxy-per-provider ②keypool-credit-bucket ③session-cache-affinity)tasks 逐项实现+验证;make check 全绿;validate strict 全绿;突变验证全红复绿;零范围外改动。
+- 证据(实现落点):①`config` Provider.ProxyURL+顶层 OutboundProxy(校验攒齐+渠道>顶层归一物化)、`proxy` 拓扑快照携带 clients(声明渠道独立 client,零声明复用默认实例)+9 处 Do 点签名穿线、`health` Channel.Outbound+`balance` ForWithClient(查询器级注入)、装配 outboundClient 缓存闭包、伪代理 CONNECT/绝对URI 三出站面端到端;②keypool OutcomeCreditExhausted 尾追加+欠费桶阶梯(30m×2 封顶 2h)+RecordCreditExhausted(幂等/提前释放/桶隔离)+CooldownSink 锁外同步落库+LoadCooldowns+迁移 0018 key_cooldowns 表+store 三访问器+proxy 上报白名单(isCreditExhausted:402/insufficient_quota,error 嵌套与顶层双摆位,负面=400 余额文案)+meterState.creditEvidence 七处采集+balance OnKeyEvaluated 逐 key 回调(失败轮零回调)+装配 cooldownSink/加载/孤儿对账;③ADR-0020 先立,cacheAffinityTable(LRU 4096+TTL 10min+绑 apiKeyID)+sessionStickID(自报头>apiKeyID+首条 user 哈希,system 噪声稳定)+failover.NewIteratorWithStick(组内起点恒 stick,非侵入 NewIterator)+keypool PickWithHint(不耗 WRR 记账)+chat 循环接线(worth 闸门=cacheReadSum>0;让位轮不改写条目;失败/换道/断言出口即清)+muniu_cache_affinity_total 三分计数;gemini/images/embeddings/responses 零触碰。
+- 证据(测试):新增回归 18 个(出站代理 3 行为+config 校验 2+keypool 欠费桶 3+hint 1+store 往返 1+balance 回写 1+health 注入 1+亲和身份/表/容量/方言键 5+iterator stick 1+端到端 2);突变验证 5 项全红复绿(①渠道>顶层优先级 ②白名单文案负例 ③欠费 2h 封顶 ③worth 闸门移除[含补哨兵负向用例:首突变不敏感→补零证据确定性用例后红] ④失败即清由端到端覆盖)。
+- 门禁:`PATH=/tmp/gclbin:$PATH make check` **EXIT=0**(vet/lint 0 issues+race 全包+coverage gate PASS 72.3%;race 曾报 1 处=新测试裸写 stub 字段,改用既有 flip() 助手后清零);`openspec validate --all --strict` 29/29;example yaml 合同测试绿;CI lint 核查:action@v9 自解析+setup-go 按 go.mod,本地 mise 失配不外溢(开放项 2026-10-20 子问销案)。
+- 遗留:代码未提交(等 owner 指令);openspec 归档+主 specs sync+评审迭代循环待 owner 点头;T5.6 与 Responses reasoning 契约照旧挂账。
+
+- **续条(同日,owner 插话裁决「Responses 流式 reasoning 是正常能力需求」→ 立项即实施)**:openspec `responses-stream-reasoning` 四件套立齐+validate 过,encoder 第三状态机(reasonOpen/reasonBuf)落地——官方事件词汇 `response.reasoning_summary_text.*`(delta/done)+`output_item.added/done(reasoning)`,item 形态与非流式冻结契约同形(type=reasoning+text 原文),混流对称收束;usage 口径零改动。红测先行→绿→突变(状态机短路须红)→复绿;spec 超长 requirement 拆三(2026-10-30 前例同款)。`make check` EXIT=0(coverage 72.4%)、strict **30/30**。4/4 任务勾,**未提交**。
+- **续条二(同日,四项搁置逐项重验)**:①MiniMax 域名——探测实证 api.minimaxi.com 与 api.minimax.cn **双活(双 401)**,「归一」前提消解→presets 注记改双活口径,**销案**(真 key 冒烟仍为可选升级,非阻塞);②siliconflow 替代余额 API——检索复核(至 2026-11-03)无官方替代发布信号(cc-switch 社区同痛仍在报错),维持搁置;③hnsw——上游 tags 最新仍 v0.6.1,维持观察;④node26 已转 LTS(2026-10-28)但零工具链增量,裁决维持 24,TS7 维持(typescript-eslint #12518)。
+
+- **续条三(同日,代码审查迭代循环:三域独立代理评审→甄别→修复→复审→门禁全绿)**:范围=本地全部未提交(4 change)。第一轮三域并行评审 24 候选,甄别证实 14+4:根修 A1 providersEqual 漏 ProxyURL(热替换静默失效+探针/数据面劈叉)+控制面载荷无 proxy_url 的表达力缺口(InheritProxy 来源闸:控制面沿用物化/配置源显式清空即时生效,SIGHUP 清代理即时生效语义经测试钉死)、A2 热替换测试 Weight 掩护、A3 余额绕缓存注释失配、A5 代理 URL 凭证四处泄漏面全脱敏(Redacted/unparseable/config Unwrap 取底层原因)、B1 回调判定 ==0→<=0+nil 门(负余额/不可知两形态会把 402 证据冷却周期性抹掉,违反 spec MUST)、B2 cooldownSink 失败留痕、B3 白名单补顶层 type 摆位、C1 失败即清**未接线**(中断编辑未落地而验收声明失实——根修接线+五拍哨兵)、C2 亲和误入 responses/gemini lane(lane 闸对齐登记)、C3 工具分支混流不收束(违自订 MUST)+死块、C5 hit 失败路径零计数(pendingHit 终判:升格拒绝/耗尽/Return/SilentAbort/committed 全出口落定)、C9 iterator 任意组 pin+文档对齐、C10 头限长 256、C4 全部测试敏感性重构(iterator 可区分 rand 突变实证红、pick 等权不耗记账、e2e 注入 RandIntn 五拍)、C7/C8 spec/design worth 口径对齐(读侧 only)、F5/B5 注释措辞。第二轮复审修复面再抓 7 项全处置:R1 沿用来源闸(InheritProxy)、R2 config parse-fail 凭证回显(Unwrap)、R3 升格拒绝漏 pendingHit、R4/R5 测试注释残块、R6 继承+脱敏哨兵测试、R7 spec「候选序最前」口径收窄。新增/重构测试 12 个,突变实证 4 项(WithStick 失效/欠费文案/封顶/worth 闸门)+2 项哨兵(失败即清/负余额)。门禁终态:`make check` EXIT=0(coverage 72.4%)、strict 30/30、gofmt 干净。代码仍未提交(等 owner 逐次指令)。
+
+- **续条五(同日,owner「归档/写好 handoff/提交所有代码/push/盯 ci」闭环执行)**:四 change archive 至 `archive/2026-11-03-*`(openspec archive --yes ×4),主 specs 新建 `keypool-scheduling`/`outbound-proxy`/`session-cache-affinity` 三 capability(Purpose 实文)+`responses-inbound` +3 Requirement(事件序列/混流收束/usage 口径);归档后 strict 29/29、无活动 change。代码+归档+HANDOFF 单笔提交,push 至 main,CI 实跑结果见本记录续补(哈希与 run 号以 git log/gh 为准)。
+
+- **续条四(同日,owner「你替我决策」三项遗留终裁,全部落地)**:①B6 乱序——裁决**修**(不容忍):失败模式修正认知=释放被迟到进入覆盖后,重启复活冷却且无余额源 key 最长 2h 无自愈触发;迁移 0018 未提交未应用,加 ev_seq 列零豁免成本;结构=锁内递增 persistSeq→事件携带→store 行级 `ev_seq<` 守卫(UPSERT WHERE/DELETE AND 双守卫)+LoadCooldowns 对**含过期行**播种序号基线(否则重启后新事件被旧守卫压住);乱序哨兵测试红→绿+守卫移除突变红。②B7 同步写——裁决**维持**,persist 注释改诚实口径(发生在响应写出后的 handler 尾部不占客户端时延,最坏等 busy_timeout;异步 sink 的生命周期/丢弃/乱序三件复杂度不值)。③A9 env 免疫——裁决**补结构性断言而非 env 注入**(ProxyFromEnvironment 进程级单次缓存使注入式顺序脆弱):断言声明渠道 `Transport.Proxy` 解析恒为声明 URL+零声明渠道恒 ProxyFromEnvironment 函数指针身份(reflect),对「代理 client 加 env 回退」突变敏感。④R7 维持组内 pin 并补 ADR-0020 否决记录(跨组越权=用缓存经济否决运营者渠道策略,否决)。门禁复验:make check EXIT=0(72.4%)、strict 30/30。
+
+**56. Magpie 二次裁决批(2026-11-03,零代码改动,纯裁决+文档登记)**
+- 判据:借鉴清单逐项溯源核验后裁决;立项标注契约面与测试先行域,剔除附真实理由;HANDOFF 登记完成。
+- 证据(七点核验):`proxy.go:91` ProxyFromEnvironment(env 全局口在位)/`keypool.go:48` max429=30min(上限在位,较 magpie 1h 更保守)/store 全目录无冷却落库字段(冷却重启即丢坐实)/`quirks.go:68` DeepSeek 402→ClassRateLimited(欠费已有处置,缺口=桶粒度+仅一家签名+阶梯封顶 30min 探活过频+余额不回写)/balance 包零 keypool 引用(无回写坐实)/chat·anthropic 入站零亲和(仅 responses previous_response_id 状态亲和)/go.mod 无 golang.org/x/net(socks5=白名单外剔出本期)。
+- 门禁:零代码改动免跑;HANDOFF 单次更新 20 行(<30 纪律)。
 
 **55. 遗留项裁决批(2026-10-30,owner「3 你自己能搞定不/4 你也自己决策一下」委任;两修复+真上游冒烟+规格收口)**
 - 判据:真实端点/源码实证先行;修复带回归测试;`make check` + `validate --all --strict` + web 门禁全绿;DeepSeek 真上游活体冒烟;实例用毕即拆。

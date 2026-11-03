@@ -32,7 +32,7 @@ type eventResult struct {
 // attemptStream 单候选流式执行。首个内容帧前对客户端零输出，首 token 前失败可安全换道重放；
 // 首个内容帧即开闸：写响应头并缓冲事件，此后失败走断言出口，即流内错误帧加 [DONE]。
 // 计量包括 usage 帧抽取、delta 文本累计作估算 fallback、首 token 延迟。
-func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
+func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, upstream *http.Client, ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
 	m.stream, m.normalize = true, ad.NormalizeUsage
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
@@ -49,7 +49,7 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter
 		p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
 		return true, failover.ClassUnknown
 	}
-	resp, err := p.client.Do(upReq)
+	resp, err := upstream.Do(upReq)
 	if err != nil {
 		return p.classifyTransportErr(w, r, err, &firstTokFired, m)
 	}
@@ -60,6 +60,8 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, ad adapter
 		// 不重发第二次请求，429 场景会双重计数上游限流器，计量 stream 列保持客户端意图
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
 		class := ad.Classify(resp.StatusCode, b)
+
+		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
 		m.status, m.class = "error", class
 		if class == failover.ClassRateLimited {
 			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))

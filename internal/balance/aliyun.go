@@ -30,7 +30,8 @@ const (
 type aliyunBSSQuerier struct {
 	accessKey string
 	secretKey string
-	endpoint  string // 空 = 官方端点;测试注入 stub
+	endpoint  string       // 空 = 官方端点;测试注入 stub
+	client    *http.Client // 渠道出站代理 client;nil = 共享 balanceHTTP
 }
 
 func (q *aliyunBSSQuerier) addr() string {
@@ -78,11 +79,14 @@ func (q *aliyunBSSQuerier) Query(ctx context.Context, _ string) (Balance, error)
 		return Balance{}, qerr(ClassParse, "balance: aliyun 构造请求失败: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	return aliyunExecute(ctx, req)
+	return aliyunExecute(ctx, req, q.client)
 }
 
-func aliyunExecute(ctx context.Context, req *http.Request) (Balance, error) {
-	resp, err := balanceHTTP.Do(req)
+func aliyunExecute(ctx context.Context, req *http.Request, cl *http.Client) (Balance, error) {
+	if cl == nil {
+		cl = balanceHTTP
+	}
+	resp, err := cl.Do(req)
 	if err != nil {
 		return Balance{}, qerrWrap(ClassNetwork, err, "balance: aliyun 请求失败")
 	}

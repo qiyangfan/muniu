@@ -93,7 +93,7 @@ var catalog = []Preset{
 		Alias: "minimax", Display: "MiniMax", Group: GroupDomestic,
 		Adapter: "openai", BaseURL: "https://api.minimaxi.com/v1", Env: "MINIMAX_API_KEY",
 		Docs: "https://platform.minimax.io/docs/api-reference/text-openai-api", Models: []string{"MiniMax-M2"},
-		Note: "国内站 api.minimaxi.com;国际站为 api.minimax.io",
+		Note: "国内站 api.minimaxi.com;国际站为 api.minimax.io;历史域 api.minimax.cn 双活(2026-11-03 探测双 401),配置维持官方文档口径 minimaxi.com",
 	},
 	{
 		Alias: "minimax-anthropic", Auth: "bearer", Display: "MiniMax(Anthropic 分支)", Group: GroupDomestic,

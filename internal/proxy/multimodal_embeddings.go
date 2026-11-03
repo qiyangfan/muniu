@@ -140,6 +140,7 @@ func (p *Proxy) attemptMultimodalEmbeddings(w http.ResponseWriter, r *http.Reque
 	prep adapter.MultimodalEmbeddingPreparer, cand failover.Candidate, key *keypool.Key,
 	req *protocol.MultimodalEmbeddingRequest, m *meterState) (bool, failover.ErrorClass) {
 	m.stream = false
+	upstream := p.clientFor(p.topo.Load(), cand.Provider)
 	m.normalize = func(raw json.RawMessage) (protocol.Usage, error) {
 		return prep.NormalizeMultimodalEmbeddingUsage(raw, cand.Model)
 	}
@@ -169,7 +170,7 @@ func (p *Proxy) attemptMultimodalEmbeddings(w http.ResponseWriter, r *http.Reque
 	}
 	upReq.Header.Set("Accept-Encoding", acceptEncoding)
 	// 原生响应必须保留上游重定向；共享 HTTP client 默认会把 301/302 等改为后续响应。
-	client := *p.client
+	client := *upstream
 	client.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := client.Do(upReq)
 	if err != nil {
@@ -191,6 +192,7 @@ func (p *Proxy) attemptMultimodalEmbeddings(w http.ResponseWriter, r *http.Reque
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		class := ad.Classify(resp.StatusCode, respBody)
+		m.creditEvidence = isCreditExhausted(resp.StatusCode, respBody)
 		m.status, m.class = "error", class
 		m.upstreamBody, m.upstreamStatus = respBody, resp.StatusCode
 		m.upstreamHeaders = resp.Header.Clone()

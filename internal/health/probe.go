@@ -54,6 +54,10 @@ func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (Probe
 	if !ok {
 		return ProbeFail, "adapter_probe_unsupported"
 	}
+	cl := m.client
+	if ch.Outbound != nil {
+		cl = ch.Outbound // 渠道声明出站代理 client(装配期按 proxy_url 解析),优先于默认
+	}
 	// 尾斜杠归一化与 adapter 层同口径:数据面容忍的 base_url 写法不得在探针面拼出 //path 404
 	url := strings.TrimRight(ch.BaseURL, "/") + path
 	ctx, cancel := context.WithTimeout(m.ctx, m.opts.Timeout)
@@ -75,7 +79,7 @@ func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (Probe
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := m.client.Do(req)
+	resp, err := cl.Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return ProbeFail, "timeout"

@@ -53,11 +53,16 @@ metering:
 
 # 上游静态拓扑。同优先级按权重随机确定尝试顺序；本组耗尽后再降级。
 # 官方端点可从 /admin/v1/provider-presets 查看；此处仅展示配置示例。
+# 出站代理：渠道 proxy_url > 顶层 outbound_proxy > 环境变量(HTTP_PROXY/HTTPS_PROXY 现状语义)。
+# 代理作用于该渠道推理出站、健康探针与余额查询三面；控制面外联不消费。
+# 形态仅 http/https(socks5 加载期拒绝);声明即完整接管环境变量,不做失败回落叠加。
+# outbound_proxy: "http://127.0.0.1:7890"   # 顶层缺省,渠道未声明 proxy_url 时回退
 providers:
   - name: deepseek
     adapter: deepseek                     # 适配器类型(值域单源=adapter.Types()):openai=兼容基座;deepseek/moonshot/glm/qwen/doubao=基座+quirk;anthropic=桥接
                                           # 类型来自 adapter.Types()；Gemini 也可使用原生 gemini 适配器。
     base_url: "https://api.deepseek.com/v1"
+    # proxy_url: "http://127.0.0.1:7890"  # 渠道级出站代理;国内直连渠道不声明即走直连/env
     keys:
       - env: DEEPSEEK_API_KEY_1           # 只写环境变量名,绝不写明文
       # - env: DEEPSEEK_API_KEY_2         # 多 key 会组成 key 池

@@ -492,3 +492,95 @@ func TestChatFromResponsesObject_status保真(t *testing.T) {
 		t.Fatalf("incomplete 应映射 length: %s", incomplete)
 	}
 }
+
+// TestResponsesStreamEncoder_reasoning流式透传 R1 类上游流式 reasoning_content 增量
+// 必须以官方事件词汇透出(response.reasoning_summary_text.*),item 形态与非流式
+// 冻结契约同形;推理先于正文时序列为 reasoning item 完整收束后开 message item。
+func TestResponsesStreamEncoder_reasoning流式透传(t *testing.T) {
+	e := NewResponsesStreamEncoder("resp_r9", "deepseek-r1")
+	events := []map[string]any{mustEvent(t, e.Init())}
+	for _, c := range []string{
+		`{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"思考"}}]}`,
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"中"}}]}`,
+		`{"choices":[{"index":0,"delta":{"content":"答案"}}]}`,
+		`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"reasoning_tokens":3}}`,
+	} {
+		for _, ev := range e.Feed([]byte(c)) {
+			events = append(events, mustEvent(t, ev))
+		}
+	}
+	events = append(events, mustEvent(t, e.Complete()))
+
+	types := make([]string, 0, len(events))
+	for _, ev := range events {
+		types = append(types, typ(ev))
+	}
+	joined := strings.Join(types, " → ")
+	want := "response.created → response.output_item.added → response.reasoning_summary_text.delta → " +
+		"response.reasoning_summary_text.delta → response.reasoning_summary_text.done → " +
+		"response.output_item.done → response.output_item.added → response.output_text.delta → " +
+		"response.output_item.done → response.completed"
+	if joined != want {
+		t.Fatalf("事件序列不符:\n got %s\nwant %s", joined, want)
+	}
+	// reasoning item done 形态与非流式冻结契约同形(type=reasoning + text 原文)
+	for _, ev := range events {
+		if typ(ev) == "response.output_item.done" {
+			item := ev["item"].(map[string]any)
+			if item["type"] == "reasoning" && item["text"] != "思考中" {
+				t.Fatalf("reasoning item text 失真: %v", item["text"])
+			}
+		}
+	}
+	// reasoning_tokens 计量口径:usage 明细照旧,不重复计入 output
+	for _, ev := range events {
+		if typ(ev) == "response.completed" {
+			u := ev["response"].(map[string]any)["usage"].(map[string]any)
+			if u["output_tokens"].(float64) != 2 {
+				t.Fatalf("reasoning 不得重复计入 output_tokens: %v", u)
+			}
+		}
+	}
+}
+
+// TestResponsesStreamEncoder_混流对称收束 spec R2:正文→推理与推理→工具两条切换剧本,
+// item 生命周期不得交叉(先完整收束当前 item 再 added 下一 item)。
+func TestResponsesStreamEncoder_混流对称收束(t *testing.T) {
+	collect := func(chunks ...string) []string {
+		e := NewResponsesStreamEncoder("resp_mix", "m")
+		_ = e.Init()
+		types := []string{}
+		for _, c := range chunks {
+			for _, ev := range e.Feed([]byte(c)) {
+				types = append(types, typ(mustEvent(t, ev)))
+			}
+		}
+		types = append(types, typ(mustEvent(t, e.Complete())))
+		return types
+	}
+	// 剧本一:content → reasoning → finish(message 先 done,再开 reasoning)
+	seq1 := collect(
+		`{"choices":[{"index":0,"delta":{"content":"答案"}}]}`,
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"补想"}}]}`,
+		`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+	)
+	join1 := strings.Join(seq1, " → ")
+	if !strings.Contains(join1, "response.output_item.done → response.output_item.added") {
+		t.Fatalf("剧本一存在生命周期交叉: %s", join1)
+	}
+	if strings.Count(join1, "added") != strings.Count(join1, "output_item.done") {
+		t.Fatalf("added/done 不配对: %s", join1)
+	}
+	// 剧本二:reasoning → tool_calls(评审 C3:工具分支首 added 前必须收束 reasoning)
+	seq2 := collect(
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"先想"}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"f","arguments":"{}"}}]}}]}`,
+		`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+	)
+	join2 := strings.Join(seq2, " → ")
+	idxReasoningDone := strings.Index(join2, "response.output_item.done")
+	toolAddedIdx := strings.LastIndex(join2, "response.output_item.added")
+	if idxReasoningDone < 0 || toolAddedIdx <= idxReasoningDone {
+		t.Fatalf("剧本二:reasoning item 必须在工具 item added 前收束: %s", join2)
+	}
+}

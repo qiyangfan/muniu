@@ -157,3 +157,43 @@ func TestManager_移除渠道状态过期清理(t *testing.T) {
 		return len(providers) == 0
 	})
 }
+
+// TestManager_渠道出站client注入 声明代理渠道的探针必须经装配注入的 client 出站
+// (标记头可证)——渠道代理覆盖探针面,与推理出站同口径;代理不可达计入探针失败计数。
+func TestManager_渠道出站client注入(t *testing.T) {
+	var seen atomic.Value
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.Header.Get("X-Outbound-Marker"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer up.Close()
+
+	m := NewManager(Options{
+		Interval: 20 * time.Millisecond, Timeout: time.Second,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Sources: func() map[string]Channel {
+			return map[string]Channel{"p": {
+				Name: "p", Adapter: "openai", BaseURL: up.URL, FreeProbe: true,
+				Outbound: &http.Client{Transport: markerTransport{}},
+				Keys:     []ChannelKey{{ID: "k", Value: "v"}},
+			}}
+		},
+	})
+	m.Start()
+	defer m.Close()
+	waitFor(t, func() bool {
+		providers, _ := m.Snapshot()
+		return len(providers) == 1 && providers[0].LastProbeOK != nil && *providers[0].LastProbeOK
+	})
+	if got, _ := seen.Load().(string); got != "1" {
+		t.Fatalf("探针应经注入 client 出站(标记头缺失): %q", got)
+	}
+}
+
+// markerTransport 出站标记传输层:证明请求确实走了注入的 client。
+type markerTransport struct{}
+
+func (markerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r.Header.Set("X-Outbound-Marker", "1")
+	return http.DefaultTransport.RoundTrip(r)
+}

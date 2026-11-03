@@ -2,12 +2,15 @@ package proxy
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"math"
 	"testing"
 
 	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/keypool"
+	"github.com/solvela/muniu/internal/testkit"
 )
 
 // 拓扑热替换管道测试：池保留语义、校验拒绝、替换生效、构建失败回滚。
@@ -205,5 +208,64 @@ func TestTopology_Replace_RejectsOutOfIntDomain(t *testing.T) {
 	s := p.topo.Load()
 	if s.pools["alpha"] == nil || s.providers[0].BaseURL != "http://alpha" {
 		t.Fatal("拒绝替换后旧快照必须保持")
+	}
+}
+
+// TestReplaceTopology_控制面载荷沿用代理声明 评审 R1/R6:控制面拓扑载荷不含 proxy_url
+// 字段,InheritProxy=true 时入站空声明沿用旧值并物化进快照(数据面/探针面同源);
+// 配置文件源(InheritProxy=false)显式清空即时生效。client 迁移:URL 同→同实例。
+func TestReplaceTopology_控制面载荷沿用代理声明(t *testing.T) {
+	upA := testkit.StartJSONUpstream(t, 200, "{}")
+	rp := newRecordingProxy(t)
+	reg := adapter.NewRegistry()
+	reg.Register("pa", adapter.NewOpenAI(upA.URL(), "sk-a"))
+
+	newProxyWith := func(providers []config.Provider) *Proxy {
+		p := New(Config{
+			Registry:  reg,
+			Providers: providers,
+			Routes:    map[string][]config.Candidate{"alias-a": {{Provider: "pa", Model: "m", Priority: 0}}},
+			Timeouts:  defTimeouts(),
+			Pools: map[string]*keypool.Pool{
+				"pa": keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}}),
+			},
+			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		})
+		return p
+	}
+	replace := func(p *Proxy, providers []config.Provider, inherit bool) {
+		if _, err := p.ReplaceTopology(Config{
+			Providers:    providers,
+			Routes:       map[string][]config.Candidate{"alias-a": {{Provider: "pa", Model: "m", Priority: 0}}},
+			InheritProxy: inherit,
+		}, func(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
+			ad, _ := reg.Get(prov.Name)
+			return keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}}), ad, nil
+		}); err != nil {
+			t.Fatalf("替换被拒: %v", err)
+		}
+	}
+
+	// 控制面源:首次同步载荷不含 proxy_url → 沿用旧声明并物化,client 同实例
+	p := newProxyWith([]config.Provider{{Name: "pa", Adapter: "openai", BaseURL: upA.URL(), Weight: 1, ProxyURL: rp.URL}})
+	before := p.clientFor(p.topo.Load(), "pa")
+	replace(p, []config.Provider{{Name: "pa", Adapter: "openai", BaseURL: upA.URL(), Weight: 1}}, true)
+	snap := p.topo.Load()
+	if snap.providers[0].ProxyURL != rp.URL {
+		t.Fatalf("控制面沿用应物化进快照: %q", snap.providers[0].ProxyURL)
+	}
+	if after := p.clientFor(snap, "pa"); after != before {
+		t.Fatal("沿用分支 client 必须同实例复用")
+	}
+
+	// 配置文件源(SIGHUP):显式清空 proxy_url → 即时生效回默认 client(评审 R1 语义)
+	p2 := newProxyWith([]config.Provider{{Name: "pa", Adapter: "openai", BaseURL: upA.URL(), Weight: 1, ProxyURL: rp.URL}})
+	replace(p2, []config.Provider{{Name: "pa", Adapter: "openai", BaseURL: upA.URL(), Weight: 1}}, false)
+	snap2 := p2.topo.Load()
+	if snap2.providers[0].ProxyURL != "" {
+		t.Fatalf("配置源显式清空不得被沿用吞掉: %q", snap2.providers[0].ProxyURL)
+	}
+	if _, has := snap2.clients["pa"]; has {
+		t.Fatal("清空后不得残留代理 client")
 	}
 }

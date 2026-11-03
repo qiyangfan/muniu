@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -251,4 +252,45 @@ func TestQuery_超时经ctx承载(t *testing.T) {
 	if classifyQueryErr(err) != ClassTimeout {
 		t.Fatalf("超时应归 ClassTimeout,实际 %v", err)
 	}
+}
+
+// TestForWithClient_注入client 渠道声明出站代理时,余额查询必须经装配注入的 client
+// (标记头可证);nil 注入保持共享 balanceHTTP 现状语义。渠道代理覆盖余额查询面,与推理/探针同纪律。
+func TestForWithClient_注入client(t *testing.T) {
+	var seen atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.Header.Get("X-Outbound-Marker"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"2.28"}]}`))
+	}))
+	defer srv.Close()
+
+	marked := &http.Client{Transport: markerRoundTripper{}}
+	q, err := ForWithClient(SourceDeepseek, SourceConfig{BaseURL: srv.URL}, marked)
+	if err != nil {
+		t.Fatalf("构造失败: %v", err)
+	}
+	if _, qerr := q.Query(context.Background(), "sk"); qerr != nil {
+		t.Fatalf("查询失败: %v", qerr)
+	}
+	if got, _ := seen.Load().(string); got != "1" {
+		t.Fatalf("余额查询应经注入 client 出站(标记头缺失): %q", got)
+	}
+
+	// nil 注入 = 共享客户端现状语义,查询照常成功
+	q2, err := ForWithClient(SourceDeepseek, SourceConfig{BaseURL: srv.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, qerr := q2.Query(context.Background(), "sk"); qerr != nil {
+		t.Fatalf("nil 注入应回退共享 client: %v", qerr)
+	}
+}
+
+// markerRoundTripper 出站标记传输层:证明请求确实走了注入的 client。
+type markerRoundTripper struct{}
+
+func (markerRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	r.Header.Set("X-Outbound-Marker", "1")
+	return http.DefaultTransport.RoundTrip(r)
 }

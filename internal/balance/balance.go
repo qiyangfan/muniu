@@ -6,6 +6,7 @@ package balance
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"sort"
 )
 
@@ -74,15 +75,21 @@ func (e ErrUnknownSource) Error() string {
 
 // For 按 kind 构造查询器;none/manual 返回 nil(无查询行为,由服务层处理)。
 func For(kind string, cfg SourceConfig) (Querier, error) {
+	return ForWithClient(kind, cfg, nil)
+}
+
+// ForWithClient 同 For,但绑定渠道出站 client(渠道声明代理时由装配层注入);nil = 共享
+// balanceHTTP(现状语义)。渠道代理覆盖余额查询面,与推理/探针同纪律。
+func ForWithClient(kind string, cfg SourceConfig, cl *http.Client) (Querier, error) {
 	switch kind {
 	case SourceNone, SourceManual:
 		return nil, nil
 	case SourceDeepseek:
-		return &bearerQuerier{kind: kind, endpoint: origin(cfg.BaseURL) + "/user/balance"}, nil
+		return &bearerQuerier{kind: kind, endpoint: origin(cfg.BaseURL) + "/user/balance", client: cl}, nil
 	case SourceMoonshot:
-		return &bearerQuerier{kind: kind, endpoint: origin(cfg.BaseURL) + "/v1/users/me/balance"}, nil
+		return &bearerQuerier{kind: kind, endpoint: origin(cfg.BaseURL) + "/v1/users/me/balance", client: cl}, nil
 	case SourceOpenrouter:
-		return &bearerQuerier{kind: kind, endpoint: origin(cfg.BaseURL) + "/api/v1/key"}, nil
+		return &bearerQuerier{kind: kind, endpoint: origin(cfg.BaseURL) + "/api/v1/key", client: cl}, nil
 	case SourceBillingCompat:
 		currency := cfg.Currency
 		if currency == "" {
@@ -92,11 +99,12 @@ func For(kind string, cfg SourceConfig) (Querier, error) {
 			subscription: origin(cfg.BaseURL) + "/v1/dashboard/billing/subscription",
 			usage:        origin(cfg.BaseURL) + "/v1/dashboard/billing/usage",
 			currency:     currency,
+			client:       cl,
 		}, nil
 	case SourceAliyunBSS:
-		return &aliyunBSSQuerier{accessKey: cfg.AccessKey, secretKey: cfg.SecretKey}, nil
+		return &aliyunBSSQuerier{accessKey: cfg.AccessKey, secretKey: cfg.SecretKey, client: cl}, nil
 	case SourceVolcBSS:
-		return &volcBSSQuerier{accessKey: cfg.AccessKey, secretKey: cfg.SecretKey}, nil
+		return &volcBSSQuerier{accessKey: cfg.AccessKey, secretKey: cfg.SecretKey, client: cl}, nil
 	default:
 		return nil, ErrUnknownSource{Kind: kind}
 	}

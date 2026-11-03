@@ -25,7 +25,7 @@ const maxUpstreamErrBody = 1 << 20
 const maxNonStreamBody = 64 << 20
 
 // attemptNonStream 单候选非流式执行。返回 false 表示失败且未向客户端输出任何字节，可换道。
-func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
+func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, upstream *http.Client, ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
 	m.stream, m.normalize = false, ad.NormalizeUsage
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
@@ -42,7 +42,7 @@ func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, ad adap
 		p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
 		return true, failover.ClassUnknown
 	}
-	resp, err := p.client.Do(upReq)
+	resp, err := upstream.Do(upReq)
 	if err != nil {
 		return p.classifyTransportErr(w, r, err, &firstTokFired, m)
 	}
@@ -51,6 +51,8 @@ func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, ad adap
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
 		class := ad.Classify(resp.StatusCode, b)
+
+		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
 		m.status, m.class = "error", class
 		if class == failover.ClassRateLimited {
 			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))

@@ -28,9 +28,10 @@ type Channel struct {
 	Name       string
 	Adapter    string
 	BaseURL    string
-	Auth       string // anthropic 桥接鉴权形态;空 = 缺省 x-api-key
-	ProbeModel string // 非空 = 启用付费推理探针(声明制)
-	FreeProbe  bool   // 免费控制面探针开关(装配期已按适配器能力与退订声明归一)
+	Auth       string       // anthropic 桥接鉴权形态;空 = 缺省 x-api-key
+	ProbeModel string       // 非空 = 启用付费推理探针(声明制)
+	FreeProbe  bool         // 免费控制面探针开关(装配期已按适配器能力与退订声明归一)
+	Outbound   *http.Client // 渠道声明出站代理 client(装配期按 proxy_url 解析);nil = 默认 client(env 语义)
 	Keys       []ChannelKey
 }
 

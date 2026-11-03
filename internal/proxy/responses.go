@@ -118,6 +118,7 @@ func (p *Proxy) HandlerResponsesStateless() http.Handler {
 			p.writeError(w, r, protocol.TypeRateLimited, "all_candidates_failed", "上游供应商暂时不可用(key 池不可用)")
 			return
 		}
+		upstream := p.clientFor(snap, provider)
 		out, err := fetcher.PrepareNativeFetch(r.Method, respID, key.Value)
 		if err != nil {
 			p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
@@ -135,7 +136,7 @@ func (p *Proxy) HandlerResponsesStateless() http.Handler {
 				upReq.Header.Add(k, v)
 			}
 		}
-		resp, err := p.client.Do(upReq)
+		resp, err := upstream.Do(upReq)
 		if err != nil {
 			p.writeError(w, r, protocol.TypeUpstreamError, "upstream_error", "上游查询失败")
 			return

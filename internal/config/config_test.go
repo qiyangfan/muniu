@@ -823,3 +823,102 @@ model_routes:
 		t.Fatalf("总开关关闭应通过: %v", err)
 	}
 }
+
+const outboundProxyBase = `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 1
+  - name: b
+    adapter: openai
+    base_url: "https://api.b.com/v1"
+    keys:
+      - env: K1
+    weight: 1
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+    - { provider: b, model: m, priority: 1 }
+`
+
+func TestOutboundProxy_渠道级覆盖顶层_零声明归一为空(t *testing.T) {
+	cfg, err := Load(writeTemp(t, "outbound_proxy: \"http://default-proxy:3128\"\n"+`
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    proxy_url: "https://a-proxy:8080"
+    keys:
+      - env: K1
+    weight: 1
+  - name: b
+    adapter: openai
+    base_url: "https://api.b.com/v1"
+    keys:
+      - env: K1
+    weight: 1
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+    - { provider: b, model: m, priority: 1 }
+`))
+	if err != nil {
+		t.Fatalf("合法声明应通过: %v", err)
+	}
+	pa, ok := cfg.ProviderByName("a")
+	if !ok || pa.ProxyURL != "https://a-proxy:8080" {
+		t.Fatalf("渠道声明应胜出顶层缺省: got %q", pa.ProxyURL)
+	}
+	pb, _ := cfg.ProviderByName("b")
+	if pb.ProxyURL != "http://default-proxy:3128" {
+		t.Fatalf("未声明渠道应回退顶层缺省: got %q", pb.ProxyURL)
+	}
+
+	// 零声明:归一为空串,出站回落环境变量(现状语义)
+	zero, err := Load(writeTemp(t, outboundProxyBase))
+	if err != nil {
+		t.Fatalf("零声明应通过: %v", err)
+	}
+	for _, name := range []string{"a", "b"} {
+		if p, _ := zero.ProviderByName(name); p.ProxyURL != "" {
+			t.Fatalf("零声明渠道 %s 归一后应为空: got %q", name, p.ProxyURL)
+		}
+	}
+}
+
+func TestOutboundProxy_非法scheme加载期攒齐拒绝(t *testing.T) {
+	_, err := Load(writeTemp(t, `outbound_proxy: "socks5://h:1080"
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    proxy_url: "ftp://x:21"
+    keys:
+      - env: K1
+    weight: 1
+  - name: b
+    adapter: openai
+    base_url: "https://api.b.com/v1"
+    proxy_url: "://nope"
+    keys:
+      - env: K1
+    weight: 1
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+`))
+	if err == nil {
+		t.Fatal("非法 scheme 必须加载期拒绝")
+	}
+	for _, want := range []string{"outbound_proxy", "providers[0](a)", "providers[1](b)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("错误应一次报全含 %q: %v", want, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "http/https") {
+		t.Fatalf("拒绝文案应提示支持形态: %v", err)
+	}
+}

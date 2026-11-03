@@ -465,3 +465,116 @@ func TestLoop_失败占位行总览零值时刻守卫(t *testing.T) {
 	}
 	t.Fatalf("总览缺 volc 渠道")
 }
+
+// TestLoop_逐key余额回写回调 Bearer 族逐 key 评估必须触发回写回调:
+// 有效余额=0 → exhausted=true;充值后 >0 → false;查询失败零回调(余额源故障不驱动冷却迁移)。
+func TestLoop_逐key余额回写回调(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	env := newTestEnv(t, 200, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"0.00"}]}`,
+		func(o *Options) {
+			o.OnKeyEvaluated = func(provider, keyID string, exhausted bool, _ time.Time) {
+				mu.Lock()
+				defer mu.Unlock()
+				calls = append(calls, provider+"/"+keyID+"/"+fmtBool(exhausted))
+			}
+		})
+	env.addBinding("ds", ChannelBinding{
+		Kind:    SourceDeepseek,
+		Querier: mustQuerier(t, SourceDeepseek, env.stub.URL),
+		Keys:    []ChannelKey{{ID: "D1", Value: "sk-1"}, {ID: "D2", Value: "sk-2"}},
+	})
+	env.start()
+	waitFor(t, "两 key 欠费回调", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) == 2
+	})
+
+	// 查询失败:零回调
+	mu.Lock()
+	calls = nil
+	mu.Unlock()
+	env.script.flip(500, "{}")
+	waitFor(t, "失败轮发生(连续失败阈值告警)", func() bool {
+		return len(env.hooks.eventsOf("balance_source_error:ds")) >= 1
+	})
+	mu.Lock()
+	n := len(calls)
+	mu.Unlock()
+	if n != 0 {
+		t.Fatalf("查询失败轮不得回调: %v", calls)
+	}
+
+	// 充值:>0 → false
+	mu.Lock()
+	calls = nil
+	mu.Unlock()
+	env.script.flip(200, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"2.28"}]}`)
+	waitFor(t, "充值回调", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) == 2
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	for _, c := range calls {
+		if !strings.HasSuffix(c, "/false") {
+			t.Fatalf("充值后应回调 false: %v", calls)
+		}
+	}
+}
+
+func fmtBool(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+// TestLoop_回写回调_负余额与不可知边界 评审 B1 哨兵:负余额(透支)必须回调 exhausted=true
+// (仅 >0 才释放);余额不可知(limit=null)零回调——两类形态此前会把 402 证据建立的欠费
+// 冷却周期性抹掉,阶梯清零永不推进。
+func TestLoop_回写回调_负余额与不可知边界(t *testing.T) {
+	var mu sync.Mutex
+	var seen []bool
+	env := newTestEnv(t, 200, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"-1.50"}]}`,
+		func(o *Options) {
+			o.OnKeyEvaluated = func(_, _ string, exhausted bool, _ time.Time) {
+				mu.Lock()
+				defer mu.Unlock()
+				seen = append(seen, exhausted)
+			}
+		})
+	env.addBinding("ds", ChannelBinding{
+		Kind:    SourceDeepseek,
+		Querier: mustQuerier(t, SourceDeepseek, env.stub.URL),
+		Keys:    []ChannelKey{{ID: "D1", Value: "sk-1"}},
+	})
+	env.start()
+	waitFor(t, "负余额回调", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(seen) >= 1
+	})
+	if !seen[0] {
+		t.Fatalf("负余额(透支)应回调 exhausted=true: %v", seen)
+	}
+
+	// 不可知(credits=nil)零回调:openrouter limit=null 形态经 SourceOpenrouter 驱动
+	mu.Lock()
+	seen = seen[:0]
+	mu.Unlock()
+	env2 := newTestEnv(t, 200, `{"data":{"limit":null,"usage":0}}`, func(o *Options) {
+		o.OnKeyEvaluated = func(_, _ string, _ bool, _ time.Time) {
+			t.Error("不可知形态不得回调")
+		}
+	})
+	env2.addBinding("or", ChannelBinding{
+		Kind:    SourceOpenrouter,
+		Querier: mustQuerier(t, SourceOpenrouter, env2.stub.URL),
+		Keys:    []ChannelKey{{ID: "O1", Value: "sk-o"}},
+	})
+	env2.start()
+	time.Sleep(120 * time.Millisecond) // 数个评估周期,零回调即断言成立
+}

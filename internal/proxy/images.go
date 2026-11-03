@@ -116,6 +116,7 @@ func (p *Proxy) attemptImages(w http.ResponseWriter, r *http.Request, ad adapter
 		m.status, m.class = "error", c
 		return true, c
 	}
+	upstream := p.clientFor(p.topo.Load(), cand.Provider)
 	prep, ok := ad.(adapter.ImagePreparer)
 	if !ok {
 		p.writeError(w, r, protocol.TypeBadRequest, "images_not_supported", "该供应商适配器不支持 images")
@@ -135,7 +136,7 @@ func (p *Proxy) attemptImages(w http.ResponseWriter, r *http.Request, ad adapter
 	if err != nil {
 		return fail(failover.ClassUnknown)
 	}
-	resp, err := p.client.Do(upReq)
+	resp, err := upstream.Do(upReq)
 	if err != nil {
 		return p.classifyTransportErr(w, r, err, &fired, m)
 	}
@@ -143,6 +144,8 @@ func (p *Proxy) attemptImages(w http.ResponseWriter, r *http.Request, ad adapter
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
 		class := ad.Classify(resp.StatusCode, b)
+
+		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
 		if class == failover.ClassRateLimited {
 			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 		}

@@ -54,6 +54,10 @@ type Options struct {
 	Now            func() time.Time
 	// Sources 每次评估动态取渠道绑定(感知拓扑热替换):渠道名 → 绑定。
 	Sources func() map[string]ChannelBinding
+	// OnKeyEvaluated 逐 key 余额评估回调(装配层接 keypool 欠费桶回写);仅 Bearer 族
+	// 逐 key 源触发,云账务哨兵/manual 不触发;查询失败路径不触发(余额源故障不得驱动冷却迁移)。
+	// exhausted = 有效余额为 0。nil = 零开销不接(纯观测形态)。
+	OnKeyEvaluated func(provider, keyID string, exhausted bool, now time.Time)
 }
 
 // Service 余额评估循环:启动即评一轮 → 间隔评估 → 单渠道 refresh 信号合流;
@@ -224,6 +228,14 @@ func (s *Service) queryPhase(provider string, binding ChannelBinding, now time.T
 			BalanceCredits: credits, Currency: bal.Currency, AsOfAt: now, UpdatedAt: now,
 		}); serr != nil {
 			s.log.Error("余额快照落库失败", "provider", provider, "error_detail", serr.Error())
+		}
+		// 逐 key 回写回调(装配层接池欠费桶):Bearer 族逐 key 才有归属。
+		// 双重静默面:查询失败零回调(不许余额源故障驱动冷却迁移);余额不可知(openrouter
+		// 不限额键 limit=null 等,credits=nil)零回调——「无资金证据」与「查询失败」同纪律。
+		// exhausted = 有效余额 ≤0(负值=透支,同为欠费证据);仅 >0 才触发提前释放
+		//(spec:「余额>0 必须(MUST)提前解除」,负值释放违反 MUST,评审 B1)。
+		if s.opts.OnKeyEvaluated != nil && IsBearer(binding.Kind) && credits != nil {
+			s.opts.OnKeyEvaluated(provider, tgt.ID, *credits <= 0, now)
 		}
 	}
 	s.evaluateSourceError(provider, failedAll, now)

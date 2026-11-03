@@ -126,10 +126,12 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 // attemptEmbeddings 单候选非流式透传：2xx 整包回写并计量 usage；非 2xx 只归类不写信封，交耗尽路径输出。
 func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand failover.Candidate, key *keypool.Key, req *protocol.EmbeddingRequest, m *meterState) (bool, failover.ErrorClass) {
 	m.stream = false
-	adI, ok := p.topo.Load().adapters[cand.Provider]
+	snap := p.topo.Load()
+	adI, ok := snap.adapters[cand.Provider]
 	if !ok {
 		return true, failover.ClassUnknown
 	}
+	upstream := p.clientFor(snap, cand.Provider)
 	prep, ok := adI.(adapter.EmbeddingPreparer)
 	if !ok {
 		// 适配器不支持 embeddings 时直接返回参数错误，不尝试换道。
@@ -159,7 +161,7 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 		p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
 		return true, failover.ClassUnknown
 	}
-	resp, err := p.client.Do(upReq)
+	resp, err := upstream.Do(upReq)
 	if err != nil {
 		return p.classifyTransportErr(w, r, err, &firstTokFired, m)
 	}
@@ -167,6 +169,8 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
 		class := adI.Classify(resp.StatusCode, b)
+
+		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
 		m.status, m.class = "error", class
 		if class == failover.ClassRateLimited {
 			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))

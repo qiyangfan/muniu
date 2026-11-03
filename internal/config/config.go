@@ -94,9 +94,12 @@ type BalanceCfg struct {
 
 // Provider 上游供应商静态拓扑。
 type Provider struct {
-	Name                          string   `yaml:"name"`
-	Adapter                       string   `yaml:"adapter"`
-	BaseURL                       string   `yaml:"base_url"`
+	Name    string `yaml:"name"`
+	Adapter string `yaml:"adapter"`
+	BaseURL string `yaml:"base_url"`
+	// ProxyURL 渠道出站代理(http/https);validate 归一后为生效值(渠道声明 > outbound_proxy,
+	// 两者皆空 = 传输层回落环境变量现状语义),下游 proxy/health/balance 只读本字段。
+	ProxyURL                      string   `yaml:"proxy_url"`
 	Auth                          string   `yaml:"auth"` // 鉴权声明；空按适配器缺省，bearer 发 Authorization Bearer，仅 anthropic 适配器消费
 	NativeMultimodalEmbeddingsURL string   `yaml:"native_multimodal_embeddings_url"`
 	Keys                          []KeyRef `yaml:"keys"`
@@ -248,6 +251,9 @@ type Config struct {
 		Backend   string `yaml:"backend"`    // inmem 缺省，实例自治；redis 为共享视图的集群形态
 		RedisAddr string `yaml:"redis_addr"` // backend=redis 必填，形如 host:port
 	} `yaml:"ratelimit"`
+	// OutboundProxy 顶层出站代理缺省(http/https);渠道 proxy_url 未声明时回退。
+	// 校验归一后该字段本身不再被下游消费(生效值已物化进各渠道)。
+	OutboundProxy    string                 `yaml:"outbound_proxy"`
 	Providers        []Provider             `yaml:"providers"`
 	ModelRoutes      map[string][]Candidate `yaml:"model_routes"`
 	ImagePricing     map[string]ImagePrice  `yaml:"image_pricing"`
@@ -593,6 +599,11 @@ func (c *Config) validate() error {
 		if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			add("providers[%d](%s) base_url 非法: %q", i, p.Name, p.BaseURL)
 		}
+		if p.ProxyURL != "" {
+			if err := validateOutboundProxyURL(p.ProxyURL); err != nil {
+				add("providers[%d](%s) proxy_url 非法: %v", i, p.Name, err)
+			}
+		}
 		if p.NativeMultimodalEmbeddingsURL != "" {
 			u, err := url.Parse(p.NativeMultimodalEmbeddingsURL)
 			if p.Adapter != "qwen" {
@@ -772,8 +783,43 @@ func (c *Config) validate() error {
 		add("semantic 数值配置非法(dim/threshold/ttl_hours/capacity 不可为负,threshold ∈ (0,1])")
 	}
 
+	if c.OutboundProxy != "" {
+		if err := validateOutboundProxyURL(c.OutboundProxy); err != nil {
+			add("outbound_proxy 非法: %v", err)
+		}
+	}
+	// 出站代理归一:渠道声明 > 顶层缺省物化进渠道字段(两者皆空保持空串 = 传输层回落
+	// ProxyFromEnvironment 现状语义)。放在校验末尾:仅合法声明参与归一,非法值由上方拒绝。
+	for i := range c.Providers {
+		if c.Providers[i].ProxyURL == "" {
+			c.Providers[i].ProxyURL = c.OutboundProxy
+		}
+	}
+
 	if len(problems) > 0 {
 		return errors.New("配置校验失败(全部列出):\n  - " + strings.Join(problems, "\n  - "))
+	}
+	return nil
+}
+
+// validateOutboundProxyURL 出站代理形态闸:scheme 仅 http/https(socks5 需 x/net 传递依赖,
+// 不在依赖白名单,加载期拒绝并提示支持形态);URL 解析失败或缺 host 同拒。
+// 错误信息一律脱敏(URL 允许内嵌 userinfo 凭证,拒绝文案不得回显原文)。
+func validateOutboundProxyURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		// url.Error 的 Error() 会内嵌原始输入(可能含 userinfo 凭证),只取底层原因
+		detail := "形态非法"
+		if inner := errors.Unwrap(err); inner != nil {
+			detail = inner.Error()
+		}
+		return fmt.Errorf("无法解析(须为 http/https 绝对 URL): %s", detail)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme %q 不支持(仅 http/https)", u.Scheme)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("%q 缺 host(须为 http/https 绝对 URL)", u.Redacted())
 	}
 	return nil
 }

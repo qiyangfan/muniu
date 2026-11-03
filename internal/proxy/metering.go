@@ -15,6 +15,7 @@ import (
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
+	"github.com/solvela/muniu/internal/metrics"
 	"github.com/solvela/muniu/internal/protocol"
 )
 
@@ -35,11 +36,14 @@ type meterState struct {
 	class        failover.ErrorClass
 	firstMs      *int64 // 首 token 延迟，开闸时刻
 	firstSet     bool
-	stream       bool              // 流式与否，计量行 stream 列
-	retryAfter   time.Duration     // 上游 429 的 Retry-After，0 表示未提供
-	upstreamMsg  string            // 上游错误 body 中的人类可读 message，终结信封透传用
-	usageFrames  []json.RawMessage // 上游 usage 原始对象，可多帧，流式 start/delta 各一
-	outBody      []byte            // 成功响应体，非流式为改写产物、流式为拼包结果，缓存入库候选
+	stream       bool          // 流式与否，计量行 stream 列
+	retryAfter   time.Duration // 上游 429 的 Retry-After，0 表示未提供
+	// creditEvidence 欠费证据（封闭白名单，attempt 非 2xx 分支采集）；上报映射到欠费桶，
+	// 换道语义不变（判定表已按原错误类走完），只改池的跨请求记忆。文案永不参与判定。
+	creditEvidence bool
+	upstreamMsg    string            // 上游错误 body 中的人类可读 message，终结信封透传用
+	usageFrames    []json.RawMessage // 上游 usage 原始对象，可多帧，流式 start/delta 各一
+	outBody        []byte            // 成功响应体，非流式为改写产物、流式为拼包结果，缓存入库候选
 	// 直通路径专用字段，翻译路径恒零值
 	upstreamBody    []byte // 不换道类上游错误体，原样透传客户端，零归一改写
 	upstreamStatus  int    // 配套状态码
@@ -223,6 +227,15 @@ func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key, class fai
 	case failover.ClassContextCanceled, failover.ClassCostBudget:
 		// 客户端断连与预算中断属网关策略，非 key 质量问题：静默退出不计失败，不回写任何结果
 		return
+	}
+	if m.creditEvidence {
+		// 欠费证据（封闭白名单）→ 欠费桶：只改池的跨请求记忆，换道语义不变
+		//（判定表已按原错误类走完）。计入欠费桶事件指标供余额回写面对照。
+		CreditEvents.Inc("upstream", "enter")
+		pool.Report(key, keypool.OutcomeCreditExhausted, now, 0)
+		return
+	}
+	switch class {
 	case failover.ClassRateLimited:
 		pool.Report(key, keypool.OutcomeRateLimited, now, m.retryAfter)
 	case failover.ClassAuthFailed:
@@ -234,6 +247,35 @@ func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key, class fai
 		pool.Report(key, keypool.OutcomeFailure, now, 0)
 	}
 }
+
+// isCreditExhausted 欠费证据封闭白名单：HTTP 402，或错误体错误码/type 属 insufficient_quota
+// （OpenAI 兼容族通用形态，顶层与 error 嵌套两种摆位都认）。刻意不做错误文案模糊匹配——
+// 厂商方言逐版本漂移是竞品的维护包袱；白名单外的一切失败维持既有分类。
+func isCreditExhausted(status int, body []byte) bool {
+	if status == http.StatusPaymentRequired {
+		return true
+	}
+	var probe struct {
+		Error struct {
+			Type string `json:"type"`
+			Code string `json:"code"`
+		} `json:"error"`
+		Type string `json:"type"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return false
+	}
+	return probe.Error.Type == "insufficient_quota" ||
+		probe.Error.Code == "insufficient_quota" ||
+		probe.Type == "insufficient_quota" ||
+		probe.Code == "insufficient_quota"
+}
+
+// CreditEvents 欠费桶事件计数：cause=upstream|balance，action=enter|release。
+// 装配层 balance 回写侧同用（balance 因由）。
+var CreditEvents = metrics.NewCounterVec("muniu_keypool_credit_events_total",
+	"欠费桶事件计数(进入/提前释放)", "cause", "action")
 
 // mergeUsage 合并 usage 帧，非零字段覆盖，桥接流式的 input/output 分帧到达。
 func mergeUsage(base, next protocol.Usage) protocol.Usage {
@@ -395,4 +437,13 @@ func budgetCost(in, out uint64, p *metering.Pricing) (int64, bool) {
 		return 0, false
 	}
 	return a + b, true
+}
+
+// cacheReadSum 缓存读证据合计(worth 闸门):跨 usage 帧的方言键扫描,任一非零即证据。
+func (m *meterState) cacheReadSum() int64 {
+	total := int64(0)
+	for _, f := range m.usageFrames {
+		total += extractCacheRead(f)
+	}
+	return total
 }

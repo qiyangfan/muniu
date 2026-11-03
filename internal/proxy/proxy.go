@@ -4,11 +4,13 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -56,33 +58,38 @@ type Config struct {
 	TenantSwitch     func(string) bool        // 租户语义缓存开关，装配层提供 DB 查询闭包
 	Capabilities     []config.ModelCapability // 模型能力目录；空表示全部零干预透传
 	StrictGovernance bool                     // true 表示命中能力约束即 400，缺省宽松放行并留痕
-	Plugins          *plugin.Registry         // WASM 插件注册表；nil 表示插件禁用，主路径零开销
-	Alerts           *alerting.Notifier       // 告警通知器；nil 表示关闭，Emit 零开销
-	Health           *health.Manager          // 渠道健康熔断管理器；nil = 关闭,候选域零收缩
-	RandIntn         func(int) int            // 候选起点随机源；nil 用全局随机，测试可注入
-	Logger           *slog.Logger
+	// InheritProxy 控制面拓扑来源标记:控制面载荷不含 proxy_url 字段,置 true 时入站声明为空
+	// 的渠道沿用旧快照代理声明(防静默摘除);配置文件源(SIGHUP/启动)必须保持 false——
+	// 用户从 yaml 删除 proxy_url 是显式清空,沿用会吞掉变更(评审 R1)。
+	InheritProxy bool
+	Plugins      *plugin.Registry   // WASM 插件注册表；nil 表示插件禁用，主路径零开销
+	Alerts       *alerting.Notifier // 告警通知器；nil 表示关闭，Emit 零开销
+	Health       *health.Manager    // 渠道健康熔断管理器；nil = 关闭,候选域零收缩
+	RandIntn     func(int) int      // 候选起点随机源；nil 用全局随机，测试可注入
+	Logger       *slog.Logger
 }
 
 // Proxy 编排器：注册表、拓扑快照、三层超时与计量管道；拓扑快照含路由、池、适配器、能力目录，支持原子热替换。
 type Proxy struct {
-	registry     *adapter.Registry                // 启动装配容器，转发路径不再读，adapter 随拓扑快照
-	topo         atomic.Pointer[topologySnapshot] // 请求入口 Load 一次，全程同快照，换道视图一致
-	settlement   string
-	imagePricing *metering.ImagePriceDirectory
-	pricing      *metering.PricingDirectory
-	timeouts     Timeouts
-	pipeline     *metering.Pipeline
-	tpm          ratelimit.TPMRecorder
-	cache        *semantic.Cache
-	tenantSw     func(string) bool
-	strictGov    bool
-	plugins      *plugin.Registry
-	alerts       *alerting.Notifier
-	health       *health.Manager
-	randIntn     func(int) int
-	logger       *slog.Logger
-	client       *http.Client
-	affinity     *affinityTable // 有状态粘性路由亲和表，进程内 TTL+LRU
+	registry      *adapter.Registry                // 启动装配容器，转发路径不再读，adapter 随拓扑快照
+	topo          atomic.Pointer[topologySnapshot] // 请求入口 Load 一次，全程同快照，换道视图一致
+	settlement    string
+	imagePricing  *metering.ImagePriceDirectory
+	pricing       *metering.PricingDirectory
+	timeouts      Timeouts
+	pipeline      *metering.Pipeline
+	tpm           ratelimit.TPMRecorder
+	cache         *semantic.Cache
+	tenantSw      func(string) bool
+	strictGov     bool
+	plugins       *plugin.Registry
+	alerts        *alerting.Notifier
+	health        *health.Manager
+	randIntn      func(int) int
+	logger        *slog.Logger
+	client        *http.Client
+	affinity      *affinityTable      // 有状态粘性路由亲和表，进程内 TTL+LRU
+	cacheAffinity *cacheAffinityTable // 会话缓存亲和表(ADR-0020),独立生命周期
 }
 
 // New 构造代理：路由候选按 priority 升序排序；HTTP 客户端带拨号层超时与连接池。
@@ -110,34 +117,93 @@ func New(cfg Config) *Proxy {
 		settlement = "CNY"
 	}
 	p := &Proxy{
-		settlement:   settlement,
-		registry:     cfg.Registry,
-		pricing:      cfg.Pricing,
-		imagePricing: cfg.ImagePricing,
-		timeouts:     cfg.Timeouts,
-		pipeline:     cfg.Pipeline,
-		tpm:          cfg.TPM,
-		cache:        cfg.Cache,
-		tenantSw:     cfg.TenantSwitch,
-		plugins:      cfg.Plugins,
-		alerts:       cfg.Alerts,
-		health:       cfg.Health,
-		strictGov:    cfg.StrictGovernance,
-		randIntn:     randIntn,
-		logger:       logger,
-		client:       &http.Client{Transport: transport},
-		affinity:     newAffinityTable(),
+		settlement:    settlement,
+		registry:      cfg.Registry,
+		pricing:       cfg.Pricing,
+		imagePricing:  cfg.ImagePricing,
+		timeouts:      cfg.Timeouts,
+		pipeline:      cfg.Pipeline,
+		tpm:           cfg.TPM,
+		cache:         cfg.Cache,
+		tenantSw:      cfg.TenantSwitch,
+		plugins:       cfg.Plugins,
+		alerts:        cfg.Alerts,
+		health:        cfg.Health,
+		strictGov:     cfg.StrictGovernance,
+		randIntn:      randIntn,
+		logger:        logger,
+		client:        &http.Client{Transport: transport},
+		affinity:      newAffinityTable(),
+		cacheAffinity: newCacheAffinityTable(),
 	}
 	p.topo.Store(&topologySnapshot{
 		providers:   append([]config.Provider(nil), cfg.Providers...),
 		routes:      sortRoutes(cfg.Routes),
 		pools:       cfg.Pools,
 		adapters:    initialAdapters(cfg),
+		clients:     initialClients(cfg, logger),
 		caps:        buildCaps(cfg.Capabilities),
 		nativeResps: buildNativeResps(cfg.Providers),
 		loadedAt:    time.Now(),
 	})
 	return p
+}
+
+// clientFor 候选出站 client:声明代理的渠道用独立 client(固定 Proxy,对 env 免疫),
+// 其余复用默认 client —— 零声明部署连实例都不新增,行为与现状逐字节一致。
+func (p *Proxy) clientFor(snap *topologySnapshot, provider string) *http.Client {
+	if cl, ok := snap.clients[provider]; ok {
+		return cl
+	}
+	return p.client
+}
+
+// initialClients 构建声明代理渠道的出站 client;解析失败降级默认 client 并告警
+// (config.Load 已校验形态,此处兜底控制面拓扑等旁路来源)。
+func initialClients(cfg Config, logger *slog.Logger) map[string]*http.Client {
+	var out map[string]*http.Client
+	for _, prov := range cfg.Providers {
+		if prov.ProxyURL == "" {
+			continue
+		}
+		cl, err := ProxiedClient(prov.ProxyURL, cfg.Timeouts.Dial)
+		if err != nil {
+			logger.Warn("渠道出站代理非法,降级默认出站", "provider", prov.Name, "proxy_url", redactProxyURL(prov.ProxyURL), "error", err.Error())
+			continue
+		}
+		if out == nil {
+			out = make(map[string]*http.Client, len(cfg.Providers))
+		}
+		out[prov.Name] = cl
+	}
+	return out
+}
+
+// redactProxyURL 日志脱敏:代理 URL 允许内嵌 userinfo 凭证,任何日志/错误面不得回显原文。
+func redactProxyURL(raw string) string {
+	if u, err := url.Parse(raw); err == nil {
+		return u.Redacted()
+	}
+	return "(unparseable)"
+}
+
+// ProxiedClient 固定代理出站 client:Proxy 恒为声明 URL,对环境变量免疫(显式声明即完整接管,
+// 不叠加「代理失败回落 env」语义——叠加不可测)。探针与余额出站复用同一构造。
+func ProxiedClient(raw string, dialTimeout time.Duration) (*http.Client, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("代理 URL 非法: %q(须为 http/https 绝对 URL)", redactProxyURL(raw))
+	}
+	transport := &http.Transport{
+		Proxy:               http.ProxyURL(u),
+		DialContext:         (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: dialTimeout,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        256,
+		MaxIdleConnsPerHost: 64,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	return &http.Client{Transport: transport}, nil
 }
 
 // initialAdapters 启动期从装配注册表提取各 provider 的适配器，构成拓扑快照初始形态；
@@ -322,7 +388,31 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	for i, c := range cands {
 		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}
 	}
-	iter := failover.NewIterator(fcs, p.randIntn)
+	// 会话缓存亲和(ADR-0020):仅 chat/messages 两条入站 lane 参与(nat 为空=chat 原生;
+	// InboundMessages=翻译后)——responses/gemini 登记为零触碰,亲和表零读写、计数零介入。
+	// 身份解析一次;stick 健康时 iterator 组内起点提示+池内同键提示。亲和永不新增候选/重试
+	// ——熔断收缩与池冷却在循环内既有跳过语义恒优先于提示。pendingHit:lookup 命中尚未终判,
+	// 请求终结时按「stick 成功服务=hit,其余出口=stale」落定,保证三分计数每请求恰一者。
+	affinityLane := nat == nil || nat.proto == protocol.InboundMessages
+	stickID, stickProvider, stickKeyID := "", "", ""
+	stickHit, entryFound, pendingHit := false, false, false
+	if affinityLane {
+		stickID = sessionStickID(r, apiKeyIDOf(r), req)
+		if stickID != "" {
+			sp, sk, status := p.cacheAffinity.lookup(stickID, apiKeyIDOf(r), time.Now())
+			switch status {
+			case "hit":
+				stickProvider, stickKeyID, stickHit, entryFound, pendingHit = sp, sk, true, true, true
+			case "stale":
+				cacheAffinityRequests.Inc("stale")
+			default:
+				cacheAffinityRequests.Inc("miss")
+			}
+		} else {
+			cacheAffinityRequests.Inc("miss")
+		}
+	}
+	iter := failover.NewIteratorWithStick(fcs, p.randIntn, stickProvider)
 	var last failover.ErrorClass
 	// 桥接工具多轮边界：多轮中途流量对翻译路径的桥接候选不可服务，
 	// 直通候选正常服务，不受此边界约束
@@ -341,6 +431,9 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			// 能走到耗尽说明每个候选都未对客户端产出，即 decide 为 next_candidate，信封可安全写出
 			if tw.committed {
 				return
+			}
+			if pendingHit {
+				cacheAffinityRequests.Inc("stale") // hit 已判定但请求未由 stick 成功服务
 			}
 			// 仅当桥接豁免是唯一的跳过原因时，返回具体提示。
 			if bridgeSkipped && last == "" && !otherSkipped {
@@ -387,13 +480,20 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		// 惰性拒绝升格：该尝试需要翻译出站而请求不可翻译，出站前升格既有 400 信封
 		if nat != nil && nat.ineligCode != "" && !path.native {
+			if pendingHit {
+				cacheAffinityRequests.Inc("stale") // 升格拒绝未由 stick 成功服务,计数三分不缺口(评审 R3)
+			}
 			p.upgradeIneligible(tw, r, nat)
 			return
 		}
 
 		// 取 key、执行、按 Decide 动作分支、结果回写 key 池
 		pool := topo.pools[cand.Provider]
-		key := pool.Pick(time.Now())
+		hint := ""
+		if cand.Provider == stickProvider {
+			hint = stickKeyID // 亲和提示:池内同键直取(健康再判在池内,冷却让位语义不变)
+		}
+		key := pool.PickWithHint(hint, time.Now())
 		if key == nil {
 			// 该 provider 全部 key 冷却或禁用：跳过候选，不计错误类
 			otherSkipped = true
@@ -417,16 +517,38 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			if nat != nil && nat.proto == protocol.InboundResponses && m.nativeRespID != "" {
 				p.affinity.Put(m.nativeRespID, cand.Provider, apiKeyIDOf(r))
 			}
+			// 会话缓存亲和写侧:缓存读>0(worth 闸门)才建/续粘。无条目 → 首建粘当次服务者;
+			// stick 命中 → 续期;stick 让位转原序服务 → **不改写条目**(保留原 stick,恢复即复粘)。
+			if stickID != "" && m.cacheReadSum() > 0 && (!entryFound || cand.Provider == stickProvider) {
+				p.cacheAffinity.note(stickID, cand.Provider, key.ID, apiKeyIDOf(r))
+			}
+			if stickHit {
+				if cand.Provider == stickProvider {
+					cacheAffinityRequests.Inc("hit")
+				} else {
+					cacheAffinityRequests.Inc("stale") // stick 不可用转原序服务
+				}
+			}
 			p.storePhase(r, cph, req, cand, m, nat)
 			return
 		}
 		// attempt 已对客户端产出即早退信封或断言出口：请求终结，绝不换道重写
 		if tw.committed {
+			if stickHit && cand.Provider == stickProvider {
+				// 断言出口=stick 键上的真实失败：缓存前提已破，立即清条(spec「失败即清」)
+				p.cacheAffinity.drop(stickID)
+			}
+			if pendingHit {
+				cacheAffinityRequests.Inc("stale")
+			}
 			return
 		}
 		switch failover.Decide(class, m.firstSet, req.Stream) {
 		case failover.ActionNextCandidate:
 			last = class
+			if stickHit && cand.Provider == stickProvider {
+				p.cacheAffinity.drop(stickID) // 换道即清：stick 键上的失败已实证(评审 C1 契约接线)
+			}
 			if p.health != nil {
 				p.health.AliasSwitch(req.Model)               // 换道率分子
 				p.health.ProviderTraffic(cand.Provider, true) // 被动失败窗口
@@ -434,6 +556,12 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		case failover.ActionReturn:
+			if stickHit && cand.Provider == stickProvider {
+				p.cacheAffinity.drop(stickID) // 不换道类的上游失败同样实证前提已破
+			}
+			if pendingHit {
+				cacheAffinityRequests.Inc("stale")
+			}
 			if path.native && len(m.upstreamBody) > 0 {
 				// 直通错误透传：不换道类的上游错误信封原样到达客户端，零归一改写
 				p.writeUpstreamPassthrough(tw, m)
@@ -443,7 +571,11 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 			p.writeError(tw, r, classToType(class), string(class), m.upstreamMsg)
 			return
 		case failover.ActionSilent, failover.ActionAbort:
-			// 静默退出或断言出口已写出，不再有任何输出
+			// 静默退出(客户端断连/预算中断)属网关侧策略：premise 未破不清条;
+			// 断言出口已写出不再有输出。亲和计数落 stale(请求未由 stick 成功服务)。
+			if pendingHit {
+				cacheAffinityRequests.Inc("stale")
+			}
 			return
 		}
 	}
@@ -490,6 +622,8 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
 		p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")
 		return true, failover.ClassUnknown
 	}
+	// 出站 client 按渠道解析：声明代理渠道走独立 client（对 env 免疫），其余默认（见 clientFor）
+	upstream := p.clientFor(snap, cand.Provider)
 	// 请求级成本预算装填：每 attempt 从 canonical 估算输入，价目按别名解析且跨候选同价；
 	// 失格请求 canonical 不可得估算为 0，usage 真值路径仍生效
 	if info := auth.KeyFrom(r.Context()); info != nil && info.MaxRequestCostCredits > 0 {
@@ -547,9 +681,9 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
 			return true, failover.ClassBadRequest
 		}
 		if nat.stream {
-			return p.attemptNativeStream(w, r, ad, path.preparer, out, m, nat, cand)
+			return p.attemptNativeStream(w, r, upstream, ad, path.preparer, out, m, nat, cand)
 		}
-		return p.attemptNativeNonStream(w, r, ad, path.preparer, out, m, nat, cand)
+		return p.attemptNativeNonStream(w, r, upstream, ad, path.preparer, out, m, nat, cand)
 	}
 
 	out, err := ad.Prepare(greq, cand.Model, key.Value)
@@ -565,14 +699,14 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
 	}()
 
 	if req.Stream {
-		handled, class := p.attemptStream(w, r, ad, out, m)
+		handled, class := p.attemptStream(w, r, upstream, ad, out, m)
 		if class == "" && m.outBody == nil {
-			// 流式成功：按累计内容拼包标准响应体供语义缓存入库，非 stop 终态返回 nil 不入库
+			// 流式成功：按累计内容拼装标准响应体供语义缓存入库，非 stop 终态返回 nil 不入库
 			m.outBody = m.assembleStreamBody(cand.Model)
 		}
 		return handled, class
 	}
-	return p.attemptNonStream(w, r, ad, out, m)
+	return p.attemptNonStream(w, r, upstream, ad, out, m)
 }
 
 // outboundRequest 组装上游请求，是 context 链断连传导的必经环节。

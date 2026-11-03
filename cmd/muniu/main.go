@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -208,7 +210,18 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 			return nil, nil, fmt.Errorf("provider %s: %w", prov.Name, err)
 		}
 		registry.Register(prov.Name, ad) // 启动装配登记，转发路径改读拓扑快照
-		return keypool.NewPool(inputs), ad, nil
+		pool := keypool.NewPool(inputs)
+		// 冷却持久化(credit 桶全程/rate 长冷却):加载恢复 → 注 sink(≥5min 迁移落库)→ 孤儿对账;
+		// 加载失败降级为空恢复(最坏多探活一次),对账失败留痕不影响转发。
+		if rows, lerr := store.LoadKeyCooldowns(db, prov.Name); lerr != nil {
+			logger.Warn("冷却行加载失败,重启恢复降级", "provider", prov.Name, "error_detail", lerr.Error())
+		} else {
+			pool.LoadCooldowns(cooldownRecords(rows), time.Now())
+		}
+		if perr := store.PruneKeyCooldowns(db, prov.Name, keyIDSet(pool.KeyIDs())); perr != nil {
+			logger.Warn("冷却孤儿对账失败", "provider", prov.Name, "error_detail", perr.Error())
+		}
+		return pool.WithSink(prov.Name, cooldownSink{db: db, logger: logger}), ad, nil
 	}
 	pools := make(map[string]*keypool.Pool, len(cfg.Providers))
 	for _, p := range cfg.Providers {
@@ -406,6 +419,14 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 						continue // 热替换新增渠道的探针声明需重启生效(与余额源同口径)
 					}
 					ch := base
+					if p.ProxyURL != "" {
+						// 渠道声明出站代理:探针与推理同路出站(代理不可达计入探针失败,与数据面同口径)
+						if cl, cerr := outboundClient(p.ProxyURL, outboundDial); cerr == nil {
+							ch.Outbound = cl
+						} else {
+							logger.Warn("渠道出站代理解析失败,探针走默认出站", "provider", p.Name, "error", cerr.Error())
+						}
+					}
 					for _, kv := range pools[p.Name].Snapshot() {
 						ch.Keys = append(ch.Keys, health.ChannelKey{ID: kv.ID, Value: kv.Value})
 					}
@@ -453,6 +474,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		Health:           healthMgr,
 		Logger:           logger,
 	})
+	outboundDial = cfg.Server.Timeouts.DialDuration() // 探针/余额出站代理与数据面建连超时同口径
 	// 健康循环在 proxy 装配完成后启动:Sources 闭包读 chatProxy,先赋值再 Start
 	// 保证 happens-before(探针首轮不会与装配写竞争,也不会打到装配前的 nil 拓扑)
 	if healthMgr != nil {
@@ -484,6 +506,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 					Providers:    providers,
 					Routes:       routes,
 					Capabilities: models,
+					InheritProxy: true, // 控制面载荷无 proxy_url 字段:沿用旧声明(评审 R1)
 				}, buildPool)
 				if rerr != nil {
 					logger.Warn("拓扑替换被拒绝,保持当前快照", "error_detail", rerr.Error())
@@ -551,14 +574,24 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 				}
 				binding.BelowCredits = &v
 			}
+			// 渠道声明出站代理:余额查询与推理/探针同路出站,统一经 outboundClient 缓存
+			//(同 URL 单实例,连接池共用);解析失败启动即失败,不让渠道悄悄直连。
+			var bcl *http.Client
+			if p.ProxyURL != "" {
+				cl, cerr := outboundClient(p.ProxyURL, outboundDial)
+				if cerr != nil {
+					return nil, nil, nil, fmt.Errorf("渠道 %s 出站代理解析失败: %w", p.Name, cerr)
+				}
+				bcl = cl
+			}
 			switch {
 			case balance.IsBearer(src):
 				// billing-compat 的币种不可自描述(new-api 随站点显示配置而变),经配置显式声明;
 				// 其余 Bearer 源忽略该字段(config 校验已拒绝)。
-				q, qerr := balance.For(src, balance.SourceConfig{
+				q, qerr := balance.ForWithClient(src, balance.SourceConfig{
 					BaseURL:  p.BaseURL,
 					Currency: strings.ToUpper(pb.Currency),
-				})
+				}, bcl)
 				if qerr != nil {
 					return nil, nil, nil, fmt.Errorf("渠道 %s 余额源构造失败: %w", p.Name, qerr)
 				}
@@ -570,7 +603,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 				if ak == "" || sk == "" {
 					return nil, nil, nil, fmt.Errorf("渠道 %s 的余额凭证环境变量未设置(%s/%s)", p.Name, pb.AccessKeyEnv, pb.SecretKeyEnv)
 				}
-				q, qerr := balance.For(src, balance.SourceConfig{AccessKey: ak, SecretKey: sk})
+				q, qerr := balance.ForWithClient(src, balance.SourceConfig{AccessKey: ak, SecretKey: sk}, bcl)
 				if qerr != nil {
 					return nil, nil, nil, fmt.Errorf("渠道 %s 余额源构造失败: %w", p.Name, qerr)
 				}
@@ -581,6 +614,22 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		if len(bindingBase) > 0 {
 			balanceSvc = balance.NewService(balance.Options{
 				DB: db, Notifier: alerts, Logger: logger,
+				// 逐 key 余额回写(credit 桶联动):欠费 → 池冷却让位(幂等),充值 → 提前释放;
+				// metrics 双记,与 upstream 侧 cause 分列。
+				OnKeyEvaluated: func(provider, keyID string, exhausted bool, now time.Time) {
+					if exhausted {
+						proxy.CreditEvents.Inc("balance", "enter")
+					} else {
+						proxy.CreditEvents.Inc("balance", "release")
+					}
+					if chatProxy == nil {
+						return
+					}
+					_, pools := chatProxy.Topology()
+					if pool := pools[provider]; pool != nil {
+						pool.RecordCreditExhausted(keyID, exhausted, now)
+					}
+				},
 				Interval:         time.Duration(cfg.Balance.EvalIntervalSec) * time.Second,
 				PollTimeout:      time.Duration(cfg.Balance.PollTimeoutSec) * time.Second,
 				WindowDays:       cfg.Balance.BurnWindowDays,
@@ -877,4 +926,57 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		_ = pipeline.Close() // 退出前排干计量存量
 	}
 	return root, declared, cleanup, nil
+}
+
+// outboundClientCache 渠道出站代理 client 缓存:按声明 URL 缓存独立 client,
+// 探针(动态拓扑)与余额查询(装配期)共用;缓存键=声明的 proxy_url,数量受配置面约束。
+var outboundClientCache sync.Map
+
+// outboundDial 探针/余额出站 client 的拨号超时,与数据面同一口径(装配期一次定型)。
+var outboundDial time.Duration
+
+// outboundClient 解析渠道出站代理 client(探针 Sources 闭包动态消费);解析失败返回错误
+// 由调用方按场景降级(探针回默认 client 并告警,余额装配启动即失败)。
+func outboundClient(raw string, dial time.Duration) (*http.Client, error) {
+	if v, ok := outboundClientCache.Load(raw); ok {
+		return v.(*http.Client), nil
+	}
+	cl, err := proxy.ProxiedClient(raw, dial)
+	if err != nil {
+		return nil, err
+	}
+	outboundClientCache.Store(raw, cl)
+	return cl, nil
+}
+
+// cooldownSink keypool 冷却持久化出口(store 实现):欠费桶全程/rate 长冷却的迁移落库。
+// 落库失败留 Warn 痕(契约「失败由实现方留痕」):持久化静默全灭的唯一症状是重启丢冷却,运维需有线索。
+type cooldownSink struct {
+	db     *sql.DB
+	logger *slog.Logger
+}
+
+func (s cooldownSink) SaveCooldown(provider, keyID, bucket string, until time.Time, consec int, seq int64) error {
+	if err := store.SaveKeyCooldown(s.db, provider, keyID, bucket, until, consec, time.Now(), seq); err != nil {
+		s.logger.Warn("冷却落库失败", "provider", provider, "key_id", keyID, "error_detail", err.Error())
+	}
+	return nil
+}
+
+// cooldownRecords store 行 → keypool 恢复记录(存储与池互不依赖,装配层换形)。
+func cooldownRecords(rows []store.KeyCooldownRow) []keypool.CooldownRecord {
+	out := make([]keypool.CooldownRecord, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, keypool.CooldownRecord{KeyID: r.KeyID, Bucket: r.Bucket, Until: r.Until, Consec: r.Consec})
+	}
+	return out
+}
+
+// keyIDSet 键集合(set 语义供对账)。
+func keyIDSet(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
 }

@@ -51,15 +51,18 @@ func qerrWrap(class Class, err error, msg string) *QueryError {
 }
 
 // getJSON Bearer GET 上游并解码;json.Number 保留原始十进制形态,
-// 数值一律不经 float64(金额整数纪律在出站侧同样生效)。
-func getJSON(ctx context.Context, endpoint, key string, out any) error {
+// 数值一律不经 float64(金额整数纪律在出站侧同样生效)。cl nil = 共享 balanceHTTP。
+func getJSON(ctx context.Context, cl *http.Client, endpoint, key string, out any) error {
+	if cl == nil {
+		cl = balanceHTTP
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return qerr(ClassParse, "balance: 构造请求失败: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Accept", "application/json")
-	resp, err := balanceHTTP.Do(req)
+	resp, err := cl.Do(req)
 	if err != nil {
 		return qerrWrap(ClassNetwork, err, "balance: 请求上游失败")
 	}
@@ -135,6 +138,7 @@ type deepseekResp struct {
 type bearerQuerier struct {
 	kind     string
 	endpoint string
+	client   *http.Client // 渠道出站代理 client;nil = 共享 balanceHTTP
 }
 
 func (q *bearerQuerier) Query(ctx context.Context, key string) (Balance, error) {
@@ -152,7 +156,7 @@ func (q *bearerQuerier) Query(ctx context.Context, key string) (Balance, error) 
 
 func (q *bearerQuerier) queryDeepseek(ctx context.Context, key string) (Balance, error) {
 	var resp deepseekResp
-	if err := getJSON(ctx, q.endpoint, key, &resp); err != nil {
+	if err := getJSON(ctx, q.client, q.endpoint, key, &resp); err != nil {
 		return Balance{}, err
 	}
 	if len(resp.BalanceInfos) == 0 || resp.BalanceInfos[0].TotalBalance.String() == "" {
@@ -181,7 +185,7 @@ type moonshotResp struct {
 
 func (q *bearerQuerier) queryMoonshot(ctx context.Context, key string) (Balance, error) {
 	var resp moonshotResp
-	if err := getJSON(ctx, q.endpoint, key, &resp); err != nil {
+	if err := getJSON(ctx, q.client, q.endpoint, key, &resp); err != nil {
 		return Balance{}, err
 	}
 	if resp.Code != 0 || !resp.Status {
@@ -208,7 +212,7 @@ type openrouterResp struct {
 
 func (q *bearerQuerier) queryOpenrouter(ctx context.Context, key string) (Balance, error) {
 	var resp openrouterResp
-	if err := getJSON(ctx, q.endpoint, key, &resp); err != nil {
+	if err := getJSON(ctx, q.client, q.endpoint, key, &resp); err != nil {
 		return Balance{}, err
 	}
 	if resp.Data.Usage.String() == "" || resp.Data.Usage.String() == "null" {
@@ -237,7 +241,8 @@ func (q *bearerQuerier) queryOpenrouter(ctx context.Context, key string) (Balanc
 type billingCompatQuerier struct {
 	subscription string
 	usage        string
-	currency     string // 余额币种:该字段族随中转实现与站点显示配置而变,不可自描述,由配置显式声明
+	currency     string // 余额币种：该字段族随中转实现与站点显示配置而变，不可自描述，由配置显式声明
+	client       *http.Client
 }
 
 type billingSubResp struct {
@@ -254,7 +259,7 @@ const billingMaxHardCredits = int64(10_000_000) * 1_000_000_000
 
 func (q *billingCompatQuerier) Query(ctx context.Context, key string) (Balance, error) {
 	var sub billingSubResp
-	if err := getJSON(ctx, q.subscription, key, &sub); err != nil {
+	if err := getJSON(ctx, q.client, q.subscription, key, &sub); err != nil {
 		return Balance{}, err
 	}
 	if sub.HardLimitUSD.String() == "" || sub.HardLimitUSD.String() == "null" {
@@ -269,7 +274,7 @@ func (q *billingCompatQuerier) Query(ctx context.Context, key string) (Balance, 
 			"balance: billing-compat hard_limit_usd 超出货币量级(疑为 quota 原始值形态)")
 	}
 	var use billingUsageResp
-	if err := getJSON(ctx, q.usage, key, &use); err != nil {
+	if err := getJSON(ctx, q.client, q.usage, key, &use); err != nil {
 		return Balance{}, err
 	}
 	if use.TotalUsage.String() == "" || use.TotalUsage.String() == "null" {

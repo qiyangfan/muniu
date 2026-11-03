@@ -335,10 +335,14 @@ type ResponsesStreamEncoder struct {
 	created   bool
 	msgOpen   bool
 	textOut   strings.Builder
-	tools     map[int]*toolItem
-	toolOrder []int
-	usage     *Usage
-	done      bool
+	// reasoning 状态机(流式 reasoning_content 透传,openspec responses-stream-reasoning):
+	// 事件词汇借官方 reasoning_summary_text 族,item 形态与非流式冻结契约同形(type=reasoning+text 原文)。
+	reasonOpen bool
+	reasonBuf  strings.Builder
+	tools      map[int]*toolItem
+	toolOrder  []int
+	usage      *Usage
+	done       bool
 }
 
 // NewResponsesStreamEncoder 构造，id 应传 resp_<request_id>。
@@ -365,6 +369,24 @@ func (e *ResponsesStreamEncoder) ensureCreated(out *[][]byte) {
 	}
 }
 
+// closeReasoning 收束推理 item：summary done（累计原文）+ output_item.done（形态与
+// 非流式冻结契约同形：type=reasoning + text 原文）。reasonOpen 时生效，否则 no-op。
+func (e *ResponsesStreamEncoder) closeReasoning(out *[][]byte) {
+	if !e.reasonOpen {
+		return
+	}
+	e.reasonOpen = false
+	*out = append(*out, e.event(map[string]any{
+		"type": "response.reasoning_summary_text.done", "item_id": "item_reasoning",
+		"output_index": 0, "text": e.reasonBuf.String(),
+	}))
+	*out = append(*out, e.event(map[string]any{
+		"type": "response.output_item.done", "output_index": 0,
+		"item": map[string]any{"type": "reasoning", "text": e.reasonBuf.String(), "status": "completed"},
+	}))
+	e.reasonBuf.Reset()
+}
+
 // closeMessage 收束文本 item，msgOpen 时发 done 并复位，否则 no-op。
 func (e *ResponsesStreamEncoder) closeMessage(out *[][]byte) {
 	if !e.msgOpen {
@@ -380,7 +402,8 @@ func (e *ResponsesStreamEncoder) closeMessage(out *[][]byte) {
 }
 
 // Feed 消费一帧上游 OpenAI chunk(delta/usage/finish)，返回待写的 Responses 事件序列。
-// usage 恒捕获，兼容 finish 帧与独立 usage 帧；流式 reasoning_content 不透出。
+// usage 恒捕获，兼容 finish 帧与独立 usage 帧；reasoning_content 经官方词汇透传
+// (openspec responses-stream-reasoning，item 形态与非流式同形)。
 func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 	c, err := ParseStreamChunk(chunk)
 	if err != nil {
@@ -398,9 +421,23 @@ func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 		if ch.Index != nil && *ch.Index != 0 {
 			continue // v1 仅映射首 choice，多 choice 映射未定义，防御合流错乱
 		}
+		if ch.Delta.ReasoningContent != nil && *ch.Delta.ReasoningContent != "" {
+			if !e.reasonOpen {
+				e.closeMessage(&out) // 混流对称收束：正文→推理切换先收 message
+				out = append(out, e.event(map[string]any{"type": "response.output_item.added",
+					"item_id": "item_reasoning", "output_index": 0,
+					"item": map[string]any{"type": "reasoning", "status": "in_progress"}}))
+				e.reasonOpen = true
+			}
+			e.reasonBuf.WriteString(*ch.Delta.ReasoningContent)
+			out = append(out, e.event(map[string]any{
+				"type": "response.reasoning_summary_text.delta", "item_id": "item_reasoning",
+				"output_index": 0, "delta": *ch.Delta.ReasoningContent,
+			}))
+		}
 		if ch.Delta.Content != nil && *ch.Delta.Content != "" {
-			if !e.msgOpen {
-				e.closeMessage(&out) // 文本与工具混流，切换前收束文本
+			if e.reasonOpen {
+				e.closeReasoning(&out) // 混流对称收束：推理→正文切换先收 reasoning
 			}
 			if !e.msgOpen {
 				out = append(out, e.event(map[string]any{"type": "response.output_item.added",
@@ -441,6 +478,10 @@ func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 				ti.name = tc.Function.Name
 			}
 			if !ti.added {
+				// 首个工具 item 开启前对称收束文本/推理 item(混流不交叉,MUST):
+				// reasoning→tools 与 content→tools 两剧本均收束后再 added。
+				e.closeReasoning(&out)
+				e.closeMessage(&out)
 				// 先创建 item，允许后续帧补齐 call_id 和 name。
 				ti.added = true
 				out = append(out, e.event(map[string]any{"type": "response.output_item.added",
@@ -457,6 +498,7 @@ func (e *ResponsesStreamEncoder) Feed(chunk []byte) [][]byte {
 		}
 		if ch.FinishReason != nil && *ch.FinishReason != "" && !e.done {
 			e.done = true
+			e.closeReasoning(&out)
 			e.closeMessage(&out)
 			for _, idx := range e.toolOrder {
 				if ti := e.tools[idx]; ti != nil && ti.added {

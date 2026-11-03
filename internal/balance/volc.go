@@ -28,7 +28,8 @@ const (
 type volcBSSQuerier struct {
 	accessKey string
 	secretKey string
-	endpoint  string // 空 = 官方端点;测试注入 stub
+	endpoint  string       // 空 = 官方端点;测试注入 stub
+	client    *http.Client // 渠道出站代理 client;nil = 共享 balanceHTTP
 }
 
 func (q *volcBSSQuerier) addr() string {
@@ -107,7 +108,11 @@ func (q *volcBSSQuerier) Query(ctx context.Context, _ string) (Balance, error) {
 		"HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		q.accessKey, scope, signedHeaders, signature))
 
-	resp, err := balanceHTTP.Do(req)
+	cl := q.client
+	if cl == nil {
+		cl = balanceHTTP
+	}
+	resp, err := cl.Do(req)
 	if err != nil {
 		return Balance{}, qerrWrap(ClassNetwork, err, "balance: volc 请求失败")
 	}

@@ -29,6 +29,10 @@ type iterator struct {
 	offset  int  // 组内加权随机起点
 	emitted int  // 当前组已产出数
 	done    bool
+
+	forced    int  // 亲和提示起点(stick 在组内下标)
+	forcedGi  int  // 亲和提示生效的组下标(stick 所在组)
+	hasForced bool // true = forcedGi 组的起点用 forced,不走加权随机
 }
 
 // NewIterator 构造：内部复制候选并按 priority 升序稳定分组。
@@ -64,7 +68,11 @@ func (it *iterator) Next() (Candidate, bool) {
 		}
 		g := it.groups[it.gi]
 		if !it.inGroup {
-			it.offset = it.startOf(g)
+			if it.hasForced && it.gi == it.forcedGi {
+				it.offset = it.forced
+			} else {
+				it.offset = it.startOf(g)
+			}
 			it.emitted = 0
 			it.inGroup = true
 		}
@@ -109,4 +117,28 @@ func (it *iterator) startOf(group []Candidate) int {
 		r -= w
 	}
 	return 0
+}
+
+// NewIteratorWithStick 同 NewIterator,但 stick 渠道所在组内的起点恒为该成员(会话缓存
+// 亲和提示,ADR-0020;stick 位于低优先级组时该组到达后同样 pin——熔断收缩先于亲和,
+// 高优组全收缩时 stick 组仍按亲和起点展开);stick 不在任何组内或为空串时行为与
+// NewIterator 逐字节一致。亲和只改「先试谁」,不增删候选、不改降级序——起点之前的
+// 成员仍会被环绕尝试。
+func NewIteratorWithStick(cands []Candidate, randIntn randIntn, stick string) Iterator {
+	it := NewIterator(cands, randIntn)
+	if stick == "" {
+		return it
+	}
+	iti := it.(*iterator)
+	for gi, g := range iti.groups {
+		for i, c := range g {
+			if c.Provider == stick {
+				iti.forced = i
+				iti.forcedGi = gi
+				iti.hasForced = true
+				return it
+			}
+		}
+	}
+	return it
 }
