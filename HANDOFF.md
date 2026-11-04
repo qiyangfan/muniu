@@ -2,6 +2,13 @@
 
 > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
 
+## 当前状态(2026-11-04,百炼原生 multimodal-embedding 透传部署收口:零代码改动,配置+运维+真机实证)
+
+- 需求核验:该透传已在 89d42a8(2026-10-22,dashscope-multimodal-embeddings)完整入库——路由挂载 cmd/muniu/main.go:709、纯透传 handler、双模型 usage 归一;下游「接不上」根因=常驻实例是 10-20 旧二进制(无该路由)+ muniu.yaml 未声明 native_multimodal_embeddings_url(缺声明恒 400 multimodal_embeddings_not_supported)。
+- 本批动作:muniu.yaml qwen provider 补该 URL 声明+修过时注释(gitignored 非 git 变更);:8787 常驻换装 v0.3.0-47-ga6fb481 重启(旧 63213 SIGTERM 温停;注意换装同时携带 10-20→HEAD 全部已归档行为变化——被动熔断缺省生效/欠费分桶/会话亲和/出站代理等,影响面超出 multimodal 本身);临时实例 :18790 及其密钥材料已拆。
+- 真机实证(临时+常驻双环境):vl-embedding text 200/2560 维;tongyi-vision-flash image 200/768 维;既有 /v1/embeddings 三别名(2026-10-20 族)200/1024 维不变;计量:新两模型 cost=0(vision_tokens 独立入账 66),text-embedding-v3 对照行正常计费(5 token→2500 credit)。
+- 门禁:make check EXIT=0(coverage 72.4%)。仓库文件仅本条 HANDOFF 变更(提交等 owner 指令);常驻库新增 key 前缀 mk-D5RYFdg7C/mm-mmroute-verify 与 mk-3T8spmlYi/mm-regression-probe(均不限模型)。
+
 ## 当前状态(2026-11-03,四 change 归档提交推送完毕:outbound-proxy / keypool-credit-bucket / session-cache-affinity / responses-stream-reasoning)
 
 - 快照冻结一次性执行 + owner「归档/提交/push/盯 CI」逐次指令闭环:四 change(三立项+reasoning 流式透传插话立项)任务全勾,评审迭代循环两轮收敛,openspec 归档至 `archive/2026-11-03-*` 四件,主 specs 新建三 capability+扩 responses-inbound(+3 Requirement),Purpose 均为实文非占位,strict 29/29。
