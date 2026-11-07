@@ -8,9 +8,15 @@ on:
     paths: ["plugins/**", ".github/workflows/plugins.yml"]
   pull_request:
     paths: ["plugins/**", ".github/workflows/plugins.yml"]
+
+concurrency:
+  group: plugins-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

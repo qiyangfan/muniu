@@ -7,9 +7,15 @@ on:
 permissions:
   contents: write
 
+# 并发 tag 推送按序发布,不取消进行中的发布(发布不可半途取消)。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:

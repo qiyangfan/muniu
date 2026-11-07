@@ -5,9 +5,48 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  check:
+  # 增量门控:Go 侧与 web 侧互不依赖,按路径裁剪(fail-open,判定失败即全跑)。
+  changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.filter.outputs.go }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          set -euo pipefail
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            BASE="origin/${GITHUB_BASE_REF}"
+          else
+            BASE="HEAD~1"
+          fi
+          if ! git rev-parse -q --verify "${BASE}^{commit}" >/dev/null 2>&1; then
+            echo "变更基线不可得,视为全量变更"
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "web=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FILES=$(git diff --name-only "${BASE}...HEAD")
+          echo "$FILES"
+          match() { echo "$FILES" | grep -Eq "$1" && echo true || echo false; }
+          # migrations/*.sql 经 go:embed 进二进制,归入 Go 侧
+          echo "go=$(match '(\.go$|^go\.mod$|^go\.sum$|^internal/store/migrations/|^\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
+          echo "web=$(match '(^web/|^\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -31,8 +70,11 @@ jobs:
         run: CGO_ENABLED=0 go build ./...
 
   web-check:
+    needs: changes
     # 与 make check 的 web-check 同域:控制台 typecheck/lint 不进 CI,纯 web 改动会带着类型错误绿灯合并
+    if: needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
