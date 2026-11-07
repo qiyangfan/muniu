@@ -31,11 +31,17 @@ jobs:
       - name: Rust tests (host)
         working-directory: plugins
         run: cargo test
+      # 工件仅存档用(无人消费):账号存储配额受限期间上传被拒,不应拖红整个
+      # workflow;retention 缩短到 3 天,别让 90 天默认保留占账号 500MB 配额。
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: pii-masker-wasm
           path: plugins/pii-masker/pii_masker.wasm
+          retention-days: 3
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
           name: json-redactor-wasm
           path: plugins/json-redactor/json_redactor.wasm
+          retention-days: 3
