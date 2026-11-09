@@ -42,3 +42,6 @@ coverage.out
 
 # TypeScript 增量构建缓存
 web/*.tsbuildinfo
+
+# HANDOFF 仅本地维护,不入库(含真实环境运维细节)
+/HANDOFF.md

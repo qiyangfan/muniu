@@ -69,6 +69,8 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
 
 只写四块:当前状态 / 下一步动作序列 / 开放决策项 / 验收记录。**不写变更明细**(那是 git log 的事),单次更新控制在 30 行以内。
 
+`HANDOFF.md` 仅本地维护,**不入库**(内容含真实环境运维细节,公开仓库不携带此文件):当前状态以本地 HANDOFF 为准,仓库侧以 git log 与 openspec 归档为接手依据。
+
 ## 明确不做(全局 Non-goals)
 
 商业化与平台功能(计费支付/套餐商城/用户注册与门户/渠道管理门户——归独立控制面产品,边界见 ADR-0005)、Kubernetes Operator、插件市场、管理面 SSO、对 gRPC 的入站支持、分布式强一致限流——出现此类诉求一律记 backlog,不进当前 phase。
