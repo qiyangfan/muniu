@@ -102,6 +102,13 @@ func (p *Proxy) HandlerResponsesStateless() http.Handler {
 		}
 		// 代理转发：取 key 确认域内可用性，经 NativeFetch GET 原样透传状态、头、体
 		snap := p.topo.Load()
+		// oauth 收窄防御检查:responses 状态 lane 不可达 oauth 渠道(创建侧已收窄,此处兜底
+		// 亲和条目指向已改声明的渠道),上游零调用
+		if snap.authModes[provider] == adapter.AuthOAuth {
+			p.writeError(w, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
+				"OAuth 订阅渠道不支持 responses 状态 lane")
+			return
+		}
 		ad, ok := snap.adapters[provider]
 		if !ok {
 			p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")

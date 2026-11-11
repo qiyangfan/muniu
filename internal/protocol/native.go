@@ -10,11 +10,13 @@ import (
 // InboundProtocol 入站协议标签，直通路径判定载体，随请求传入管道。
 type InboundProtocol string
 
-// 入站协议标签值域：chat 无直通增益，messages/responses 具同构直通语义。
+// 入站协议标签值域：chat 无直通增益，messages/responses 具同构直通语义；
+// gemini 为纯翻译型(委托 chat 管道,lane 身份标记载体,无直通 lane)。
 const (
 	InboundChat      InboundProtocol = "chat" // 原生 chat，基座本就透传，无直通增益
 	InboundMessages  InboundProtocol = "messages"
 	InboundResponses InboundProtocol = "responses"
+	InboundGemini    InboundProtocol = "gemini" // 翻译型 lane 标记(亲和范围/oauth 收窄判定消费)
 )
 
 // TranslationResult 边缘翻译结果双形态。不变式：Chat != nil ⇔ Fatal == nil ∧ Ineligible == nil。

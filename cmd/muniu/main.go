@@ -194,14 +194,33 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		inputs := make([]keypool.KeyInput, 0, len(prov.Keys))
 		first := ""
 		for i, kr := range prov.Keys {
-			v := os.Getenv(kr.Env)
-			if v == "" {
-				return nil, nil, fmt.Errorf("provider %s 的 key 环境变量 %s 未设置", prov.Name, kr.Env)
+			var v string
+			if kr.Account != "" {
+				// 账号引用:从账号存储解析当前凭据(装配层唯一解析点,oauth 包不依赖 store);
+				// 不存在即装配失败——文件源启动 fail-fast,控制面/热替换路径快照被拒(旧快照保留)。
+				row, gerr := store.GetOAuthAccount(db, kr.Account)
+				if gerr != nil {
+					return nil, nil, fmt.Errorf("provider %s 的账号引用 %s 不可用: %w", prov.Name, kr.Account, gerr)
+				}
+				v = row.AccessToken
+				if v == "" {
+					return nil, nil, fmt.Errorf("provider %s 的账号引用 %s 凭据为空", prov.Name, kr.Account)
+				}
+			} else {
+				v = os.Getenv(kr.Env)
+				if v == "" {
+					return nil, nil, fmt.Errorf("provider %s 的 key 环境变量 %s 未设置", prov.Name, kr.Env)
+				}
 			}
 			if i == 0 {
 				first = v
 			}
-			inputs = append(inputs, keypool.KeyInput{ID: kr.Env, Value: v, Weight: kr.Weight})
+			// 池成员 ID = 引用身份(env 名或账号 ID):冷却落库/亲和提示/账号同步同键对齐
+			id := kr.Env
+			if kr.Account != "" {
+				id = kr.Account
+			}
+			inputs = append(inputs, keypool.KeyInput{ID: id, Value: v, Weight: kr.Weight})
 		}
 		ad, err := adapter.For(prov.Adapter, prov.BaseURL, first, adapter.Options{
 			Auth: prov.Auth, NativeMultimodalEmbeddingURL: prov.NativeMultimodalEmbeddingsURL,
@@ -469,6 +488,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		TenantSwitch:     tenantSw,
 		Capabilities:     cfg.Models,
 		StrictGovernance: cfg.StrictGovernance,
+		OAuth:            cfg.OAuth, // 实例 oauth 段:拓扑守门 auth 共享校验的完整性基准
 		Plugins:          pluginReg,
 		Alerts:           alerts,
 		Health:           healthMgr,
@@ -480,6 +500,9 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	if healthMgr != nil {
 		healthMgr.Start()
 	}
+	// oauth 刷新器同序启动(oauth 段未声明时零开销零 goroutine);flow 交管理面授权端点,
+	// cancel 挂 cleanup 随退出停环。
+	oauthFlow, oauthCancel := startOAuthRefresher(context.Background(), cfg, db, chatProxy, logger)
 
 	// 控制面拓扑热替换：文件源为缺省，配置 topology_url 后启用。
 	// 启动即拉，ETag 条件请求（304 跳过），失败或损坏保持当前快照并告警降级；
@@ -764,6 +787,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		StaticPricing:          staticHuman,
 		RefreshPricing:         refreshPricing,
 		Plugins:                pluginReg,
+		OAuthFlow:              oauthFlow, // nil = oauth 段未声明,授权端点返回关闭态
 	}
 	if cacheInst != nil {
 		adminDeps.CacheStats = cacheInst.Stats
@@ -921,6 +945,9 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 		}
 		if healthMgr != nil {
 			healthMgr.Close() // 停探针循环,在途探针随 ctx 取消(与余额观测启用与否无关)
+		}
+		if oauthCancel != nil {
+			oauthCancel() // 停 oauth 刷新循环
 		}
 		verifier.Close()
 		_ = pipeline.Close() // 退出前排干计量存量

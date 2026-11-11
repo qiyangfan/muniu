@@ -87,6 +87,8 @@ func (p *Proxy) handleMultimodalEmbeddings(w http.ResponseWriter, r *http.Reques
 	var (
 		lastClass    failover.ErrorClass
 		lastUpstream *meterState
+		oauthSkipped bool // oauth 候选收窄:多模态 lane 不可达,唯一跳因时显式信封
+		otherSkipped bool // 池缺失/池耗尽等非 oauth 跳因
 	)
 	for {
 		cand, ok := iter.Next()
@@ -95,15 +97,28 @@ func (p *Proxy) handleMultimodalEmbeddings(w http.ResponseWriter, r *http.Reques
 				writeUpstreamResponse(tw, lastUpstream.upstreamStatus, lastUpstream.upstreamHeaders, lastUpstream.upstreamBody)
 				return
 			}
+			if oauthSkipped && lastClass == "" && !otherSkipped {
+				p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
+					"该别名的候选均为 OAuth 订阅渠道,不支持多模态 embeddings lane,请为别名配置非 oauth 候选")
+				return
+			}
 			p.writeError(tw, r, classToType(lastClass), "all_candidates_failed", "上游供应商暂时不可用,已尝试全部支持的候选")
 			return
 		}
+		if topo.authModes[cand.Provider] == adapter.AuthOAuth {
+			oauthSkipped = true
+			p.logger.Warn("oauth 渠道不支持多模态 embeddings lane,跳过候选",
+				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+			continue
+		}
 		pool := topo.pools[cand.Provider]
 		if pool == nil {
+			otherSkipped = true
 			continue
 		}
 		key := pool.Pick(time.Now())
 		if key == nil {
+			otherSkipped = true
 			continue
 		}
 		m := &meterState{start: time.Now(), status: "ok"}

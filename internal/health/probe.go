@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/solvela/muniu/internal/adapter"
 )
 
 // probeSpec 各适配器族的探针端点与鉴权形态;gemini 原生 v1 不支持(登记限制:
@@ -17,7 +19,7 @@ import (
 type probeSpec struct {
 	freePath      string
 	inferencePath string
-	anthropic     bool // true = x-api-key + anthropic-version 鉴权头;false = Bearer
+	anthropic     bool // true = 三态鉴权头(缺省 x-api-key/bearer/oauth,与数据面 bridge.applyAuth 同语义);false = Bearer
 }
 
 // adaptersWithProbe 支持探针的适配器族:openai 兼容系共享 /models 与 /chat/completions 形态。
@@ -67,9 +69,16 @@ func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (Probe
 		return ProbeFail, "network"
 	}
 	if spec.anthropic {
-		if ch.Auth == "bearer" {
+		// 三态与数据面 bridge.applyAuth 同语义(oauth-subscription-lane):oauth 渠道若缺
+		// 此分支,缺省全开的免费探针会以 x-api-key 发订阅 access token → 连续 401 → 健康面
+		// 误熔断可用渠道,且畸形凭据外呼构成保号风险(评审域三 P1)。
+		switch ch.Auth {
+		case adapter.AuthOAuth:
 			req.Header.Set("Authorization", "Bearer "+key)
-		} else {
+			req.Header.Set("anthropic-beta", adapter.AuthOAuthBetaHeader)
+		case adapter.AuthBearer:
+			req.Header.Set("Authorization", "Bearer "+key)
+		default:
 			req.Header.Set("x-api-key", key)
 		}
 		req.Header.Set("anthropic-version", "2023-06-01")

@@ -42,6 +42,20 @@ type Timeouts struct {
 
 const providerCircuitOpenCode = "provider_circuit_open"
 
+// oauthLaneUnsupportedCode oauth lane 收窄的显式拒绝码:候选均为订阅渠道而入站 lane 不支持。
+const oauthLaneUnsupportedCode = "oauth_lane_unsupported"
+
+// oauthSkippedLane 收窄判定:nat 非空且非 messages 入站(responses)命中 oauth 渠道即跳过;
+// gemini 经 lane 标记判定;chat(nat 空且无 lane 标记)与 messages 恒放行。
+func oauthSkippedLane(r *http.Request, nat *inboundNative, authModes map[string]string, provider string) bool {
+	if nat != nil {
+		return nat.proto != protocol.InboundMessages &&
+			authModes[provider] == adapter.AuthOAuth
+	}
+	return laneFrom(r) == protocol.InboundGemini &&
+		authModes[provider] == adapter.AuthOAuth
+}
+
 // Config 代理装配参数，由 New 消费，结构化形态避免参数膨胀。
 type Config struct {
 	Registry         *adapter.Registry
@@ -62,11 +76,14 @@ type Config struct {
 	// 的渠道沿用旧快照代理声明(防静默摘除);配置文件源(SIGHUP/启动)必须保持 false——
 	// 用户从 yaml 删除 proxy_url 是显式清空,沿用会吞掉变更(评审 R1)。
 	InheritProxy bool
-	Plugins      *plugin.Registry   // WASM 插件注册表；nil 表示插件禁用，主路径零开销
-	Alerts       *alerting.Notifier // 告警通知器；nil 表示关闭，Emit 零开销
-	Health       *health.Manager    // 渠道健康熔断管理器；nil = 关闭,候选域零收缩
-	RandIntn     func(int) int      // 候选起点随机源；nil 用全局随机，测试可注入
-	Logger       *slog.Logger
+	// OAuth 实例的 oauth 端点声明(来自 yaml oauth 段,不随控制面拓扑下发):ReplaceTopology
+	// 的 auth 共享校验以此判定「auth=oauth 渠道需 oauth 段完整」。
+	OAuth    config.OAuthCfg
+	Plugins  *plugin.Registry   // WASM 插件注册表；nil 表示插件禁用，主路径零开销
+	Alerts   *alerting.Notifier // 告警通知器；nil 表示关闭，Emit 零开销
+	Health   *health.Manager    // 渠道健康熔断管理器；nil = 关闭,候选域零收缩
+	RandIntn func(int) int      // 候选起点随机源；nil 用全局随机，测试可注入
+	Logger   *slog.Logger
 }
 
 // Proxy 编排器：注册表、拓扑快照、三层超时与计量管道；拓扑快照含路由、池、适配器、能力目录，支持原子热替换。
@@ -87,6 +104,7 @@ type Proxy struct {
 	health        *health.Manager
 	randIntn      func(int) int
 	logger        *slog.Logger
+	oauthCfg      config.OAuthCfg // 实例 oauth 段(拓扑守门的 oauth 完整性判定基准)
 	client        *http.Client
 	affinity      *affinityTable      // 有状态粘性路由亲和表，进程内 TTL+LRU
 	cacheAffinity *cacheAffinityTable // 会话缓存亲和表(ADR-0020),独立生命周期
@@ -130,6 +148,7 @@ func New(cfg Config) *Proxy {
 		alerts:        cfg.Alerts,
 		health:        cfg.Health,
 		strictGov:     cfg.StrictGovernance,
+		oauthCfg:      cfg.OAuth,
 		randIntn:      randIntn,
 		logger:        logger,
 		client:        &http.Client{Transport: transport},
@@ -144,6 +163,7 @@ func New(cfg Config) *Proxy {
 		clients:     initialClients(cfg, logger),
 		caps:        buildCaps(cfg.Capabilities),
 		nativeResps: buildNativeResps(cfg.Providers),
+		authModes:   buildAuthModes(cfg.Providers), // 与 ReplaceTopology 同源:引导快照不落表则启动路径收窄失灵
 		loadedAt:    time.Now(),
 	})
 	return p
@@ -388,12 +408,13 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	for i, c := range cands {
 		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}
 	}
-	// 会话缓存亲和(ADR-0020):仅 chat/messages 两条入站 lane 参与(nat 为空=chat 原生;
-	// InboundMessages=翻译后)——responses/gemini 登记为零触碰,亲和表零读写、计数零介入。
+	// 会话缓存亲和(ADR-0020):仅 chat/messages 两条入站 lane 参与(nat 为空且无 lane 标记
+	// =chat 原生;InboundMessages=翻译后;gemini 经 lane 标记排除——先前 gemini 委托管道
+	// 不携带任何身份,被误当 chat 参与亲和,违反其零触碰声明,本次以 lane 标记根修)。
 	// 身份解析一次;stick 健康时 iterator 组内起点提示+池内同键提示。亲和永不新增候选/重试
 	// ——熔断收缩与池冷却在循环内既有跳过语义恒优先于提示。pendingHit:lookup 命中尚未终判,
 	// 请求终结时按「stick 成功服务=hit,其余出口=stale」落定,保证三分计数每请求恰一者。
-	affinityLane := nat == nil || nat.proto == protocol.InboundMessages
+	affinityLane := (nat == nil && laneFrom(r) == "") || (nat != nil && nat.proto == protocol.InboundMessages)
 	stickID, stickProvider, stickKeyID := "", "", ""
 	stickHit, entryFound, pendingHit := false, false, false
 	if affinityLane {
@@ -420,6 +441,7 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	bridgeSkipped := false
 	otherSkipped := false   // 非桥接原因的候选跳过，如 key 池全冷却
 	circuitSkipped := false // 健康熔断收缩的候选跳过;唯一跳过原因时快速失败
+	oauthSkipped := false   // oauth lane 收窄跳过(responses/gemini 入站的 oauth 候选);唯一跳过原因时显式信封
 	if p.health != nil {
 		p.health.AliasRequest(req.Model) // 换道率分母:每请求一次
 	}
@@ -447,6 +469,12 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 					"上游渠道处于健康熔断期,请稍后重试;可为该别名配置多候选实现透明降级")
 				return
 			}
+			// 仅当 oauth 收窄是唯一跳过原因时显式信封:零上游调用,不伪装成供应商不可用
+			if oauthSkipped && last == "" && !otherSkipped {
+				p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
+					"该别名的候选均为 OAuth 订阅渠道,不支持当前入站 lane(仅 chat/messages 可达),请为别名配置非 oauth 候选")
+				return
+			}
 			typ := classToType(last)
 			p.alerts.Emit("all_candidates_failed", "critical",
 				"别名 "+req.Model+" 全部候选失败(最后错误: "+string(last)+")")
@@ -464,6 +492,15 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		// 每 attempt 直通或翻译路径判定，决策点唯一，chat 入站恒翻译
 		path := decideNativePath(nat, topo.adapters, topo.nativeResps, cand, pluginModified)
+		// oauth lane 收窄(oauth-subscription-lane 契约):仅 chat/messages 入站可达 oauth 渠道,
+		// responses/gemini 入站的 oauth 候选跳过(上游零调用,不计错误类),全跳过时耗尽分支
+		// 显式信封。nat 为空=chat 入站,恒放行。
+		if oauthSkippedLane(r, nat, topo.authModes, cand.Provider) {
+			oauthSkipped = true
+			p.logger.Warn("oauth 渠道不支持当前入站 lane,跳过候选",
+				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+			continue
+		}
 		// 适配性豁免先于取 key：仅作用于翻译路径，直通候选正常服务工具多轮不豁免；
 		// 不计 EMA 与冷却，多候选别名换道继续
 		if !path.native && bridgeExempted(topo.adapters[cand.Provider], midLoop) {

@@ -77,10 +77,17 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 	iter := failover.NewIterator(fcs, p.randIntn)
 	var last failover.ErrorClass
+	oauthSkipped := false // oauth 候选收窄:embeddings lane 不可达,唯一跳因时显式信封
+	otherSkipped := false // 池缺失/池耗尽等非 oauth 跳因(混合时信封不得冒认唯一因)
 	for {
 		cand, ok := iter.Next()
 		if !ok {
 			if tw.committed {
+				return
+			}
+			if oauthSkipped && last == "" && !otherSkipped {
+				p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
+					"该别名的候选均为 OAuth 订阅渠道,不支持 embeddings lane,请为别名配置非 oauth 候选")
 				return
 			}
 			typ := classToType(last)
@@ -88,9 +95,16 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 				"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
 			return
 		}
+		if topo.authModes[cand.Provider] == adapter.AuthOAuth {
+			oauthSkipped = true
+			p.logger.Warn("oauth 渠道不支持 embeddings lane,跳过候选",
+				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+			continue
+		}
 		pool := topo.pools[cand.Provider]
 		key := pool.Pick(time.Now())
 		if key == nil {
+			otherSkipped = true
 			p.logger.Warn("provider key 池不可用,跳过候选",
 				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
 			continue

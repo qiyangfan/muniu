@@ -65,6 +65,9 @@ func (p *Proxy) HandlerGemini() http.Handler {
 		r2.Body = io.NopCloser(bytes.NewReader(req.Raw))
 		r2.ContentLength = int64(len(req.Raw))
 		r2.Header.Set("Content-Length", strconv.Itoa(len(req.Raw)))
+		// lane 身份标记:gemini 委托 chat 管道但不携带原生上下文,不标记则管道内与裸 chat
+		// 不可区分(亲和范围/oauth lane 收窄两个判定都以 lane 为准)
+		r2 = withLane(r2, protocol.InboundGemini)
 
 		if stream {
 			sw := &geminiStreamWriter{ResponseWriter: w, enc: protocol.NewGeminiStreamEncoder(pathModel)}

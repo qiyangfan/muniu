@@ -528,3 +528,96 @@ func TestBridge_Prepare_工具多轮往返(t *testing.T) {
 		}
 	})
 }
+
+func TestAnthropic_OAuth三态鉴权头(t *testing.T) {
+	cases := []struct {
+		name     string
+		auth     string
+		key      string // 传入凭据(oauth 形态下即 access token)
+		wantX    string // x-api-key 期望值,空 = 不应出现
+		wantB    string // Authorization Bearer 期望值,空 = 不应出现
+		wantBeta string // anthropic-beta 期望值,空 = 不应出现
+	}{
+		{name: "缺省x-api-key", auth: adapter.AuthDefault, key: "sk-key", wantX: "sk-key"},
+		{name: "bearer声明", auth: adapter.AuthBearer, key: "sk-key", wantB: "Bearer sk-key"},
+		{name: "oauth声明_Bearer加beta头", auth: adapter.AuthOAuth, key: "at-token", wantB: "Bearer at-token", wantBeta: "oauth-2025-04-20"},
+	}
+	for _, tc := range cases {
+		ad, err := adapter.For("anthropic", "https://api.anthropic.com", tc.key, adapter.Options{Auth: tc.auth})
+		if err != nil {
+			t.Fatalf("%s: 构造: %v", tc.name, err)
+		}
+		out, err := ad.Prepare(&protocol.ChatRequest{Raw: json.RawMessage(`{"model":"claude-sonnet-4-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)}, "claude-sonnet-4-5", tc.key)
+		if err != nil {
+			t.Fatalf("%s: Prepare: %v", tc.name, err)
+		}
+		if got := out.Header.Get("x-api-key"); got != tc.wantX {
+			t.Fatalf("%s: x-api-key = %q, want %q", tc.name, got, tc.wantX)
+		}
+		if got := out.Header.Get("Authorization"); got != tc.wantB {
+			t.Fatalf("%s: Authorization = %q, want %q", tc.name, got, tc.wantB)
+		}
+		if got := out.Header.Get("anthropic-beta"); got != tc.wantBeta {
+			t.Fatalf("%s: anthropic-beta = %q, want %q", tc.name, got, tc.wantBeta)
+		}
+		// 「不应出现」按头存在性判定(Get()=="" 无法区分未设与被设为空串,空头等价泄漏形态)
+		for key, want := range map[string]string{"X-Api-Key": tc.wantX, "Authorization": tc.wantB, "Anthropic-Beta": tc.wantBeta} {
+			if want == "" && len(out.Header.Values(key)) != 0 {
+				t.Fatalf("%s: %s 不得出现(含空值形态)", tc.name, key)
+			}
+		}
+		// UA 与指纹头零覆写(缺省形态)
+		if out.Header.Get("User-Agent") != "" || len(out.Header.Values("User-Agent")) != 0 {
+			t.Fatalf("%s: UA 不应覆写", tc.name)
+		}
+	}
+}
+
+func TestAnthropic_OAuth三态鉴权头_直通路径(t *testing.T) {
+	// PrepareNative(messages 直通)与翻译路径共用 applyAuth,三态头断言同表复跑——
+	// 直通分支回退为内联 x-api-key/bearer 时本表必红(评审域三 P2 测试缺口)。
+	cases := []struct {
+		name     string
+		auth     string
+		key      string
+		wantX    string
+		wantB    string
+		wantBeta string
+	}{
+		{name: "缺省x-api-key", auth: adapter.AuthDefault, key: "sk-key", wantX: "sk-key"},
+		{name: "bearer声明", auth: adapter.AuthBearer, key: "sk-key", wantB: "Bearer sk-key"},
+		{name: "oauth声明_Bearer加beta头", auth: adapter.AuthOAuth, key: "at-token", wantB: "Bearer at-token", wantBeta: "oauth-2025-04-20"},
+	}
+	for _, tc := range cases {
+		ad, err := adapter.For("anthropic", "https://api.anthropic.com", tc.key, adapter.Options{Auth: tc.auth})
+		if err != nil {
+			t.Fatalf("%s: 构造: %v", tc.name, err)
+		}
+		np, ok := ad.(adapter.NativePreparer)
+		if !ok {
+			t.Fatalf("%s: 适配器不具备 NativePreparer", tc.name)
+		}
+		out, err := np.PrepareNative(&protocol.NativeRequest{
+			Proto: protocol.InboundMessages,
+			Raw:   json.RawMessage(`{"model":"alias","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`),
+		}, "claude-sonnet-4-5", tc.key)
+		if err != nil {
+			t.Fatalf("%s: PrepareNative: %v", tc.name, err)
+		}
+		if got := out.Header.Get("x-api-key"); got != tc.wantX {
+			t.Fatalf("%s: 直通 x-api-key = %q, want %q", tc.name, got, tc.wantX)
+		}
+		if got := out.Header.Get("Authorization"); got != tc.wantB {
+			t.Fatalf("%s: 直通 Authorization = %q, want %q", tc.name, got, tc.wantB)
+		}
+		if got := out.Header.Get("anthropic-beta"); got != tc.wantBeta {
+			t.Fatalf("%s: 直通 anthropic-beta = %q, want %q", tc.name, got, tc.wantBeta)
+		}
+		// 「不应出现」按头存在性判定(与翻译路径同口径)
+		for key, want := range map[string]string{"X-Api-Key": tc.wantX, "Authorization": tc.wantB, "Anthropic-Beta": tc.wantBeta} {
+			if want == "" && len(out.Header.Values(key)) != 0 {
+				t.Fatalf("%s: 直通 %s 不得出现(含空值形态)", tc.name, key)
+			}
+		}
+	}
+}

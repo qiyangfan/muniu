@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/solvela/muniu/internal/adapter"
 )
 
 // waitFor 轮询等待条件达成(Manager 循环异步,断言须等待)。
@@ -196,4 +198,43 @@ type markerTransport struct{}
 func (markerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r.Header.Set("X-Outbound-Marker", "1")
 	return http.DefaultTransport.RoundTrip(r)
+}
+
+// TestManager_oauth渠道探针三态头(评审域三 P1 根修钉子):anthropic oauth 渠道的免费探针
+// 必须以 Bearer + 官方 beta 头出站——缺分支时探针以 x-api-key 发订阅 token,连续 401 误熔断
+// 可用渠道且构成畸形凭据外呼。突变敏感:移除 probe.go 的 oauth 分支必红。
+func TestManager_oauth渠道探针三态头(t *testing.T) {
+	var gotAuth, gotBeta atomic.Value
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth.Store(r.Header.Get("Authorization"))
+		gotBeta.Store(r.Header.Get("anthropic-beta"))
+		gotXAPIKey := r.Header.Get("x-api-key")
+		if gotXAPIKey != "" {
+			gotAuth.Store("XAPIKEY:" + gotXAPIKey)
+		}
+		w.WriteHeader(200)
+	}))
+	defer up.Close()
+	m := NewManager(Options{
+		Interval: 20 * time.Millisecond, Timeout: time.Second,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Sources: func() map[string]Channel {
+			return map[string]Channel{"co": {
+				Name: "co", Adapter: "anthropic", BaseURL: up.URL, Auth: "oauth", FreeProbe: true,
+				Keys: []ChannelKey{{ID: "acc-1", Value: "at-token"}},
+			}}
+		},
+	})
+	m.Start()
+	defer m.Close()
+	waitFor(t, func() bool {
+		providers, _ := m.Snapshot()
+		return len(providers) == 1 && providers[0].LastProbeOK != nil && *providers[0].LastProbeOK
+	})
+	if a, _ := gotAuth.Load().(string); a != "Bearer at-token" {
+		t.Fatalf("oauth 渠道探针应 Bearer access token, got %q", a)
+	}
+	if b, _ := gotBeta.Load().(string); b != adapter.AuthOAuthBetaHeader {
+		t.Fatalf("oauth 渠道探针应带官方 beta 头, got %q", b)
+	}
 }

@@ -19,15 +19,18 @@ type topologyCandidate struct {
 	Weight   int    `json:"weight"`
 }
 
-// topologyProvider 供应商定义接收形态，与 YAML Provider 同义；key 以 env 引用形态下发。
+// topologyProvider 供应商定义接收形态，与 YAML Provider 同义；key 以 env 或 account
+// 引用形态下发，auth 声明同义透传(缺字段即控制面无法声明对应形态,ProxyURL 缺口先例)。
 type topologyProvider struct {
 	Name                          string `json:"name"`
 	Adapter                       string `json:"adapter"`
 	BaseURL                       string `json:"base_url"`
+	Auth                          string `json:"auth,omitempty"`
 	NativeMultimodalEmbeddingsURL string `json:"native_multimodal_embeddings_url,omitempty"`
 	Keys                          []struct {
-		Env    string `json:"env"`
-		Weight int    `json:"weight"`
+		Env     string `json:"env"`
+		Account string `json:"account"`
+		Weight  int    `json:"weight"`
 	} `json:"keys"`
 	Weight   int `json:"weight"`
 	Priority int `json:"priority"`
@@ -47,12 +50,12 @@ func (p TopologyPayload) ToTopology() (providers []Provider,
 	routes map[string][]Candidate, models []ModelCapability) {
 	for _, tp := range p.Providers {
 		prov := Provider{
-			Name: tp.Name, Adapter: tp.Adapter, BaseURL: tp.BaseURL,
+			Name: tp.Name, Adapter: tp.Adapter, BaseURL: tp.BaseURL, Auth: tp.Auth,
 			NativeMultimodalEmbeddingsURL: tp.NativeMultimodalEmbeddingsURL,
 			Weight:                        tp.Weight, Priority: tp.Priority,
 		}
 		for _, k := range tp.Keys {
-			prov.Keys = append(prov.Keys, KeyRef{Env: k.Env, Weight: k.Weight})
+			prov.Keys = append(prov.Keys, KeyRef{Env: k.Env, Account: k.Account, Weight: k.Weight})
 		}
 		providers = append(providers, prov)
 	}

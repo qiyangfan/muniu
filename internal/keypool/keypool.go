@@ -482,6 +482,26 @@ func (p *Pool) StateCounts(now time.Time) map[string]int {
 	return out
 }
 
+// SyncAccount 账号凭据同步(刷新器/装配回调,oauth-subscription-lane 契约):value 非空
+// 时原位替换——池内后续 Pick 即取新凭据,零重启零拓扑操作;active 控制可用性(false =
+// 收缩,禁用语义与 OutcomeAuthFailed 同源,恢复由下一轮同步解除)。仅作用于已存在成员,
+// 未知 ID 零作用;调度状态机(WRR/冷却)零特例,本方法不触碰记账字段。
+func (p *Pool) SyncAccount(id, value string, active bool) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k := p.byID(id)
+	if k == nil {
+		return
+	}
+	if value != "" {
+		k.value = value
+	}
+	k.disabled = !active
+}
+
 // PickWithHint 会话亲和提示选中(ADR-0020):hint 键健康(非禁用/冷却)时直取——亲和
 // 是对既有分配的复用,不消耗 WRR 虚拟权重记账;hint 空/未知/不健康退回 Pick。
 func (p *Pool) PickWithHint(hintKeyID string, now time.Time) *Key {

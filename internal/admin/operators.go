@@ -38,8 +38,11 @@ func ActorFrom(ctx context.Context) Actor { a, _ := ctx.Value(actorKey{}).(Actor
 func authOperators(d Deps, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		login := r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login"
+		// OAuth 回调豁免:浏览器重定向不带管理凭据;state(不可预测、单次、TTL 内)即回调
+		// 的持有者凭据,重放/伪造在 Flow.Exchange 被拒——标准 OAuth 回调姿势。
+		oauthCallback := r.Method == http.MethodGet && r.URL.Path == "/admin/v1/oauth/callback"
 		actor := Actor{}
-		if !login {
+		if !login && !oauthCallback {
 			if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
 				u, err := d.AdminAuth.Session(cookie.Value)
 				if err == nil {

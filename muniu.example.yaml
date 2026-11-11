@@ -47,6 +47,15 @@ metering:
 #   backend: redis
 #   redis_addr: "127.0.0.1:6379"
 
+# 可选的 OAuth 订阅账号端点声明(订阅转 API,ADR-0021)：声明 auth: oauth 渠道时四字段
+# 必齐(部分声明加载期拒绝)。凭据经管理面 /admin/v1/oauth/accounts 录入或授权流落库;
+# refresh token 明文落本地库(无法哈希),请以文件权限与部署边界保护,备份含敏感凭据。
+# oauth:
+#   authorize_url: "https://claude.ai/oauth/authorize"
+#   token_url: "https://console.anthropic.com/v1/oauth/token"
+#   client_id: "<声明的 OAuth client_id>"
+#   callback_url: "http://127.0.0.1:8787/admin/v1/oauth/callback"
+
 # 启用后需配置 MUNIU_ADMIN_TOKEN 才会挂载 Prometheus 指标端点 GET /metrics。
 # metrics:
 #   enabled: true
@@ -89,6 +98,17 @@ providers:
   #   base_url: "https://api.kimi.com/coding/"
   #   keys:
   #     - env: KIMI_CODING_KEY_1
+  # OAuth 订阅账号渠道示例(oauth-subscription-lane)：凭据经管理面录入账号存储，
+  # 配置仅持 account 引用；渠道内同构(oauth 渠道 keys 全部为 account，不与 env 混编)，
+  # 订阅与按量并存的混编由路由候选层表达(下方别名双候选)。仅 chat/messages lane 可达。
+  # - name: claude-subscription
+  #   adapter: anthropic
+  #   auth: oauth                        # Bearer access_token + 官方 beta 头；UA 零覆写(保号边界见 ADR-0021)
+  #   base_url: "https://api.anthropic.com"
+  #   keys:
+  #     - account: acc-1                 # 账号 ID = 管理面录入时的 id
+  #     - account: acc-2                 # 多账号同池走 WRR 轮询；刷新器自动换发凭据
+  #   weight: 10
   # Gemini 原生出站示例：
   # - name: gemini-native
   #   adapter: gemini

@@ -104,7 +104,10 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 > **Anthropic 桥接鉴权为声明制**(config `providers[].auth`,ADR-0010 同哲学):缺省
 > x-api-key(协议标准,官方 Anthropic/SDK 口径;对其发 Bearer 形态 API key 即 401,
 > Bearer 仅留给 OAuth);`auth: bearer` 改发 `Authorization: Bearer <key>`——国内分支
-> 官方文档普遍以 AUTH_TOKEN(Bearer)演示,目录中的分支预设已按此声明。零自动探测,
+> 官方文档普遍以 AUTH_TOKEN(Bearer)演示,目录中的分支预设已按此声明。`auth: oauth`
+> 发 `Authorization: Bearer <access token>` + `anthropic-beta: <官方 beta 头>`(订阅账号
+> 凭据形态,ADR-0021;beta 头常量单点 internal/adapter,真机值实证前不声称准确,UA 零
+> 覆写)。零自动探测,
 > 分支实际接受头以 `MUNIU_SMOKE_PROVIDER=anthropic`(配 `MUNIU_SMOKE_AUTH=bearer`)
 > 真上游冒烟为准。
 

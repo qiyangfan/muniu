@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
@@ -23,7 +24,8 @@ type topologySnapshot struct {
 	adapters    map[string]adapter.Adapter // provider 到出站适配器，与池同生命周期
 	clients     map[string]*http.Client    // provider 到声明代理的出站 client（缺项 = 默认 client，env 语义）
 	caps        map[governKey]config.ModelCapability
-	nativeResps map[string]bool // provider 到 native_responses 声明，responses 直通资格，声明制
+	nativeResps map[string]bool   // provider 到 native_responses 声明，responses 直通资格，声明制
+	authModes   map[string]string // provider 到 auth 声明(oauth 记录用,lane 收窄判定)
 	loadedAt    time.Time
 }
 
@@ -54,6 +56,12 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		return TopologyStats{}, errors.New("拓扑替换被拒绝: 池构建回调缺失")
 	}
 	old := p.topo.Load()
+	// auth/账号声明共享校验(与 config.Load 同源 AuthDeclarationViolations):控制面拓扑
+	// 载荷不经 YAML 校验,缺此门则值域契约只在文件源生效,跨源行为劈叉(评审域一 P1);
+	// 含渠道内重复账号引用拒绝(凭据同步只达首个同 ID 成员,其余成员冻结)。
+	if vs := config.AuthDeclarationViolations(cfg.Providers, p.oauthCfg); len(vs) > 0 {
+		return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: auth 声明非法: %s", strings.Join(vs, "; "))
+	}
 	// 拓扑可能来自控制面，须限制在本机 int 可安全处理的数值范围内。
 	for _, prov := range cfg.Providers {
 		if prov.NativeMultimodalEmbeddingsURL != "" {
@@ -174,6 +182,7 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		clients:     clients,
 		caps:        buildCaps(cfg.Capabilities),
 		nativeResps: buildNativeResps(cfg.Providers),
+		authModes:   buildAuthModes(cfg.Providers),
 		loadedAt:    time.Now(),
 	})
 	return stats, nil
@@ -205,13 +214,13 @@ func providerByName(s *topologySnapshot) map[string]config.Provider {
 	return out
 }
 
-// providersEqual 比较 provider 的拓扑配置（含出站代理声明），包括 key 引用列表。
+// providersEqual 比较 provider 的拓扑配置（含出站代理声明与鉴权声明），包括 key 引用列表。
 // proxy_url 必须入比较：SIGHUP 仅改代理声明时，复用分支会让变更静默失效、探针面与
-// 数据面各读各源劈叉（评审 A1）。
+// 数据面各读各源劈叉（评审 A1）。auth 同理:声明变更(bearer↔oauth)不改适配器即静默吞掉。
 func providersEqual(a, b config.Provider) bool {
 	if a.Name != b.Name || a.Adapter != b.Adapter || a.BaseURL != b.BaseURL ||
 		a.NativeMultimodalEmbeddingsURL != b.NativeMultimodalEmbeddingsURL ||
-		a.ProxyURL != b.ProxyURL ||
+		a.ProxyURL != b.ProxyURL || a.Auth != b.Auth ||
 		a.Weight != b.Weight || a.Priority != b.Priority || len(a.Keys) != len(b.Keys) {
 		return false
 	}
@@ -221,6 +230,17 @@ func providersEqual(a, b config.Provider) bool {
 		}
 	}
 	return true
+}
+
+// buildAuthModes provider 到 auth 声明映射(oauth lane 收窄判定用;非 oauth 渠道不入表)。
+func buildAuthModes(provs []config.Provider) map[string]string {
+	m := map[string]string{}
+	for _, p := range provs {
+		if p.Auth == adapter.AuthOAuth {
+			m[p.Name] = p.Auth
+		}
+	}
+	return m
 }
 
 // sortRoutes 按 priority 升序排列每个路由的候选。

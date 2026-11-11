@@ -250,3 +250,65 @@ func TestSnapshot_只读枚举与数据面解耦(t *testing.T) {
 		}
 	}
 }
+
+func TestSyncAccount_凭据原位替换与收缩恢复(t *testing.T) {
+	p := NewPool([]KeyInput{{ID: "acc-1", Value: "at-old", Weight: 1}})
+	now := base
+
+	// 原位替换:后续 Pick 即取新凭据(零重启零拓扑)
+	p.SyncAccount("acc-1", "at-new", true)
+	if k := p.Pick(now); k == nil || k.Value != "at-new" {
+		t.Fatalf("刷新后应取新凭据: %+v", k)
+	}
+
+	// 收缩:删除/终态 → 禁用,Pick 不再选中
+	p.SyncAccount("acc-1", "", false)
+	if got := p.StateOf("acc-1", now); got != "disabled" {
+		t.Fatalf("收缩后应 disabled, got %s", got)
+	}
+	if k := p.Pick(now); k != nil {
+		t.Fatalf("禁用成员不应被选中: %+v", k)
+	}
+
+	// 恢复:重新授权 → active 解除禁用,凭据同步更新
+	p.SyncAccount("acc-1", "at-again", true)
+	if got := p.StateOf("acc-1", now); got != "healthy" {
+		t.Fatalf("恢复后应 healthy, got %s", got)
+	}
+	if k := p.Pick(now); k == nil || k.Value != "at-again" {
+		t.Fatalf("恢复后应取新凭据: %+v", k)
+	}
+
+	// 未知 ID 零作用:不得注册为新成员、不得扰动既有成员(后置断言钉住)
+	p.SyncAccount("nope", "x", true)
+	if got := p.StateOf("nope", now); got != "unknown" {
+		t.Fatalf("未知 ID 不得注册为池成员, got %s", got)
+	}
+
+	// 空 value + active:保旧值只解禁(value 守卫的另一腿)
+	p.SyncAccount("acc-1", "", true)
+	if got := p.StateOf("acc-1", now); got != "healthy" {
+		t.Fatalf("空 value 同步应只动可用性, got %s", got)
+	}
+	if k := p.Pick(now); k == nil || k.Value != "at-again" {
+		t.Fatalf("空 value 不得覆写存量凭据: %+v", k)
+	}
+
+	// 空池安全
+	var nilPool *Pool
+	nilPool.SyncAccount("acc-1", "x", true)
+}
+
+func TestSyncAccount_与冷却正交(t *testing.T) {
+	// 账号同步不触碰冷却记账:限流冷却中的账号,同步 active 后仍在冷却(调度不变式零特例)
+	p := NewPool([]KeyInput{{ID: "acc-1", Value: "at", Weight: 1}})
+	now := base
+	p.Report(&Key{ID: "acc-1"}, OutcomeRateLimited, now, 10*time.Minute)
+	p.SyncAccount("acc-1", "at-2", true)
+	if got := p.CooldownRemain("acc-1", now); got <= 0 {
+		t.Fatalf("账号同步不得清除限流冷却: %v", got)
+	}
+	if k := p.Pick(now); k != nil {
+		t.Fatal("冷却中账号不应被选中")
+	}
+}

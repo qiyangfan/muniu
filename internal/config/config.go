@@ -135,10 +135,31 @@ type HealthCfg struct {
 	SwitchMinSamples int   `yaml:"switch_min_samples"` // 换道率最低样本数,缺省 20(小分母不判定)
 }
 
-// KeyRef 环境变量引用名，绝不存明文；weight 参与 key 池 WRR。
+// KeyRef key 引用成员:env(环境变量名,绝不存明文)或 account(oauth 账号引用,凭据在
+// 账号存储),互斥;weight 参与 key 池 WRR。渠道内同构由 auth 声明约束(oauth 渠道全
+// account,其余全 env)。
 type KeyRef struct {
-	Env    string `yaml:"env"`
-	Weight int    `yaml:"weight"`
+	Env     string `yaml:"env"`
+	Account string `yaml:"account"`
+	Weight  int    `yaml:"weight"`
+}
+
+// OAuthCfg OAuth 端点声明;部分声明即配置错误(半套声明让授权/刷新在运行期才炸)。
+type OAuthCfg struct {
+	AuthorizeURL string `yaml:"authorize_url"`
+	TokenURL     string `yaml:"token_url"`
+	ClientID     string `yaml:"client_id"`
+	CallbackURL  string `yaml:"callback_url"`
+}
+
+// Complete OAuth 声明完整性:全部字段非空才可用(装配层判定刷新器/授权流启停)。
+func (c OAuthCfg) Complete() bool {
+	return c.AuthorizeURL != "" && c.TokenURL != "" && c.ClientID != "" && c.CallbackURL != ""
+}
+
+// Declared 是否有任何字段被声明(部分声明的校验依据)。
+func (c OAuthCfg) Declared() bool {
+	return c.AuthorizeURL != "" || c.TokenURL != "" || c.ClientID != "" || c.CallbackURL != ""
 }
 
 // Candidate 是模型路由候选；优先级较小者先尝试，同优先级按权重随机确定起始候选。
@@ -251,6 +272,9 @@ type Config struct {
 		Backend   string `yaml:"backend"`    // inmem 缺省，实例自治；redis 为共享视图的集群形态
 		RedisAddr string `yaml:"redis_addr"` // backend=redis 必填，形如 host:port
 	} `yaml:"ratelimit"`
+	// OAuth OAuth 端点声明(订阅账号授权流与刷新,oauth-subscription-lane 契约);
+	// 空段 = 授权流关闭(手动录入凭据仍可用),声明 oauth 渠道则四字段必齐。
+	OAuth OAuthCfg `yaml:"oauth"`
 	// OutboundProxy 顶层出站代理缺省(http/https);渠道 proxy_url 未声明时回退。
 	// 校验归一后该字段本身不再被下游消费(生效值已物化进各渠道)。
 	OutboundProxy    string                 `yaml:"outbound_proxy"`
@@ -583,6 +607,10 @@ func (c *Config) validate() error {
 	if len(c.Providers) == 0 {
 		add("providers 至少需要一个")
 	}
+	// auth/账号声明共享校验(与 proxy.ReplaceTopology 同源,值域契约不得只在 YAML 源生效)
+	for _, v := range AuthDeclarationViolations(c.Providers, c.OAuth) {
+		add("%s", v)
+	}
 	seen := map[string]bool{}
 	for i, p := range c.Providers {
 		if p.Name == "" {
@@ -613,14 +641,6 @@ func (c *Config) validate() error {
 				add("providers[%d](%s) native_multimodal_embeddings_url 非法: %q(须为 http(s) 绝对 URL)", i, p.Name, p.NativeMultimodalEmbeddingsURL)
 			}
 		}
-		if p.Auth != "" {
-			// 仅 Anthropic 支持声明鉴权方式；bearer 值须与 adapter.AuthBearer 一致。
-			if p.Adapter != "anthropic" {
-				add("providers[%d](%s) auth 仅 anthropic 适配器支持(其余形态鉴权固有)", i, p.Name)
-			} else if p.Auth != "bearer" {
-				add("providers[%d](%s) auth 非法 %q(允许 bearer)", i, p.Name, p.Auth)
-			}
-		}
 		if p.NativeResponses && (p.Adapter == "anthropic" || p.Adapter == "gemini") {
 			// 声明制直通：native_responses 是 openai 系 responses 端点的声明。
 			// 桥接族声明即配置错误：anthropic 走 messages 直通，适配器类型即声明；
@@ -632,9 +652,6 @@ func (c *Config) validate() error {
 			add("providers[%d](%s) keys 不能为空", i, p.Name)
 		}
 		for j, k := range p.Keys {
-			if k.Env == "" {
-				add("providers[%d](%s).keys[%d] 缺 env 引用名", i, p.Name, j)
-			}
 			if int64(k.Weight) > MaxTopologyInt {
 				add("providers[%d](%s).keys[%d] weight 超出数值域(≤%d)", i, p.Name, j, MaxTopologyInt)
 			}

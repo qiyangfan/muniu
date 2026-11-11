@@ -41,11 +41,22 @@ type EventMeta struct {
 }
 
 // Anthropic 鉴权方式由 provider 配置显式声明，不自动探测。
-// 官方 API key 使用 x-api-key；部分兼容分支使用 Bearer。
+// 官方 API key 使用 x-api-key；部分兼容分支使用 Bearer；oauth 为订阅账号凭据形态
+// (Bearer + 官方 beta 头,oauth-subscription-lane 契约)。
 const (
 	AuthDefault = ""       // 缺省：anthropic 用 x-api-key，openai 系用 Bearer
 	AuthBearer  = "bearer" // anthropic 桥接改发 Authorization: Bearer <key>，用于国内兼容分支
+	AuthOAuth   = "oauth"  // anthropic 订阅账号凭据:Authorization Bearer + 官方 beta 头
 )
+
+// AuthOAuthBetaHeader 订阅账号凭据(oauth 形态)的官方 beta 头值:数据面(bridge)与健康
+// 探针(probe)两处出站共用此单源,值修正只动此处(真机形态实证前不声称准确,ADR-0021)。
+const AuthOAuthBetaHeader = "oauth-2025-04-20"
+
+// AuthDecl 渲染 auth 声明值域(config 校验文案与 For 拒绝文案单源,新增值只改此处)。
+func AuthDecl() string {
+	return "空|" + AuthBearer + "|" + AuthOAuth
+}
 
 // Options 保存适配器构造选项；零值表示协议默认值。
 type Options struct {
@@ -81,8 +92,8 @@ func For(adapterType, baseURL, apiKey string, opts ...Options) (Adapter, error) 
 	case "gemini":
 		return NewGemini(baseURL), nil
 	case "anthropic":
-		if opt.Auth != AuthDefault && opt.Auth != AuthBearer {
-			return nil, fmt.Errorf("adapter: 不支持的鉴权形态 %q(允许 空|%s)", opt.Auth, AuthBearer)
+		if opt.Auth != AuthDefault && opt.Auth != AuthBearer && opt.Auth != AuthOAuth {
+			return nil, fmt.Errorf("adapter: 不支持的鉴权形态 %q(允许 %s)", opt.Auth, AuthDecl())
 		}
 		// 桥接工厂由 bridge 包 init 注册，以避免 adapter 与 bridge 循环依赖
 		if anthropicFactory != nil {

@@ -21,6 +21,10 @@ export type BalanceManualRequest = components["schemas"]["BalanceManualRequest"]
 export type AlertDeliveryStatus = components["schemas"]["AlertDeliveryStatusResponse"];
 export type UpstreamHealthResponse = components["schemas"]["UpstreamHealthResponse"];
 export type UpstreamHealthProvider = components["schemas"]["UpstreamHealthProvider"];
+export type OAuthAccountView = components["schemas"]["OAuthAccountView"];
+export type OAuthAccountsResponse = components["schemas"]["OAuthAccountsResponse"];
+export type OAuthAccountCreateRequest = components["schemas"]["OAuthAccountCreateRequest"];
+export type OAuthAuthorizeResponse = components["schemas"]["OAuthAuthorizeResponse"];
 
 const TOKEN_KEY = "muniu-admin-token";
 let authRevision = 0;
@@ -180,6 +184,15 @@ export const api = {
     ),
   balanceRefresh: (provider: string) =>
     call<{ ok: boolean }>("POST", `/admin/v1/balances/${encodeURIComponent(provider)}/refresh`),
+  oauthAccounts: () => call<OAuthAccountsResponse>("GET", "/admin/v1/oauth/accounts"),
+  oauthAccountCreate: (body: OAuthAccountCreateRequest) =>
+    call<{ ok: boolean; id: string }>("POST", "/admin/v1/oauth/accounts", body),
+  oauthAccountDelete: (id: string) =>
+    call<{ ok: boolean }>("DELETE", `/admin/v1/oauth/accounts/${encodeURIComponent(id)}`),
+  oauthAuthorize: (accountId: string) =>
+    call<OAuthAuthorizeResponse>("POST", "/admin/v1/oauth/authorize", {
+      account_id: accountId,
+    }),
   alertDeliveryStatus: () => call<AlertDeliveryStatus>("GET", "/admin/v1/alerts/delivery-status"),
   upstreamHealth: () => call<UpstreamHealthResponse>("GET", "/admin/v1/upstream-health"),
   putPricing: (alias: string, body: PricingEntry) =>

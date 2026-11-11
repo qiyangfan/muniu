@@ -28,12 +28,26 @@ const anthropicVersion = "2023-06-01"
 // Anthropic 保存 provider 的 API 基址和鉴权选项。
 type Anthropic struct {
 	baseURL string
-	bearer  bool // true 时凭证走 Authorization: Bearer，即国内分支官方文档口径；缺省走 x-api-key
+	auth    string // adapter.AuthDefault | AuthBearer | AuthOAuth;头形态是适配器级语义,渠道内同构
 }
 
 // NewAnthropic 创建 Anthropic 适配器。
 func NewAnthropic(baseURL string, opts adapter.Options) *Anthropic {
-	return &Anthropic{baseURL: strings.TrimRight(baseURL, "/"), bearer: opts.Auth == adapter.AuthBearer}
+	return &Anthropic{baseURL: strings.TrimRight(baseURL, "/"), auth: opts.Auth}
+}
+
+// applyAuth 三态鉴权头:oauth 走 Bearer + 官方 beta 头(订阅账号凭据形态),bearer 走
+// 国内分支文档口径,缺省走协议标准 x-api-key。翻译与直通两条出站路径共用同一分支。
+func (a *Anthropic) applyAuth(h http.Header, apiKey string) {
+	switch a.auth {
+	case adapter.AuthOAuth:
+		h.Set("Authorization", "Bearer "+apiKey)
+		h.Set("anthropic-beta", adapter.AuthOAuthBetaHeader)
+	case adapter.AuthBearer:
+		h.Set("Authorization", "Bearer "+apiKey)
+	default:
+		h.Set("x-api-key", apiKey)
+	}
 }
 
 // Prepare 将规范 chat 请求转换为 Anthropic 请求：system 移至顶层，max_tokens 缺省为 4096，并合并连续同角色消息。
@@ -44,13 +58,7 @@ func (a *Anthropic) Prepare(in *protocol.ChatRequest, upstreamModel, apiKey stri
 	}
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
-	if a.bearer {
-		// 国内分支声明口径，与其官方文档 AUTH_TOKEN 的 Bearer 形态一致
-		h.Set("Authorization", "Bearer "+apiKey)
-	} else {
-		// 协议标准形态，官方 Anthropic 与官方 SDK 缺省
-		h.Set("x-api-key", apiKey)
-	}
+	a.applyAuth(h, apiKey)
 	h.Set("anthropic-version", anthropicVersion)
 	return &adapter.Outbound{
 		URL:    a.baseURL + "/v1/messages",
@@ -588,11 +596,7 @@ func (a *Anthropic) PrepareNative(in *protocol.NativeRequest, upstreamModel, api
 	}
 	h := http.Header{}
 	h.Set("Content-Type", "application/json")
-	if a.bearer {
-		h.Set("Authorization", "Bearer "+apiKey)
-	} else {
-		h.Set("x-api-key", apiKey)
-	}
+	a.applyAuth(h, apiKey)
 	h.Set("anthropic-version", anthropicVersion)
 	return &adapter.Outbound{URL: a.baseURL + "/v1/messages", Header: h, Body: body}, nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
+	"github.com/solvela/muniu/internal/oauth"
 	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/store"
@@ -57,6 +58,7 @@ type Deps struct {
 	Balance                *balance.Service // 余额观测服务;nil = 观测未启用,端点返回禁用/空态
 	Health                 *health.Manager  // 上游健康管理器;nil = 观测未启用,端点返回空态
 	AlertWebhookConfigured bool             // webhook_url 是否配置;false 时投递自监控端点返回关闭态
+	OAuthFlow              *oauth.Flow      // OAuth 授权流;nil = oauth 段未声明,授权端点返回关闭态(账号 CRUD 不依赖)
 
 	Logger *slog.Logger
 }
@@ -100,6 +102,11 @@ var adminRouteTable = []adminRouteEntry{
 	{"GET /admin/v1/balances", balancesOverview},
 	{"POST /admin/v1/balances/{provider}/manual", balanceManual},
 	{"POST /admin/v1/balances/{provider}/refresh", balanceRefresh},
+	{"GET /admin/v1/oauth/accounts", oauthAccountsList},
+	{"POST /admin/v1/oauth/accounts", oauthAccountsCreate},
+	{"DELETE /admin/v1/oauth/accounts/{id}", oauthAccountDelete},
+	{"POST /admin/v1/oauth/authorize", oauthAuthorize},
+	{"GET /admin/v1/oauth/callback", oauthCallback},
 	{"GET /admin/v1/alerts/delivery-status", alertDeliveryStatus},
 	{"GET /admin/v1/upstream-health", upstreamHealth},
 }
@@ -484,11 +491,17 @@ func providers(d Deps) http.HandlerFunc {
 		for _, p := range providers {
 			keys := make([]map[string]any, 0, len(p.Keys))
 			for _, kr := range p.Keys {
+				// 成员键与装配规则同源(env 优先,account 引用渠道用账号 ID):oauth 成员
+				// 以 kr.Env 作键恒为空串/unknown,渠道不可观测(评审域二 P2)
+				id := kr.Env
+				if id == "" {
+					id = kr.Account
+				}
 				st := "unknown"
 				if pool := pools[p.Name]; pool != nil {
-					st = pool.StateOf(kr.Env, now)
+					st = pool.StateOf(id, now)
 				}
-				keys = append(keys, map[string]any{"id": kr.Env, "weight": kr.Weight, "state": st})
+				keys = append(keys, map[string]any{"id": id, "weight": kr.Weight, "state": st})
 			}
 			out = append(out, map[string]any{
 				"name": p.Name, "adapter": p.Adapter, "base_url": p.BaseURL,

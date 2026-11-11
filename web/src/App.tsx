@@ -8,6 +8,7 @@ import {
   Server,
   Sun,
   Tags,
+  UserRoundCheck,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
@@ -25,6 +26,7 @@ import Usage from "./pages/Usage";
 import Providers from "./pages/Providers";
 import Pricing from "./pages/Pricing";
 import Balances from "./pages/Balances";
+import OAuthAccounts from "./pages/OAuthAccounts";
 import Audit from "./pages/Audit";
 
 // 两种登录方式均通过 whoami 恢复会话；会话凭据由 HttpOnly cookie 保存。
@@ -126,12 +128,14 @@ const TABS: { key: TabKey; label: string; shortLabel: string; icon: LucideIcon }
   { key: "keys", label: "密钥管理", shortLabel: "密钥", icon: KeyRound },
   { key: "usage", label: "用量明细", shortLabel: "用量", icon: ChartColumn },
   { key: "providers", label: "供应商", shortLabel: "供应商", icon: Server },
+  { key: "oauth", label: "订阅账号", shortLabel: "订阅", icon: UserRoundCheck },
   { key: "balances", label: "余额告警", shortLabel: "余额", icon: Wallet },
   { key: "pricing", label: "价目管理", shortLabel: "价目", icon: Tags },
   { key: "audit", label: "操作审计", shortLabel: "审计", icon: ClipboardList },
 ];
 
-type TabKey = "overview" | "keys" | "usage" | "providers" | "balances" | "pricing" | "audit";
+type TabKey =
+  "overview" | "keys" | "usage" | "providers" | "oauth" | "balances" | "pricing" | "audit";
 
 export default function App() {
   const [actor, setActor] = useState<AdminActor | null>(null);
@@ -252,6 +256,7 @@ export default function App() {
         {tab === "keys" && <Keys />}
         {tab === "usage" && <Usage />}
         {tab === "providers" && <Providers />}
+        {tab === "oauth" && <OAuthAccounts />}
         {tab === "balances" && <Balances />}
         {tab === "pricing" && <Pricing />}
         {tab === "audit" && <Audit />}
@@ -261,8 +266,8 @@ export default function App() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card md:hidden"
         aria-label="主导航"
       >
-        {/* 网格列数需与 TABS.length 一致。 */}
-        <div className="grid grid-cols-7 pb-[env(safe-area-inset-bottom)]">
+        {/* 网格列数需与 TABS.length 一致(8 页签靠窄内距+小字阶在 375 档单排放下)。 */}
+        <div className="grid grid-cols-8 pb-[env(safe-area-inset-bottom)]">
           {TABS.map((t) => {
             const active = tab === t.key;
             return (

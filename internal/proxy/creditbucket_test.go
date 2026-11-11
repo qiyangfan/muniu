@@ -62,3 +62,22 @@ func TestReportKeyOutcome_欠费证据映射欠费桶(t *testing.T) {
 		t.Fatalf("无证据应维持 429 桶(60s): %v", got)
 	}
 }
+
+func TestIsCreditExhausted_订阅用量上限不进欠费桶(t *testing.T) {
+	// 订阅账号的用量上限是「窗口等待」暂态,与 API 余额耗尽(充值即恢复)不同构;
+	// 欠费白名单必须保持封闭,误收会把订阅账号打进 30m-2h 欠费阶梯。
+	cases := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"429 usage limit 方言(anthropic 系)", 429, `{"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the usage limit for your organization"}}`},
+		{"429 usage limit 措辞(余额字样陷阱)", 429, `{"error":{"type":"rate_limit_error","message":"usage limit reached, please wait or upgrade your plan"}}`},
+		{"529 overloaded", 529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`},
+	}
+	for _, tc := range cases {
+		if isCreditExhausted(tc.status, []byte(tc.body)) {
+			t.Fatalf("%s: 订阅用量上限不得进欠费白名单", tc.name)
+		}
+	}
+}

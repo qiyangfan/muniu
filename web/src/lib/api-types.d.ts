@@ -1324,6 +1324,226 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/v1/oauth/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** OAuth 订阅账号列表(凭据脱敏展示;meta 披露明文落库事实与授权流配置态) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 账号列表(状态含 active/auth_failed/expired 展示推导) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OAuthAccountsResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** 手动录入 OAuth 账号凭据(调试通道;expires_at 缺省视为已过期,oauth 段完整声明(刷新器运行)时下一轮自愈) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OAuthAccountCreateRequest"];
+                };
+            };
+            responses: {
+                /** @description 已录入(id 为配置 account 引用主键) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 缺凭据/id 形态非法/expires_at 非 RFC3339 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 账号已存在 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/oauth/accounts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 删除 OAuth 账号(仍被渠道 keys 引用时拒绝并列出引用方) */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 已删除 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 账号不存在 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 仍被渠道引用(报错列出引用方 provider) */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/oauth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 发起 OAuth 授权(生成 consent URL,PKCE S256 + 一次性 state;account_id 非空为重授权既有账号) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["OAuthAuthorizeRequest"];
+                };
+            };
+            responses: {
+                /** @description consent URL(浏览器打开完成授权后回调) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OAuthAuthorizeResponse"];
+                    };
+                };
+                /** @description OAuth 授权流未配置(oauth 段未声明)或 account_id 形态非法 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/oauth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** OAuth 授权回调(授权码 + state 换 token 落库;state 单次使用,重放拒绝;免管理凭据,state 即持有者凭据) */
+        get: {
+            parameters: {
+                query: {
+                    code: string;
+                    state: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 授权完成(账号已创建或重授权) */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description state 非法/过期/重放,或缺 code/state,或授权流未配置 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description token 端点交互失败 */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/images/generations": {
         parameters: {
             query?: never;
@@ -2135,6 +2355,49 @@ export interface components {
             samples?: number;
             /** @description 是否越线(样本不足时恒 false) */
             breached?: boolean;
+        };
+        OAuthAccountView: {
+            /** @description 配置 keys[].account 引用主键 */
+            id: string;
+            /** @description 账号族:claude(Codex/gemini 为后续切片值域) */
+            provider_type: string;
+            /** @description active | auth_failed(终态,需重新授权) | expired(展示推导:行 active 但已过期) */
+            status: string;
+            /** @description 终态原因(如刷新被拒的上报) */
+            status_reason?: string;
+            /** @description access token 过期时刻(RFC3339) */
+            expires_at?: string;
+            /** @description 脱敏展示(前缀+长度),凭据原文任何响应不回传 */
+            access_token_masked: string;
+            /** @description refresh token 是否已录入(明文落库,见 meta.plaintext_disclosure) */
+            refresh_present: boolean;
+        };
+        OAuthAccountsResponse: {
+            accounts: components["schemas"]["OAuthAccountView"][];
+            meta: {
+                /** @description 契约披露:凭据明文落库的缓解边界 */
+                plaintext_disclosure?: string;
+                /** @description oauth 段是否完整声明(false 时授权端点关闭) */
+                flow_configured: boolean;
+            };
+        };
+        OAuthAccountCreateRequest: {
+            /** @description 缺省生成 UUIDv7;形态 [a-zA-Z0-9][a-zA-Z0-9_-]{0,63} */
+            id?: string;
+            /** @description 缺省 claude */
+            provider_type?: string;
+            access_token: string;
+            refresh_token: string;
+            /** @description RFC3339;空=视为已过期,oauth 段完整声明(刷新器运行)时下一轮自愈 */
+            expires_at?: string;
+        };
+        OAuthAuthorizeRequest: {
+            /** @description 空=授权新账号;非空=重授权既有账号(终态恢复路径) */
+            account_id?: string;
+        };
+        OAuthAuthorizeResponse: {
+            /** @description consent URL(PKCE S256 + 一次性 state) */
+            authorize_url?: string;
         };
         AlertDeliveryStatusResponse: {
             /** @description webhook_url 是否配置(false 时无投递面,其余字段不出现) */

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/solvela/muniu/internal/adapter"
@@ -267,5 +268,106 @@ func TestReplaceTopology_控制面载荷沿用代理声明(t *testing.T) {
 	}
 	if _, has := snap2.clients["pa"]; has {
 		t.Fatal("清空后不得残留代理 client")
+	}
+}
+
+func TestProvidersEqual_Auth与账号引用参与比较(t *testing.T) {
+	base := config.Provider{
+		Name: "co", Adapter: "anthropic", BaseURL: "https://u", Auth: "bearer", Weight: 1,
+		Keys: []config.KeyRef{{Env: "K1", Weight: 1}},
+	}
+	sameAuth := base
+
+	// 全同 → 复用
+	if !providersEqual(base, sameAuth) {
+		t.Fatal("全同 provider 应判等(池运行态复用)")
+	}
+	// auth 变更(bearer→oauth)必须判不等,否则复用分支静默吞掉声明变更(适配器仍是旧形态)
+	oauth := base
+	oauth.Auth = adapter.AuthOAuth
+	if providersEqual(base, oauth) {
+		t.Fatal("auth 变更必须判不等(评审 A1 同款:复用分支吞声明变更)")
+	}
+	// key 成员 env↔account 变更判不等
+	acct := base
+	acct.Auth = adapter.AuthOAuth
+	acct.Keys = []config.KeyRef{{Account: "acc-1", Weight: 1}}
+	if providersEqual(base, acct) {
+		t.Fatal("keys 账号引用变更必须判不等")
+	}
+}
+
+func TestBuildAuthModes_仅oauth渠道入表(t *testing.T) {
+	m := buildAuthModes([]config.Provider{
+		{Name: "a", Auth: ""},
+		{Name: "b", Auth: adapter.AuthBearer},
+		{Name: "c", Auth: adapter.AuthOAuth},
+	})
+	if len(m) != 1 || m["c"] != adapter.AuthOAuth {
+		t.Fatalf("仅 oauth 渠道入表: %+v", m)
+	}
+}
+
+func TestNewSnapshot_引导路径authModes与热替换同源(t *testing.T) {
+	// C2 同类对齐:New 引导快照不落 authModes 则启动路径 lane 收窄失灵,热替换路径却生效
+	reg := adapter.NewRegistry()
+	reg.Register("co", adapter.NewOpenAI("https://u", "k"))
+	p := New(Config{
+		Registry: reg,
+		Providers: []config.Provider{{
+			Name: "co", Adapter: "anthropic", BaseURL: "https://u", Auth: adapter.AuthOAuth,
+			Keys: []config.KeyRef{{Account: "acc-1", Weight: 1}},
+		}},
+		Routes: map[string][]config.Candidate{
+			"emb": {{Provider: "co", Model: "m", Priority: 0}},
+		},
+		Timeouts: defTimeouts(),
+		Pools: map[string]*keypool.Pool{
+			"co": keypool.NewPool([]keypool.KeyInput{{ID: "acc-1", Value: "at", Weight: 1}}),
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if p.topo.Load().authModes["co"] != adapter.AuthOAuth {
+		t.Fatal("引导快照必须携带 authModes(与 ReplaceTopology 同源)")
+	}
+}
+
+func TestReplaceTopology_auth共享校验拒绝(t *testing.T) {
+	// 控制面拓扑源零 auth 校验的跨源劈叉根修钉子(评审域一 P1):openai 适配器 + auth=oauth
+	// 的载荷必须被拒(否则 buildAuthModes 标记 oauth 而适配器实际持静态 key,跨 lane 语义劈叉)
+	reg := adapter.NewRegistry()
+	p := New(Config{Registry: reg, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Timeouts: defTimeouts(), OAuth: config.OAuthCfg{
+			AuthorizeURL: "https://s/authorize", TokenURL: "https://s/token",
+			ClientID: "cid", CallbackURL: "http://127.0.0.1:8787/cb",
+		}})
+	_, err := p.ReplaceTopology(Config{
+		Providers: []config.Provider{{
+			Name: "bad", Adapter: "openai", BaseURL: "https://u", Auth: adapter.AuthOAuth,
+			Keys: []config.KeyRef{{Account: "acc-1", Weight: 1}},
+		}},
+		Routes: map[string][]config.Candidate{
+			"a": {{Provider: "bad", Model: "m", Priority: 0}},
+		},
+	}, func(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
+		return keypool.NewPool(nil), adapter.NewOpenAI(prov.BaseURL, "k"), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "auth 声明非法") {
+		t.Fatalf("控制面拓扑 auth 非法载荷应被拒: %v", err)
+	}
+	// 渠道内重复账号引用同拒
+	_, err = p.ReplaceTopology(Config{
+		Providers: []config.Provider{{
+			Name: "co", Adapter: "anthropic", BaseURL: "https://u", Auth: adapter.AuthOAuth,
+			Keys: []config.KeyRef{{Account: "acc-1", Weight: 1}, {Account: "acc-1", Weight: 1}},
+		}},
+		Routes: map[string][]config.Candidate{
+			"a": {{Provider: "co", Model: "m", Priority: 0}},
+		},
+	}, func(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
+		return keypool.NewPool(nil), adapter.NewOpenAI(prov.BaseURL, "k"), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "账号引用重复") {
+		t.Fatalf("重复账号引用拓扑应被拒: %v", err)
 	}
 }

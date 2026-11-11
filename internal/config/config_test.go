@@ -922,3 +922,294 @@ model_routes:
 		t.Fatalf("拒绝文案应提示支持形态: %v", err)
 	}
 }
+
+func TestAuthOAuth_值域与账号引用约束(t *testing.T) {
+	cases := []struct {
+		name    string
+		prov    string
+		wantErr string
+	}{
+		{
+			name: "oauth仅anthropic合法_全账号引用",
+			prov: `
+  - name: claude
+    adapter: anthropic
+    base_url: "https://api.anthropic.com"
+    auth: oauth
+    keys:
+      - account: acc-1
+      - account: acc-2
+    weight: 10`,
+			wantErr: "",
+		},
+		{
+			name: "非法值文案含全值域",
+			prov: `
+  - name: claude
+    adapter: anthropic
+    base_url: "https://api.anthropic.com"
+    auth: apikey
+    keys:
+      - account: acc-1
+    weight: 10`,
+			wantErr: "auth 非法",
+		},
+		{
+			name: "非anthropic适配器声明oauth拒绝",
+			prov: `
+  - name: oa
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    auth: oauth
+    keys:
+      - account: acc-1
+    weight: 10`,
+			wantErr: "auth 仅 anthropic 适配器支持",
+		},
+		{
+			name: "oauth渠道混入env引用拒绝",
+			prov: `
+  - name: claude
+    adapter: anthropic
+    base_url: "https://api.anthropic.com"
+    auth: oauth
+    keys:
+      - account: acc-1
+      - env: K2
+    weight: 10`,
+			wantErr: "须全部为账号引用",
+		},
+		{
+			name: "非oauth渠道声明账号引用拒绝",
+			prov: `
+  - name: claude
+    adapter: anthropic
+    base_url: "https://api.anthropic.com"
+    auth: bearer
+    keys:
+      - account: acc-1
+    weight: 10`,
+			wantErr: "账号引用仅限 auth: oauth 渠道",
+		},
+		{
+			name: "缺env与account双空拒绝",
+			prov: `
+  - name: claude
+    adapter: anthropic
+    base_url: "https://api.anthropic.com"
+    auth: oauth
+    keys:
+      - weight: 5
+    weight: 10`,
+			wantErr: "缺 env 或 account 引用",
+		},
+	}
+	for _, tc := range cases {
+		y := `
+oauth:
+  authorize_url: "https://sso.example/authorize"
+  token_url: "https://sso.example/token"
+  client_id: cid
+  callback_url: "http://127.0.0.1:8787/admin/v1/oauth/callback"
+providers:` + tc.prov + `
+model_routes:
+  alias-claude:
+    - { provider: claude, model: claude-sonnet-4-5, priority: 0 }
+`
+		_, err := Load(writeTemp(t, y))
+		if tc.wantErr == "" {
+			if err != nil {
+				t.Fatalf("%s: 合法声明被拒: %v", tc.name, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Fatalf("%s: 非法配置应拒绝", tc.name)
+		}
+		if !strings.Contains(err.Error(), tc.wantErr) {
+			t.Fatalf("%s: 错误缺 %q: %v", tc.name, tc.wantErr, err)
+		}
+	}
+}
+
+func TestAuthOAuth_值域文案单源(t *testing.T) {
+	// 文案与 adapter 值域单源:出现新值只改 adapter 一处,config 文案自动跟随
+	y := `
+providers:
+  - name: claude
+    adapter: anthropic
+    base_url: "https://api.anthropic.com"
+    auth: apikey
+    keys:
+      - account: acc-1
+    weight: 10
+model_routes:
+  alias-claude:
+    - { provider: claude, model: claude-sonnet-4-5, priority: 0 }
+`
+	_, err := Load(writeTemp(t, y))
+	if err == nil {
+		t.Fatal("非法 auth 应拒绝")
+	}
+	for _, frag := range []string{"bearer", adapter.AuthOAuth} {
+		if !strings.Contains(err.Error(), frag) {
+			t.Fatalf("值域文案缺 %q(单源失守): %v", frag, err)
+		}
+	}
+}
+
+func TestOAuthCfg_成套声明与oauth渠道前提(t *testing.T) {
+	// oauth 渠道 + 缺 oauth 段:加载期拒绝(刷新/授权流的端点前提)
+	y := `
+providers:
+  - name: claude
+    adapter: anthropic
+    base_url: "https://api.anthropic.com"
+    auth: oauth
+    keys:
+      - account: acc-1
+    weight: 10
+model_routes:
+  alias-claude:
+    - { provider: claude, model: claude-sonnet-4-5, priority: 0 }
+`
+	_, err := Load(writeTemp(t, y))
+	if err == nil || !strings.Contains(err.Error(), "oauth 段完整声明") {
+		t.Fatalf("oauth 渠道缺 oauth 段应拒绝: %v", err)
+	}
+
+	// 部分声明拒绝
+	y2 := `
+oauth:
+  token_url: "https://sso.example/token"
+  client_id: cid
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+`
+	_, err = Load(writeTemp(t, y2))
+	if err == nil || !strings.Contains(err.Error(), "必须成套声明") {
+		t.Fatalf("部分声明应拒绝: %v", err)
+	}
+
+	// 完整声明 + 非法 URL 拒绝
+	y3 := `
+oauth:
+  authorize_url: "notaurl"
+  token_url: "https://sso.example/token"
+  client_id: cid
+  callback_url: "http://127.0.0.1:8787/admin/v1/oauth/callback"
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+`
+	_, err = Load(writeTemp(t, y3))
+	if err == nil || !strings.Contains(err.Error(), "authorize_url 非法") {
+		t.Fatalf("非法 authorize_url 应拒绝: %v", err)
+	}
+
+	// token_url / callback_url 同入 URL 校验(循环任一字段被摘除本行必红)
+	y3b := `
+oauth:
+  authorize_url: "https://sso.example/authorize"
+  token_url: "notaurl"
+  client_id: cid
+  callback_url: "http://127.0.0.1:8787/admin/v1/oauth/callback#frag"
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+`
+	_, err = Load(writeTemp(t, y3b))
+	if err == nil || !strings.Contains(err.Error(), "token_url 非法") || !strings.Contains(err.Error(), "callback_url 非法") {
+		t.Fatalf("非法 token_url/callback_url 应拒绝: %v", err)
+	}
+
+	// 完整声明 + 非 oauth 渠道:合法(为后续录入账号预备)
+	y4 := `
+oauth:
+  authorize_url: "https://sso.example/authorize"
+  token_url: "https://sso.example/token"
+  client_id: cid
+  callback_url: "http://127.0.0.1:8787/admin/v1/oauth/callback"
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+`
+	if _, err := Load(writeTemp(t, y4)); err != nil {
+		t.Fatalf("完整 oauth 段应合法: %v", err)
+	}
+}
+
+func TestAuthDeclarationViolations_重复账号引用与控制面源(t *testing.T) {
+	// 渠道内重复账号引用:同 ID 两成员使凭据同步只达首个,其余冻结——加载期拒绝(评审域一 P2)
+	provs := []Provider{
+		{Name: "co", Adapter: "anthropic", Auth: "oauth",
+			Keys: []KeyRef{{Account: "acc-1"}, {Account: "acc-1"}}},
+	}
+	vs := AuthDeclarationViolations(provs, OAuthCfg{
+		AuthorizeURL: "https://s/authorize", TokenURL: "https://s/token",
+		ClientID: "cid", CallbackURL: "http://127.0.0.1:8787/cb",
+	})
+	dup := false
+	for _, v := range vs {
+		if strings.Contains(v, "账号引用重复") {
+			dup = true
+		}
+	}
+	if !dup {
+		t.Fatalf("重复账号引用应报违规: %v", vs)
+	}
+	// 合法形态零违规
+	ok := []Provider{
+		{Name: "co", Adapter: "anthropic", Auth: "oauth",
+			Keys: []KeyRef{{Account: "acc-1"}, {Account: "acc-2"}}},
+	}
+	if vs := AuthDeclarationViolations(ok, OAuthCfg{
+		AuthorizeURL: "https://s/authorize", TokenURL: "https://s/token",
+		ClientID: "cid", CallbackURL: "http://127.0.0.1:8787/cb",
+	}); len(vs) != 0 {
+		t.Fatalf("合法形态应零违规: %v", vs)
+	}
+	// 跨渠道共享账号合法(拒绝仅限同渠道重复:跨渠道引用各自成池成员,同步各自可达;
+	// 收紧为全拒的突变在本行必红)
+	share := []Provider{
+		{Name: "co-a", Adapter: "anthropic", Auth: "oauth",
+			Keys: []KeyRef{{Account: "acc-1"}}},
+		{Name: "co-b", Adapter: "anthropic", Auth: "oauth",
+			Keys: []KeyRef{{Account: "acc-1"}}},
+	}
+	if vs := AuthDeclarationViolations(share, OAuthCfg{
+		AuthorizeURL: "https://s/authorize", TokenURL: "https://s/token",
+		ClientID: "cid", CallbackURL: "http://127.0.0.1:8787/cb",
+	}); len(vs) != 0 {
+		t.Fatalf("跨渠道共享账号应零违规: %v", vs)
+	}
+}

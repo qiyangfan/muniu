@@ -39,6 +39,21 @@ func inboundFrom(r *http.Request) *inboundNative {
 	return n
 }
 
+// laneKey 入站 lane 标记：不携带原生上下文的 lane(gemini)经此声明身份,chat 裸入站
+// 无标记(零值)。公共管道内 lane 相关判定(亲和范围/oauth 收窄)同源消费,防再劈叉。
+type laneKey struct{}
+
+// withLane 标记请求的入站 lane(gemini handler 委托 chat 管道前挂载)。
+func withLane(r *http.Request, proto protocol.InboundProtocol) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), laneKey{}, proto))
+}
+
+// laneFrom 取 lane 标记;无标记(裸 chat)返回零值。
+func laneFrom(r *http.Request) protocol.InboundProtocol {
+	p, _ := r.Context().Value(laneKey{}).(protocol.InboundProtocol)
+	return p
+}
+
 // pathModeWriter 响应 writer 的直通/翻译模式位：直通为恒等写，翻译为反向映射。
 // 切换仅发生在首字节提交前，tw.committed 不变式由候选循环保证；
 // 已提交后绝不二次写出、换道或混用形态。
