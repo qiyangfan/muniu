@@ -72,6 +72,31 @@ jobs:
       - name: build (CGO_ENABLED=0)
         run: CGO_ENABLED=0 go build ./...
 
+  fuzz:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      # 每个目标短时跑:捕捉 panic 与「解析成功但校验不变量被破坏」;
+      # 崩溃语料由 go 自动写入 testdata/fuzz,失败输出即最小复现
+      - name: fuzz (protocol parsers)
+        run: |
+          for target in \
+            FuzzParseChatRequest \
+            FuzzParseStreamChunk \
+            FuzzParseEmbeddingRequest \
+            FuzzParseImageRequest \
+            FuzzParseMultimodalEmbeddingRequest
+          do
+            go test ./internal/protocol/ -run='^$' -fuzz="^${target}$" -fuzztime=20s
+          done
+
   vuln:
     needs: changes
     if: needs.changes.outputs.go == 'true'

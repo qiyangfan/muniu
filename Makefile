@@ -2,9 +2,9 @@ GO ?= go
 BIN := bin
 PKG := github.com/solvela/muniu
 
-## check: 全量门禁(vet、lint、基础设施 lint、依赖整洁、web 检查、race test 和覆盖率)
+## check: 全量门禁(vet、lint、基础设施 lint、依赖整洁、web 检查、race test/覆盖率、插件)
 .PHONY: check
-check: vet lint infra-lint tidy-check web-check test
+check: vet lint infra-lint tidy-check web-check test plugin-check
 
 ## web-check: 控制台类型检查/lint/组件测试/契约类型漂移(pnpm 存在时执行,否则跳过)
 .PHONY: web-check
@@ -111,6 +111,20 @@ dev-status:
 ## dev-restart: 重启常驻容器(重建镜像,改代码后)
 .PHONY: dev-restart
 dev-restart: dev-up
+
+## fuzz: 协议解析 fuzz(手动档;FUZZ 指定目标,FUZZTIME 指定时长)
+FUZZ ?= FuzzParseChatRequest
+FUZZTIME ?= 30s
+.PHONY: fuzz
+fuzz:
+	$(GO) test ./internal/protocol/ -run='^$$' -fuzz='^$(FUZZ)$$' -fuzztime=$(FUZZTIME)
+
+## plugin-check: 插件侧门禁(fmt/clippy/test/依赖审计;工具缺失时跳过并提示,CI 全量执行)
+.PHONY: plugin-check
+plugin-check:
+	@command -v cargo >/dev/null 2>&1 || { echo "[plugin-check] cargo 未安装,跳过"; exit 0; }
+	cd plugins && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test
+	@if command -v cargo-audit >/dev/null 2>&1; then cd plugins && cargo audit; else echo "[plugin-check] cargo-audit 未安装,跳过依赖审计"; fi
 
 ## bench: 全量基准测试(eval tag:选型评估含 1 万×1536 维构建,-race 下插桩放大 10 倍+,不进常规门禁)
 .PHONY: bench

@@ -39,6 +39,11 @@ jobs:
       - name: Rust tests (host)
         working-directory: plugins
         run: cargo test
+      # 依赖漏洞走 RustSec 公告库:版本钉死保证可复现,有漏洞时非零退出
+      - name: Rust audit
+        run: |
+          cargo install cargo-audit --locked --version 0.23.0
+          cd plugins && cargo audit
       # 工件仅存档用(无人消费):账号存储配额受限期间上传被拒,不应拖红整个
       # workflow;retention 缩短到 3 天,别让 90 天默认保留占账号 500MB 配额。
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
