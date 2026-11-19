@@ -10,6 +10,8 @@ allow = [
     "Apache-2.0",
     "Unicode-3.0",
     "Unlicense",
+    # serde_json 1.0.154 起传递引入 foldhash(Zlib,OSI/FSF 认可的宽松许可)
+    "Zlib",
 ]
 
 [bans]
