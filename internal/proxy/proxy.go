@@ -65,13 +65,13 @@ type Config struct {
 	ImagePricing     *metering.ImagePriceDirectory
 	Pricing          *metering.PricingDirectory // 价目目录，动态改价由管理面原子替换，转发只读；nil 表示成本记 0
 	Timeouts         Timeouts
-	Pipeline         *metering.Pipeline       // 计量管道；nil 表示不计量，纯转发场景
-	Pools            map[string]*keypool.Pool // provider 到 key 池；缺池则该 provider 无法出站
-	TPM              ratelimit.TPMRecorder    // TPM 记账回填，TPM 或 redis 后端，前置判定在 Gate 中间件
-	Cache            *semantic.Cache          // 语义缓存；nil 表示关闭
-	TenantSwitch     func(string) bool        // 租户语义缓存开关，装配层提供 DB 查询闭包
-	Capabilities     []config.ModelCapability // 模型能力目录；空表示全部零干预透传
-	StrictGovernance bool                     // true 表示命中能力约束即 400，缺省宽松放行并留痕
+	Pipeline         *metering.Pipeline                 // 计量管道；nil 表示不计量，纯转发场景
+	Pools            map[string]*keypool.Pool           // provider 到 key 池；缺池则该 provider 无法出站
+	TPM              ratelimit.TPMRecorder              // TPM 记账回填，TPM 或 redis 后端，前置判定在 Gate 中间件
+	Cache            *semantic.Cache                    // 语义缓存；nil 表示关闭
+	TenantSwitch     func(context.Context, string) bool // 租户语义缓存开关，装配层提供 DB 查询闭包
+	Capabilities     []config.ModelCapability           // 模型能力目录；空表示全部零干预透传
+	StrictGovernance bool                               // true 表示命中能力约束即 400，缺省宽松放行并留痕
 	// InheritProxy 控制面拓扑来源标记:控制面载荷不含 proxy_url 字段,置 true 时入站声明为空
 	// 的渠道沿用旧快照代理声明(防静默摘除);配置文件源(SIGHUP/启动)必须保持 false——
 	// 用户从 yaml 删除 proxy_url 是显式清空,沿用会吞掉变更(评审 R1)。
@@ -97,7 +97,7 @@ type Proxy struct {
 	pipeline      *metering.Pipeline
 	tpm           ratelimit.TPMRecorder
 	cache         *semantic.Cache
-	tenantSw      func(string) bool
+	tenantSw      func(context.Context, string) bool
 	strictGov     bool
 	plugins       *plugin.Registry
 	alerts        *alerting.Notifier
@@ -258,11 +258,11 @@ func (p *Proxy) Handler() http.Handler {
 }
 
 // cacheTenantEnabled 查租户语义缓存开关，装配层注入 DB 查询闭包。
-func (p *Proxy) cacheTenantEnabled(tenantID string) bool {
+func (p *Proxy) cacheTenantEnabled(ctx context.Context, tenantID string) bool {
 	if p.tenantSw == nil {
 		return false
 	}
-	return p.tenantSw(tenantID)
+	return p.tenantSw(ctx, tenantID)
 }
 
 // trackWriter 记录响应是否已向客户端提交，写过头或体都算。候选循环据此终结：

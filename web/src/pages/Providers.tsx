@@ -6,6 +6,7 @@ import {
   type ProviderPreset,
   type UpstreamHealthProvider,
 } from "../lib/api";
+import { errorMessage } from "../lib/utils";
 import { Badge } from "../components/ui/badge";
 import { StatusBadge, type StatusMeta } from "../components/status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
@@ -93,7 +94,7 @@ function PresetCatalog() {
         setPresets(r.presets);
         setErr("");
       })
-      .catch((e) => setErr(e.message))
+      .catch((e) => setErr(errorMessage(e)))
       .finally(() => setLoaded(true));
   }, []);
 
@@ -235,7 +236,7 @@ export default function Providers() {
         setProviders(r.providers);
         setErr("");
       })
-      .catch((e) => setErr(e.message))
+      .catch((e) => setErr(errorMessage(e)))
       .finally(() => setLoaded(true));
     // 健康观测未启用时端点返回 enabled=false,不渲染任何健康元素
     api

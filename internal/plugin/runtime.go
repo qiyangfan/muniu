@@ -64,6 +64,7 @@ func clampResource[T int | int64 | uint32](v, def, max T) T {
 // Plugin 单个已注册插件：专属 runtime、编译产物与实例池。
 type Plugin struct {
 	opts     Options
+	closeCtx context.Context // 关停用生命周期 ctx:热替换/退出时注册 ctx 可能已取消,只继承值不继承取消。
 	rt       wazero.Runtime
 	compiled wazero.CompiledModule
 	hostMod  api.Module
@@ -97,7 +98,7 @@ func (p *Plugin) releaseSnapshotSlot() {
 
 // Compile 注册期校验与编译，任何一步失败即拒载，既有插件不受影响，
 // 调用方持有的是各自 Plugin 实例。
-func Compile(opts Options) (*Plugin, error) {
+func Compile(ctx context.Context, opts Options) (*Plugin, error) {
 	if strings.TrimSpace(opts.Name) == "" {
 		return nil, errors.New("插件名不能为空")
 	}
@@ -111,13 +112,13 @@ func Compile(opts Options) (*Plugin, error) {
 
 	// 探测链必须有界：插件可在实例化、版本、start 任一环节死循环，Background ctx
 	// 下 WithCloseOnContextDone 永不中断，Register 会永久挂死。
-	ctx, cancelProbe := context.WithTimeout(context.Background(),
+	ctx, cancelProbe := context.WithTimeout(ctx,
 		time.Duration(opts.ProbeTimeoutMs)*time.Millisecond)
 	defer cancelProbe()
 
-	p := &Plugin{opts: opts}
+	p := &Plugin{opts: opts, closeCtx: context.WithoutCancel(ctx)}
 	p.snapCond = sync.NewCond(&p.snapMu)
-	p.rt = newRuntime(opts.MemoryLimitPages)
+	p.rt = newRuntime(ctx, opts.MemoryLimitPages)
 	if err := p.setupRuntime(ctx); err != nil {
 		return nil, err
 	}
@@ -127,7 +128,7 @@ func Compile(opts Options) (*Plugin, error) {
 		_ = p.rt.Close(ctx)
 		return nil, err
 	}
-	p.pool = newPool(p, probe, time.Duration(opts.IdleTTLMs)*time.Millisecond)
+	p.pool = newPool(ctx, p, probe, time.Duration(opts.IdleTTLMs)*time.Millisecond)
 	return p, nil
 }
 
@@ -483,8 +484,8 @@ func (p *Plugin) Close() error {
 		return nil
 	}
 	p.inflight.Wait()
-	p.pool.closeAll(context.Background())
-	ctx := context.Background()
+	p.pool.closeAll(p.closeCtx)
+	ctx := p.closeCtx
 	if p.hostMod != nil {
 		_ = p.hostMod.Close(ctx)
 	}

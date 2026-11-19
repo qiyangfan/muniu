@@ -28,9 +28,9 @@ func testOptions(name string, kind testkit.PluginFixtureKind) Options {
 
 func compileFor(t *testing.T, name string, kind testkit.PluginFixtureKind) *Plugin {
 	t.Helper()
-	p, err := Compile(testOptions(name, kind))
+	p, err := Compile(context.Background(), testOptions(name, kind))
 	if err != nil {
-		t.Fatalf("Compile(%s): %v", name, err)
+		t.Fatalf("Compile(context.Background(), %s): %v", name, err)
 	}
 	t.Cleanup(func() { _ = p.Close() })
 	return p
@@ -48,35 +48,35 @@ func TestCompile_ValidPlugins(t *testing.T) {
 }
 
 func TestCompile_RejectNonWasm(t *testing.T) {
-	_, err := Compile(Options{Name: "bad", Binary: []byte("this is not wasm at all")})
+	_, err := Compile(context.Background(), Options{Name: "bad", Binary: []byte("this is not wasm at all")})
 	if err == nil || !strings.Contains(err.Error(), "wasm") {
 		t.Fatalf("非 wasm 二进制应拒载,得到: %v", err)
 	}
 }
 
 func TestCompile_RejectTruncatedMagic(t *testing.T) {
-	_, err := Compile(Options{Name: "bad", Binary: []byte{0x00, 0x61}})
+	_, err := Compile(context.Background(), Options{Name: "bad", Binary: []byte{0x00, 0x61}})
 	if err == nil {
 		t.Fatal("截断二进制应拒载")
 	}
 }
 
 func TestCompile_RejectAbiMismatch(t *testing.T) {
-	_, err := Compile(testOptions("mismatch", testkit.FixtureAbiMismatch))
+	_, err := Compile(context.Background(), testOptions("mismatch", testkit.FixtureAbiMismatch))
 	if err == nil || !strings.Contains(err.Error(), "ABI") {
 		t.Fatalf("ABI 版本不匹配应拒载,得到: %v", err)
 	}
 }
 
 func TestCompile_RejectStartFail(t *testing.T) {
-	_, err := Compile(testOptions("startfail", testkit.FixtureStartFail))
+	_, err := Compile(context.Background(), testOptions("startfail", testkit.FixtureStartFail))
 	if err == nil || !strings.Contains(err.Error(), "plugin_start") {
 		t.Fatalf("plugin_start 失败应拒载,得到: %v", err)
 	}
 }
 
 func TestCompile_RejectMissingExport(t *testing.T) {
-	_, err := Compile(testOptions("missing", testkit.FixtureMissingExport))
+	_, err := Compile(context.Background(), testOptions("missing", testkit.FixtureMissingExport))
 	if err == nil {
 		t.Fatal("缺 plugin_result 导出应拒载")
 	}
@@ -129,7 +129,7 @@ func TestHook_HostImports(t *testing.T) {
 // ---- 资源隔离四态：超时/trap/超内存/exit，插件死不拖垮宿主 ----
 
 func TestContain_Timeout(t *testing.T) {
-	p, err := Compile(Options{Name: "loop", Binary: testkit.FixturePlugin(testkit.FixtureLoop), TimeoutMs: 80,
+	p, err := Compile(context.Background(), Options{Name: "loop", Binary: testkit.FixturePlugin(testkit.FixtureLoop), TimeoutMs: 80,
 		MemoryLimitPages: 1, PoolSize: 1, IdleTTLMs: DefaultIdleTTLMs})
 	if err != nil {
 		t.Fatalf("加载: %v", err)
@@ -185,7 +185,7 @@ func TestFailOpen_OnContainment(t *testing.T) {
 	o := testOptions("loop-open", testkit.FixtureLoop)
 	o.FailOpen = true
 	o.TimeoutMs = 80
-	p, err := Compile(o)
+	p, err := Compile(context.Background(), o)
 	if err != nil {
 		t.Fatalf("加载: %v", err)
 	}
@@ -225,7 +225,7 @@ func TestPool_ConcurrentReuse(t *testing.T) {
 func TestPool_IdleRecycle(t *testing.T) {
 	o := testOptions("idle", testkit.FixturePass)
 	o.IdleTTLMs = 30
-	p, err := Compile(o)
+	p, err := Compile(context.Background(), o)
 	if err != nil {
 		t.Fatalf("加载: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestPool_IdleRecycle(t *testing.T) {
 
 func TestCompile_RejectKeepsExisting(t *testing.T) {
 	p := compileFor(t, "keeper", testkit.FixturePass)
-	if _, err := Compile(testOptions("keeper-bad", testkit.FixtureAbiMismatch)); err == nil {
+	if _, err := Compile(context.Background(), testOptions("keeper-bad", testkit.FixtureAbiMismatch)); err == nil {
 		t.Fatal("坏插件应拒载")
 	}
 	if v := p.HookRequestBody(context.Background(), testkit.FixtureChatBody("m1")); v.Kind != VerdictKindPass {
@@ -259,7 +259,7 @@ func TestCompile_RejectKeepsExisting(t *testing.T) {
 func TestContain_FreeLoop(t *testing.T) {
 	o := testOptions("free-loop", testkit.FixtureFreeLoop)
 	o.TimeoutMs = 100
-	p, err := Compile(o)
+	p, err := Compile(context.Background(), o)
 	if err != nil {
 		t.Fatalf("加载: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestCompile_ProbeTimeout(t *testing.T) {
 	o.TimeoutMs = 50       // 探测超时缺省为 max(2s, 4×TimeoutMs) 即 2s。
 	o.ProbeTimeoutMs = 100 // 测试收紧。
 	start := time.Now()
-	_, err := Compile(o)
+	_, err := Compile(context.Background(), o)
 	if err == nil {
 		t.Fatal("plugin_start 死循环必须探测超时拒载")
 	}

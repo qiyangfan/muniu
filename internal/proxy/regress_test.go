@@ -54,12 +54,12 @@ func TestRegress_桥接流式usage计量(t *testing.T) {
 	}
 	reg.Register("prov-a", ad)
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
-	db, err := store.Open(filepath.Join(t.TempDir(), "bridge.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "bridge.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{},
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
@@ -98,12 +98,12 @@ func TestRegress_断连已开闸_估算计量且key免记失败(t *testing.T) {
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
-	db, err := store.Open(filepath.Join(t.TempDir(), "cancel.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "cancel.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{},
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
@@ -159,12 +159,12 @@ func TestRegress_早退信封单次写出(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg.Register("prov-a", ad)
-	db, err := store.Open(filepath.Join(t.TempDir(), "once.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "once.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{},
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
@@ -180,8 +180,13 @@ func TestRegress_早退信封单次写出(t *testing.T) {
 	ts := httptest.NewServer(p.HandlerEmbeddings())
 	t.Cleanup(ts.Close)
 
-	resp, err := http.Post(ts.URL+"/v1/embeddings", "application/json",
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/embeddings",
 		strings.NewReader(`{"model":"emb-alias","input":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,12 +281,12 @@ func TestRegress_SSE心跳不可见(t *testing.T) {
 	up := testkit.StartStreamUpstream(t, events)
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
-	db, err := store.Open(filepath.Join(t.TempDir(), "ka.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "ka.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
 		Routes: map[string][]config.Candidate{
@@ -314,12 +319,12 @@ func TestRegress_分时段倍率落账(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, testkit.JSONOKBody)
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
-	db, err := store.Open(filepath.Join(t.TempDir(), "tw.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "tw.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	tbl, err := metering.NewPricingTable(
 		metering.Pricing{Currency: "CNY", InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000},
 		time.UTC,

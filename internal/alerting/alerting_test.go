@@ -2,6 +2,7 @@
 package alerting
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -100,7 +101,7 @@ func TestAlerting_终局回调失败与成功(t *testing.T) {
 	t.Cleanup(srv.Close)
 	n := New(Options{WebhookURL: srv.URL, Backoff: []time.Duration{time.Millisecond},
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		OnDeliveryFailure: func(f DeliveryFailure) { fails.Add(1); failCh <- f }})
+		OnDeliveryFailure: func(_ context.Context, f DeliveryFailure) { fails.Add(1); failCh <- f }})
 
 	n.Emit("e", "warning", "s")
 	waitFor(t, func() bool { return fails.Load() == 1 })
@@ -118,7 +119,7 @@ func TestAlerting_终局回调失败与成功(t *testing.T) {
 	t.Cleanup(srv2.Close)
 	n2 := New(Options{WebhookURL: srv2.URL, Backoff: []time.Duration{time.Millisecond},
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		OnDeliverySuccess: func(eventKey string, at time.Time) { oks.Add(1) }})
+		OnDeliverySuccess: func(_ context.Context, eventKey string, at time.Time) { oks.Add(1) }})
 	n2.Emit("ok", "info", "s")
 	waitFor(t, func() bool { return oks.Load() == 1 })
 }
@@ -131,7 +132,7 @@ func TestAlerting_回调panic不反噬投递(t *testing.T) {
 	t.Cleanup(srv.Close)
 	n := New(Options{WebhookURL: srv.URL, Backoff: []time.Duration{time.Millisecond},
 		Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		OnDeliverySuccess: func(string, time.Time) { panic("boom") }})
+		OnDeliverySuccess: func(context.Context, string, time.Time) { panic("boom") }})
 	n.Emit("p", "info", "s")
 	waitFor(t, func() bool { return hits.Load() >= 1 }) // 投递完成即证明回调 panic 未反噬
 }

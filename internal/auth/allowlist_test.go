@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
@@ -13,7 +14,7 @@ import (
 
 func createAllowKey(t *testing.T, db *sql.DB, allowed []string) (string, *KeyRecord) {
 	t.Helper()
-	plaintext, rec, err := CreateKey(db, "default", "wl-key", 60, KeyOpts{AllowedModels: allowed})
+	plaintext, rec, err := CreateKey(context.Background(), db, "default", "wl-key", 60, KeyOpts{AllowedModels: allowed})
 	if err != nil {
 		t.Fatalf("签发失败: %v", err)
 	}
@@ -22,7 +23,7 @@ func createAllowKey(t *testing.T, db *sql.DB, allowed []string) (string, *KeyRec
 
 func verifyWith(t *testing.T, v *Verifier, plaintext string) *KeyInfo {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/chat/completions", nil)
 	req.Header.Set("Authorization", "Bearer "+plaintext)
 	info, err := v.verify(req)
 	if err != nil {
@@ -50,7 +51,7 @@ func TestAllowlist_签发回显与读侧贯通(t *testing.T) {
 	if !sameStrings(rec.AllowedModels, []string{"m-flash", "m-pro"}) {
 		t.Fatalf("回执回显不符: %v", rec.AllowedModels)
 	}
-	row, err := store.GetAPIKeyByHash(db, Hash(plaintext))
+	row, err := store.GetAPIKeyByHash(context.Background(), db, Hash(plaintext))
 	if err != nil {
 		t.Fatalf("读侧查询失败: %v", err)
 	}
@@ -62,10 +63,10 @@ func TestAllowlist_签发回显与读侧贯通(t *testing.T) {
 // 归一化：空白条目整单拒绝；合法条目 trim 加去重，保持首现顺序。
 func TestAllowlist_归一化_空条目拒绝与去重(t *testing.T) {
 	db := openDB(t)
-	if _, _, err := CreateKey(db, "default", "bad", 60, KeyOpts{AllowedModels: []string{"m-a", "   "}}); err == nil {
+	if _, _, err := CreateKey(context.Background(), db, "default", "bad", 60, KeyOpts{AllowedModels: []string{"m-a", "   "}}); err == nil {
 		t.Fatal("含空白条目的签发必须整单拒绝")
 	}
-	_, rec, err := CreateKey(db, "default", "ok", 60, KeyOpts{AllowedModels: []string{" m-b ", "m-b", "m-a"}})
+	_, rec, err := CreateKey(context.Background(), db, "default", "ok", 60, KeyOpts{AllowedModels: []string{" m-b ", "m-b", "m-a"}})
 	if err != nil {
 		t.Fatalf("合法签发失败: %v", err)
 	}
@@ -80,7 +81,7 @@ func TestAllowlist_三态PATCH(t *testing.T) {
 	_, rec := createAllowKey(t, db, []string{"m-a"})
 
 	next := []string{"m-b"}
-	rec2, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{AllowedModels: next})
+	rec2, err := UpdateKeyLimits(context.Background(), db, rec.ID, LimitsPatch{AllowedModels: next})
 	if err != nil {
 		t.Fatalf("设定失败: %v", err)
 	}
@@ -88,7 +89,7 @@ func TestAllowlist_三态PATCH(t *testing.T) {
 		t.Fatalf("设定后回显不符: %v", rec2.AllowedModels)
 	}
 
-	rec3, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{ClearAllowModels: true})
+	rec3, err := UpdateKeyLimits(context.Background(), db, rec.ID, LimitsPatch{ClearAllowModels: true})
 	if err != nil {
 		t.Fatalf("清除失败: %v", err)
 	}
@@ -97,7 +98,7 @@ func TestAllowlist_三态PATCH(t *testing.T) {
 	}
 
 	rpm := int64(120)
-	rec4, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{RPMLimit: &rpm})
+	rec4, err := UpdateKeyLimits(context.Background(), db, rec.ID, LimitsPatch{RPMLimit: &rpm})
 	if err != nil {
 		t.Fatalf("无关 PATCH 失败: %v", err)
 	}
@@ -105,10 +106,10 @@ func TestAllowlist_三态PATCH(t *testing.T) {
 		t.Fatalf("省略字段不得改动白名单: %v", rec4.AllowedModels)
 	}
 
-	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{AllowedModels: []string{" "}}); err == nil {
+	if _, err := UpdateKeyLimits(context.Background(), db, rec.ID, LimitsPatch{AllowedModels: []string{" "}}); err == nil {
 		t.Fatal("空白条目 PATCH 必须整单拒绝")
 	}
-	row, err := store.GetAPIKeyByHash(db, rowHash(t, db, rec.ID))
+	row, err := store.GetAPIKeyByHash(context.Background(), db, rowHash(t, db, rec.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestAllowlist_三态PATCH(t *testing.T) {
 func rowHash(t *testing.T, db *sql.DB, keyID string) string {
 	t.Helper()
 	var h string
-	if err := db.QueryRow(`SELECT key_hash FROM api_keys WHERE id = ?`, keyID).Scan(&h); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT key_hash FROM api_keys WHERE id = ?`, keyID).Scan(&h); err != nil {
 		t.Fatal(err)
 	}
 	return h
@@ -131,7 +132,7 @@ func rowHash(t *testing.T, db *sql.DB, keyID string) string {
 func TestAllowlist_verify携带与缓存可见性(t *testing.T) {
 	db := openDB(t)
 	plaintext, rec := createAllowKey(t, db, []string{"m-a"})
-	v := NewVerifier(db, Options{}, testLogger())
+	v := NewVerifier(context.Background(), db, Options{}, testLogger())
 	defer v.Close()
 
 	info := verifyWith(t, v, plaintext)
@@ -140,7 +141,7 @@ func TestAllowlist_verify携带与缓存可见性(t *testing.T) {
 	}
 
 	next := []string{"m-a", "m-b"}
-	if _, err := UpdateKeyLimits(db, rec.ID, LimitsPatch{AllowedModels: next}); err != nil {
+	if _, err := UpdateKeyLimits(context.Background(), db, rec.ID, LimitsPatch{AllowedModels: next}); err != nil {
 		t.Fatal(err)
 	}
 	// 缓存窗口内旧值可见，TTL 只影响 DB 变更可见性
@@ -159,10 +160,10 @@ func TestAllowlist_verify携带与缓存可见性(t *testing.T) {
 func TestAllowlist_损坏JSON拒不放行(t *testing.T) {
 	db := openDB(t)
 	plaintext, _ := createAllowKey(t, db, []string{"m-a"})
-	if _, err := db.Exec(`UPDATE api_keys SET allowed_models = '{bad'`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `UPDATE api_keys SET allowed_models = '{bad'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.GetAPIKeyByHash(db, Hash(plaintext)); err == nil {
+	if _, err := store.GetAPIKeyByHash(context.Background(), db, Hash(plaintext)); err == nil {
 		t.Fatal("allowed_models 列损坏必须拒绝该 key")
 	}
 }

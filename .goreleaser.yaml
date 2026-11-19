@@ -20,6 +20,34 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# SBOM:syft 扫归档内二进制,产出 SPDX JSON 与归档并列发布
+sboms:
+  - artifacts: archive
+
+# 签名:cosign keyless(GitHub OIDC),对校验和与 SBOM 各出 .sigstore.json 包;
+# 用户侧验证见 README 发布说明
+signs:
+  - id: checksums
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+  - id: sboms
+    cmd: cosign
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - "--bundle=${signature}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: sbom
+    output: true
+
 changelog:
   use: github
   # 变更说明来自 Git 记录，并按 feat、fix 和其他类型分组。

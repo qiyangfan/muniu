@@ -18,7 +18,7 @@ func alertDeliveryStatus(d Deps) http.HandlerFunc {
 			writeJSON(w, 200, map[string]any{"configured": false, "failing": false})
 			return
 		}
-		st, err := store.GetAlertDeliveryStatus(d.DB)
+		st, err := store.GetAlertDeliveryStatus(r.Context(), d.DB)
 		if err != nil {
 			respondErr(d, w, r, err, "alert_delivery_status_failed")
 			return

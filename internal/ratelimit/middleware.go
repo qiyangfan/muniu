@@ -36,10 +36,3 @@ func (l *Limiter) Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-// QuotaPlaceholder 保留日配额检查在中间件链中的位置；当前始终放行。
-func QuotaPlaceholder(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-	})
-}

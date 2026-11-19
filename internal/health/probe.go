@@ -41,7 +41,7 @@ func ProbeSupported(adapter string) bool {
 
 // probeSend 单次探针请求:2xx → OK,429 → Limited(存活但受限),其余 → Fail(带归类)。
 // 探针零触碰 key 池:取值来自装配期快照,绝不调用 Pick/Report(EMA/冷却/禁用零写入)。
-func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (ProbeOutcome, string) {
+func (m *Manager) probeSend(ctx context.Context, ch Channel, method, path string, body []byte) (ProbeOutcome, string) {
 	key := firstKeyValue(ch.Keys)
 	if key == "" {
 		return ProbeFail, "no_key"
@@ -50,7 +50,7 @@ func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (Probe
 	if !ok {
 		return ProbeFail, "adapter_probe_unsupported"
 	}
-	req, cancel, err := m.newProbeRequest(ch, spec, method, path, body, key)
+	req, cancel, err := m.newProbeRequest(ctx, ch, spec, method, path, body, key)
 	if err != nil {
 		return ProbeFail, "network"
 	}
@@ -87,11 +87,11 @@ func probeClient(def *http.Client, ch Channel) *http.Client {
 
 // newProbeRequest 组装探针请求(超时经 ctx 注入,与评估循环同口径);
 // 返回的 cancel 由调用方在请求结束后调用。
-func (m *Manager) newProbeRequest(ch Channel, spec probeSpec, method, path string,
+func (m *Manager) newProbeRequest(ctx context.Context, ch Channel, spec probeSpec, method, path string,
 	body []byte, key string) (*http.Request, context.CancelFunc, error) {
 	// 尾斜杠归一化与 adapter 层同口径:数据面容忍的 base_url 写法不得在探针面拼出 //path 404
 	url := strings.TrimRight(ch.BaseURL, "/") + path
-	ctx, cancel := context.WithTimeout(m.ctx, m.opts.Timeout)
+	ctx, cancel := context.WithTimeout(ctx, m.opts.Timeout)
 	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
 	if err != nil {
 		cancel()
@@ -138,12 +138,12 @@ func probeOutcomeOf(status int) (ProbeOutcome, string) {
 }
 
 // freeProbe 免费控制面探测。
-func (m *Manager) freeProbe(ch Channel) (ProbeOutcome, string) {
-	return m.probeSend(ch, http.MethodGet, adaptersWithProbe[ch.Adapter].freePath, nil)
+func (m *Manager) freeProbe(ctx context.Context, ch Channel) (ProbeOutcome, string) {
+	return m.probeSend(ctx, ch, http.MethodGet, adaptersWithProbe[ch.Adapter].freePath, nil)
 }
 
 // inferenceProbe 付费推理面探测:最小补全请求(max_tokens 微值,零输出成本量级)。
-func (m *Manager) inferenceProbe(ch Channel) (ProbeOutcome, string) {
+func (m *Manager) inferenceProbe(ctx context.Context, ch Channel) (ProbeOutcome, string) {
 	payload := map[string]any{
 		"model":      ch.ProbeModel,
 		"max_tokens": 1,
@@ -153,5 +153,5 @@ func (m *Manager) inferenceProbe(ch Channel) (ProbeOutcome, string) {
 	if err != nil {
 		return ProbeFail, "network"
 	}
-	return m.probeSend(ch, http.MethodPost, adaptersWithProbe[ch.Adapter].inferencePath, encoded)
+	return m.probeSend(ctx, ch, http.MethodPost, adaptersWithProbe[ch.Adapter].inferencePath, encoded)
 }

@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -64,8 +65,8 @@ const oauthAccountCols = `id, provider_type, status, access_token, refresh_token
 
 // CreateOAuthAccount 新建账号;id 冲突显式报错(账号 ID 是配置引用主键,静默覆盖会让
 // 两份配置指向同一行而各自以为独占)。
-func CreateOAuthAccount(db *sql.DB, r OAuthAccountRow) error {
-	_, err := db.Exec(`INSERT INTO oauth_accounts
+func CreateOAuthAccount(ctx context.Context, db *sql.DB, r OAuthAccountRow) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO oauth_accounts
 		(id, provider_type, status, access_token, refresh_token, expires_at, status_reason, created_at, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.ProviderType, r.Status, r.AccessToken, r.RefreshToken, oauthTime(r.ExpiresAt),
@@ -81,8 +82,8 @@ func CreateOAuthAccount(db *sql.DB, r OAuthAccountRow) error {
 }
 
 // GetOAuthAccount 单账号;不存在返回 ErrOAuthAccountNotFound。
-func GetOAuthAccount(db *sql.DB, id string) (OAuthAccountRow, error) {
-	row := db.QueryRow(`SELECT `+oauthAccountCols+` FROM oauth_accounts WHERE id=?`, id)
+func GetOAuthAccount(ctx context.Context, db *sql.DB, id string) (OAuthAccountRow, error) {
+	row := db.QueryRowContext(ctx, `SELECT `+oauthAccountCols+` FROM oauth_accounts WHERE id=?`, id)
 	r, err := scanOAuthAccount(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return r, ErrOAuthAccountNotFound
@@ -94,8 +95,8 @@ func GetOAuthAccount(db *sql.DB, id string) (OAuthAccountRow, error) {
 }
 
 // ListOAuthAccounts 全量账号,created_at 升序(列表页稳定序)。
-func ListOAuthAccounts(db *sql.DB) ([]OAuthAccountRow, error) {
-	rows, err := db.Query(`SELECT ` + oauthAccountCols + ` FROM oauth_accounts ORDER BY created_at, id`)
+func ListOAuthAccounts(ctx context.Context, db *sql.DB) ([]OAuthAccountRow, error) {
+	rows, err := db.QueryContext(ctx, `SELECT `+oauthAccountCols+` FROM oauth_accounts ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: 读 oauth 账号列表: %w", err)
 	}
@@ -114,12 +115,13 @@ func ListOAuthAccounts(db *sql.DB) ([]OAuthAccountRow, error) {
 // UpdateOAuthAccountTokens 刷新成功回写:换新凭据对与过期时刻,状态回 active 并清原因
 // (auth_failed 账号经重新授权恢复走同一入口)。账号运行中被删返回 ErrOAuthAccountNotFound。
 func UpdateOAuthAccountTokens(
+	ctx context.Context,
 	db *sql.DB,
 	id, accessToken, refreshToken string,
 	expiresAt time.Time,
 	now time.Time,
 ) error {
-	res, err := db.Exec(`UPDATE oauth_accounts SET
+	res, err := db.ExecContext(ctx, `UPDATE oauth_accounts SET
 		access_token=?, refresh_token=?, expires_at=?, status=?, status_reason='', updated_at=?
 		WHERE id=?`,
 		accessToken, refreshToken, oauthTime(expiresAt), OAuthStatusActive, oauthTime(now), id)
@@ -133,8 +135,8 @@ func UpdateOAuthAccountTokens(
 }
 
 // SetOAuthAccountStatus 状态迁移(刷新被拒 → auth_failed 终态等);账号不存在返回 ErrOAuthAccountNotFound。
-func SetOAuthAccountStatus(db *sql.DB, id, status, reason string, now time.Time) error {
-	res, err := db.Exec(`UPDATE oauth_accounts SET status=?, status_reason=?, updated_at=? WHERE id=?`,
+func SetOAuthAccountStatus(ctx context.Context, db *sql.DB, id, status, reason string, now time.Time) error {
+	res, err := db.ExecContext(ctx, `UPDATE oauth_accounts SET status=?, status_reason=?, updated_at=? WHERE id=?`,
 		status, reason, oauthTime(now), id)
 	if err != nil {
 		return fmt.Errorf("store: 迁移 oauth 状态 %s: %w", id, err)
@@ -146,8 +148,8 @@ func SetOAuthAccountStatus(db *sql.DB, id, status, reason string, now time.Time)
 }
 
 // DeleteOAuthAccount 删账号;引用校验在管理面(读拓扑做引用判定),存储层保持无配置知识。
-func DeleteOAuthAccount(db *sql.DB, id string) error {
-	res, err := db.Exec(`DELETE FROM oauth_accounts WHERE id=?`, id)
+func DeleteOAuthAccount(ctx context.Context, db *sql.DB, id string) error {
+	res, err := db.ExecContext(ctx, `DELETE FROM oauth_accounts WHERE id=?`, id)
 	if err != nil {
 		return fmt.Errorf("store: 删 oauth 账号 %s: %w", id, err)
 	}

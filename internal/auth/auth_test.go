@@ -3,6 +3,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -21,7 +22,7 @@ import (
 
 func openDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "auth.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "auth.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +65,7 @@ func TestHash_确定性(t *testing.T) {
 func newVerifierDB(t *testing.T) (*sql.DB, string, string) {
 	t.Helper()
 	db := openDB(t)
-	plaintext, rec, err := CreateKey(db, "default", "测试key", 60, KeyOpts{})
+	plaintext, rec, err := CreateKey(context.Background(), db, "default", "测试key", 60, KeyOpts{})
 	if err != nil {
 		t.Fatalf("签发失败: %v", err)
 	}
@@ -73,7 +74,7 @@ func newVerifierDB(t *testing.T) (*sql.DB, string, string) {
 
 func TestVerifier_成功路径挂载租户上下文(t *testing.T) {
 	db, plaintext, _ := newVerifierDB(t)
-	v := NewVerifier(db, Options{TTL: 10 * time.Second, Capacity: 100}, testLogger())
+	v := NewVerifier(context.Background(), db, Options{TTL: 10 * time.Second, Capacity: 100}, testLogger())
 
 	var seenKeyID, seenTenant string
 	h := v.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,7 +83,7 @@ func TestVerifier_成功路径挂载租户上下文(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil)
 	req.Header.Set("Authorization", "Bearer "+plaintext)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -98,11 +99,11 @@ func TestVerifier_成功路径挂载租户上下文(t *testing.T) {
 
 func TestVerifier_负面路径全归auth_failed(t *testing.T) {
 	db, plaintext, prefix := newVerifierDB(t)
-	v := NewVerifier(db, Options{TTL: 10 * time.Second, Capacity: 100}, testLogger())
+	v := NewVerifier(context.Background(), db, Options{TTL: 10 * time.Second, Capacity: 100}, testLogger())
 	handler := v.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
 	do := func(header string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		req := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil)
 		if header != "" {
 			req.Header.Set("Authorization", header)
 		}
@@ -139,7 +140,7 @@ func TestVerifier_负面路径全归auth_failed(t *testing.T) {
 	}
 
 	// 吊销后必须 401
-	if _, err := RevokeKeyByPrefix(db, prefix); err != nil {
+	if _, err := RevokeKeyByPrefix(context.Background(), db, prefix); err != nil {
 		t.Fatalf("吊销失败: %v", err)
 	}
 	v.Invalidate() // 吊销属管理操作，清缓存立生效
@@ -152,11 +153,11 @@ func TestVerifier_负面路径全归auth_failed(t *testing.T) {
 func TestCache_过期与容量淘汰(t *testing.T) {
 	db, plaintext, _ := newVerifierDB(t)
 	// TTL 极短，第二次请求时缓存必过期
-	v := NewVerifier(db, Options{TTL: 5 * time.Millisecond, Capacity: 100}, testLogger())
+	v := NewVerifier(context.Background(), db, Options{TTL: 5 * time.Millisecond, Capacity: 100}, testLogger())
 	handler := v.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 
 	do := func() int {
-		req := httptest.NewRequest("POST", "/x", nil)
+		req := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 		req.Header.Set("Authorization", "Bearer "+plaintext)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -171,10 +172,10 @@ func TestCache_过期与容量淘汰(t *testing.T) {
 	}
 
 	// 容量淘汰：容量为 1，另一 key 入缓存后挤掉前者；随机淘汰，只断言不崩且仍放行
-	v2 := NewVerifier(db, Options{TTL: time.Minute, Capacity: 1}, testLogger())
+	v2 := NewVerifier(context.Background(), db, Options{TTL: time.Minute, Capacity: 1}, testLogger())
 	h2 := v2.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	for i := 0; i < 5; i++ {
-		req := httptest.NewRequest("POST", "/x", nil)
+		req := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 		req.Header.Set("Authorization", "Bearer "+plaintext)
 		rec := httptest.NewRecorder()
 		h2.ServeHTTP(rec, req)
@@ -186,7 +187,7 @@ func TestCache_过期与容量淘汰(t *testing.T) {
 
 func TestCreateKey_落库记录与明文回显(t *testing.T) {
 	db := openDB(t)
-	plaintext, rec, err := CreateKey(db, "default", "k1", 120, KeyOpts{})
+	plaintext, rec, err := CreateKey(context.Background(), db, "default", "k1", 120, KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +197,7 @@ func TestCreateKey_落库记录与明文回显(t *testing.T) {
 	if rec.RPMLimit != 120 {
 		t.Fatalf("rpm 落库不符: %d", rec.RPMLimit)
 	}
-	got, err := store.GetAPIKeyByHash(db, Hash(plaintext))
+	got, err := store.GetAPIKeyByHash(context.Background(), db, Hash(plaintext))
 	if err != nil {
 		t.Fatalf("按 hash 查不到刚签发的 key: %v", err)
 	}
@@ -209,13 +210,13 @@ func TestCreateKey_落库记录与明文回显(t *testing.T) {
 // 租户状态随 GetAPIKeyByHash 的 JOIN 返回，verify 一并判定。
 func TestVerify_租户禁用拒绝(t *testing.T) {
 	db := openDB(t)
-	plaintext, _, err := CreateKey(db, "default", "tenant-disable", 60, KeyOpts{})
+	plaintext, _, err := CreateKey(context.Background(), db, "default", "tenant-disable", 60, KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewVerifier(db, Options{}, testLogger())
+	v := NewVerifier(context.Background(), db, Options{}, testLogger())
 	probe := func() error {
-		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		req := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil)
 		req.Header.Set("Authorization", "Bearer "+plaintext)
 		_, err := v.verify(req)
 		return err
@@ -223,7 +224,7 @@ func TestVerify_租户禁用拒绝(t *testing.T) {
 	if err := probe(); err != nil {
 		t.Fatalf("禁用前应通过: %v", err)
 	}
-	if _, err := db.Exec(`UPDATE tenants SET status = 'disabled' WHERE name = 'default'`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `UPDATE tenants SET status = 'disabled' WHERE name = 'default'`); err != nil {
 		t.Fatal(err)
 	}
 	// 管理面 patch 租户后会调用 Invalidate，此处直接模拟同一序列
@@ -242,11 +243,11 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v := NewVerifier(nil, Options{PlatformSecrets: [][]byte{secret}}, testLogger())
+	v := NewVerifier(context.Background(), nil, Options{PlatformSecrets: [][]byte{secret}}, testLogger())
 	t.Cleanup(v.Close)
 
 	req := func(k string) (*KeyInfo, error) {
-		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil)
 		r.Header.Set("Authorization", "Bearer "+k)
 		return v.verify(r)
 	}
@@ -270,29 +271,29 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	}
 	// 密钥轮换：新旧两把验签密钥并存
 	oldKey := key
-	v2 := NewVerifier(nil, Options{PlatformSecrets: [][]byte{[]byte("new-secret-0123456789abcdef"), secret}, RevocationsURL: ""}, testLogger())
+	v2 := NewVerifier(context.Background(), nil, Options{PlatformSecrets: [][]byte{[]byte("new-secret-0123456789abcdef"), secret}, RevocationsURL: ""}, testLogger())
 	t.Cleanup(v2.Close)
-	r := httptest.NewRequest("POST", "/x", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 	r.Header.Set("Authorization", "Bearer "+oldKey)
 	if _, err := v2.verify(r); err != nil {
 		t.Fatalf("轮换期旧密钥验签应通过: %v", err)
 	}
 	// 吊销快照命中
-	v3 := NewVerifier(nil, Options{PlatformSecrets: [][]byte{secret}}, testLogger())
+	v3 := NewVerifier(context.Background(), nil, Options{PlatformSecrets: [][]byte{secret}}, testLogger())
 	t.Cleanup(v3.Close)
 	v3.revMu.Lock()
 	v3.revoked = map[string]struct{}{"k-1": {}}
 	v3.revMu.Unlock()
-	r3 := httptest.NewRequest("POST", "/x", nil)
+	r3 := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 	r3.Header.Set("Authorization", "Bearer "+key)
 	if _, err := v3.verify(r3); err == nil {
 		t.Fatal("吊销名单内必须拒绝")
 	}
 	// 未启用平台 key 即空密钥时一律拒绝
-	v4 := NewVerifier(nil, Options{}, testLogger())
+	v4 := NewVerifier(context.Background(), nil, Options{}, testLogger())
 	t.Cleanup(v4.Close)
 	if _, err := func() (*KeyInfo, error) {
-		r := httptest.NewRequest("POST", "/x", nil)
+		r := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 		r.Header.Set("Authorization", "Bearer "+key)
 		return v4.verify(r)
 	}(); err == nil {
@@ -310,7 +311,7 @@ func TestRevocationLoop_收敛与单调(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	// interval 缺省时应使用安全默认值，不能将 0 传给 NewTicker。
-	v := NewVerifier(nil, Options{
+	v := NewVerifier(context.Background(), nil, Options{
 		PlatformSecrets:     [][]byte{[]byte("0123456789abcdef0123456789abcdef")},
 		RevocationsURL:      srv.URL,
 		RevocationsInterval: 30 * time.Millisecond,
@@ -323,7 +324,7 @@ func TestRevocationLoop_收敛与单调(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifyKey := func() bool {
-		r := httptest.NewRequest("POST", "/x", nil)
+		r := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 		r.Header.Set("Authorization", "Bearer "+key)
 		_, verr := v.verify(r)
 		return verr == nil

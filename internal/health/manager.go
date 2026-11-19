@@ -78,9 +78,9 @@ type Manager struct {
 }
 
 // NewManager 构造并兜底缺省;调用方随后 Start()。
-func NewManager(opts Options) *Manager {
+func NewManager(ctx context.Context, opts Options) *Manager {
 	opts = managerDefaults(opts)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	return &Manager{
 		opts: opts, log: opts.Logger, ctx: ctx, cancel: cancel,
 		stop: make(chan struct{}), done: make(chan struct{}),
@@ -150,7 +150,7 @@ func (m *Manager) Close() {
 
 func (m *Manager) loop() {
 	defer close(m.done)
-	m.tick()
+	m.tick(m.ctx)
 	ticker := time.NewTicker(m.opts.Interval)
 	defer ticker.Stop()
 	for {
@@ -160,13 +160,13 @@ func (m *Manager) loop() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			m.tick()
+			m.tick(m.ctx)
 		}
 	}
 }
 
 // tick 一轮探针:逐渠道免费/付费探针 + open 到期转半开推进;单渠道 panic 隔离。
-func (m *Manager) tick() {
+func (m *Manager) tick(ctx context.Context) {
 	if m.opts.Sources == nil {
 		return
 	}
@@ -178,11 +178,11 @@ func (m *Manager) tick() {
 				}
 			}()
 			if ch.FreeProbe && ProbeSupported(ch.Adapter) {
-				oc, class := m.freeProbe(ch)
+				oc, class := m.freeProbe(ctx, ch)
 				m.applyProbe(name, oc, class, ReasonControlPlane)
 			}
 			if ch.ProbeModel != "" && ProbeSupported(ch.Adapter) { // 不支持探针的适配器族静默跳过(登记限制),防每轮失败计数误熔断
-				oc, class := m.inferenceProbe(ch)
+				oc, class := m.inferenceProbe(ctx, ch)
 				m.applyProbe(name, oc, class, ReasonInference)
 			}
 			m.advanceTick(name)

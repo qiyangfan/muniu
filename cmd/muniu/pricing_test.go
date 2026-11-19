@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 )
 
 func TestBuildPricingTables_合并语义(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "pricing.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "pricing.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +28,7 @@ func TestBuildPricingTables_合并语义(t *testing.T) {
 	}
 
 	// 1) 无 DB 行：纯 YAML 兜底，含倍率窗。
-	tables, err := buildPricingTables(db, static, "CNY", 0)
+	tables, err := buildPricingTables(context.Background(), db, static, "CNY", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,19 +37,19 @@ func TestBuildPricingTables_合并语义(t *testing.T) {
 	}
 
 	// 2) DB 覆盖同别名：0.22 缺省价且无窗，YAML 窗被整体取代。
-	if err := store.UpsertPricing(db, store.PricingRecord{
+	if err := store.UpsertPricing(context.Background(), db, store.PricingRecord{
 		Alias: "alias-a", Currency: "CNY", InputCredits: 220_000, VisionInputCredits: 330_000, OutputCredits: 660_000,
 		Timezone: "UTC", UpdatedAt: "2026-09-11T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpsertPricing(db, store.PricingRecord{
+	if err := store.UpsertPricing(context.Background(), db, store.PricingRecord{
 		Alias: "alias-b", Currency: "CNY", InputCredits: 100, OutputCredits: 100,
 		Timezone: "UTC", UpdatedAt: "2026-09-11T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	tables, err = buildPricingTables(db, static, "CNY", 0)
+	tables, err = buildPricingTables(context.Background(), db, static, "CNY", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,10 +61,10 @@ func TestBuildPricingTables_合并语义(t *testing.T) {
 	}
 
 	// 3) 撤销覆盖：删除后回落 YAML。
-	if _, err := store.DeletePricing(db, "alias-a"); err != nil {
+	if _, err := store.DeletePricing(context.Background(), db, "alias-a"); err != nil {
 		t.Fatal(err)
 	}
-	tables, err = buildPricingTables(db, static, "CNY", 0)
+	tables, err = buildPricingTables(context.Background(), db, static, "CNY", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,14 +73,14 @@ func TestBuildPricingTables_合并语义(t *testing.T) {
 	}
 
 	// 4) 非法 DB 行窗口越界：重建报错，绝不静默放行脏数据。
-	if err := store.UpsertPricing(db, store.PricingRecord{
+	if err := store.UpsertPricing(context.Background(), db, store.PricingRecord{
 		Alias: "bad", Currency: "CNY", InputCredits: 1, OutputCredits: 1,
 		Timezone: "UTC", Windows: []store.PricingWindowRecord{{Window: "25:00-26:00", BasisPoints: 5000}},
 		UpdatedAt: "2026-09-11T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := buildPricingTables(db, static, "CNY", 0); err == nil {
+	if _, err := buildPricingTables(context.Background(), db, static, "CNY", 0); err == nil {
 		t.Fatal("非法 DB 行必须使重建失败")
 	}
 }

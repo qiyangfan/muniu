@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -20,11 +21,11 @@ func TestE2E_配额耗尽仍可列模型(t *testing.T) {
 
 	// 签发日配额 50 credit 的 key，并预插当日已耗成本 100 credit，estimated=0 为配额聚合口径。
 	kdb := adb
-	plaintext, rec, err := auth.CreateKey(kdb, "default", "quota-pin", 60, auth.KeyOpts{DailyQuotaCredits: 50})
+	plaintext, rec, err := auth.CreateKey(context.Background(), kdb, "default", "quota-pin", 60, auth.KeyOpts{DailyQuotaCredits: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.InsertUsageBatch(kdb, []store.UsageRow{{
+	if err := store.InsertUsageBatch(context.Background(), kdb, []store.UsageRow{{
 		ID: uuid.NewV7().String(), RequestID: "req-quota-pin",
 		TenantID: "01900000-0000-7000-8000-000000000001", APIKeyID: rec.ID,
 		Provider: "openai", ModelAlias: e2eAlias, UpstreamModel: "upstream-a",
@@ -35,7 +36,7 @@ func TestE2E_配额耗尽仍可列模型(t *testing.T) {
 	}
 
 	do := func(method, path, key string) (int, string) {
-		req, _ := http.NewRequest(method, ts.URL+path, strings.NewReader(e2eJSONBody))
+		req, _ := http.NewRequestWithContext(context.Background(), method, ts.URL+path, strings.NewReader(e2eJSONBody))
 		req.Header.Set("Authorization", "Bearer "+key)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {

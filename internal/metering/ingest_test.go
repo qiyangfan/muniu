@@ -7,6 +7,7 @@
 package metering
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -114,7 +115,7 @@ func TestIngestSink_2xx待结算不制造传输重试(t *testing.T) {
 	srv := httptest.NewServer(cp.handler())
 	t.Cleanup(srv.Close)
 
-	sink := &IngestSink{URL: srv.URL}
+	sink := &IngestSink{Ctx: context.Background(), URL: srv.URL}
 	first := row("w1")
 	first.VisionTokens = 9
 	if err := sink.Write([]store.UsageRow{first, row("w2")}); err != nil {
@@ -136,7 +137,7 @@ func TestIngestSink_2xx待结算不制造传输重试(t *testing.T) {
 
 func TestPipeline_前缀已接收后5xx整批按原ID续传(t *testing.T) {
 	db := openIngestDB(t)
-	if _, err := db.Exec(`CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
 	// 首投：控制面持久接收批内前缀 1 行后存储故障回 5xx；重投时恢复，同 ID 去重。
@@ -144,9 +145,9 @@ func TestPipeline_前缀已接收后5xx整批按原ID续传(t *testing.T) {
 	srv := httptest.NewServer(cp.handler())
 	t.Cleanup(srv.Close)
 
-	p := NewPipeline(db, Options{
+	p := NewPipeline(context.Background(), db, Options{
 		Capacity: 64, Interval: 50 * time.Millisecond, Batch: 2,
-		Remote: &IngestSink{URL: srv.URL}, Buffer: NewBufferStore(db, 100),
+		Remote: &IngestSink{Ctx: context.Background(), URL: srv.URL}, Buffer: NewBufferStore(context.Background(), db, 100),
 	}, nil)
 	p.Submit(row("p1"))
 	p.Submit(row("p2"))
@@ -154,7 +155,7 @@ func TestPipeline_前缀已接收后5xx整批按原ID续传(t *testing.T) {
 	// 等缓冲排空，重投成功后删除。
 	drain := time.Now().Add(5 * time.Second)
 	for {
-		n, _ := store.CountBufferedRows(db)
+		n, _ := store.CountBufferedRows(context.Background(), db)
 		if n == 0 && func() bool { a, _, _, _ := cp.snapshot(); return a >= 2 }() {
 			break
 		}
@@ -203,5 +204,18 @@ func TestPipeline_前缀已接收后5xx整批按原ID续传(t *testing.T) {
 	}
 	if len(persisted) != 2 {
 		t.Fatalf("最终应完整接收两行: %v", persisted)
+	}
+}
+
+// 父 ctx 取消(进程退出)不应阻断投递:排干期由单批 15s 超时兜底,而非随生命周期立即失败。
+func TestIngestSink_父ctx取消仍投递(t *testing.T) {
+	cp := newFakeControlPlane(0, 0)
+	srv := httptest.NewServer(cp.handler())
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sink := &IngestSink{Ctx: ctx, URL: srv.URL}
+	if err := sink.Write([]store.UsageRow{row("c1")}); err != nil {
+		t.Fatalf("父 ctx 取消不应阻断投递: %v", err)
 	}
 }

@@ -29,7 +29,7 @@ func TestChain_顺序执行(t *testing.T) {
 		}
 	}
 	h := Chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { order = append(order, "handler") }), mk("a"), mk("b"))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), "GET", "/", nil))
 	if strings.Join(order, ",") != "a,b,handler" {
 		t.Fatalf("链顺序不符: %v", order)
 	}
@@ -41,7 +41,7 @@ func TestRequestID_回带响应头并写入ctx(t *testing.T) {
 		seenInHandler = loggingRequestID(r.Context())
 	}))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), "GET", "/", nil))
 
 	got := rec.Header().Get("X-Muniu-Request-Id")
 	if got == "" {
@@ -63,7 +63,7 @@ func TestRecover_panic兜住并返回500信封(t *testing.T) {
 		panic("上游炸了测试用")
 	}))
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), "GET", "/", nil))
 
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("panic 应映射 500,实际 %d", rec.Code)
@@ -92,7 +92,7 @@ func TestAccessLog_进出两条且含状态耗时(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 		w.WriteHeader(http.StatusTeapot)
 	}))
-	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/v1/chat/completions", nil))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil))
 
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 {
@@ -124,7 +124,7 @@ func TestRun_优雅退出在途请求跑完(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := New("127.0.0.1:0", mux)
-	ln, err := Listen(srv.Addr)
+	ln, err := Listen(context.Background(), srv.Addr)
 	if err != nil {
 		t.Fatalf("绑定监听失败: %v", err)
 	}
@@ -133,7 +133,12 @@ func TestRun_优雅退出在途请求跑完(t *testing.T) {
 	go func() { errCh <- Run(ctx, srv, ln, logger) }()
 
 	go func() {
-		resp, err := http.Get(url + "/slow")
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url+"/slow", nil)
+		if err != nil {
+			t.Errorf("构造在途请求失败: %v", err)
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Errorf("在途请求失败: %v", err)
 			return

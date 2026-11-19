@@ -18,7 +18,7 @@ import { DataList, type DataCol } from "../components/data-list";
 import { EmptyState } from "../components/empty-state";
 import { Skeleton } from "../components/ui/skeleton";
 import { FormRow } from "../components/form-row";
-import { formatCreditsExact } from "../lib/utils";
+import { formatCreditsExact, errorMessage } from "../lib/utils";
 import { formatDateTime } from "../lib/datetime";
 
 // 估算降级原因的用户面文案(实现归因不进正文,只说用户事实)。
@@ -159,7 +159,7 @@ export default function Balances() {
         setData(normalize(r));
         setErr("");
       })
-      .catch((e) => setErr(e.message))
+      .catch((e) => setErr(errorMessage(e)))
       .finally(() => setLoaded(true));
   }, []);
 
@@ -209,7 +209,9 @@ export default function Balances() {
         ) : (
           <DataList
             tableClassName="min-w-[1080px]"
-            columns={columns(refreshOne)}
+            columns={columns((p) => {
+              void refreshOne(p);
+            })}
             rows={providers}
             rowKey={(p) => p.provider}
             empty="暂无声明余额源的渠道"
@@ -235,6 +237,20 @@ function ManualEntry({ providers, onDone }: { providers: ProviderRow[]; onDone: 
   const current = providers.find((p) => p.provider === provider);
   const currency = current?.manual_currency ?? "";
 
+  const submitManual = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      await api.balanceManual(provider, { amount: amount.trim(), currency });
+      setAmount("");
+      onDone();
+    } catch (e2) {
+      setErr(errorMessage(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -247,19 +263,9 @@ function ManualEntry({ providers, onDone }: { providers: ProviderRow[]; onDone: 
       <CardContent>
         <form
           className="grid gap-4 sm:grid-cols-[minmax(0,14rem) minmax(0,1fr) auto] sm:items-end"
-          onSubmit={async (e) => {
+          onSubmit={(e) => {
             e.preventDefault();
-            setBusy(true);
-            setErr("");
-            try {
-              await api.balanceManual(provider, { amount: amount.trim(), currency });
-              setAmount("");
-              onDone();
-            } catch (e2) {
-              setErr(e2 instanceof Error ? e2.message : "录入失败");
-            } finally {
-              setBusy(false);
-            }
+            void submitManual();
           }}
         >
           <FormRow label="渠道">
@@ -418,7 +424,9 @@ function columns(refreshOne: (provider: string) => void): DataCol<ProviderRow>[]
         <Button
           size={mobile ? "sm" : "xs"}
           variant="outline"
-          onClick={() => refreshOne(p.provider)}
+          onClick={() => {
+            void refreshOne(p.provider);
+          }}
           aria-label={`刷新 ${p.provider} 的余额`}
         >
           刷新

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -21,8 +22,8 @@ type AdminAudit struct {
 }
 
 // AppendAdminAudit 不提供更新或删除接口。
-func AppendAdminAudit(db *sql.DB, a AdminAudit) error {
-	_, err := db.Exec(`INSERT INTO admin_audit_log VALUES(?,?,?,?,?,?,?,?,?)`,
+func AppendAdminAudit(ctx context.Context, db *sql.DB, a AdminAudit) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO admin_audit_log VALUES(?,?,?,?,?,?,?,?,?)`,
 		a.ID, a.RequestID, a.ActorKind, a.ActorName, a.Action, a.TargetID, a.Outcome, a.Detail, a.CreatedAt)
 	return err
 }
@@ -38,7 +39,7 @@ const adminAuditCols = `id,request_id,actor_kind,actor_name,action,
 
 // ListAdminAudit 同秒行按 UUIDv7 排序，游标不因并发新增而重复旧行。
 // items 最多 limit 条；多取的一行只用于生成 next_cursor。
-func ListAdminAudit(db *sql.DB, cursor string, limit int) ([]AdminAudit, string, error) {
+func ListAdminAudit(ctx context.Context, db *sql.DB, cursor string, limit int) ([]AdminAudit, string, error) {
 	if limit < 1 || limit > 100 {
 		return nil, "", MarkBusiness(fmt.Errorf("limit 须在 1 到 100 之间"))
 	}
@@ -46,7 +47,7 @@ func ListAdminAudit(db *sql.DB, cursor string, limit int) ([]AdminAudit, string,
 	if err != nil {
 		return nil, "", err
 	}
-	out, err := queryAdminAudit(db, c, limit)
+	out, err := queryAdminAudit(ctx, db, c, limit)
 	if err != nil {
 		return nil, "", err
 	}
@@ -74,7 +75,7 @@ func decodeAuditCursor(cursor string) (auditCursor, error) {
 }
 
 // queryAdminAudit 按游标条件取 limit+1 行，多出的一行仅用于判定是否还有下一页。
-func queryAdminAudit(db *sql.DB, c auditCursor, limit int) ([]AdminAudit, error) {
+func queryAdminAudit(ctx context.Context, db *sql.DB, c auditCursor, limit int) ([]AdminAudit, error) {
 	query := `SELECT ` + adminAuditCols + ` FROM admin_audit_log`
 	args := []any{}
 	if c.Time != "" {
@@ -83,7 +84,7 @@ func queryAdminAudit(db *sql.DB, c auditCursor, limit int) ([]AdminAudit, error)
 	}
 	query += ` ORDER BY created_at DESC,id DESC LIMIT ?`
 	args = append(args, limit+1)
-	rows, err := db.Query(query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

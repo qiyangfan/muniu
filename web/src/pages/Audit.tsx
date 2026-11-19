@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { errorMessage } from "../lib/utils";
 import { api, type AdminAudit } from "../lib/api";
 import { DataList, type DataCol } from "../components/data-list";
 import { ErrorAlert } from "../components/error-alert";
@@ -86,7 +87,7 @@ export default function Audit() {
         setNext(page.next_cursor);
       })
       .catch((e) => {
-        if (current === version.current) setErr((e as Error).message);
+        if (current === version.current) setErr(errorMessage(e));
       })
       .finally(() => {
         if (current === version.current) setLoading(false);

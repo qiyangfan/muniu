@@ -167,7 +167,9 @@ export const api = {
     tenant_id?: string;
     key_id?: string;
   }) => {
-    const qs = new URLSearchParams(Object.entries(q).filter(([, v]) => v) as [string, string][]);
+    const qs = new URLSearchParams(
+      Object.entries(q).filter((entry): entry is [string, string] => Boolean(entry[1])),
+    );
     return call<{ points: UsagePoint[] }>("GET", `/admin/v1/usage?${qs}`);
   },
   providers: () => call<{ providers: ProviderInfo[] }>("GET", "/admin/v1/providers"),

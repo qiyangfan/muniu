@@ -33,8 +33,9 @@ func New(addr string, handler http.Handler) *http.Server {
 }
 
 // Listen 绑定监听，与 Run 分离，便于测试在启动前拿到真实地址。
-func Listen(addr string) (net.Listener, error) {
-	return net.Listen("tcp", addr)
+func Listen(ctx context.Context, addr string) (net.Listener, error) {
+	var lc net.ListenConfig
+	return lc.Listen(ctx, "tcp", addr)
 }
 
 // shutdownBudget 优雅退出预算，定为 15s。
@@ -52,7 +53,8 @@ func Run(ctx context.Context, srv *http.Server, ln net.Listener, logger *slog.Lo
 	case <-ctx.Done():
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownBudget)
+	// 退出预算独立于触发信号：ctx 此刻已取消，派生会立即到期，故只继承值不继承取消。
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBudget)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("优雅退出超时,强制关闭", "error_detail", err.Error())

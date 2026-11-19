@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -275,7 +276,12 @@ func newGovHarness(t *testing.T, capabilities []config.ModelCapability, strict b
 // govPost 发请求并返回状态码、body、响应头值，治理留痕断言需要响应头。
 func govPost(t *testing.T, ts *httptest.Server, body string) (int, string, string) {
 	t.Helper()
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("请求失败: %v", err)
 	}
@@ -334,11 +340,16 @@ func TestGovernance_干预留痕与出站改写(t *testing.T) {
 			"alias": {{Provider: "prov-a", Model: "up-a", Priority: 0, Weight: 1}},
 		}, http.StatusOK, logger)
 
-	req, _ := http.Post(ts.URL+"/v1/chat/completions", "application/json",
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"alias","messages":[{"role":"user","content":"hi"}],"max_tokens":8192,"temperature":0.7}`))
-	defer func() { _ = req.Body.Close() }()
-	if req.StatusCode != http.StatusOK {
-		t.Fatalf("宽松模式应放行: %d", req.StatusCode)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("宽松模式应放行: %d", resp.StatusCode)
 	}
 	var got map[string]json.RawMessage
 	if err := json.Unmarshal(ups["prov-a"].LastBody(), &got); err != nil {
@@ -352,7 +363,7 @@ func TestGovernance_干预留痕与出站改写(t *testing.T) {
 	if _, ok := got["temperature"]; ok {
 		t.Fatal("出站 temperature 必须被 drop")
 	}
-	hdr := req.Header.Get("X-Muniu-Normalized")
+	hdr := resp.Header.Get("X-Muniu-Normalized")
 	set := map[string]bool{}
 	for _, p := range strings.Split(hdr, ",") {
 		set[strings.TrimSpace(p)] = true

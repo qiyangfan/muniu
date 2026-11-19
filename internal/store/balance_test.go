@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -9,7 +10,7 @@ import (
 
 func openBalanceDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "balance.db"))
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "balance.db"))
 	if err != nil {
 		t.Fatalf("打开库: %v", err)
 	}
@@ -21,13 +22,13 @@ func TestBalanceSnapshot_成功写入覆盖与不可知余额往返(t *testing.T
 	db := openBalanceDB(t)
 	credits := int64(110_000_000_000)
 	now := time.Now()
-	if err := RecordBalanceSuccess(db, BalanceSnapshot{
+	if err := RecordBalanceSuccess(context.Background(), db, BalanceSnapshot{
 		Provider: "deepseek", KeyID: "DEEPSEEK_API_KEY", Source: "deepseek",
 		BalanceCredits: &credits, Currency: "CNY", AsOfAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("写入快照: %v", err)
 	}
-	snap, err := ListBalanceSnapshots(db, "deepseek")
+	snap, err := ListBalanceSnapshots(context.Background(), db, "deepseek")
 	if err != nil || len(snap) != 1 {
 		t.Fatalf("列快照: %v, rows=%d", err, len(snap))
 	}
@@ -39,13 +40,13 @@ func TestBalanceSnapshot_成功写入覆盖与不可知余额往返(t *testing.T
 	}
 
 	// 不可知余额(openrouter 不限额):NULL 列往返不得变成 0
-	if err := RecordBalanceSuccess(db, BalanceSnapshot{
+	if err := RecordBalanceSuccess(context.Background(), db, BalanceSnapshot{
 		Provider: "openrouter", KeyID: "OPENROUTER_API_KEY", Source: "openrouter",
 		BalanceCredits: nil, Currency: "USD", AsOfAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("写不可知快照: %v", err)
 	}
-	snap, err = ListBalanceSnapshots(db, "openrouter")
+	snap, err = ListBalanceSnapshots(context.Background(), db, "openrouter")
 	if err != nil || len(snap) != 1 || snap[0].BalanceCredits != nil {
 		t.Fatalf("不可知余额被写为有值: %v %+v", err, snap)
 	}
@@ -55,18 +56,18 @@ func TestBalanceSnapshot_失败保持旧余额且成功清零计数(t *testing.T
 	db := openBalanceDB(t)
 	credits := int64(50_000_000_000)
 	now := time.Now()
-	if err := RecordBalanceSuccess(db, BalanceSnapshot{
+	if err := RecordBalanceSuccess(context.Background(), db, BalanceSnapshot{
 		Provider: "moonshot", KeyID: AccountKeyID, Source: "moonshot",
 		BalanceCredits: &credits, Currency: "CNY", AsOfAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("写入快照: %v", err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := RecordBalanceFailure(db, "moonshot", AccountKeyID, "moonshot", "upstream_5xx", now); err != nil {
+		if err := RecordBalanceFailure(context.Background(), db, "moonshot", AccountKeyID, "moonshot", "upstream_5xx", now); err != nil {
 			t.Fatalf("记失败: %v", err)
 		}
 	}
-	snap, err := ListBalanceSnapshots(db, "moonshot")
+	snap, err := ListBalanceSnapshots(context.Background(), db, "moonshot")
 	if err != nil || len(snap) != 1 {
 		t.Fatalf("列快照: %v rows=%d", err, len(snap))
 	}
@@ -77,13 +78,13 @@ func TestBalanceSnapshot_失败保持旧余额且成功清零计数(t *testing.T
 		t.Fatalf("失败计数/归类失真: %+v", snap[0])
 	}
 	// 成功即清零
-	if err := RecordBalanceSuccess(db, BalanceSnapshot{
+	if err := RecordBalanceSuccess(context.Background(), db, BalanceSnapshot{
 		Provider: "moonshot", KeyID: AccountKeyID, Source: "moonshot",
 		BalanceCredits: &credits, Currency: "CNY", AsOfAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("再写快照: %v", err)
 	}
-	snap, _ = ListBalanceSnapshots(db, "moonshot")
+	snap, _ = ListBalanceSnapshots(context.Background(), db, "moonshot")
 	if snap[0].ConsecutiveFailures != 0 || snap[0].LastError != "" {
 		t.Fatalf("成功后失败痕迹未清零: %+v", snap[0])
 	}
@@ -92,10 +93,10 @@ func TestBalanceSnapshot_失败保持旧余额且成功清零计数(t *testing.T
 func TestBalanceSnapshot_首次失败落无余额占位(t *testing.T) {
 	db := openBalanceDB(t)
 	now := time.Now()
-	if err := RecordBalanceFailure(db, "volc", AccountKeyID, "volc-bss", "credential", now); err != nil {
+	if err := RecordBalanceFailure(context.Background(), db, "volc", AccountKeyID, "volc-bss", "credential", now); err != nil {
 		t.Fatalf("记失败: %v", err)
 	}
-	snap, err := ListBalanceSnapshots(db, "volc")
+	snap, err := ListBalanceSnapshots(context.Background(), db, "volc")
 	if err != nil || len(snap) != 1 {
 		t.Fatalf("列快照: %v rows=%d", err, len(snap))
 	}
@@ -106,7 +107,7 @@ func TestBalanceSnapshot_首次失败落无余额占位(t *testing.T) {
 
 func insertUsage(t *testing.T, db *sqlDB, provider string, at time.Time, estimated bool, credits int64) {
 	t.Helper()
-	if err := InsertUsageBatch(db, []UsageRow{{
+	if err := InsertUsageBatch(context.Background(), db, []UsageRow{{
 		ID: "u-" + provider + at.Format("20060102150405.000000000"), RequestID: "r-" + t.Name(),
 		TenantID: "t", APIKeyID: "k", Provider: provider, ModelAlias: "m", UpstreamModel: "m",
 		Status: "ok", Estimated: estimated, CostCredits: credits,
@@ -123,7 +124,7 @@ func TestSpendSince_口径与边界(t *testing.T) {
 	insertUsage(t, db, "deepseek", asOf.Add(1*time.Hour), false, 35)   // 快照后:计入
 	insertUsage(t, db, "deepseek", asOf.Add(2*time.Hour), true, 999)   // estimated=1:排除
 	insertUsage(t, db, "other", asOf.Add(1*time.Hour), false, 777)     // 其他渠道:排除
-	got, err := SpendSince(db, "deepseek", balanceTime(asOf))
+	got, err := SpendSince(context.Background(), db, "deepseek", balanceTime(asOf))
 	if err != nil || got != 35 {
 		t.Fatalf("SpendSince = %d, %v; 期望 35", got, err)
 	}
@@ -136,7 +137,7 @@ func TestBurnWindow_逐日聚合与窗口外排除(t *testing.T) {
 	insertUsage(t, db, "deepseek", base.Add(32*time.Hour), false, 20)   // 10-29
 	insertUsage(t, db, "deepseek", base.Add(33*time.Hour), true, 500)   // estimated 排除
 	insertUsage(t, db, "deepseek", base.Add(-24*time.Hour), false, 666) // 窗口外排除
-	days, err := BurnWindow(db, "deepseek", balanceTime(base))
+	days, err := BurnWindow(context.Background(), db, "deepseek", balanceTime(base))
 	if err != nil {
 		t.Fatalf("BurnWindow: %v", err)
 	}
@@ -155,13 +156,13 @@ func TestAlertState_往返与覆盖(t *testing.T) {
 	db := openBalanceDB(t)
 	now := time.Now()
 	fired := now
-	if err := UpsertAlertState(db, AlertState{
+	if err := UpsertAlertState(context.Background(), db, AlertState{
 		Provider: "deepseek", RuleKey: "tier:72", Firing: true, Severity: "warning",
 		LastFiredAt: &fired, ContextJSON: `{"balance_credits":35}`, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("写告警态: %v", err)
 	}
-	states, err := ListAlertStates(db, "deepseek")
+	states, err := ListAlertStates(context.Background(), db, "deepseek")
 	if err != nil || len(states) != 1 {
 		t.Fatalf("列告警态: %v rows=%d", err, len(states))
 	}
@@ -170,20 +171,20 @@ func TestAlertState_往返与覆盖(t *testing.T) {
 		t.Fatalf("告警态往返失真: %+v", st)
 	}
 	// 解除:firing=false + last_fired_at 保留
-	if err := UpsertAlertState(db, AlertState{
+	if err := UpsertAlertState(context.Background(), db, AlertState{
 		Provider: "deepseek", RuleKey: "tier:72", Firing: false, Severity: "warning",
 		LastFiredAt: &fired, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("覆盖告警态: %v", err)
 	}
-	states, _ = ListAlertStates(db, "deepseek")
+	states, _ = ListAlertStates(context.Background(), db, "deepseek")
 	if states[0].Firing || states[0].LastFiredAt == nil || states[0].ContextJSON != "" {
 		t.Fatalf("解除态失真: %+v", states[0])
 	}
 }
 
 func TestBalancePrev_平移语义(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "muniu.db"))
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "muniu.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,10 +193,10 @@ func TestBalancePrev_平移语义(t *testing.T) {
 	at := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
 
 	// 首次成功写入:无转移可判(prev 为 NULL)
-	if err := RecordBalanceSuccess(db, BalanceSnapshot{Provider: "p", KeyID: "k", Source: "deepseek", BalanceCredits: c(100), Currency: "CNY", AsOfAt: at, UpdatedAt: at}); err != nil {
+	if err := RecordBalanceSuccess(context.Background(), db, BalanceSnapshot{Provider: "p", KeyID: "k", Source: "deepseek", BalanceCredits: c(100), Currency: "CNY", AsOfAt: at, UpdatedAt: at}); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := ListBalanceSnapshots(db, "p")
+	rows, err := ListBalanceSnapshots(context.Background(), db, "p")
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("list: %v", err)
 	}
@@ -205,10 +206,10 @@ func TestBalancePrev_平移语义(t *testing.T) {
 
 	// 第二次成功:前值平移为 100,当前 40——转移可判
 	at2 := at.Add(time.Hour)
-	if err := RecordBalanceSuccess(db, BalanceSnapshot{Provider: "p", KeyID: "k", Source: "deepseek", BalanceCredits: c(40), Currency: "CNY", AsOfAt: at2, UpdatedAt: at2}); err != nil {
+	if err := RecordBalanceSuccess(context.Background(), db, BalanceSnapshot{Provider: "p", KeyID: "k", Source: "deepseek", BalanceCredits: c(40), Currency: "CNY", AsOfAt: at2, UpdatedAt: at2}); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ = ListBalanceSnapshots(db, "p")
+	rows, _ = ListBalanceSnapshots(context.Background(), db, "p")
 	if !rows[0].HasPrevTransition() || *rows[0].PrevBalanceCredits != 100 || *rows[0].BalanceCredits != 40 {
 		t.Fatalf("平移不符: %+v", rows[0])
 	}
@@ -217,33 +218,33 @@ func TestBalancePrev_平移语义(t *testing.T) {
 	}
 
 	// 失败查询:前值与当前均不动(失败不产生新转移)
-	if err := RecordBalanceFailure(db, "p", "k", "deepseek", "http_status_503", at2.Add(time.Minute)); err != nil {
+	if err := RecordBalanceFailure(context.Background(), db, "p", "k", "deepseek", "http_status_503", at2.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ = ListBalanceSnapshots(db, "p")
+	rows, _ = ListBalanceSnapshots(context.Background(), db, "p")
 	if !rows[0].HasPrevTransition() || *rows[0].PrevBalanceCredits != 100 || *rows[0].BalanceCredits != 40 {
 		t.Fatalf("失败不得改变转移判据: %+v", rows[0])
 	}
 
 	// 第三次成功:转移整体前移(prev=40,cur=38)
 	at3 := at2.Add(time.Hour)
-	if err := RecordBalanceSuccess(db, BalanceSnapshot{Provider: "p", KeyID: "k", Source: "deepseek", BalanceCredits: c(38), Currency: "CNY", AsOfAt: at3, UpdatedAt: at3}); err != nil {
+	if err := RecordBalanceSuccess(context.Background(), db, BalanceSnapshot{Provider: "p", KeyID: "k", Source: "deepseek", BalanceCredits: c(38), Currency: "CNY", AsOfAt: at3, UpdatedAt: at3}); err != nil {
 		t.Fatal(err)
 	}
-	rows, _ = ListBalanceSnapshots(db, "p")
+	rows, _ = ListBalanceSnapshots(context.Background(), db, "p")
 	if *rows[0].PrevBalanceCredits != 40 || *rows[0].BalanceCredits != 38 {
 		t.Fatalf("转移应前移: %+v", rows[0])
 	}
 }
 
 func TestBurnWindowRange_区间过滤与天数计数(t *testing.T) {
-	db, err := Open(filepath.Join(t.TempDir(), "muniu.db"))
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "muniu.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
 	insertUsage := func(day string, credits int64) {
-		_, err := db.Exec(`INSERT INTO usage_logs (id, request_id, tenant_id, api_key_id, provider, model_alias, upstream_model, stream, status, latency_total_ms, cost_credits, estimated, created_at)
+		_, err := db.ExecContext(context.Background(), `INSERT INTO usage_logs (id, request_id, tenant_id, api_key_id, provider, model_alias, upstream_model, stream, status, latency_total_ms, cost_credits, estimated, created_at)
 			VALUES (?, ?, 'default', 'k', 'p', 'm', 'm', 1, 'ok', 1, ?, 0, ?)`,
 			day+"-id", day+"-req", credits, day+"T12:00:00Z")
 		if err != nil {
@@ -257,7 +258,7 @@ func TestBurnWindowRange_区间过滤与天数计数(t *testing.T) {
 	insertUsage("2026-10-25", 700) // 当前窗口
 
 	// 上一窗口 [10-19, 10-24):命中 20/22 两天,窗口外 18 号不入
-	days, err := BurnWindowRange(db, "p", "2026-10-19T00:00:00Z", "2026-10-24T00:00:00Z")
+	days, err := BurnWindowRange(context.Background(), db, "p", "2026-10-19T00:00:00Z", "2026-10-24T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,8 +266,55 @@ func TestBurnWindowRange_区间过滤与天数计数(t *testing.T) {
 		t.Fatalf("上一窗口聚合不符: %+v", days)
 	}
 	// 无上界形态(既有 BurnWindow 语义)不受影响
-	all, err := BurnWindow(db, "p", "2026-10-19T00:00:00Z")
+	all, err := BurnWindow(context.Background(), db, "p", "2026-10-19T00:00:00Z")
 	if err != nil || len(all) != 3 {
 		t.Fatalf("无上界聚合不符: %+v err=%v", all, err)
+	}
+}
+
+// PruneBalanceKeys 以 JSON 数组绑定保留集:幽灵 key 与其骤降规则状态清除,
+// 账户哨兵行与保留 key 不动(同时验证驱动 JSON1 可用)。
+func TestPruneBalanceKeys_保留集清理与哨兵保留(t *testing.T) {
+	db := openBalanceDB(t)
+	ctx := context.Background()
+	now := time.Now()
+	for _, k := range []string{"K1", "K2", AccountKeyID} {
+		if err := RecordBalanceSuccess(ctx, db, BalanceSnapshot{
+			Provider: "pa", KeyID: k, Source: "manual", Currency: "CNY", AsOfAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []string{"cliff:K1", "cliff:K2"} {
+		if err := UpsertAlertState(ctx, db, AlertState{
+			Provider: "pa", RuleKey: k, Severity: "warning", UpdatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := PruneBalanceKeys(ctx, db, "pa", []string{"K1"}); err != nil {
+		t.Fatalf("PruneBalanceKeys: %v", err)
+	}
+	snaps, err := ListBalanceSnapshots(ctx, db, "pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := map[string]bool{}
+	for _, s := range snaps {
+		keys[s.KeyID] = true
+	}
+	if !keys["K1"] || !keys[AccountKeyID] || keys["K2"] {
+		t.Fatalf("快照清理不符(应保留 K1 与哨兵,清除 K2): %v", keys)
+	}
+	states, err := ListAlertStates(ctx, db, "pa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := map[string]bool{}
+	for _, st := range states {
+		rules[st.RuleKey] = true
+	}
+	if !rules["cliff:K1"] || rules["cliff:K2"] {
+		t.Fatalf("骤降状态清理不符(应保留 cliff:K1): %v", rules)
 	}
 }

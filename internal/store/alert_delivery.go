@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -23,8 +24,9 @@ type AlertDeliveryStatus struct {
 
 // RecordAlertDeliveryFailure 记录投递最终失败:failing 期内推进计数,新失败期重置为 1
 // 并清空上次解除时刻(它属于上一个 episode)。
-func RecordAlertDeliveryFailure(db *sql.DB, eventKey, severity, summary, errClass string, at time.Time) error {
-	_, err := db.Exec(`INSERT INTO alert_delivery_status (
+func RecordAlertDeliveryFailure(ctx context.Context, db *sql.DB,
+	eventKey, severity, summary, errClass string, at time.Time) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO alert_delivery_status (
 		id, failing, last_event_key, last_severity, last_summary, last_error,
 		failure_count, last_failure_at, last_resolved_at, updated_at)
 		VALUES (1,1,?,?,?,?,1,?,'',?)
@@ -45,8 +47,8 @@ func RecordAlertDeliveryFailure(db *sql.DB, eventKey, severity, summary, errClas
 
 // RecordAlertDeliverySuccess 记录投递成功(2xx):仅 failing 期间置解除并保留失败事实;
 // 未失败或已解除时 no-op(成功是常态,不产生写放大)。
-func RecordAlertDeliverySuccess(db *sql.DB, at time.Time) error {
-	_, err := db.Exec(`UPDATE alert_delivery_status
+func RecordAlertDeliverySuccess(ctx context.Context, db *sql.DB, at time.Time) error {
+	_, err := db.ExecContext(ctx, `UPDATE alert_delivery_status
 		SET failing=0, last_resolved_at=?, updated_at=?
 		WHERE id=1 AND failing=1`, balanceTime(at), balanceTime(at))
 	if err != nil {
@@ -57,11 +59,11 @@ func RecordAlertDeliverySuccess(db *sql.DB, at time.Time) error {
 
 // GetAlertDeliveryStatus 读取自监控行;从未失败(无行)返回 nil 而非零值结构,
 // 调用方据此区分「从未失败」与「零值」。
-func GetAlertDeliveryStatus(db *sql.DB) (*AlertDeliveryStatus, error) {
+func GetAlertDeliveryStatus(ctx context.Context, db *sql.DB) (*AlertDeliveryStatus, error) {
 	var st AlertDeliveryStatus
 	var failing int64
 	var failureAt, resolvedAt, updated sql.NullString
-	err := db.QueryRow(`SELECT failing, last_event_key, last_severity, last_summary, last_error,
+	err := db.QueryRowContext(ctx, `SELECT failing, last_event_key, last_severity, last_summary, last_error,
 		failure_count, last_failure_at, last_resolved_at, updated_at
 		FROM alert_delivery_status WHERE id=1`).
 		Scan(&failing, &st.LastEventKey, &st.LastSeverity, &st.LastSummary, &st.LastError,

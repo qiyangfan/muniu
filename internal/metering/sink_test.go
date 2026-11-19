@@ -2,6 +2,7 @@
 package metering
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"path/filepath"
@@ -60,13 +61,13 @@ func openSinkDB(t *testing.T) *sql.DB {
 func TestPipeline_远端失败缓冲续传(t *testing.T) {
 	db := openSinkDB(t)
 	// 本地汇在远端成功时不落库，故无需 usage_logs 表；缓冲表需真实迁移。
-	if _, err := db.Exec(`CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
 	remote := &fakeRemote{}
 	remote.failLeft.Store(1) // 第一批必失败 → 落缓冲
-	buf := NewBufferStore(db, 100)
-	p := NewPipeline(db, Options{
+	buf := NewBufferStore(context.Background(), db, 100)
+	p := NewPipeline(context.Background(), db, Options{
 		Capacity: 64, Interval: 50 * time.Millisecond, Batch: 2,
 		Remote: remote, Buffer: buf,
 	}, nil)
@@ -89,7 +90,7 @@ func TestPipeline_远端失败缓冲续传(t *testing.T) {
 	// 排空断言轮询：缓冲删除在 flushLoop 后台执行，慢环境下断言可能先于删除到达。
 	drainDeadline := time.Now().Add(3 * time.Second)
 	for {
-		n, _ := store.CountBufferedRows(db)
+		n, _ := store.CountBufferedRows(context.Background(), db)
 		if n == 0 {
 			break
 		}
@@ -109,8 +110,8 @@ func TestPipeline_纯本地等价(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	remote := &fakeRemote{}
 	remote.failLeft.Store(0)
-	buf := NewBufferStore(db, 10)
-	p := NewPipeline(db, Options{Capacity: 8, Interval: 50 * time.Millisecond, Batch: 4, Remote: remote, Buffer: buf}, nil)
+	buf := NewBufferStore(context.Background(), db, 10)
+	p := NewPipeline(context.Background(), db, Options{Capacity: 8, Interval: 50 * time.Millisecond, Batch: 4, Remote: remote, Buffer: buf}, nil)
 	_ = p.Close()
 	if p.InFlight() != 0 {
 		t.Fatal("关闭后在途应为 0")
@@ -126,10 +127,10 @@ func TestBufferStore_容量与往返(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if _, err := db.Exec(`CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
 		t.Fatal(err)
 	}
-	buf := NewBufferStore(db, 2)
+	buf := NewBufferStore(context.Background(), db, 2)
 	if err := buf.Save([]store.UsageRow{row("a")}); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +144,25 @@ func TestBufferStore_容量与往返(t *testing.T) {
 	if err := buf.Delete([]int64{items[0].Seq}); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := store.CountBufferedRows(db); n != 0 {
+	if n, _ := store.CountBufferedRows(context.Background(), db); n != 0 {
 		t.Fatalf("删除后应为空: %d", n)
+	}
+}
+
+// 生命周期 ctx 取消后缓冲写入仍须成功:关机排干时远端失败整批落缓冲走的就是这条路径。
+func TestBufferStore_父ctx取消仍可写入(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "cancel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(context.Background(), `CREATE TABLE metering_buffer (seq INTEGER PRIMARY KEY AUTOINCREMENT, row_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	buf := NewBufferStore(ctx, db, 2)
+	if err := buf.Save([]store.UsageRow{row("a")}); err != nil {
+		t.Fatalf("父 ctx 取消不应阻断缓冲写入: %v", err)
 	}
 }

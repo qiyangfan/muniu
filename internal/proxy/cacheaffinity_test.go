@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,7 @@ import (
 func stickReq(header, firstUser string) *http.Request {
 	body := `{"model":"m","messages":[{"role":"system","content":"sys"},` +
 		`{"role":"user","content":"` + firstUser + `"}]}`
-	r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", strings.NewReader(body))
 	if header != "" {
 		r.Header.Set("X-Session-Id", header)
 	}

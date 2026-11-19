@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,7 +70,7 @@ model_routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, _, cleanup, err := assemble(cfg, cfgPath, logging.New("error", "text"))
+	handler, _, cleanup, err := assemble(context.Background(), cfg, cfgPath, logging.New("error", "text"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,18 +79,18 @@ model_routes:
 	t.Cleanup(ts.Close)
 
 	// 数据面 key 经同库签发：装配已开库，第二连接 WAL 共存。
-	keyDB, err := store.Open(dbPath)
+	keyDB, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = keyDB.Close() })
-	plaintext, _, kerr := auth.CreateKey(keyDB, "default", "sighup-test", 0, auth.KeyOpts{})
+	plaintext, _, kerr := auth.CreateKey(context.Background(), keyDB, "default", "sighup-test", 0, auth.KeyOpts{})
 	if kerr != nil {
 		t.Fatal(kerr)
 	}
 
 	post := func() (int, string) {
-		req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions",
+		req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/chat/completions",
 			strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`))
 		req.Header.Set("Authorization", "Bearer "+plaintext)
 		req.Header.Set("Content-Type", "application/json")
@@ -109,7 +110,7 @@ model_routes:
 		t.Fatalf("初态应触达 up1 一次: %d", up1.RequestCount())
 	}
 	postNative := func() (int, string) {
-		req, _ := http.NewRequest("POST", ts.URL+"/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
+		req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding",
 			strings.NewReader(`{"model":"multimodal-alias","input":{"contents":[{"text":"hi"}]}}`))
 		req.Header.Set("Authorization", "Bearer "+plaintext)
 		req.Header.Set("Content-Type", "application/json")
@@ -160,7 +161,7 @@ model_routes:
 
 	// 管理页与 gauge 必须与数据面的同一快照收敛，不能继续呈现启动 provider。
 	for _, path := range []string{"/admin/v1/providers", "/metrics"} {
-		req, err := http.NewRequest("GET", ts.URL+path, nil)
+		req, err := http.NewRequestWithContext(context.Background(), "GET", ts.URL+path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

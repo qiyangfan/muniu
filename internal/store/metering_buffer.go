@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -21,14 +22,14 @@ type BufferedRow struct {
 }
 
 // SaveBufferedRows 批量入缓冲，容量检查与写入同事务。
-func SaveBufferedRows(db *sql.DB, capacity int, rows []UsageRow) error {
-	tx, err := db.Begin()
+func SaveBufferedRows(ctx context.Context, db *sql.DB, capacity int, rows []UsageRow) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: 开启缓冲事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	var n int64
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM metering_buffer`).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM metering_buffer`).Scan(&n); err != nil {
 		return fmt.Errorf("store: 查缓冲水位: %w", err)
 	}
 	if n+int64(len(rows)) > int64(capacity) {
@@ -40,7 +41,7 @@ func SaveBufferedRows(db *sql.DB, capacity int, rows []UsageRow) error {
 		if err != nil {
 			return fmt.Errorf("store: 序列化缓冲行: %w", err)
 		}
-		if _, err := tx.Exec(`INSERT INTO metering_buffer (row_id, payload, created_at) VALUES (?,?,?)`,
+		if _, err := tx.ExecContext(ctx, `INSERT INTO metering_buffer (row_id, payload, created_at) VALUES (?,?,?)`,
 			r.ID, string(payload), now); err != nil {
 			return fmt.Errorf("store: 写缓冲行: %w", err)
 		}
@@ -51,8 +52,8 @@ func SaveBufferedRows(db *sql.DB, capacity int, rows []UsageRow) error {
 // PendingBufferedRows 按序读取待续传行，只读不删；投递成功后按 Seq 调 DeleteBufferedRows。
 // 跨版本 schema 变更或存储损坏的反序列化毒丸行自愈式剔除并计入 returnedSkipped，
 // 调用方必须告警：不剔除会让该行之后的全部缓冲永久阻塞。
-func PendingBufferedRows(db *sql.DB, limit int) (out []BufferedRow, skipped []int64, err error) {
-	rows, err := db.Query(`SELECT seq, payload FROM metering_buffer ORDER BY seq LIMIT ?`, limit)
+func PendingBufferedRows(ctx context.Context, db *sql.DB, limit int) (out []BufferedRow, skipped []int64, err error) {
+	rows, err := db.QueryContext(ctx, `SELECT seq, payload FROM metering_buffer ORDER BY seq LIMIT ?`, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("store: 读缓冲: %w", err)
 	}
@@ -79,7 +80,7 @@ func PendingBufferedRows(db *sql.DB, limit int) (out []BufferedRow, skipped []in
 	}
 	_ = rows.Close() // 显式释放游标，腾出唯一连接供删除使用。
 	if len(deadSeqs) > 0 {
-		if err := deletePoisonRows(db, deadSeqs); err != nil {
+		if err := deletePoisonRows(ctx, db, deadSeqs); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -88,9 +89,9 @@ func PendingBufferedRows(db *sql.DB, limit int) (out []BufferedRow, skipped []in
 
 // deletePoisonRows 逐序号删除无法解析的毒丸行。
 // 不用拼接 IN 列表：SQL 文本固定，只按占位符点删，错误文案与整批语义保持不变。
-func deletePoisonRows(db *sql.DB, seqs []int64) error {
+func deletePoisonRows(ctx context.Context, db *sql.DB, seqs []int64) error {
 	for _, seq := range seqs {
-		if _, err := db.Exec(`DELETE FROM metering_buffer WHERE seq = ?`, seq); err != nil {
+		if _, err := db.ExecContext(ctx, `DELETE FROM metering_buffer WHERE seq = ?`, seq); err != nil {
 			return fmt.Errorf("store: 剔除毒丸行: %w", err)
 		}
 	}
@@ -98,17 +99,17 @@ func deletePoisonRows(db *sql.DB, seqs []int64) error {
 }
 
 // DeleteBufferedRows 按序号删除已续传行。
-func DeleteBufferedRows(db *sql.DB, seqs []int64) error {
+func DeleteBufferedRows(ctx context.Context, db *sql.DB, seqs []int64) error {
 	if len(seqs) == 0 {
 		return nil
 	}
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: 开启缓冲删除事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	for _, seq := range seqs {
-		if _, err := tx.Exec(`DELETE FROM metering_buffer WHERE seq = ?`, seq); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM metering_buffer WHERE seq = ?`, seq); err != nil {
 			return fmt.Errorf("store: 删缓冲行: %w", err)
 		}
 	}
@@ -116,8 +117,8 @@ func DeleteBufferedRows(db *sql.DB, seqs []int64) error {
 }
 
 // CountBufferedRows 缓冲水位，供观测与容量判定。
-func CountBufferedRows(db *sql.DB) (int64, error) {
+func CountBufferedRows(ctx context.Context, db *sql.DB) (int64, error) {
 	var n int64
-	err := db.QueryRow(`SELECT COUNT(*) FROM metering_buffer`).Scan(&n)
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM metering_buffer`).Scan(&n)
 	return n, err
 }

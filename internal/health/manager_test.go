@@ -3,6 +3,7 @@
 package health
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,7 +50,7 @@ func newCountingUpstream() *countingUpstream {
 func TestManager_探针URL尾斜杠归一(t *testing.T) {
 	up := newCountingUpstream()
 	defer up.srv.Close()
-	m := NewManager(Options{
+	m := NewManager(context.Background(), Options{
 		Interval: 20 * time.Millisecond, Timeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]Channel {
@@ -75,7 +76,7 @@ func TestManager_探针URL尾斜杠归一(t *testing.T) {
 func TestManager_不支持探针的适配器静默跳过(t *testing.T) {
 	up := newCountingUpstream()
 	defer up.srv.Close()
-	m := NewManager(Options{
+	m := NewManager(context.Background(), Options{
 		Interval: 20 * time.Millisecond, Timeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]Channel {
@@ -109,7 +110,7 @@ func TestManager_不支持探针的适配器静默跳过(t *testing.T) {
 // TestManager_无key渠道被动降级到期转半开 无 key 渠道零探针载体,但状态推进(open 计时到期
 // 转半开)依赖周期 tick 触达——排除在 Sources 外会让被动降级永不试探恢复(永久熔断)。
 func TestManager_无key渠道被动降级到期转半开(t *testing.T) {
-	m := NewManager(Options{
+	m := NewManager(context.Background(), Options{
 		Interval: 20 * time.Millisecond, Timeout: time.Second,
 		OpenFor: 40 * time.Millisecond, // 熔断计时极短,到期即转半开
 		// 被动窗口:3 样本即判越线(全部失败)
@@ -136,7 +137,7 @@ func TestManager_无key渠道被动降级到期转半开(t *testing.T) {
 func TestManager_移除渠道状态过期清理(t *testing.T) {
 	present := atomic.Bool{}
 	present.Store(true)
-	m := NewManager(Options{
+	m := NewManager(context.Background(), Options{
 		Interval: 20 * time.Millisecond, Timeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]Channel {
@@ -170,7 +171,7 @@ func TestManager_渠道出站client注入(t *testing.T) {
 	}))
 	defer up.Close()
 
-	m := NewManager(Options{
+	m := NewManager(context.Background(), Options{
 		Interval: 20 * time.Millisecond, Timeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]Channel {
@@ -215,7 +216,7 @@ func TestManager_oauth渠道探针三态头(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer up.Close()
-	m := NewManager(Options{
+	m := NewManager(context.Background(), Options{
 		Interval: 20 * time.Millisecond, Timeout: time.Second,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]Channel {

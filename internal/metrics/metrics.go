@@ -45,6 +45,28 @@ func register(c Collector) {
 	collectors = append(collectors, c)
 }
 
+// ResetForTest 清空全部计数与直方图样本；仅测试使用，消除跨用例的全局状态。
+// 收集器注册表本身不动（注册发生在包级初始化，重建会丢指针绑定）。
+func ResetForTest() {
+	mu.Lock()
+	snapshot := append([]Collector(nil), collectors...)
+	mu.Unlock()
+	for _, c := range snapshot {
+		switch v := c.(type) {
+		case *CounterVec:
+			v.mu.Lock()
+			v.values = map[string]*counterEntry{}
+			v.mu.Unlock()
+		case *Histogram:
+			for i := range v.buckets {
+				v.buckets[i].Store(0)
+			}
+			v.count.Store(0)
+			v.sumBits.Store(math.Float64bits(0))
+		}
+	}
+}
+
 // RenderTo 以 Prometheus 文本暴露格式(v0.0.4)输出全部已注册收集器。
 func RenderTo(w io.Writer) {
 	if !Enabled() {

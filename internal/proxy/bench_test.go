@@ -2,6 +2,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,7 +47,12 @@ func BenchmarkSSEForward(b *testing.B) {
 	body := `{"model":"alias-a","stream":true,"messages":[{"role":"user","content":"hi"}]}`
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+		if err != nil {
+			b.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			b.Fatal(err)
 		}

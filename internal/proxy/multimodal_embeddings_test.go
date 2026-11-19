@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -32,7 +33,7 @@ func TestMultimodalEmbeddings_不完整Usage保留已知总token并标估算(t *
 	const responseBody = `{"output":{"embeddings":[]},"usage":{"input_tokens":13}}`
 	p, db := newMeteredMultimodalProxy(t, "tongyi-embedding-vision-flash", responseBody)
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusOK || w.Body.String() != responseBody {
 		t.Fatalf("原生响应必须逐字节透传: status=%d body=%q", w.Code, w.Body.String())
@@ -47,7 +48,7 @@ func TestMultimodalEmbeddings_E2E视觉用量按视觉价结算(t *testing.T) {
 	const responseBody = `{"output":{"embeddings":[]},"usage":{"input_tokens":10,"image_tokens":3,"total_tokens":13}}`
 	p, db := newMeteredMultimodalProxy(t, "qwen3-vl-embedding", responseBody)
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusOK || w.Body.String() != responseBody {
 		t.Fatalf("原生响应必须逐字节透传: status=%d body=%q", w.Code, w.Body.String())
@@ -71,12 +72,12 @@ func newMeteredMultimodalProxy(t *testing.T, model, responseBody string) (*Proxy
 	}
 	reg := adapter.NewRegistry()
 	reg.Register("qwen", qwen)
-	db, err := store.Open(t.TempDir() + "/usage.db")
+	db, err := store.Open(context.Background(), t.TempDir()+"/usage.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{Batch: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{Batch: 1}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(func() { _ = pipeline.Close() })
 	p := New(Config{
 		Registry:  reg,
@@ -97,20 +98,7 @@ func waitMultimodalRows(t *testing.T, db *sql.DB, want int) []store.UsageRow {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		rows, err := db.Query(`SELECT prompt_tokens, vision_tokens, estimated, cost_credits FROM usage_logs`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got []store.UsageRow
-		for rows.Next() {
-			var row store.UsageRow
-			if err := rows.Scan(&row.PromptTokens, &row.VisionTokens, &row.Estimated, &row.CostCredits); err != nil {
-				_ = rows.Close()
-				t.Fatal(err)
-			}
-			got = append(got, row)
-		}
-		_ = rows.Close()
+		got := queryMultimodalRows(t, db)
 		if len(got) >= want {
 			return got
 		}
@@ -118,6 +106,25 @@ func waitMultimodalRows(t *testing.T, db *sql.DB, want int) []store.UsageRow {
 	}
 	t.Fatalf("等待 %d 条用量行超时", want)
 	return nil
+}
+
+// queryMultimodalRows 查询一轮多模态用量行,defer 关闭游标。
+func queryMultimodalRows(t *testing.T, db *sql.DB) []store.UsageRow {
+	t.Helper()
+	rows, err := db.QueryContext(context.Background(), `SELECT prompt_tokens, vision_tokens, estimated, cost_credits FROM usage_logs`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var got []store.UsageRow
+	for rows.Next() {
+		var row store.UsageRow
+		if err := rows.Scan(&row.PromptTokens, &row.VisionTokens, &row.Estimated, &row.CostCredits); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, row)
+	}
+	return got
 }
 
 func TestMultimodalEmbeddings_只走声明能力并原生透传(t *testing.T) {
@@ -171,7 +178,7 @@ func TestMultimodalEmbeddings_只走声明能力并原生透传(t *testing.T) {
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	body := "{\n  \"model\": \"alias\",\n  \"input\": {\"contents\": [{\"text\": \"hi\"}]},\n  \"parameters\": {\"enable_fusion\": true}, \"unknown\": [1, 2]\n}"
-	req := httptest.NewRequest(http.MethodPost, multimodalPath, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	p.HandlerMultimodalEmbeddings().ServeHTTP(w, req)
 	if w.Code != http.StatusCreated || w.Body.String() != responseBody {
@@ -212,7 +219,7 @@ func TestMultimodalEmbeddings_无能力候选本地拒绝(t *testing.T) {
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "multimodal_embeddings_not_supported") || calls.Load() != 0 {
 		t.Fatalf("无能力候选应本地拒绝且零上游: status=%d calls=%d body=%s", w.Code, calls.Load(), w.Body.String())
@@ -241,7 +248,7 @@ func TestMultimodalEmbeddings_不支持模型不触达上游(t *testing.T) {
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "multimodal_embeddings_not_supported") || calls.Load() != 0 {
 		t.Fatalf("当前 lane 外的上游模型应本地拒绝: status=%d calls=%d body=%s", w.Code, calls.Load(), w.Body.String())
@@ -272,7 +279,7 @@ func TestMultimodalEmbeddings_白名单先于插件和上游(t *testing.T) {
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	request := func(allowed []string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodPost, multimodalPath, strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`))
+		r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath, strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`))
 		r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{AllowedModels: allowed}))
 		w := httptest.NewRecorder()
 		p.HandlerMultimodalEmbeddings().ServeHTTP(w, r)
@@ -322,7 +329,7 @@ func TestMultimodalEmbeddings_插件改写后重路由复校验白名单(t *test
 		Plugins: reg, Timeouts: Timeouts{Dial: time.Second, FirstToken: time.Second},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	r := httptest.NewRequest(http.MethodPost, multimodalPath,
+	r := httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias-a","input":{"contents":[{"text":"hi"}]}}`))
 	r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{AllowedModels: []string{"alias-a"}}))
 	w := httptest.NewRecorder()
@@ -381,7 +388,7 @@ func TestMultimodalEmbeddings_耗尽时返回最后上游错误(t *testing.T) {
 		RandIntn: func(int) int { return 0 }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusUnprocessableEntity || w.Body.String() != responses[1].body || w.Header().Get("X-Upstream") != "last" {
 		t.Fatalf("应透传最后一个上游错误: status=%d header=%v body=%q", w.Code, w.Header(), w.Body.String())
@@ -413,7 +420,7 @@ func TestMultimodalEmbeddings_耗尽时保留非4xx5xx上游响应(t *testing.T)
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusMultipleChoices || w.Body.String() != responseBody || w.Header().Get("X-Upstream") != "multiple-choices" {
 		t.Fatalf("候选耗尽时应保留最后上游 HTTP 响应: status=%d header=%v body=%q", w.Code, w.Header(), w.Body.String())
@@ -453,7 +460,7 @@ func TestMultimodalEmbeddings_不跟随上游重定向(t *testing.T) {
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusFound || w.Body.String() != responseBody || w.Header().Get("X-Upstream") != "redirect" || redirectedCalls.Load() != 0 {
 		t.Fatalf("原生上游重定向必须原样透传且不得跟随: status=%d header=%v body=%q target_calls=%d",
@@ -495,7 +502,7 @@ func TestMultimodalEmbeddings_压缩响应保持原始编码(t *testing.T) {
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	w := httptest.NewRecorder()
-	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequest(http.MethodPost, multimodalPath,
+	p.HandlerMultimodalEmbeddings().ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), http.MethodPost, multimodalPath,
 		strings.NewReader(`{"model":"alias","input":{"contents":[{"text":"hi"}]}}`)))
 	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), compressed.Bytes()) ||
 		w.Header().Get("Content-Encoding") != "gzip" || w.Header().Get("Content-Length") != fmt.Sprint(compressed.Len()) {

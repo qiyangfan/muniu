@@ -2,6 +2,7 @@
 package admin_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -29,7 +30,7 @@ func upstreamHealth(t *testing.T, h http.Handler) map[string]any {
 
 func TestAdminUpstreamHealth_三态(t *testing.T) {
 	// 未装配:enabled=false 空态
-	h := admin.New(admin.Deps{DB: openDB(t), Token: "t",
+	h := admin.New(context.Background(), admin.Deps{DB: openDB(t), Token: "t",
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	out := upstreamHealth(t, h)
 	if out["enabled"] != false {
@@ -37,11 +38,11 @@ func TestAdminUpstreamHealth_三态(t *testing.T) {
 	}
 
 	// 已启用、尚无状态(未 Start):enabled=true 空集
-	mgr := health.NewManager(health.Options{
+	mgr := health.NewManager(context.Background(), health.Options{
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]health.Channel { return map[string]health.Channel{} },
 	})
-	h2 := admin.New(admin.Deps{DB: openDB(t), Token: "t", Health: mgr,
+	h2 := admin.New(context.Background(), admin.Deps{DB: openDB(t), Token: "t", Health: mgr,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	out = upstreamHealth(t, h2)
 	if out["enabled"] != true {
@@ -50,7 +51,7 @@ func TestAdminUpstreamHealth_三态(t *testing.T) {
 
 	// 降级相位透出:免费探针指向坏上游,单阈值即降级
 	upBad := testkit.StartJSONUpstream(t, 503, `{}`)
-	mgr2 := health.NewManager(health.Options{
+	mgr2 := health.NewManager(context.Background(), health.Options{
 		FailureThreshold: 1,
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]health.Channel {
@@ -66,7 +67,7 @@ func TestAdminUpstreamHealth_三态(t *testing.T) {
 	for time.Now().Before(deadline) && !mgr2.Contracted("prov-a") {
 		time.Sleep(10 * time.Millisecond)
 	}
-	h3 := admin.New(admin.Deps{DB: openDB(t), Token: "t", Health: mgr2,
+	h3 := admin.New(context.Background(), admin.Deps{DB: openDB(t), Token: "t", Health: mgr2,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	out = upstreamHealth(t, h3)
 	providers, _ := out["providers"].([]any)

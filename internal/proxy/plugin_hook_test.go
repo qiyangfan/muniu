@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -49,7 +50,7 @@ func newPluginTestProxy(t *testing.T, upstreamURL string, reg *plugin.Registry) 
 func manualRegistry(t *testing.T, name string, kind testkit.PluginFixtureKind, timeoutMs int64) *plugin.Registry {
 	t.Helper()
 	reg := plugin.NewRegistry()
-	if _, _, err := reg.Register(plugin.Options{
+	if _, _, err := reg.Register(context.Background(), plugin.Options{
 		Name: name, Binary: testkit.FixturePlugin(kind), Enabled: true,
 		TimeoutMs: timeoutMs, MemoryLimitPages: 1, PoolSize: 2,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -159,7 +160,7 @@ func TestPluginHook_fail_open_containment_放行(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	reg := plugin.NewRegistry()
 	t.Cleanup(reg.Close)
-	if _, _, err := reg.Register(plugin.Options{
+	if _, _, err := reg.Register(context.Background(), plugin.Options{
 		Name: "loose", Binary: testkit.FixturePlugin(testkit.FixtureLoop), Enabled: true,
 		FailOpen: true, TimeoutMs: 80, MemoryLimitPages: 1, PoolSize: 2,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -197,7 +198,7 @@ func BenchmarkPluginHook_禁用态零开销(b *testing.B) {
 	})
 	ts := httptest.NewServer(p.Handler())
 	defer ts.Close()
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(chatBody))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/chat/completions", strings.NewReader(chatBody))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		resp, err := http.DefaultClient.Do(req)
@@ -215,7 +216,7 @@ func BenchmarkPluginHook_启用态(b *testing.B) {
 	up := testkit.StartJSONUpstream(b, 200, `{"id":"x","choices":[]}`)
 	reg := plugin.NewRegistry()
 	defer reg.Close()
-	if _, _, err := reg.Register(plugin.Options{
+	if _, _, err := reg.Register(context.Background(), plugin.Options{
 		Name: "bench", Binary: testkit.FixturePlugin(testkit.FixturePass), Enabled: true,
 		TimeoutMs: 200, MemoryLimitPages: 1, PoolSize: 8,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -238,7 +239,7 @@ func BenchmarkPluginHook_启用态(b *testing.B) {
 	})
 	ts := httptest.NewServer(p.Handler())
 	defer ts.Close()
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(chatBody))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/chat/completions", strings.NewReader(chatBody))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		resp, err := http.DefaultClient.Do(req)
@@ -254,9 +255,14 @@ func BenchmarkPluginHook_启用态(b *testing.B) {
 
 const embedBody = `{"model":"alias-a","input":"hello"}`
 
-func postEmbeddings(t *testing.T, url, body string) (*http.Response, string) {
+func postEmbeddings(t *testing.T, url, body string) (chatResponse, string) {
 	t.Helper()
-	resp, err := http.Post(url+"/v1/embeddings", "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url+"/v1/embeddings", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("请求失败: %v", err)
 	}
@@ -265,7 +271,7 @@ func postEmbeddings(t *testing.T, url, body string) (*http.Response, string) {
 		t.Fatalf("读响应失败: %v", err)
 	}
 	_ = resp.Body.Close()
-	return resp, string(b)
+	return chatResponse{StatusCode: resp.StatusCode, Header: resp.Header}, string(b)
 }
 
 func TestPluginHook_Embeddings_拒绝(t *testing.T) {
@@ -320,7 +326,7 @@ func BenchmarkPluginHook_空注册表(b *testing.B) {
 	})
 	ts := httptest.NewServer(p.Handler())
 	defer ts.Close()
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(chatBody))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/chat/completions", strings.NewReader(chatBody))
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		resp, err := http.DefaultClient.Do(req)

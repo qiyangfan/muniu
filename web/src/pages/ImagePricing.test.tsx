@@ -27,6 +27,7 @@ it("保存后的新价目不被迟到首屏覆盖", async () => {
   await screen.findAllByText("运行态覆盖");
   await act(async () => {
     finish({ pricing: [] });
+    await Promise.resolve();
   });
   expect(screen.getAllByText("运行态覆盖").length).toBeGreaterThan(0);
 });

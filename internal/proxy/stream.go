@@ -70,6 +70,7 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, upstream *
 
 	frame := &streamFrame{tok: &firstTokGate{gateOpen: false, firstTokFired: &firstTokFired, firstTok: firstTok,
 		chunkIdle: p.timeouts.ChunkIdle}}
+	defer frame.tok.stopIdle() // 流提前结束时不留计时到 ChunkIdle 的残余定时器。
 	for {
 		select {
 		case <-r.Context().Done():
@@ -155,6 +156,13 @@ func (g *firstTokGate) open(p *Proxy, w http.ResponseWriter, m *meterState) {
 
 // reset 开闸后逐帧重置帧间计时。
 func (g *firstTokGate) reset() { g.idleT.Reset(g.chunkIdle) }
+
+// stopIdle 流出口停表;首 token 计时器由 attemptStream 的 defer 负责,这里只管帧间计时。
+func (g *firstTokGate) stopIdle() {
+	if g.idleT != nil {
+		g.idleT.Stop()
+	}
+}
 
 // streamFrame 单流的帧门与计时状态。
 type streamFrame struct {

@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -85,7 +86,7 @@ func TestOAuthLane_Messages直通oauth渠道(t *testing.T) {
 	})
 	ts := httptest.NewServer(p.HandlerMessages())
 	t.Cleanup(ts.Close)
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/messages", strings.NewReader(messagesBody))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/messages", strings.NewReader(messagesBody))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -113,7 +114,7 @@ func TestOAuthLane_全oauth别名embeddings显式拒绝(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/embeddings", strings.NewReader(`{"model":"emb-oauth","input":"hi"}`))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/embeddings", strings.NewReader(`{"model":"emb-oauth","input":"hi"}`))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -159,7 +160,7 @@ func TestOAuthLane_混合候选oauth跳过由非oauth服务(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/embeddings", strings.NewReader(`{"model":"emb-mixed","input":"hi"}`))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/embeddings", strings.NewReader(`{"model":"emb-mixed","input":"hi"}`))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -210,7 +211,7 @@ func TestOAuthLane_混合跳因走通用信封(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	req, _ := http.NewRequest("POST", ts.URL+"/v1beta/models/alias-mixed:generateContent",
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1beta/models/alias-mixed:generateContent",
 		strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
@@ -240,7 +241,7 @@ func TestOAuthLane_Gemini入站oauth收窄(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	req, _ := http.NewRequest("POST", ts.URL+"/v1beta/models/alias-co:generateContent",
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1beta/models/alias-co:generateContent",
 		strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
@@ -307,7 +308,7 @@ func TestAffinityLane_Gemini入站漂移根修回归(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 
-	req, _ := http.NewRequest("POST", ts.URL+"/v1beta/models/alias-po:generateContent",
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1beta/models/alias-po:generateContent",
 		strings.NewReader(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`))
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
@@ -332,7 +333,7 @@ func TestOauthSkippedLane_判定表(t *testing.T) {
 	oauthModes := map[string]string{"co": adapter.AuthOAuth}
 	plainModes := map[string]string{"po": ""}
 	mkReq := func(lane protocol.InboundProtocol) *http.Request {
-		r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil)
 		if lane != "" {
 			r = withLane(r, lane)
 		}

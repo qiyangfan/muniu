@@ -13,6 +13,8 @@ import (
 )
 
 func TestPluginMetrics_文本协议(t *testing.T) {
+	// 其他用例会把 loop/trap 等夹具调用计入同一组全局指标,-shuffle 下先清态再断言绝对值。
+	metrics.ResetForTest()
 	metrics.SetEnabled(true)
 	t.Cleanup(func() { metrics.SetEnabled(false) })
 
@@ -21,7 +23,7 @@ func TestPluginMetrics_文本协议(t *testing.T) {
 	_ = pPass.HookRequestBody(context.Background(), testkit.FixtureChatBody("m"))
 	pRej := compileFor(t, "m-rej", testkit.FixtureReject)
 	_ = pRej.HookRequestBody(context.Background(), testkit.FixtureChatBody("m"))
-	pLoop, err := Compile(Options{Name: "m-loop", Binary: testkit.FixturePlugin(testkit.FixtureLoop),
+	pLoop, err := Compile(context.Background(), Options{Name: "m-loop", Binary: testkit.FixturePlugin(testkit.FixtureLoop),
 		TimeoutMs: 50, MemoryLimitPages: 1, PoolSize: 1,
 		Logger: discardLogger()})
 	if err != nil {
@@ -52,7 +54,7 @@ func TestPluginMetrics_文本协议(t *testing.T) {
 	// 实例水位仪表在 NewRegistry 注册，需注册表内有插件才有序列。
 	reg := NewRegistry()
 	t.Cleanup(reg.Close)
-	if _, _, err := reg.Register(Options{Name: "m-g", Binary: testkit.FixturePlugin(testkit.FixturePass),
+	if _, _, err := reg.Register(context.Background(), Options{Name: "m-g", Binary: testkit.FixturePlugin(testkit.FixturePass),
 		TimeoutMs: 50, MemoryLimitPages: 1, PoolSize: 1, Logger: discardLogger()}); err != nil {
 		t.Fatal(err)
 	}

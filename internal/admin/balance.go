@@ -19,7 +19,7 @@ func balancesOverview(d Deps) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, 200, map[string]any{
-			"enabled": true, "providers": d.Balance.Overview(), "settlement": d.Balance.Settlement(),
+			"enabled": true, "providers": d.Balance.Overview(r.Context()), "settlement": d.Balance.Settlement(),
 		})
 	}
 }
@@ -44,7 +44,7 @@ func balanceManual(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 404, protocol.TypeNotFound, "provider_not_found", "渠道未声明余额源")
 			return
 		}
-		err := d.Balance.RecordManual(provider, strings.TrimSpace(req.Amount), strings.TrimSpace(req.Currency))
+		err := d.Balance.RecordManual(r.Context(), provider, strings.TrimSpace(req.Amount), strings.TrimSpace(req.Currency))
 		if err != nil {
 			// 金额/币种/来源不匹配均为用户可修正的录入错误,透出原始 message
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "balance_manual_failed", err.Error())

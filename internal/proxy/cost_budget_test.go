@@ -5,6 +5,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"fmt"
 	"io"
@@ -35,12 +36,12 @@ func newBudgetServer(t *testing.T, up *testkit.Upstream, budgetSrc *int64) (*htt
 	t.Helper()
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
-	db, err := store.Open(filepath.Join(t.TempDir(), "budget.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "budget.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(func() { _ = pipeline.Close() })
 	tbl, err := metering.NewPricingTable(
 		metering.Pricing{Currency: "CNY", InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000},
@@ -76,7 +77,7 @@ func assertNoRows(t *testing.T, db *sql.DB) {
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		var n int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM usage_logs`).Scan(&n); err != nil {
+		if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM usage_logs`).Scan(&n); err != nil {
 			t.Fatal(err)
 		}
 		if n != 0 {
@@ -249,14 +250,14 @@ func TestCostBudget_在途预算与落账不得跨价目(t *testing.T) {
 			defer up.Close()
 			reg := adapter.NewRegistry()
 			reg.Register("a", adapter.NewOpenAI(up.URL, ""))
-			db, err := store.Open(filepath.Join(t.TempDir(), "snapshot.db"))
+			db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "snapshot.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer func() { _ = db.Close() }()
-			pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			p := New(Config{Registry: reg, Pricing: pricing, Pipeline: pipeline, Routes: map[string][]config.Candidate{"alias-a": {{Provider: "a", Model: "up", Weight: 1}}}, Pools: map[string]*keypool.Pool{"a": keypool.NewPool([]keypool.KeyInput{{ID: "k", Value: "x", Weight: 1}})}, Timeouts: Timeouts{Dial: time.Second, FirstToken: time.Second}})
-			r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}],"max_tokens":10}`))
+			r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}],"max_tokens":10}`))
 			r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{MaxRequestCostCredits: tc.budget}))
 			w := httptest.NewRecorder()
 			p.Handler().ServeHTTP(w, r)
@@ -322,17 +323,17 @@ func TestMetering_费用溢出仍交付响应并留下核对证据(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := store.Open(filepath.Join(t.TempDir(), "overflow.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "overflow.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
 	var log bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&log, nil))
-	pipeline := metering.NewPipeline(db, metering.Options{}, logger)
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, logger)
 	defer func() { _ = pipeline.Close() }()
 	p := New(Config{Registry: reg, Pricing: metering.NewPricingDirectory(map[string]*metering.PricingTable{"alias-a": tbl}), Pipeline: pipeline, Logger: logger, Routes: map[string][]config.Candidate{"alias-a": {{Provider: "a", Model: "up", Weight: 1}}}, Pools: map[string]*keypool.Pool{"a": keypool.NewPool([]keypool.KeyInput{{ID: "k", Value: "fixture", Weight: 1}})}, Timeouts: Timeouts{Dial: time.Second, FirstToken: time.Second}})
-	r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`))
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`))
 	w := httptest.NewRecorder()
 	p.Handler().ServeHTTP(w, r)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"prompt_tokens":1000000`) {

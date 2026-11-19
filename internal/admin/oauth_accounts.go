@@ -73,7 +73,7 @@ func oauthAccountRowToView(r store.OAuthAccountRow, now time.Time) oauthAccountV
 
 func oauthAccountsList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.ListOAuthAccounts(d.DB)
+		rows, err := store.ListOAuthAccounts(r.Context(), d.DB)
 		if err != nil {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "oauth_list_failed", "账号列表读取失败")
 			return
@@ -154,7 +154,7 @@ func oauthAccountsCreate(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "access_token 与 refresh_token 必填")
 			return
 		}
-		if err := store.CreateOAuthAccount(d.DB, row); err != nil {
+		if err := store.CreateOAuthAccount(r.Context(), d.DB, row); err != nil {
 			// 仅唯一键冲突报 409;磁盘满等 DB 故障如实 500,不得伪装成「已存在」误导排障
 			if errors.Is(err, store.ErrOAuthAccountExists) {
 				writeAdminError(w, r, 409, protocol.TypeBadRequest, "oauth_account_exists", "账号已存在: "+id)
@@ -194,7 +194,7 @@ func oauthAccountDelete(d Deps) http.HandlerFunc {
 				"账号仍被渠道引用,先移除配置引用再删除: "+strings.Join(referrers, ", "))
 			return
 		}
-		if err := store.DeleteOAuthAccount(d.DB, id); err != nil {
+		if err := store.DeleteOAuthAccount(r.Context(), d.DB, id); err != nil {
 			if errors.Is(err, store.ErrOAuthAccountNotFound) {
 				writeAdminError(w, r, 404, protocol.TypeNotFound, "oauth_account_not_found", "账号不存在: "+id)
 				return
@@ -251,12 +251,12 @@ func reauthorizeAccount(
 	accountID string, pair oauth.TokenPair,
 	exp, now time.Time,
 ) {
-	uerr := store.UpdateOAuthAccountTokens(d.DB, accountID, pair.AccessToken, pair.RefreshToken, exp, now)
+	uerr := store.UpdateOAuthAccountTokens(r.Context(), d.DB, accountID, pair.AccessToken, pair.RefreshToken, exp, now)
 	switch {
 	case uerr == nil:
 		writeJSON(w, 200, map[string]any{"ok": true, "id": accountID, "mode": "reauthorize"})
 	case errors.Is(uerr, store.ErrOAuthAccountNotFound):
-		if cerr := store.CreateOAuthAccount(d.DB, oauthCallbackRow(accountID, pair, exp, now)); cerr != nil {
+		if cerr := store.CreateOAuthAccount(r.Context(), d.DB, oauthCallbackRow(accountID, pair, exp, now)); cerr != nil {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "账号创建失败: "+accountID)
 			return
 		}
@@ -301,7 +301,7 @@ func oauthCallback(d Deps) http.HandlerFunc {
 			return
 		}
 		id := uuid.NewV7().String()
-		if cerr := store.CreateOAuthAccount(d.DB, oauthCallbackRow(id, pair, exp, now)); cerr != nil {
+		if cerr := store.CreateOAuthAccount(r.Context(), d.DB, oauthCallbackRow(id, pair, exp, now)); cerr != nil {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "账号创建失败")
 			return
 		}

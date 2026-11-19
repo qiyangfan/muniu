@@ -36,12 +36,12 @@ func newMeteredProxy(t *testing.T, jsonBody string) (*httptest.Server, *Proxy) {
 	up := testkit.StartJSONUpstream(t, 200, jsonBody)
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
-	db, err := store.Open(t.TempDir() + "/m.db")
+	db, err := store.Open(context.Background(), t.TempDir()+"/m.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
 		Routes: map[string][]config.Candidate{
@@ -63,6 +63,7 @@ const usageBody = `{"choices":[{"index":0,"message":{"role":"assistant","content
 // 禁用态渲染为空即零开销等价，启用后 token 三向累加且与落账行同口径；
 // 非流式不观测首字节，序列恒 3 行，基数受配置界。
 func TestMetrics_Token三向累加_禁用等价_非流式无TTFB(t *testing.T) {
+	metrics.ResetForTest() // 全局计数器跨用例共享，先清空保证断言与执行顺序无关
 	metrics.SetEnabled(false)
 	ts, _ := newMeteredProxy(t, usageBody)
 
@@ -94,12 +95,13 @@ func TestMetrics_Token三向累加_禁用等价_非流式无TTFB(t *testing.T) {
 
 // 流式请求产生首字节观测。
 func TestMetrics_流式首token观测(t *testing.T) {
+	metrics.ResetForTest()
 	metrics.SetEnabled(true)
 	t.Cleanup(func() { metrics.SetEnabled(false) })
 	up := testkit.StartStreamUpstream(t, testkit.NormalEvents())
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
-	mdb, err := store.Open(t.TempDir() + "/s.db")
+	mdb, err := store.Open(context.Background(), t.TempDir()+"/s.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +112,7 @@ func TestMetrics_流式首token观测(t *testing.T) {
 			"alias-a": {{Provider: "prov-a", Model: "up-a", Priority: 0}},
 		},
 		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
-		Pipeline: metering.NewPipeline(mdb, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Pipeline: metering.NewPipeline(context.Background(), mdb, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil))),
 		Pools:    map[string]*keypool.Pool{"prov-a": keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "k", Weight: 1}})},
 		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -126,14 +128,15 @@ func TestMetrics_流式首token观测(t *testing.T) {
 
 // 缓存判定三分支：skip 即租户开关关或 tools 请求、miss、hit 即写入后同输入命中。
 func TestMetrics_缓存判定三分支(t *testing.T) {
+	metrics.ResetForTest()
 	metrics.SetEnabled(true)
 	t.Cleanup(func() { metrics.SetEnabled(false) })
-	db, err := store.Open(t.TempDir() + "/c.db")
+	db, err := store.Open(context.Background(), t.TempDir()+"/c.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	c, err := semantic.NewCache(db, semantic.Options{
+	c, err := semantic.NewCache(context.Background(), db, semantic.Options{
 		Dim: 4, Threshold: 0.5, TTL: time.Hour, Capacity: 100, EmbeddingModel: "emb",
 	}, constEmbedder{})
 	if err != nil {
@@ -144,10 +147,10 @@ func TestMetrics_缓存判定三分支(t *testing.T) {
 			"alias-a": {{Provider: "prov-a", Model: "up-a", Priority: 0}},
 		},
 		Cache:        c,
-		TenantSwitch: func(tenant string) bool { return tenant == "01900000-0000-7000-8000-000000000001" },
+		TenantSwitch: func(_ context.Context, tenant string) bool { return tenant == "01900000-0000-7000-8000-000000000001" },
 		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	r := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil)
 
 	temp := 0.1
 	plain := &protocol.ChatRequest{Model: "alias-a", Messages: msgOf(`[{"role":"user","content":"hi"}]`), Temperature: &temp}

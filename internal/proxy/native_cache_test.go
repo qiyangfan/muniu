@@ -28,14 +28,14 @@ import (
 // tenantRequest 携带租户身份的测试请求，缓存租户归属从 ctx 取，与生产一致。
 func tenantRequest(t *testing.T, target string) *http.Request {
 	t.Helper()
-	return httptest.NewRequest("POST", target, nil).WithContext(
+	return httptest.NewRequestWithContext(context.Background(), "POST", target, nil).WithContext(
 		auth.WithKeyInfo(context.Background(), &auth.KeyInfo{ID: "k1", TenantID: testTenant}))
 }
 
 // newTestDB 测试用 SQLite，schema 含直通双存列。
 func newTestDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := store.Open(t.TempDir() + "/native-cache.db")
+	db, err := store.Open(context.Background(), t.TempDir()+"/native-cache.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ const testTenant = "01900000-0000-7000-8000-000000000001"
 
 func newCacheProxy(t *testing.T) *Proxy {
 	t.Helper()
-	c, err := semantic.NewCache(newTestDB(t), semantic.Options{
+	c, err := semantic.NewCache(context.Background(), newTestDB(t), semantic.Options{
 		Dim: 4, Threshold: 0.5, TTL: time.Hour, Capacity: 100, EmbeddingModel: "emb",
 	}, constEmbedder{})
 	if err != nil {
@@ -58,7 +58,7 @@ func newCacheProxy(t *testing.T) *Proxy {
 			"alias-a": {{Provider: "prov-a", Model: "up-a", Priority: 0}},
 		},
 		Cache:        c,
-		TenantSwitch: func(tenant string) bool { return tenant == testTenant },
+		TenantSwitch: func(_ context.Context, tenant string) bool { return tenant == testTenant },
 	})
 	return p
 }
@@ -108,7 +108,7 @@ func TestNativeCache_回放择优(t *testing.T) {
 
 	t.Run("同构流式原生恒等回放", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		p.replayHit(w, httptest.NewRequest("POST", "/v1/messages", nil), res,
+		p.replayHit(w, httptest.NewRequestWithContext(context.Background(), "POST", "/v1/messages", nil), res,
 			&inboundNative{proto: protocol.InboundMessages}, true)
 		if w.Code != 200 || w.Body.String() != string(native) {
 			t.Fatalf("同构命中应原生恒等回放: %d %s", w.Code, w.Body)
@@ -119,7 +119,7 @@ func TestNativeCache_回放择优(t *testing.T) {
 	})
 	t.Run("表单不兼容回退canonical", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		p.replayHit(w, httptest.NewRequest("POST", "/v1/messages", nil), res,
+		p.replayHit(w, httptest.NewRequestWithContext(context.Background(), "POST", "/v1/messages", nil), res,
 			&inboundNative{proto: protocol.InboundMessages}, false) // 非流式请求 × 流式条目
 		if !strings.Contains(w.Body.String(), `"content":"ok"`) {
 			t.Fatalf("表单不兼容应回退 canonical: %s", w.Body)
@@ -130,7 +130,7 @@ func TestNativeCache_回放择优(t *testing.T) {
 	})
 	t.Run("跨协议回退canonical", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		p.replayHit(w, httptest.NewRequest("POST", "/v1/chat/completions", nil), res, nil, true)
+		p.replayHit(w, httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil), res, nil, true)
 		if !strings.Contains(w.Body.String(), `"content":"ok"`) {
 			t.Fatalf("跨协议命中应走 canonical: %s", w.Body)
 		}
@@ -178,7 +178,7 @@ func TestNativeCache_直通流式入库与原生回放(t *testing.T) {
 	up := testkit.StartStreamUpstream(t, anthropicStreamEvents())
 	reg := adapter.NewRegistry()
 	reg.Register("anth", bridge.NewAnthropic(up.URL(), adapter.Options{}))
-	c, err := semantic.NewCache(newTestDB(t), semantic.Options{
+	c, err := semantic.NewCache(context.Background(), newTestDB(t), semantic.Options{
 		Dim: 4, Threshold: 0.5, TTL: time.Hour, Capacity: 100, EmbeddingModel: "emb",
 	}, constEmbedder{})
 	if err != nil {
@@ -191,7 +191,7 @@ func TestNativeCache_直通流式入库与原生回放(t *testing.T) {
 			"alias-a": {{Provider: "anth", Model: "claude-up", Priority: 0}},
 		},
 		Cache:        c,
-		TenantSwitch: func(tenant string) bool { return tenant == testTenant },
+		TenantSwitch: func(_ context.Context, tenant string) bool { return tenant == testTenant },
 		Timeouts:     Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
 		Pools: map[string]*keypool.Pool{
 			"anth": keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "k", Weight: 1}}),

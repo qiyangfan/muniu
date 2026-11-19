@@ -4,6 +4,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -33,17 +34,19 @@ func RequestID(next http.Handler) http.Handler {
 func Recover(logger *slog.Logger) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestID := logging.RequestIDFrom(r.Context())
 			defer func() {
 				if rec := recover(); rec != nil {
-					if rec == http.ErrAbortHandler {
+					// panic 值通常是 error，走 errors.Is 兼容被包装的控制流哨兵。
+					if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 						panic(rec)
 					}
 					logger.Error("panic 已兜底",
-						"request_id", logging.RequestIDFrom(r.Context()),
+						"request_id", requestID,
 						"error_detail", tostring(rec),
 						"stack", string(debug.Stack()),
 					)
-					env := protocol.NewErrorEnvelope(protocol.TypeInternal, "internal", "服务内部错误", logging.RequestIDFrom(r.Context()))
+					env := protocol.NewErrorEnvelope(protocol.TypeInternal, "internal", "服务内部错误", requestID)
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusInternalServerError)
 					_ = json.NewEncoder(w).Encode(env)

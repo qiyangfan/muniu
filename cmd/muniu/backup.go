@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -88,7 +89,7 @@ func runBackupCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) i
 		_, _ = fmt.Fprintf(stderr, "muniu backup: 多余参数 %v\n", fs.Args())
 		return 2
 	}
-	db, err := store.Open(cfg.Storage.SQLite.Path)
+	db, err := store.Open(context.Background(), cfg.Storage.SQLite.Path)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu backup: %v\n", err)
 		return 1
@@ -98,7 +99,7 @@ func runBackupCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) i
 	if dir == "" {
 		dir = defaultBackupDir(cfg.Storage.SQLite.Path, time.Now())
 	}
-	man, err := store.Snapshot(db, dir, time.Now())
+	man, err := store.Snapshot(context.Background(), db, dir, time.Now())
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu backup: %v\n", err)
 		return 1
@@ -131,7 +132,7 @@ func runRestoreCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) 
 	if *target != "" {
 		dest = *target
 	}
-	if err := store.Restore(pos[0], dest, *force); err != nil {
+	if err := store.Restore(context.Background(), pos[0], dest, *force); err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu restore: %v\n", err)
 		return 1
 	}

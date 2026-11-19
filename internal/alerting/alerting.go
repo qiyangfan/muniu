@@ -4,7 +4,9 @@ package alerting
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -24,6 +26,8 @@ type DeliveryFailure struct {
 
 // Options 通知器装配参数，测试可注入时钟、退避与客户端。
 type Options struct {
+	// Context 通知器生命周期基 ctx(装配父 ctx 的 WithoutCancel 派生);投递不随触发请求取消。
+	Context     context.Context
 	WebhookURL  string          // 空 = 关闭，调用方也可直接不构造 Notifier
 	DedupWindow time.Duration   // 同事件键静默窗口；缺省 5m
 	Backoff     []time.Duration // 重试退避序列；缺省 {100ms, 400ms, 1.6s}
@@ -32,20 +36,21 @@ type Options struct {
 	Now         func() time.Time
 	// 投递终局回调(告警通道自监控,装配层接 store 落库);nil = 关闭。
 	// 在投递 goroutine 内执行并经 recover 防御——自监控失败不得反噬投递路径。
-	OnDeliveryFailure func(DeliveryFailure)
-	OnDeliverySuccess func(eventKey string, at time.Time)
+	OnDeliveryFailure func(context.Context, DeliveryFailure)
+	OnDeliverySuccess func(context.Context, string, time.Time)
 }
 
 // Notifier 进程内通知器，并发安全；零值不可用，须经 New 构造。
 type Notifier struct {
+	ctx       context.Context
 	url       string
 	window    time.Duration
 	backoff   []time.Duration
 	timeout   time.Duration
 	logger    *slog.Logger
 	now       func() time.Time
-	onFail    func(DeliveryFailure)
-	onSuccess func(eventKey string, at time.Time)
+	onFail    func(context.Context, DeliveryFailure)
+	onSuccess func(context.Context, string, time.Time)
 	mu        sync.Mutex
 	lastSeen  map[string]time.Time
 }
@@ -75,7 +80,12 @@ func New(opts Options) *Notifier {
 	if window <= 0 {
 		window = 5 * time.Minute
 	}
+	ctx := opts.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return &Notifier{
+		ctx:       context.WithoutCancel(ctx),
 		url:       opts.WebhookURL,
 		window:    window,
 		backoff:   backoff,
@@ -124,7 +134,7 @@ func (n *Notifier) deliver(eventKey, severity, summary string, context map[strin
 		err = n.post(client, encoded)
 		if err == nil {
 			if n.onSuccess != nil {
-				safeCall(func() { n.onSuccess(eventKey, n.now()) })
+				safeCall(func() { n.onSuccess(n.ctx, eventKey, n.now()) })
 			}
 			return
 		}
@@ -148,8 +158,15 @@ func (n *Notifier) encode(eventKey, severity, summary string, context map[string
 }
 
 // post 单次投递；非 2xx 归一为 statusCodeError 供归类与自监控。
+// 告警走独立后台生命周期，不继承触发请求的 ctx：客户端断连不能取消通知；
+// 超时由 client.Timeout 约束。
 func (n *Notifier) post(client *http.Client, encoded []byte) error {
-	resp, err := client.Post(n.url, "application/json", bytes.NewReader(encoded))
+	req, err := http.NewRequestWithContext(n.ctx, http.MethodPost, n.url, bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -167,7 +184,7 @@ func (n *Notifier) reportFailure(eventKey, severity, summary string, at time.Tim
 		return
 	}
 	safeCall(func() {
-		n.onFail(DeliveryFailure{
+		n.onFail(n.ctx, DeliveryFailure{
 			EventKey: eventKey, Severity: severity, Summary: summary,
 			ErrorClass: errorClass(err), At: at,
 		})
@@ -176,7 +193,8 @@ func (n *Notifier) reportFailure(eventKey, severity, summary string, at time.Tim
 
 // errorClass 投递失败归类:状态码类与网络类二分,自监控落库与告警载荷共用同一口径。
 func errorClass(err error) string {
-	if sc, ok := err.(*statusCodeError); ok {
+	var sc *statusCodeError
+	if errors.As(err, &sc) {
 		return "http_status_" + strconv.Itoa(sc.code)
 	}
 	return "network"

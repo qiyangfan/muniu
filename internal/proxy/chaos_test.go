@@ -6,6 +6,7 @@
 package proxy_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -53,12 +54,12 @@ func TestChaos_429冷却降级与恢复(t *testing.T) {
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
 	poolB := keypool.NewPool([]keypool.KeyInput{{ID: "KB", Value: "sk-b", Weight: 1}})
 
-	db, err := store.Open(filepath.Join(t.TempDir(), "chaos.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "chaos.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 256},
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 256},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	var logBuf lockedBuffer
@@ -169,7 +170,7 @@ func (b *lockedBuffer) String() string {
 
 func queryAll(t *testing.T, db *sql.DB) []store.UsageRow {
 	t.Helper()
-	rows, err := db.Query(`SELECT request_id, provider, model_alias, upstream_model, stream, status,
+	rows, err := db.QueryContext(context.Background(), `SELECT request_id, provider, model_alias, upstream_model, stream, status,
 		IFNULL(error_class,''), prompt_tokens, completion_tokens, estimated, cost_credits, currency FROM usage_logs ORDER BY created_at`)
 	if err != nil {
 		t.Fatal(err)

@@ -18,7 +18,7 @@ type Refresher struct {
 	store    AccountStore
 	flow     *Flow
 	logger   *slog.Logger
-	sync     func() // 每轮结束的池同步回调(装配注入:拓扑内账号成员凭据/可用性对齐)
+	sync     func(context.Context) // 每轮结束的池同步回调(装配注入:拓扑内账号成员凭据/可用性对齐)
 	interval time.Duration
 	window   time.Duration
 	now      func() time.Time
@@ -38,7 +38,7 @@ const (
 
 // NewRefresher 构造;logger/sync 可为 nil(nil sync = 每轮空操作)。
 func NewRefresher(
-	cfg Config, store AccountStore, flow *Flow, logger *slog.Logger, tuning RefreshTuning, sync func(),
+	cfg Config, store AccountStore, flow *Flow, logger *slog.Logger, tuning RefreshTuning, sync func(context.Context),
 ) *Refresher {
 	if tuning.Interval <= 0 {
 		tuning.Interval = defaultInterval
@@ -58,7 +58,7 @@ func NewRefresher(
 // Run 阻塞循环;ctx 取消即退出。首 tick 前先同步一轮(启动补齐池与存储的偏差)。
 func (r *Refresher) Run(ctx context.Context) {
 	if r.sync != nil {
-		r.sync()
+		r.sync(ctx)
 	}
 	t := time.NewTicker(r.interval)
 	defer t.Stop()
@@ -90,7 +90,7 @@ func (r *Refresher) tick(ctx context.Context) {
 		r.refreshOne(ctx, acc, now)
 	}
 	if r.sync != nil {
-		r.sync()
+		r.sync(ctx)
 	}
 }
 
@@ -153,8 +153,8 @@ func (r *Refresher) markAuthFailed(acc Account, err error) {
 // isAuthReject 终态判定:401/403(spec MUST)+ 400 invalid_grant(RFC 6749:凭据已撤销,
 // 重试无意义)。
 func isAuthReject(err error) bool {
-	te, ok := err.(*TokenError)
-	if !ok {
+	var te *TokenError
+	if !errors.As(err, &te) {
 		return false
 	}
 	if te.Status == 401 || te.Status == 403 {

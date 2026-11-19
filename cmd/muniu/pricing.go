@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -20,7 +21,7 @@ type staticPricing struct {
 }
 
 // buildPricingTables 合并静态与运行态价目，装配期与管理面刷新共用；调用方包装为目录并原子替换。
-func buildPricingTables(
+func buildPricingTables(ctx context.Context,
 	db *sql.DB, static map[string]staticPricing, settlement string, fxCnyPerUsdMilli int64,
 ) (map[string]*metering.PricingTable, error) {
 	tables := make(map[string]*metering.PricingTable, len(static))
@@ -36,7 +37,7 @@ func buildPricingTables(
 		}
 		tables[alias] = tbl
 	}
-	rows, err := store.ListPricing(db)
+	rows, err := store.ListPricing(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("读取运行态价目: %w", err)
 	}

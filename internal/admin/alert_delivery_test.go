@@ -2,6 +2,7 @@
 package admin_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -15,7 +16,7 @@ import (
 
 func newDeliveryAdmin(t *testing.T, configured bool) http.Handler {
 	t.Helper()
-	h := admin.New(admin.Deps{
+	h := admin.New(context.Background(), admin.Deps{
 		DB:                     openDB(t),
 		Token:                  "t",
 		AlertWebhookConfigured: configured,
@@ -63,10 +64,10 @@ func TestAdminDeliveryStatus_四态(t *testing.T) {
 	// 失败落库:failing=true + 事实
 	db := openDB(t)
 	at := time.Date(2026, 10, 30, 8, 0, 0, 0, time.UTC)
-	if err := store.RecordAlertDeliveryFailure(db, "balance_tier:p", "warning", "渠道 p 余额 1 天档", "http_status_503", at); err != nil {
+	if err := store.RecordAlertDeliveryFailure(context.Background(), db, "balance_tier:p", "warning", "渠道 p 余额 1 天档", "http_status_503", at); err != nil {
 		t.Fatal(err)
 	}
-	h2 := admin.New(admin.Deps{
+	h2 := admin.New(context.Background(), admin.Deps{
 		DB: db, Token: "t", AlertWebhookConfigured: true,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
@@ -76,7 +77,7 @@ func TestAdminDeliveryStatus_四态(t *testing.T) {
 	}
 
 	// 成功解除:failing=false + 解除时刻可见(历史失败事实保留)
-	if err := store.RecordAlertDeliverySuccess(db, at.Add(time.Minute)); err != nil {
+	if err := store.RecordAlertDeliverySuccess(context.Background(), db, at.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	out = deliveryStatus(t, h2)

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -35,102 +36,102 @@ func TestAdminPassword_PHC与参数迁移(t *testing.T) {
 }
 
 func TestAdminAuth_会话锁定生命周期(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "admin.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "admin.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	svc, err := NewAdminService(db)
+	svc, err := NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return now }
-	user, err := svc.Create("alice", "password123")
+	user, err := svc.Create(context.Background(), "alice", "password123")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		if _, _, err := svc.Login("alice", "wrong"); !errors.Is(err, ErrAdminCredentials) {
+		if _, _, err := svc.Login(context.Background(), "alice", "wrong"); !errors.Is(err, ErrAdminCredentials) {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := svc.Login("alice", "password123"); !errors.Is(err, ErrAdminLocked) {
+	if _, _, err := svc.Login(context.Background(), "alice", "password123"); !errors.Is(err, ErrAdminLocked) {
 		t.Fatal("锁定期正确口令未拒绝", err)
 	}
-	other, err := NewAdminService(db)
+	other, err := NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	other.now = svc.now
-	if _, _, err := other.Login("alice", "password123"); err != nil {
+	if _, _, err := other.Login(context.Background(), "alice", "password123"); err != nil {
 		t.Fatal("进程重启未清锁", err)
 	}
 	now = now.Add(15 * time.Minute)
-	token, _, err := svc.Login("alice", "password123")
+	token, _, err := svc.Login(context.Background(), "alice", "password123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := svc.Session(token); err != nil || got.Username != "alice" {
+	if got, err := svc.Session(context.Background(), token); err != nil || got.Username != "alice" {
 		t.Fatal("会话校验", err)
 	}
-	if err := svc.Patch(user.ID, nil, "newpassword"); err != nil {
+	if err := svc.Patch(context.Background(), user.ID, nil, "newpassword"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Session(token); !errors.Is(err, ErrAdminCredentials) {
+	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
 		t.Fatal("改密未注销会话", err)
 	}
-	token, _, err = svc.Login("alice", "newpassword")
+	token, _, err = svc.Login(context.Background(), "alice", "newpassword")
 	if err != nil {
 		t.Fatal(err)
 	}
 	disabled := true
-	if err := svc.Patch(user.ID, &disabled, ""); err != nil {
+	if err := svc.Patch(context.Background(), user.ID, &disabled, ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Session(token); !errors.Is(err, ErrAdminCredentials) {
+	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
 		t.Fatal("停用未失效", err)
 	}
 	disabled = false
-	if err := svc.Patch(user.ID, &disabled, ""); err != nil {
+	if err := svc.Patch(context.Background(), user.ID, &disabled, ""); err != nil {
 		t.Fatal(err)
 	}
-	token, _, err = svc.Login("alice", "newpassword")
+	token, _, err = svc.Login(context.Background(), "alice", "newpassword")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Logout(token); err != nil {
+	if err := svc.Logout(context.Background(), token); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Session(token); !errors.Is(err, ErrAdminCredentials) {
+	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
 		t.Fatal("注销未失效", err)
 	}
-	token, _, err = svc.Login("alice", "newpassword")
+	token, _, err = svc.Login(context.Background(), "alice", "newpassword")
 	if err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(12 * time.Hour)
-	if _, err := svc.Session(token); !errors.Is(err, ErrAdminCredentials) {
+	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
 		t.Fatal("过期未拒绝", err)
 	}
 	var n int
-	if err := db.QueryRow(`SELECT count(*) FROM admin_sessions WHERE token_hash=?`, adminTokenHash(token)).Scan(&n); err != nil || n != 0 {
+	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_sessions WHERE token_hash=?`, adminTokenHash(token)).Scan(&n); err != nil || n != 0 {
 		t.Fatal("过期未惰性清理", n, err)
 	}
 }
 
 func TestAdminAuth_不存在账号不占用锁定状态(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "limits.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "limits.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	svc, err := NewAdminService(db)
+	svc, err := NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 8; i++ {
-		if _, _, err := svc.Login(fmt.Sprintf("missing-%d", i), "password123"); !errors.Is(err, ErrAdminCredentials) {
+		if _, _, err := svc.Login(context.Background(), fmt.Sprintf("missing-%d", i), "password123"); !errors.Is(err, ErrAdminCredentials) {
 			t.Fatal(err)
 		}
 	}
@@ -140,12 +141,12 @@ func TestAdminAuth_不存在账号不占用锁定状态(t *testing.T) {
 }
 
 func TestAdminAuth_CLI凭据必须可由JSON无损表达(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "utf8.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "utf8.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	svc, err := NewAdminService(db)
+	svc, err := NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestAdminAuth_CLI凭据必须可由JSON无损表达(t *testing.T) {
 		{"alice", strings.Repeat(string([]byte{0xff}), 8)},
 		{string([]byte{'a', 0xff}), "password123"},
 	} {
-		if _, err := svc.Create(in.username, in.password); err == nil {
+		if _, err := svc.Create(context.Background(), in.username, in.password); err == nil {
 			t.Fatal("CLI 接受了无法由 JSON 无损表达的凭据")
 		}
 	}

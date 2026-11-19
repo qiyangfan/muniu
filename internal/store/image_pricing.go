@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -16,8 +17,9 @@ type ImagePricingRecord struct {
 }
 
 // ListImagePricing 脏 JSON 拒绝整目录读取。
-func ListImagePricing(db *sql.DB) ([]ImagePricingRecord, error) {
-	rows, err := db.Query(`SELECT alias,currency,default_credits,tiers,updated_at FROM image_pricing ORDER BY alias`)
+func ListImagePricing(ctx context.Context, db *sql.DB) ([]ImagePricingRecord, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT alias,currency,default_credits,tiers,updated_at FROM image_pricing ORDER BY alias`)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +40,7 @@ func ListImagePricing(db *sql.DB) ([]ImagePricingRecord, error) {
 }
 
 // UpsertImagePricing 按别名整体覆盖，不逐档合并。
-func UpsertImagePricing(db *sql.DB, r ImagePricingRecord) error {
+func UpsertImagePricing(ctx context.Context, db *sql.DB, r ImagePricingRecord) error {
 	if r.Tiers == nil {
 		r.Tiers = map[string]int64{}
 	}
@@ -46,7 +48,7 @@ func UpsertImagePricing(db *sql.DB, r ImagePricingRecord) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`INSERT INTO image_pricing VALUES(?,?,?,?,?)
+	_, err = db.ExecContext(ctx, `INSERT INTO image_pricing VALUES(?,?,?,?,?)
 		ON CONFLICT(alias) DO UPDATE SET
 		currency=excluded.currency, default_credits=excluded.default_credits,
 		tiers=excluded.tiers, updated_at=excluded.updated_at`,
@@ -55,8 +57,8 @@ func UpsertImagePricing(db *sql.DB, r ImagePricingRecord) error {
 }
 
 // DeleteImagePricing 删除运行态覆盖，回落由目录重建完成。
-func DeleteImagePricing(db *sql.DB, alias string) (int64, error) {
-	res, err := db.Exec(`DELETE FROM image_pricing WHERE alias=?`, alias)
+func DeleteImagePricing(ctx context.Context, db *sql.DB, alias string) (int64, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM image_pricing WHERE alias=?`, alias)
 	if err != nil {
 		return 0, err
 	}

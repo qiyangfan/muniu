@@ -45,10 +45,16 @@
 ## 命令速查
 
 ```bash
-make check          # 全量门禁 = vet + lint + infra-lint + tidy-check + web-check + race test/覆盖率 + plugin-check(完成标准)
-make test / bench   # 单跑测试(含聚合+逐包覆盖率闸)/ 基准
+make check          # 全量门禁 = vet + lint + 死代码 + 许可证 + 密钥扫描 + 文档链接 + infra-lint + tidy-check + web-check + race test/覆盖率 + plugin-check(完成标准)
+make test / bench   # 单跑测试(-shuffle=on,含聚合+逐包覆盖率闸)/ 基准
+make vuln / audit   # 可达漏洞扫描(govulncheck) / 控制台生产依赖审计(pnpm audit)
 make fuzz           # 协议解析 fuzz 冒烟(FUZZ 选目标,默认 FuzzParseChatRequest;FUZZTIME 定时长)
-make plugin-check   # 插件侧 fmt/clippy/test/依赖策略(cargo-deny)/覆盖率(无 Rust 工具链时跳过)
+make deadcode       # 跨包不可达函数(deadcode -test,含测试可达性)
+make licenses       # Go 依赖许可证白名单审计(清单在 scripts/licensecheck.sh)
+                    # web 生产依赖许可证审计随 make web-check 执行(scripts/weblicensecheck.mjs)
+make secrets        # gitleaks 全历史密钥扫描(策略与逐条 allowlist 在 .gitleaks.toml,与 security.yml 同源)
+make doclink        # 文档相对链接与标题锚点检查(scripts/linkcheck.py,零网络)
+make plugin-check   # 插件侧 fmt/clippy(host+wasm32)/test/未用依赖(machete)/依赖策略(cargo-deny)/覆盖率(无 Rust 工具链时跳过)
 make build / run    # 单二进制构建 / 启动(读 muniu.yaml,冒烟 GET /healthz)
 make smoke PROVIDER=deepseek   # 真上游冒烟(需环境变量注 key,仅手动)
 make tidy / tidy-check         # 白名单内新增依赖后必跑 / 校验依赖文件与源码一致

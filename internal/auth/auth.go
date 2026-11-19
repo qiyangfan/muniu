@@ -111,7 +111,9 @@ func normalizeAllowlist(allowed []string) ([]string, error) {
 
 // CreateKey 签发并落库，返回回执与仅此一次可见的明文。
 // 负值限额在入口拒绝，否则会被执行链解释为不限，与收紧意图相反。
-func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string, *KeyRecord, error) {
+func CreateKey(ctx context.Context, db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (
+	string, *KeyRecord, error,
+) {
 	if tenant == "" {
 		tenant = "default"
 	}
@@ -123,7 +125,7 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 	if err != nil {
 		return "", nil, err
 	}
-	tenantID, err := resolveTenantID(db, tenant)
+	tenantID, err := resolveTenantID(ctx, db, tenant)
 	if err != nil {
 		return "", nil, err
 	}
@@ -134,7 +136,7 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 	if opts.ExpiresAt != nil {
 		expires = opts.ExpiresAt.UTC().Format(time.RFC3339)
 	}
-	if err := insertAPIKey(db, apiKeyRow{
+	if err := insertAPIKey(ctx, db, apiKeyRow{
 		id: id, tenantID: tenantID, name: name, hash: Hash(plaintext), prefix: plaintext[:12],
 		rpm: rpm, opts: opts, expires: expires, allowed: store.MarshalAllowlist(allowed), now: now,
 	}); err != nil {
@@ -168,8 +170,8 @@ func limitsOfKey(rpm int64, opts KeyOpts) LimitsPatch {
 
 // resolveTenantID 解析租户名到 id；仅真不存在才标记业务错，DB I/O 故障不得标记，
 // 否则会被 admin 出口当 400 外泄。
-func resolveTenantID(db *sql.DB, tenant string) (string, error) {
-	tenantID, err := store.TenantIDByName(db, tenant)
+func resolveTenantID(ctx context.Context, db *sql.DB, tenant string) (string, error) {
+	tenantID, err := store.TenantIDByName(ctx, db, tenant)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return "", store.MarkBusiness(fmt.Errorf("auth: 租户 %q 不存在", tenant))
@@ -194,8 +196,8 @@ type apiKeyRow struct {
 }
 
 // insertAPIKey 写入签发行。
-func insertAPIKey(db *sql.DB, r apiKeyRow) error {
-	_, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
+func insertAPIKey(ctx context.Context, db *sql.DB, r apiKeyRow) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
 		rpm_limit, tpm_limit, daily_quota_credits, expires_at, max_request_cost_credits, allowed_models, created_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.id, r.tenantID, r.name, r.hash, r.prefix, "active",
@@ -223,7 +225,7 @@ type LimitsPatch struct {
 
 // UpdateKeyLimits 局部更新 key 限额、过期与启停；管理面 PATCH 入口，写后调用方须 Verifier.Invalidate。
 // key id 不存在返回 store.ErrNotFound；负值限额拒绝并标记业务错，管理面出口 400。
-func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error) {
+func UpdateKeyLimits(ctx context.Context, db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error) {
 	if hasNegativeLimit(p) {
 		return nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额/请求预算 不可为负"))
 	}
@@ -236,14 +238,14 @@ func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error
 		sets = append(sets, "rpm_limit = rpm_limit")
 	}
 	args = append(args, keyID)
-	res, err := execKeyUpdate(db, sets, args)
+	res, err := execKeyUpdate(ctx, db, sets, args)
 	if err != nil {
 		return nil, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, store.ErrNotFound
 	}
-	return keyRecordByID(db, keyID)
+	return keyRecordByID(ctx, db, keyID)
 }
 
 // hasNegativeLimit 负值限额在入口拒绝，否则会被执行链解释为不限，与收紧意图相反。
@@ -313,10 +315,10 @@ func appendSet(sets []string, args []any, col string, v any) ([]string, []any) {
 }
 
 // execKeyUpdate 执行 SET 片段；片段全部由固定列名与占位符拼成，无外部输入入串。
-func execKeyUpdate(db *sql.DB, sets []string, args []any) (sql.Result, error) {
+func execKeyUpdate(ctx context.Context, db *sql.DB, sets []string, args []any) (sql.Result, error) {
 	sqlText := fmt.Sprintf(`UPDATE api_keys SET %s WHERE id = ?`, //nolint:gosec // 列名仅内部常量,值走占位符
 		strings.Join(sets, ", "))
-	res, err := db.Exec(sqlText, args...)
+	res, err := db.ExecContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("auth: 更新 api_key 限额: %w", err)
 	}
@@ -324,10 +326,10 @@ func execKeyUpdate(db *sql.DB, sets []string, args []any) (sql.Result, error) {
 }
 
 // keyRecordByID 按 id 读回执，供 Update 后回传最新行；不存在返回 ErrNotFound。
-func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
+func keyRecordByID(ctx context.Context, db *sql.DB, keyID string) (*KeyRecord, error) {
 	var r KeyRecord
 	var exp, dis, allow sql.NullString
-	err := db.QueryRow(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
+	err := db.QueryRowContext(ctx, `SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
 		expires_at, status, disabled_at, max_request_cost_credits, allowed_models
 		FROM api_keys WHERE id = ?`, keyID).
 		Scan(&r.ID, &r.TenantID, &r.Name, &r.Prefix, &r.RPMLimit, &r.TPMLimit, &r.DailyQuotaCredits,
@@ -357,8 +359,8 @@ func keyRecordByID(db *sql.DB, keyID string) (*KeyRecord, error) {
 }
 
 // RevokeKeyByPrefix 按 prefix 吊销，管理命令入口；返回吊销行数。
-func RevokeKeyByPrefix(db *sql.DB, prefix string) (int64, error) {
-	res, err := db.Exec(`UPDATE api_keys
+func RevokeKeyByPrefix(ctx context.Context, db *sql.DB, prefix string) (int64, error) {
+	res, err := db.ExecContext(ctx, `UPDATE api_keys
 		SET status = 'revoked', revoked_at = ?
 		WHERE prefix = ? AND status = 'active'`,
 		time.Now().UTC().Format(time.RFC3339), prefix)
@@ -370,8 +372,8 @@ func RevokeKeyByPrefix(db *sql.DB, prefix string) (int64, error) {
 }
 
 // ListKeys 列出 key，管理命令读侧，不含哈希明文，按签发时间升序。
-func ListKeys(db *sql.DB) ([]KeyRecord, error) {
-	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
+func ListKeys(ctx context.Context, db *sql.DB) ([]KeyRecord, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
 		expires_at, status, disabled_at, max_request_cost_credits, allowed_models
 		FROM api_keys ORDER BY created_at`)
 	if err != nil {
@@ -468,7 +470,7 @@ type KeyInfo struct {
 type ctxKey struct{}
 
 // NewVerifier 构造校验器；配置了吊销端点时启动拉取循环，Close 退出。
-func NewVerifier(db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
+func NewVerifier(ctx context.Context, db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
 	if opts.TTL <= 0 {
 		opts.TTL = 10 * time.Second
 	}
@@ -490,7 +492,7 @@ func NewVerifier(db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
 	if opts.RevocationsURL != "" {
 		v.revoked = map[string]struct{}{}
 		v.revStop = make(chan struct{})
-		go v.revocationLoop() // 启动即拉一次，不等首个周期，重启后吊销立即收敛
+		go v.revocationLoop(ctx) // 启动即拉一次，不等首个周期，重启后吊销立即收敛
 	}
 	return v
 }
@@ -505,8 +507,8 @@ func (v *Verifier) Close() {
 
 // revocationLoop 吊销名单拉取循环：启动即拉，失败保持上一次快照并告警；
 // 版本单调，仅应用 version >= 本地版本的快照以防旧快照回退；Close 经 ctx 立即中断在途请求。
-func (v *Verifier) revocationLoop() {
-	ctx, cancel := context.WithCancel(context.Background())
+func (v *Verifier) revocationLoop(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		<-v.revStop
@@ -638,7 +640,7 @@ func (v *Verifier) verify(r *http.Request) (*KeyInfo, error) {
 	if strings.HasPrefix(raw, PlatformKeyPrefix) {
 		info, err = v.verifyPlatform(raw)
 	} else {
-		info, err = v.verifyLookup(raw)
+		info, err = v.verifyLookup(r.Context(), raw)
 	}
 	if err != nil {
 		return nil, err
@@ -670,7 +672,7 @@ func (v *Verifier) verifyPlatform(raw string) (*KeyInfo, error) {
 	}, nil
 }
 
-func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
+func (v *Verifier) verifyLookup(ctx context.Context, raw string) (*KeyInfo, error) {
 	plaintext, err := bearerOfValue(raw)
 	if err != nil {
 		return nil, err
@@ -685,7 +687,7 @@ func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
 	}
 	v.mu.Unlock()
 
-	row, err := store.GetAPIKeyByHash(v.db, hash)
+	row, err := store.GetAPIKeyByHash(ctx, v.db, hash)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, errors.New("key 不存在")

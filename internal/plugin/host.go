@@ -105,14 +105,14 @@ func newHostGetConfigFn(
 
 // newRuntime 构造插件专属 runtime：开启 context 中断支撑超时 epoch 打断；
 // 实例内存硬顶以 runtime 为粒度施加，恰好与每插件隔离边界重合。
-func newRuntime(memoryLimitPages uint32) wazero.Runtime {
+func newRuntime(ctx context.Context, memoryLimitPages uint32) wazero.Runtime {
 	cfg := wazero.NewRuntimeConfig().
 		WithCloseOnContextDone(true).
 		WithMemoryLimitPages(memoryLimitPages)
 	if sharedCompilationCache != nil {
 		cfg = cfg.WithCompilationCache(sharedCompilationCache)
 	}
-	return wazero.NewRuntimeWithConfig(context.Background(), cfg)
+	return wazero.NewRuntimeWithConfig(ctx, cfg)
 }
 
 // wasiInstantiate 挂载 wasi_snapshot_preview1，零文件系统挂载、零环境注入，

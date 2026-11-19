@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -47,12 +48,12 @@ func adminsMain(cfg *config.Config, args []string, stdin io.Reader, stdout, stde
 			"用法: muniu admins add --username <名字> | list | disable <用户名> | enable <用户名> | passwd <用户名>")
 		return 2
 	}
-	db, err := store.Open(cfg.Storage.SQLite.Path)
+	db, err := store.Open(context.Background(), cfg.Storage.SQLite.Path)
 	if err != nil {
 		return reportErr(stderr, err)
 	}
 	defer func() { _ = db.Close() }()
-	svc, err := auth.NewAdminService(db)
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		return reportErr(stderr, err)
 	}
@@ -77,7 +78,7 @@ func reportErr(stderr io.Writer, err error) int {
 
 // adminsList 列出管理员。
 func adminsList(db *sql.DB, stdout, stderr io.Writer) int {
-	users, err := store.ListAdminUsers(db)
+	users, err := store.ListAdminUsers(context.Background(), db)
 	if err != nil {
 		return reportErr(stderr, err)
 	}
@@ -103,7 +104,7 @@ func adminsAdd(svc *auth.AdminService, args []string, stdin io.Reader, stdout, s
 	if err != nil {
 		return reportErr(stderr, err)
 	}
-	u, err := svc.Create(*username, password)
+	u, err := svc.Create(context.Background(), *username, password)
 	if err != nil {
 		return reportErr(stderr, err)
 	}
@@ -117,7 +118,7 @@ func adminsMutate(svc *auth.AdminService, db *sql.DB, args []string, stdin io.Re
 		_, _ = fmt.Fprintln(stderr, "须提供一个管理员用户名")
 		return 2
 	}
-	u, err := store.GetAdminUser(db, args[1])
+	u, err := store.GetAdminUser(context.Background(), db, args[1])
 	if err != nil {
 		return reportErr(stderr, err)
 	}
@@ -125,7 +126,7 @@ func adminsMutate(svc *auth.AdminService, db *sql.DB, args []string, stdin io.Re
 	if err != nil {
 		return reportErr(stderr, err)
 	}
-	if err := svc.Patch(u.ID, disabled, password); err != nil {
+	if err := svc.Patch(context.Background(), u.ID, disabled, password); err != nil {
 		return reportErr(stderr, err)
 	}
 	_, _ = fmt.Fprintf(stdout, "管理员 %s 已更新\n", u.Username)
@@ -165,8 +166,9 @@ func adminPasswordReader(reader io.Reader) (io.Reader, func(), bool, error) {
 	if !ok {
 		return reader, func() {}, false, nil
 	}
-	state, err := unix.IoctlGetTermios(int(file.Fd()), ttyGetRequest)
-	if err != nil {
+	// ioctl 失败（非终端或平台不支持）即视为无回显可关，按原样返回。
+	state, _ := unix.IoctlGetTermios(int(file.Fd()), ttyGetRequest)
+	if state == nil {
 		return reader, func() {}, false, nil
 	}
 	interrupted := make(chan os.Signal, 1)

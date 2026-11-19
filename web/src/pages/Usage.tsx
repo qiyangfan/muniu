@@ -5,7 +5,7 @@ import { Button } from "../components/ui/button";
 import { ErrorAlert } from "../components/error-alert";
 import { DataList, type DataCol } from "../components/data-list";
 import { formatDateTime, formatNumber } from "../lib/datetime";
-import { fmtCredits } from "../lib/utils";
+import { fmtCredits, errorMessage } from "../lib/utils";
 
 const DIMS = ["day", "key", "model", "provider"] as const;
 type Dim = (typeof DIMS)[number];
@@ -97,7 +97,7 @@ function UsageReport({ dim, days }: { dim: Dim; days: RangeDays }) {
       .catch((e) => {
         if (cancelled) return;
         setRange({ from, to });
-        setErr(e.message);
+        setErr(errorMessage(e));
         setLoaded(true);
       });
     // 密钥维度使用 ID 查询；补充拉取前缀用于显示，失败时回退到 ID。

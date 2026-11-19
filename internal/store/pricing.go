@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -32,8 +33,8 @@ const pricingCols = `alias, currency, input_credits, cached_input_credits, visio
 	output_credits, timezone, time_windows, updated_at`
 
 // ListPricing 全部运行态价目，按别名升序。
-func ListPricing(db *sql.DB) ([]PricingRecord, error) {
-	rows, err := db.Query(`SELECT ` + pricingCols + ` FROM model_pricing ORDER BY alias`)
+func ListPricing(ctx context.Context, db *sql.DB) ([]PricingRecord, error) {
+	rows, err := db.QueryContext(ctx, `SELECT `+pricingCols+` FROM model_pricing ORDER BY alias`)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列出价目: %w", err)
 	}
@@ -55,8 +56,8 @@ func ListPricing(db *sql.DB) ([]PricingRecord, error) {
 }
 
 // GetPricing 按别名取运行态价目；未配置返回 ErrNotFound。
-func GetPricing(db *sql.DB, alias string) (*PricingRecord, error) {
-	row := db.QueryRow(`SELECT `+pricingCols+` FROM model_pricing WHERE alias = ?`, alias)
+func GetPricing(ctx context.Context, db *sql.DB, alias string) (*PricingRecord, error) {
+	row := db.QueryRowContext(ctx, `SELECT `+pricingCols+` FROM model_pricing WHERE alias = ?`, alias)
 	var r PricingRecord
 	var windowsJSON string
 	err := row.Scan(&r.Alias, &r.Currency, &r.InputCredits, &r.CachedInputCredits, &r.VisionInputCredits,
@@ -74,7 +75,7 @@ func GetPricing(db *sql.DB, alias string) (*PricingRecord, error) {
 }
 
 // UpsertPricing 写入或覆盖运行态价目，同别名覆盖。
-func UpsertPricing(db *sql.DB, r PricingRecord) error {
+func UpsertPricing(ctx context.Context, db *sql.DB, r PricingRecord) error {
 	windowsJSON, err := json.Marshal(r.Windows)
 	if err != nil {
 		return fmt.Errorf("store: 序列化价目窗: %w", err)
@@ -82,7 +83,7 @@ func UpsertPricing(db *sql.DB, r PricingRecord) error {
 	if r.Timezone == "" {
 		r.Timezone = "UTC"
 	}
-	_, err = db.Exec(`INSERT INTO model_pricing
+	_, err = db.ExecContext(ctx, `INSERT INTO model_pricing
 		(alias, currency, input_credits, cached_input_credits, vision_input_credits,
 		 output_credits, timezone, time_windows, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?)
@@ -100,8 +101,8 @@ func UpsertPricing(db *sql.DB, r PricingRecord) error {
 }
 
 // DeletePricing 删除运行态价目，该别名回落 YAML 静态兜底；返回删除行数。
-func DeletePricing(db *sql.DB, alias string) (int64, error) {
-	res, err := db.Exec(`DELETE FROM model_pricing WHERE alias = ?`, alias)
+func DeletePricing(ctx context.Context, db *sql.DB, alias string) (int64, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM model_pricing WHERE alias = ?`, alias)
 	if err != nil {
 		return 0, fmt.Errorf("store: 删价目: %w", err)
 	}

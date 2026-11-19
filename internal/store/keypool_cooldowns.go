@@ -8,6 +8,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"math"
@@ -31,6 +32,7 @@ type KeyCooldownRow struct {
 // (锁外落库的完成顺序不可控,行状态必须由事件序裁决);幂等(同序号重复迁移无副作用,
 // UPSERT 的 WHERE 与 DELETE 的 ev_seq<? 均为严格小于)。
 func SaveKeyCooldown(
+	ctx context.Context,
 	db *sql.DB,
 	provider, keyID, bucket string,
 	until time.Time,
@@ -39,14 +41,14 @@ func SaveKeyCooldown(
 	seq int64,
 ) error {
 	if bucket == "" {
-		_, err := db.Exec(`DELETE FROM key_cooldowns
+		_, err := db.ExecContext(ctx, `DELETE FROM key_cooldowns
 			WHERE provider=? AND key_id=? AND ev_seq<?`, provider, keyID, seq)
 		if err != nil {
 			return fmt.Errorf("store: 删冷却行 %s/%s: %w", provider, keyID, err)
 		}
 		return nil
 	}
-	_, err := db.Exec(`INSERT INTO key_cooldowns
+	_, err := db.ExecContext(ctx, `INSERT INTO key_cooldowns
 		(provider, key_id, bucket, cool_until, consec, ev_seq, updated_at)
 		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(provider, key_id) DO UPDATE SET
@@ -62,8 +64,8 @@ func SaveKeyCooldown(
 
 // LoadKeyCooldowns 单渠道全量冷却行(启动恢复);含已到期行,由池侧过期过滤
 // (序号仍在行上,池侧须对过期行同样播种序号,否则重启后新事件被旧守卫压住)。
-func LoadKeyCooldowns(db *sql.DB, provider string) ([]KeyCooldownRow, error) {
-	rows, err := db.Query(`SELECT key_id, bucket, cool_until, consec, ev_seq
+func LoadKeyCooldowns(ctx context.Context, db *sql.DB, provider string) ([]KeyCooldownRow, error) {
+	rows, err := db.QueryContext(ctx, `SELECT key_id, bucket, cool_until, consec, ev_seq
 		FROM key_cooldowns WHERE provider=?`, provider)
 	if err != nil {
 		return nil, fmt.Errorf("store: 读冷却行 %s: %w", provider, err)
@@ -87,14 +89,14 @@ func LoadKeyCooldowns(db *sql.DB, provider string) ([]KeyCooldownRow, error) {
 }
 
 // PruneKeyCooldowns 孤儿对账:拓扑替换后键集变化时清掉 keep 之外的行(仅限单渠道)。
-func PruneKeyCooldowns(db *sql.DB, provider string, keep map[string]bool) error {
-	rows, err := LoadKeyCooldowns(db, provider)
+func PruneKeyCooldowns(ctx context.Context, db *sql.DB, provider string, keep map[string]bool) error {
+	rows, err := LoadKeyCooldowns(ctx, db, provider)
 	if err != nil {
 		return err
 	}
 	for _, r := range rows {
 		if !keep[r.KeyID] {
-			if err := SaveKeyCooldown(db, provider, r.KeyID, "", time.Time{}, 0, time.Now(), PruneSeq); err != nil {
+			if err := SaveKeyCooldown(ctx, db, provider, r.KeyID, "", time.Time{}, 0, time.Now(), PruneSeq); err != nil {
 				return err
 			}
 		}

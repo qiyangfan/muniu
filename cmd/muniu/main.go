@@ -72,7 +72,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "muniu: %v\n", lerr)
 		os.Exit(1)
 	}
-	handler, _, cleanup, err := assemble(cfg, cfgResolved, logger)
+	// 信号 ctx 提前建立：装配期（迁移、插件编译探测）同样应可被退出信号中断。
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	handler, _, cleanup, err := assemble(ctx, cfg, cfgResolved, logger)
 	if err != nil {
 		logger.Error("装配失败", "error_detail", err.Error())
 		os.Exit(1)
@@ -85,10 +89,7 @@ func main() {
 		addr = p
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	ln, err := server.Listen(addr)
+	ln, err := server.Listen(ctx, addr)
 	if err != nil {
 		logger.Error("监听失败", "addr", addr, "error_detail", err.Error())
 		cleanup() // 计量存量是钱，任何退出路径都必须排干；os.Exit 不执行 defer
@@ -124,9 +125,11 @@ type routeEntry struct {
 }
 
 // assemble 装配 HTTP 处理链并注册路由；返回的 cleanup 会在退出前排干计量管道。
-func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Handler, []string, func(), error) {
+func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *slog.Logger) (
+	http.Handler, []string, func(), error,
+) {
 	// SQLite 运行态库（api_keys/usage_logs），迁移随打开执行。
-	deps, err := newRuntimeDeps(cfg, logger)
+	deps, err := newRuntimeDeps(ctx, cfg, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -134,7 +137,7 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	tpm, tpmRecorder, sharedBackend, buildPool, pools := deps.tpm, deps.tpmRecorder,
 		deps.sharedBackend, deps.buildPool, deps.pools
 
-	pricing, err := newPricingAssembly(cfg, db)
+	pricing, err := newPricingAssembly(ctx, cfg, db)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -145,21 +148,21 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	staticHuman := staticPricingView(pricing.staticDefs)
 
 	// 语义缓存由租户开关控制，嵌入请求经进程内 HTTP 路由发送。
-	cacheInst, embedKey, late, err := newSemanticCache(cfg, db, logger)
+	cacheInst, embedKey, late, err := newSemanticCache(ctx, cfg, db, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	tenantSw := tenantSwitch(db)
 
 	// WASM 插件注册表：YAML 静态声明注册，运行态增改走管理面，重启回落本声明。
-	pluginReg, err := newPluginRegistry(cfg, logger)
+	pluginReg, err := newPluginRegistry(ctx, cfg, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	// 上游健康观测与熔断:免费控制面探针(缺省开,渠道可退订,适配器能力闸)+ 付费推理探针
 	// (probe_model 声明制)+ 被动统计;降级渠道由 proxy 候选域收缩自动降级路由。
-	chatProxy, healthMgr, oauthFlow, oauthCancel := newProxyRuntime(proxyAssembly{
+	chatProxy, healthMgr, oauthFlow, oauthCancel := newProxyRuntime(ctx, proxyAssembly{
 		cfg: cfg, cfgPath: cfgPath, logger: logger, db: db, alerts: alerts, pipeline: pipeline,
 		registry: deps.registry, pools: pools, buildPool: buildPool,
 		pricingDir: pricingDir, imageDir: imageDir, settlement: settlement,
@@ -167,33 +170,46 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
 	})
 
 	// 余额观测评估循环:渠道级余额源声明驱动,声明变更属非热更域(需重启生效)。
-	balanceSvc, err := newBalanceService(cfg, db, alerts, logger, func() *proxy.Proxy { return chatProxy }, settlement)
+	balanceSvc, err := newBalanceService(ctx, cfg, db, alerts, logger,
+		func() *proxy.Proxy { return chatProxy }, settlement)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	verifier := newVerifier(cfg, db, logger)
-	gate := newGate(tpm, db, logger, sharedBackend)
-	entries := buildRoutes(chatProxy, verifier, gate, logger)
+	verifier, entries := newVerifierAndRoutes(ctx, cfg, db, logger, chatProxy, tpm, sharedBackend)
 
 	// 未配置管理 token 且没有启用管理员账号时关闭管理面。
-	adminToken, adminSvc, err := newAdminContext(db, logger)
+	adminToken, adminSvc, err := newAdminContext(ctx, db, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	refreshPricing := func() error { return refreshPricingDirectory(rebuildPricing, pricingDir) }
-	adminDeps := buildAdminDeps(adminWiring{
+	adminHandler := newAdminHandlerWithDeps(ctx, adminWiring{
 		cfg: cfg, db: db, token: adminToken, adminSvc: adminSvc, pools: pools,
 		verifier: verifier, logger: logger, balanceSvc: balanceSvc, healthMgr: healthMgr,
 		px: chatProxy, pricingDir: pricingDir, staticImages: staticImages, updateImages: updateImages,
 		staticHuman: staticHuman, refreshPricing: refreshPricing, pluginReg: pluginReg, oauthFlow: oauthFlow,
-	})
-	adminHandler := newAdminHandler(adminDeps, cacheInst)
+	}, cacheInst)
 
-	root, declared, cleanup := finishAssembly(cfg, logger, db, pipeline, chatProxy, entries,
+	root, declared, cleanup := finishAssembly(ctx, cfg, logger, db, pipeline, chatProxy, entries,
 		adminHandler, adminToken, refreshPricing, cacheInst, late, embedKey,
 		pluginReg, balanceSvc, healthMgr, oauthCancel, verifier)
 	return root, declared, cleanup, nil
+}
+
+// newVerifierAndRoutes 构造鉴权器并装配路由表。
+func newVerifierAndRoutes(
+	ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger,
+	chatProxy *proxy.Proxy, tpm *ratelimit.TPM, shared ratelimit.SharedBackend,
+) (*auth.Verifier, []routeEntry) {
+	verifier := newVerifier(ctx, cfg, db, logger)
+	gate := newGate(tpm, db, logger, shared)
+	return verifier, buildRoutes(chatProxy, verifier, gate, logger)
+}
+
+// newAdminHandlerWithDeps 由装配输入构造管理面 handler。
+func newAdminHandlerWithDeps(ctx context.Context, w adminWiring, cache *semantic.Cache) http.Handler {
+	return newAdminHandler(ctx, buildAdminDeps(w), cache)
 }
 
 // adminWiring 管理面依赖装配输入。
@@ -210,7 +226,7 @@ type adminWiring struct {
 	px             *proxy.Proxy
 	pricingDir     *metering.PricingDirectory
 	staticImages   map[string]metering.ImagePrice
-	updateImages   func(string, *store.ImagePricingRecord) error
+	updateImages   func(context.Context, string, *store.ImagePricingRecord) error
 	staticHuman    map[string]admin.StaticEntry
 	refreshPricing func() error
 	pluginReg      *plugin.Registry
@@ -236,18 +252,19 @@ func buildAdminDeps(w adminWiring) admin.Deps {
 }
 
 // finishAssembly 完成可观测挂载、价目轮询、嵌入绑定与退出清理。
-func finishAssembly(cfg *config.Config, logger *slog.Logger, db *sql.DB, pipeline *metering.Pipeline,
+func finishAssembly(ctx context.Context, cfg *config.Config, logger *slog.Logger,
+	db *sql.DB, pipeline *metering.Pipeline,
 	px *proxy.Proxy, entries []routeEntry, adminHandler http.Handler, adminToken string,
 	refreshPricing func() error, cacheInst *semantic.Cache, late *lateEmbedder, embedKey string,
 	pluginReg *plugin.Registry, balanceSvc *balance.Service, healthMgr *health.Manager,
 	oauthCancel func(), verifier *auth.Verifier) (http.Handler, []string, func()) {
 	// 可观测：启用且管理 token 已配置时暴露 /metrics；token 门禁恒时比较防时序侧信道，
 	// Recover 防仪表函数 panic 裸断连接。无 token 不挂载。
-	metricsEnabled := newMetrics(cfg, adminToken, db, pipeline, px, logger)
+	metricsEnabled := newMetrics(ctx, cfg, adminToken, db, pipeline, px, logger)
 	root, declared := mountRoutes(entries, adminHandler, metricsEnabled, adminToken, logger)
 	// 控制面价目拉取：响应形态与管理 API 一致，覆盖写入后刷新目录。
 	// 全量期望语义仅 upsert，撤销覆盖仍走管理面 DELETE；失败保持原目录，下轮重试。
-	startPricingPoll(cfg, logger, db, refreshPricing)
+	startPricingPoll(ctx, cfg, logger, db, refreshPricing)
 	// 嵌入通道绑定：HTTP 链就绪后进程内自调用 /v1/embeddings。
 	if cacheInst != nil {
 		bindEmbedder(late, root, embedKey)
@@ -268,21 +285,21 @@ func refreshPricingDirectory(
 }
 
 // newAdminHandler 构造管理面 handler；缓存统计仅在启用时挂载。
-func newAdminHandler(deps admin.Deps, cache *semantic.Cache) http.Handler {
+func newAdminHandler(ctx context.Context, deps admin.Deps, cache *semantic.Cache) http.Handler {
 	if cache != nil {
-		deps.CacheStats = cache.Stats
+		deps.CacheStats = func() map[string]any { return cache.Stats(ctx) }
 	}
-	return admin.New(deps)
+	return admin.New(ctx, deps)
 }
 
 // newAdminContext 读取管理 token 并构造管理员服务；两者皆缺时管理面关闭。
-func newAdminContext(db *sql.DB, logger *slog.Logger) (string, *auth.AdminService, error) {
+func newAdminContext(ctx context.Context, db *sql.DB, logger *slog.Logger) (string, *auth.AdminService, error) {
 	token := os.Getenv("MUNIU_ADMIN_TOKEN")
-	svc, err := auth.NewAdminService(db)
+	svc, err := auth.NewAdminService(ctx, db)
 	if err != nil {
 		return "", nil, err
 	}
-	active, err := store.HasActiveAdmins(db)
+	active, err := store.HasActiveAdmins(ctx, db)
 	if err != nil {
 		return "", nil, err
 	}
@@ -390,12 +407,16 @@ func outboundClient(raw string, dial time.Duration) (*http.Client, error) {
 // cooldownSink keypool 冷却持久化出口(store 实现):欠费桶全程/rate 长冷却的迁移落库。
 // 落库失败留 Warn 痕(契约「失败由实现方留痕」):持久化静默全灭的唯一症状是重启丢冷却,运维需有线索。
 type cooldownSink struct {
+	ctx    context.Context
 	db     *sql.DB
 	logger *slog.Logger
 }
 
 func (s cooldownSink) SaveCooldown(provider, keyID, bucket string, until time.Time, consec int, seq int64) error {
-	if err := store.SaveKeyCooldown(s.db, provider, keyID, bucket, until, consec, time.Now(), seq); err != nil {
+	// 冷却持久化是请求后的记账性副作用:不随客户端断连取消,也不随退出信号的
+	// 生命周期 ctx 取消——关机排干窗口内的在途请求同样要留下冷却行。
+	if err := store.SaveKeyCooldown(context.WithoutCancel(s.ctx), s.db,
+		provider, keyID, bucket, until, consec, time.Now(), seq); err != nil {
 		s.logger.Warn("冷却落库失败", "provider", provider, "key_id", keyID, "error_detail", err.Error())
 	}
 	return nil
@@ -433,20 +454,20 @@ type runtimeDeps struct {
 }
 
 // newRuntimeDeps 打开存储并装配基础件；buildPool 同时用于启动装配和拓扑热替换。
-func newRuntimeDeps(cfg *config.Config, logger *slog.Logger) (runtimeDeps, error) {
+func newRuntimeDeps(ctx context.Context, cfg *config.Config, logger *slog.Logger) (runtimeDeps, error) {
 	// SQLite 运行态库（api_keys/usage_logs），迁移随打开执行。
-	db, err := store.Open(cfg.Storage.SQLite.Path)
+	db, err := store.Open(ctx, cfg.Storage.SQLite.Path)
 	if err != nil {
 		return runtimeDeps{}, fmt.Errorf("打开存储: %w", err)
 	}
-	alerts := newAlerting(cfg, db, logger)
-	pipeline := newMeteringPipeline(cfg, db, alerts, logger)
+	alerts := newAlerting(ctx, cfg, db, logger)
+	pipeline := newMeteringPipeline(ctx, cfg, db, alerts, logger)
 	tpm, recorder, shared, err := newRateLimit(cfg, logger)
 	if err != nil {
 		return runtimeDeps{}, err
 	}
 	registry := adapter.NewRegistry()
-	buildPool := newPoolBuilder(db, registry, logger)
+	buildPool := newPoolBuilder(ctx, db, registry, logger)
 	pools, err := buildAllPools(cfg.Providers, buildPool)
 	if err != nil {
 		return runtimeDeps{}, err
@@ -473,7 +494,7 @@ type proxyAssembly struct {
 	imageDir    *metering.ImagePriceDirectory
 	settlement  string
 	cacheInst   *semantic.Cache
-	tenantSw    func(string) bool
+	tenantSw    func(context.Context, string) bool
 	pluginReg   *plugin.Registry
 	tpmRecorder ratelimit.TPMRecorder
 }
@@ -482,9 +503,9 @@ type proxyAssembly struct {
 //
 // 健康循环在 proxy 装配完成后启动：Sources 闭包读 proxy，先赋值再 Start 保证
 // happens-before（探针首轮不会与装配写竞争，也不会打到装配前的 nil 拓扑）。
-func newProxyRuntime(a proxyAssembly) (*proxy.Proxy, *health.Manager, *oauth.Flow, func()) {
+func newProxyRuntime(ctx context.Context, a proxyAssembly) (*proxy.Proxy, *health.Manager, *oauth.Flow, func()) {
 	var px *proxy.Proxy
-	healthMgr := newHealthManager(a.cfg, a.alerts, a.logger, func() *proxy.Proxy { return px })
+	healthMgr := newHealthManager(ctx, a.cfg, a.alerts, a.logger, func() *proxy.Proxy { return px })
 	px = proxy.New(proxy.Config{
 		Registry:     a.registry,
 		Providers:    a.cfg.Providers,
@@ -514,26 +535,28 @@ func newProxyRuntime(a proxyAssembly) (*proxy.Proxy, *health.Manager, *oauth.Flo
 	startHealth(healthMgr)
 	// oauth 刷新器同序启动(oauth 段未声明时零开销零 goroutine);flow 交管理面授权端点,
 	// cancel 挂 cleanup 随退出停环。
-	oauthFlow, oauthCancel := startOAuthRefresher(context.Background(), a.cfg, a.db, px, a.logger)
-	startTopologyPoll(a.cfg, a.logger, px, a.buildPool)
+	oauthFlow, oauthCancel := startOAuthRefresher(ctx, a.cfg, a.db, px, a.logger)
+	startTopologyPoll(ctx, a.cfg, a.logger, px, a.buildPool)
 	startSighupReload(a.cfgPath, a.logger, px, a.buildPool)
 	return px, healthMgr, oauthFlow, oauthCancel
 }
 
 // newAlerting 构造告警通知器：未配置 webhook_url 时为 nil，各接入点 Emit 零开销。
 // 投递终局回调落库自监控:通道挂了不能再用通道自报(递归陷阱),失败事实只落库走管理面可见。
-func newAlerting(cfg *config.Config, db *sql.DB, logger *slog.Logger) *alerting.Notifier {
+func newAlerting(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) *alerting.Notifier {
 	return alerting.New(alerting.Options{
+		Context:     ctx,
 		WebhookURL:  cfg.Alerts.WebhookURL,
 		DedupWindow: time.Duration(cfg.Alerts.DedupWindowSec) * time.Second,
 		Logger:      logger,
-		OnDeliveryFailure: func(f alerting.DeliveryFailure) {
-			if err := store.RecordAlertDeliveryFailure(db, f.EventKey, f.Severity, f.Summary, f.ErrorClass, f.At); err != nil {
+		OnDeliveryFailure: func(ctx context.Context, f alerting.DeliveryFailure) {
+			if err := store.RecordAlertDeliveryFailure(ctx, db,
+				f.EventKey, f.Severity, f.Summary, f.ErrorClass, f.At); err != nil {
 				logger.Error("告警投递失败落库失败", "error_detail", err.Error())
 			}
 		},
-		OnDeliverySuccess: func(eventKey string, at time.Time) {
-			if err := store.RecordAlertDeliverySuccess(db, at); err != nil {
+		OnDeliverySuccess: func(ctx context.Context, eventKey string, at time.Time) {
+			if err := store.RecordAlertDeliverySuccess(ctx, db, at); err != nil {
 				logger.Error("告警投递解除落库失败", "error_detail", err.Error())
 			}
 		},
@@ -543,7 +566,7 @@ func newAlerting(cfg *config.Config, db *sql.DB, logger *slog.Logger) *alerting.
 // newMeteringPipeline 接线刷盘参数（缺省值已在 config.validate 兜底）。
 // sink=ingest 时为远端汇加本地缓冲：投递失败整批落缓冲，恢复后按序续传。
 func newMeteringPipeline(
-	cfg *config.Config, db *sql.DB, alerts *alerting.Notifier, logger *slog.Logger,
+	ctx context.Context, cfg *config.Config, db *sql.DB, alerts *alerting.Notifier, logger *slog.Logger,
 ) *metering.Pipeline {
 	opts := metering.Options{
 		Interval: time.Duration(cfg.Metering.FlushIntervalMs) * time.Millisecond,
@@ -558,10 +581,10 @@ func newMeteringPipeline(
 		if bufferCap <= 0 {
 			bufferCap = 1_000_000
 		}
-		opts.Remote = &metering.IngestSink{URL: cfg.Metering.IngestURL, Token: cfg.Metering.IngestToken}
-		opts.Buffer = metering.NewBufferStore(db, bufferCap)
+		opts.Remote = &metering.IngestSink{Ctx: ctx, URL: cfg.Metering.IngestURL, Token: cfg.Metering.IngestToken}
+		opts.Buffer = metering.NewBufferStore(ctx, db, bufferCap)
 	}
-	return metering.NewPipeline(db, opts, logger)
+	return metering.NewPipeline(ctx, db, opts, logger)
 }
 
 // newRateLimit 选择限流计数后端：inmem 缺省（实例自治，零变更）；redis 为集群共享视图。
@@ -589,10 +612,10 @@ func newRateLimit(cfg *config.Config, logger *slog.Logger) (
 
 // newPoolBuilder 构造池装配闭包：启动装配与拓扑热替换共用同一份解析/注册逻辑。
 func newPoolBuilder(
-	db *sql.DB, registry *adapter.Registry, logger *slog.Logger,
+	ctx context.Context, db *sql.DB, registry *adapter.Registry, logger *slog.Logger,
 ) func(config.Provider) (*keypool.Pool, adapter.Adapter, error) {
 	return func(prov config.Provider) (*keypool.Pool, adapter.Adapter, error) {
-		inputs, first, err := resolveKeyInputs(db, prov)
+		inputs, first, err := resolveKeyInputs(ctx, db, prov)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -606,27 +629,27 @@ func newPoolBuilder(
 		pool := keypool.NewPool(inputs)
 		// 冷却持久化(credit 桶全程/rate 长冷却):加载恢复 → 注 sink(≥5min 迁移落库)→ 孤儿对账;
 		// 加载失败降级为空恢复(最坏多探活一次),对账失败留痕不影响转发。
-		if rows, lerr := store.LoadKeyCooldowns(db, prov.Name); lerr != nil {
+		if rows, lerr := store.LoadKeyCooldowns(ctx, db, prov.Name); lerr != nil {
 			logger.Warn("冷却行加载失败,重启恢复降级", "provider", prov.Name, "error_detail", lerr.Error())
 		} else {
 			pool.LoadCooldowns(cooldownRecords(rows), time.Now())
 		}
-		if perr := store.PruneKeyCooldowns(db, prov.Name, keyIDSet(pool.KeyIDs())); perr != nil {
+		if perr := store.PruneKeyCooldowns(ctx, db, prov.Name, keyIDSet(pool.KeyIDs())); perr != nil {
 			logger.Warn("冷却孤儿对账失败", "provider", prov.Name, "error_detail", perr.Error())
 		}
-		return pool.WithSink(prov.Name, cooldownSink{db: db, logger: logger}), ad, nil
+		return pool.WithSink(prov.Name, cooldownSink{ctx: ctx, db: db, logger: logger}), ad, nil
 	}
 }
 
 // resolveKeyInputs 解析渠道 keys 为池输入，并返回首个凭据供适配器构造。
-func resolveKeyInputs(db *sql.DB, prov config.Provider) ([]keypool.KeyInput, string, error) {
+func resolveKeyInputs(ctx context.Context, db *sql.DB, prov config.Provider) ([]keypool.KeyInput, string, error) {
 	if len(prov.Keys) == 0 {
 		return nil, "", fmt.Errorf("provider %s 无可用 key 引用", prov.Name)
 	}
 	inputs := make([]keypool.KeyInput, 0, len(prov.Keys))
 	first := ""
 	for i, kr := range prov.Keys {
-		v, err := resolveKeyValue(db, prov.Name, kr)
+		v, err := resolveKeyValue(ctx, db, prov.Name, kr)
 		if err != nil {
 			return nil, "", err
 		}
@@ -647,9 +670,9 @@ func resolveKeyInputs(db *sql.DB, prov config.Provider) ([]keypool.KeyInput, str
 //
 // 账号引用：装配层唯一解析点（oauth 包不依赖 store）；不存在即装配失败——文件源启动
 // fail-fast，控制面/热替换路径快照被拒（旧快照保留）。
-func resolveKeyValue(db *sql.DB, providerName string, kr config.KeyRef) (string, error) {
+func resolveKeyValue(ctx context.Context, db *sql.DB, providerName string, kr config.KeyRef) (string, error) {
 	if kr.Account != "" {
-		row, err := store.GetOAuthAccount(db, kr.Account)
+		row, err := store.GetOAuthAccount(ctx, db, kr.Account)
 		if err != nil {
 			return "", fmt.Errorf("provider %s 的账号引用 %s 不可用: %w", providerName, kr.Account, err)
 		}
@@ -690,14 +713,14 @@ type pricingAssembly struct {
 	dir          *metering.PricingDirectory
 	imageDir     *metering.ImagePriceDirectory
 	staticImages map[string]metering.ImagePrice
-	updateImages func(string, *store.ImagePricingRecord) error
+	updateImages func(context.Context, string, *store.ImagePricingRecord) error
 }
 
 // newPricingAssembly 在加载期把 YAML 价目一次性换算为 credit 整数，全程零浮点；
 // 分时段倍率窗同样预先算出各窗有效三段价。
 // credit 锚定本位币（缺省 CNY），异币种报价按 fx_usd_cny_milli 在此一次性换算，热路径只查表。
 // YAML 为静态兜底，model_pricing 表为运营覆盖；本位币空值在此补 CNY（validate 只校验不写回）。
-func newPricingAssembly(cfg *config.Config, db *sql.DB) (pricingAssembly, error) {
+func newPricingAssembly(ctx context.Context, cfg *config.Config, db *sql.DB) (pricingAssembly, error) {
 	settlement := strings.ToUpper(cfg.Metering.Settlement)
 	if settlement == "" {
 		settlement = metering.SettlementCNY
@@ -712,13 +735,13 @@ func newPricingAssembly(cfg *config.Config, db *sql.DB) (pricingAssembly, error)
 		staticDefs[alias] = sp
 	}
 	rebuild := func() (map[string]*metering.PricingTable, error) {
-		return buildPricingTables(db, staticDefs, settlement, fx)
+		return buildPricingTables(ctx, db, staticDefs, settlement, fx)
 	}
 	tables, err := rebuild()
 	if err != nil {
 		return pricingAssembly{}, err
 	}
-	imageDir, staticImages, updateImages, err := assembleImagePricing(db, cfg, settlement, fx)
+	imageDir, staticImages, updateImages, err := assembleImagePricing(ctx, db, cfg, settlement, fx)
 	if err != nil {
 		return pricingAssembly{}, err
 	}
@@ -820,13 +843,14 @@ func staticPricingView(defs map[string]staticPricing) map[string]admin.StaticEnt
 
 // newSemanticCache 构造语义缓存；未启用时返回零值（late 仍可用，cleanup 会关闭它）。
 func newSemanticCache(
+	ctx context.Context,
 	cfg *config.Config, db *sql.DB, logger *slog.Logger,
 ) (*semantic.Cache, string, *lateEmbedder, error) {
 	late := &lateEmbedder{}
 	if !cfg.Semantic.Enabled {
 		return nil, "", late, nil
 	}
-	cache, err := semantic.NewCache(db, semantic.Options{
+	cache, err := semantic.NewCache(ctx, db, semantic.Options{
 		Dim: cfg.Semantic.Dim, Threshold: cfg.Semantic.Threshold,
 		TTL: time.Duration(cfg.Semantic.TTLHours) * time.Hour, Capacity: cfg.Semantic.Capacity,
 		EmbeddingModel: cfg.Semantic.EmbeddingModel,
@@ -834,7 +858,7 @@ func newSemanticCache(
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("初始化语义缓存: %w", err)
 	}
-	embedKey := ensureInternalEmbedKey(db, logger)
+	embedKey := ensureInternalEmbedKey(ctx, db, logger)
 	if embedKey == "" {
 		return nil, "", nil, errors.New("内部嵌入 key 签发失败")
 	}
@@ -842,10 +866,11 @@ func newSemanticCache(
 }
 
 // tenantSwitch 租户语义缓存开关（租户行缺失或查询失败按关闭处理）。
-func tenantSwitch(db *sql.DB) func(string) bool {
-	return func(tenantID string) bool {
+func tenantSwitch(db *sql.DB) func(context.Context, string) bool {
+	return func(ctx context.Context, tenantID string) bool {
 		var en int64
-		if err := db.QueryRow(`SELECT semantic_cache_enabled FROM tenants WHERE id = ?`, tenantID).Scan(&en); err != nil {
+		if err := db.QueryRowContext(ctx,
+			`SELECT semantic_cache_enabled FROM tenants WHERE id = ?`, tenantID).Scan(&en); err != nil {
 			return false
 		}
 		return en == 1
@@ -854,11 +879,11 @@ func tenantSwitch(db *sql.DB) func(string) bool {
 
 // newPluginRegistry 注册 YAML 静态声明的 WASM 插件。
 // 注册即校验：wasm magic → 编译 → 探测实例 → ABI 版本 → plugin_start，任一失败启动即断。
-func newPluginRegistry(cfg *config.Config, logger *slog.Logger) (*plugin.Registry, error) {
+func newPluginRegistry(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*plugin.Registry, error) {
 	// 恒建：管理面运行态注册端点依赖，空表快照零堆分配
 	reg := plugin.NewRegistry()
 	for _, pc := range cfg.Plugins {
-		if err := registerPlugin(reg, pc, logger); err != nil {
+		if err := registerPlugin(ctx, reg, pc, logger); err != nil {
 			return nil, err
 		}
 	}
@@ -866,7 +891,7 @@ func newPluginRegistry(cfg *config.Config, logger *slog.Logger) (*plugin.Registr
 }
 
 // registerPlugin 读取插件二进制并登记。
-func registerPlugin(reg *plugin.Registry, pc config.PluginCfg, logger *slog.Logger) error {
+func registerPlugin(ctx context.Context, reg *plugin.Registry, pc config.PluginCfg, logger *slog.Logger) error {
 	bin, err := os.ReadFile(pc.Path)
 	if err != nil {
 		return fmt.Errorf("插件 %s 读取失败: %w", pc.Name, err)
@@ -875,7 +900,7 @@ func registerPlugin(reg *plugin.Registry, pc config.PluginCfg, logger *slog.Logg
 	if mib == 0 {
 		mib = 64 // 与 plugin.ResourceDefaults 对齐，config 层保持零值语义
 	}
-	if _, _, err := reg.Register(plugin.Options{
+	if _, _, err := reg.Register(ctx, plugin.Options{
 		Name:             pc.Name,
 		Binary:           bin,
 		Config:           pc.Config,
@@ -894,14 +919,14 @@ func registerPlugin(reg *plugin.Registry, pc config.PluginCfg, logger *slog.Logg
 
 // newHealthManager 构造上游健康观测；显式关闭时返回 nil。
 func newHealthManager(
-	cfg *config.Config, alerts *alerting.Notifier, logger *slog.Logger,
+	ctx context.Context, cfg *config.Config, alerts *alerting.Notifier, logger *slog.Logger,
 	proxyRef func() *proxy.Proxy,
 ) *health.Manager {
 	if cfg.Health.Enabled != nil && !*cfg.Health.Enabled {
 		return nil
 	}
 	base := healthChannelBase(cfg)
-	mgr := health.NewManager(health.Options{
+	mgr := health.NewManager(ctx, health.Options{
 		Interval:         time.Duration(cfg.Health.ProbeIntervalSec) * time.Second,
 		Timeout:          time.Duration(cfg.Health.ProbeTimeoutSec) * time.Second,
 		FailureThreshold: cfg.Health.FailureThreshold,
@@ -1015,6 +1040,7 @@ func pollInterval(seconds int) time.Duration {
 // startTopologyPoll 控制面拓扑热替换轮询：启动即拉，ETag 条件请求（304 跳过），
 // 失败或损坏保持当前快照并告警降级；池构建复用启动闭包（env 解析与 adapter 注册）。
 func startTopologyPoll(
+	ctx context.Context,
 	cfg *config.Config, logger *slog.Logger, px *proxy.Proxy,
 	build func(config.Provider) (*keypool.Pool, adapter.Adapter, error),
 ) {
@@ -1025,7 +1051,7 @@ func startTopologyPoll(
 	go func() {
 		client := &http.Client{Timeout: 10 * time.Second}
 		var etag string
-		sync := func() { etag = syncTopologyOnce(client, cfg.ControlPlane.TopologyURL, etag, logger, px, build) }
+		sync := func() { etag = syncTopologyOnce(ctx, client, cfg.ControlPlane.TopologyURL, etag, logger, px, build) }
 		sync() // 启动即拉，不等首个周期
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -1037,10 +1063,10 @@ func startTopologyPoll(
 
 // syncTopologyOnce 拉取一次控制面拓扑并原子替换；返回下次条件请求的 ETag。
 func syncTopologyOnce(
-	client *http.Client, url, etag string, logger *slog.Logger, px *proxy.Proxy,
+	ctx context.Context, client *http.Client, url, etag string, logger *slog.Logger, px *proxy.Proxy,
 	build func(config.Provider) (*keypool.Pool, adapter.Adapter, error),
 ) string {
-	payload, newETag, notModified, err := config.FetchTopology(client, url, etag)
+	payload, newETag, notModified, err := config.FetchTopology(ctx, client, url, etag)
 	if err != nil {
 		logger.Warn("控制面拓扑拉取失败,保持当前快照", "error_detail", err.Error())
 		return etag
@@ -1106,7 +1132,8 @@ func reloadTopology(
 //
 // 凭证解析与查询器构造一次性完成于装配期（缺凭证启动即失败，与 key env 同纪律）；
 // 运行期经拓扑快照动态映射 key（热替换感知），余额查询不触 Pick/Report。
-func newBalanceService(cfg *config.Config, db *sql.DB, alerts *alerting.Notifier, logger *slog.Logger,
+func newBalanceService(ctx context.Context, cfg *config.Config, db *sql.DB,
+	alerts *alerting.Notifier, logger *slog.Logger,
 	proxyRef func() *proxy.Proxy, settlement string) (*balance.Service, error) {
 	if cfg.Balance.Enabled != nil && !*cfg.Balance.Enabled {
 		return nil, nil
@@ -1118,7 +1145,7 @@ func newBalanceService(cfg *config.Config, db *sql.DB, alerts *alerting.Notifier
 	if len(base) == 0 {
 		return nil, nil
 	}
-	svc := balance.NewService(balance.Options{
+	svc := balance.NewService(ctx, balance.Options{
 		DB: db, Notifier: alerts, Logger: logger,
 		OnKeyEvaluated:   balanceKeyEvaluated(proxyRef),
 		Interval:         time.Duration(cfg.Balance.EvalIntervalSec) * time.Second,
@@ -1275,8 +1302,8 @@ func balanceSnapshot(
 }
 
 // newVerifier 构造业务鉴权器（平台 key 解析 + 撤销列表拉取）。
-func newVerifier(cfg *config.Config, db *sql.DB, logger *slog.Logger) *auth.Verifier {
-	return auth.NewVerifier(db, auth.Options{
+func newVerifier(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) *auth.Verifier {
+	return auth.NewVerifier(ctx, db, auth.Options{
 		PlatformSecrets:     decodePlatformSecrets(cfg.Auth.PlatformKeySecrets),
 		RevocationsURL:      cfg.Auth.RevocationsURL,
 		RevocationsInterval: time.Duration(cfg.Auth.RevocationsIntervalSec) * time.Second,
@@ -1365,7 +1392,7 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 }
 
 // startPricingPoll 控制面价目轮询：启动即拉，失败保持原目录，下轮重试。
-func startPricingPoll(cfg *config.Config, logger *slog.Logger, db *sql.DB, refresh func() error) {
+func startPricingPoll(ctx context.Context, cfg *config.Config, logger *slog.Logger, db *sql.DB, refresh func() error) {
 	if cfg.ControlPlane.PricingURL == "" {
 		return
 	}
@@ -1374,7 +1401,7 @@ func startPricingPoll(cfg *config.Config, logger *slog.Logger, db *sql.DB, refre
 		client := &http.Client{Timeout: 10 * time.Second}
 		pending := false // 上轮刷新失败的待重试标记，比对跳过不得短路刷新
 		sync := func() {
-			pending = syncPricingOnce(client, cfg.ControlPlane.PricingURL, db, logger, refresh, pending)
+			pending = syncPricingOnce(ctx, client, cfg.ControlPlane.PricingURL, db, logger, refresh, pending)
 		}
 		sync() // 启动即拉，不等首个周期
 		ticker := time.NewTicker(interval)
@@ -1387,9 +1414,15 @@ func startPricingPoll(cfg *config.Config, logger *slog.Logger, db *sql.DB, refre
 
 // syncPricingOnce 拉取一轮价目并返回更新后的待重试标记。
 func syncPricingOnce(
-	client *http.Client, url string, db *sql.DB, logger *slog.Logger, refresh func() error, pending bool,
+	ctx context.Context, client *http.Client, url string, db *sql.DB,
+	logger *slog.Logger, refresh func() error, pending bool,
 ) bool {
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		logger.Warn("构造价目拉取请求失败")
+		return pending
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		logger.Warn("控制面价目拉取失败", "error_detail", err.Error())
 		return pending
@@ -1403,7 +1436,7 @@ func syncPricingOnce(
 		logger.Warn("控制面价目响应非法", "status", resp.StatusCode)
 		return pending
 	}
-	changed := applyPricingItems(db, body.Pricing, time.Now(), logger)
+	changed := applyPricingItems(ctx, db, body.Pricing, time.Now(), logger)
 	if !changed && !pending {
 		return false
 	}
@@ -1416,10 +1449,11 @@ func syncPricingOnce(
 }
 
 // applyPricingItems 逐条 upsert 价目，返回是否有任何落库变更。
-func applyPricingItems(db *sql.DB, items []admin.PricingView, now time.Time, logger *slog.Logger) bool {
+func applyPricingItems(ctx context.Context, db *sql.DB, items []admin.PricingView,
+	now time.Time, logger *slog.Logger) bool {
 	changed := false
 	for _, item := range items {
-		if applyPricingItem(db, item, now, logger) {
+		if applyPricingItem(ctx, db, item, now, logger) {
 			changed = true
 		}
 	}
@@ -1427,7 +1461,8 @@ func applyPricingItems(db *sql.DB, items []admin.PricingView, now time.Time, log
 }
 
 // applyPricingItem 落库单条价目；空别名/非法条目/写失败跳过并留痕。
-func applyPricingItem(db *sql.DB, item admin.PricingView, now time.Time, logger *slog.Logger) bool {
+func applyPricingItem(ctx context.Context, db *sql.DB, item admin.PricingView,
+	now time.Time, logger *slog.Logger) bool {
 	if item.Alias == "" {
 		return false
 	}
@@ -1437,10 +1472,10 @@ func applyPricingItem(db *sql.DB, item admin.PricingView, now time.Time, logger 
 		return false
 	}
 	// 内容未变化则跳过，避免 updated_at 失去最后真实变更语义并产生无谓写放大
-	if existing, err := store.GetPricing(db, rec.Alias); err == nil && pricingRecordEqual(existing, rec) {
+	if existing, err := store.GetPricing(ctx, db, rec.Alias); err == nil && pricingRecordEqual(existing, rec) {
 		return false
 	}
-	if err := store.UpsertPricing(db, rec); err != nil {
+	if err := store.UpsertPricing(ctx, db, rec); err != nil {
 		logger.Warn("控制面价目落库失败", "alias", item.Alias, "error_detail", err.Error())
 		return false
 	}
@@ -1459,7 +1494,7 @@ func pricingRecordEqual(a *store.PricingRecord, b store.PricingRecord) bool {
 }
 
 // newMetrics 按开关与管理 token 启停 /metrics 并注册仪表。
-func newMetrics(cfg *config.Config, adminToken string, db *sql.DB, pipeline *metering.Pipeline,
+func newMetrics(ctx context.Context, cfg *config.Config, adminToken string, db *sql.DB, pipeline *metering.Pipeline,
 	px *proxy.Proxy, logger *slog.Logger) bool {
 	enabled := cfg.Metrics.Enabled && adminToken != ""
 	if cfg.Metrics.Enabled && adminToken == "" {
@@ -1469,17 +1504,18 @@ func newMetrics(cfg *config.Config, adminToken string, db *sql.DB, pipeline *met
 	if !enabled {
 		return false
 	}
-	registerMetricsGauges(db, pipeline, px)
+	registerMetricsGauges(ctx, db, pipeline, px)
 	return true
 }
 
 // registerMetricsGauges 注册计量水位与池状态仪表。
-func registerMetricsGauges(db *sql.DB, pipeline *metering.Pipeline, px *proxy.Proxy) {
+func registerMetricsGauges(ctx context.Context, db *sql.DB, pipeline *metering.Pipeline, px *proxy.Proxy) {
 	metrics.NewGaugeFunc("muniu_pipeline_in_flight", "计量管道在途水位", func() []metrics.Sample {
 		return []metrics.Sample{{Value: float64(pipeline.InFlight())}}
 	})
-	metrics.NewGaugeFunc("muniu_metering_buffer_rows", "计量本地缓冲行数", func() []metrics.Sample {
-		n, err := store.CountBufferedRows(db)
+	// 抓取回调签名由 metrics 包固定(无 ctx 形参),此处 ctx 为装配期捕获的服务生命周期 ctx。
+	metrics.NewGaugeFunc("muniu_metering_buffer_rows", "计量本地缓冲行数", func() []metrics.Sample { //nolint:contextcheck
+		n, err := store.CountBufferedRows(ctx, db)
 		if err != nil {
 			return nil
 		}

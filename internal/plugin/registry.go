@@ -4,6 +4,7 @@
 package plugin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
@@ -98,12 +99,12 @@ func (r *Registry) instanceSamples() []metrics.Sample {
 // Register 注册新插件，同名即版本替换：内容哈希固定版本，新请求热生效，旧版本在
 // 在途请求完成后关闭；启停状态沿用旧版本，版本替换不等于状态变更。
 // 注册即校验：Compile 任一步失败即拒载，既有插件不受影响。
-func (r *Registry) Register(opts Options) (Info, bool, error) {
+func (r *Registry) Register(ctx context.Context, opts Options) (Info, bool, error) {
 	opts.Name = strings.TrimSpace(opts.Name)
 	sum := sha256.Sum256(opts.Binary)
 	sumHex := hex.EncodeToString(sum[:])
 
-	p, err := Compile(opts)
+	p, err := Compile(ctx, opts)
 	if err != nil {
 		return Info{}, false, err
 	}

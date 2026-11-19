@@ -41,16 +41,16 @@ func (e *lateEmbedder) set(fn func(ctx context.Context, model, input string) ([]
 }
 
 // ensureInternalEmbedKey 每次启动签发新的内部嵌入 key，旧的 active 同名 key 全部吊销。
-func ensureInternalEmbedKey(db *sql.DB, logger *slog.Logger) string {
-	keys, err := auth.ListKeys(db)
+func ensureInternalEmbedKey(ctx context.Context, db *sql.DB, logger *slog.Logger) string {
+	keys, err := auth.ListKeys(ctx, db)
 	if err == nil {
 		for _, k := range keys {
 			if k.Name == internalEmbedKeyName {
-				_, _ = auth.RevokeKeyByPrefix(db, k.Prefix)
+				_, _ = auth.RevokeKeyByPrefix(ctx, db, k.Prefix)
 			}
 		}
 	}
-	plaintext, _, err := auth.CreateKey(db, "default", internalEmbedKeyName, 600, auth.KeyOpts{})
+	plaintext, _, err := auth.CreateKey(ctx, db, "default", internalEmbedKeyName, 600, auth.KeyOpts{})
 	if err != nil {
 		logger.Error("内部嵌入 key 签发失败", "error_detail", err.Error())
 		return ""

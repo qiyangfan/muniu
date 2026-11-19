@@ -3,6 +3,7 @@
 package admin
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -50,7 +51,7 @@ type Deps struct {
 	Verifier   *auth.Verifier
 
 	StaticImagePricing     map[string]metering.ImagePrice
-	UpdateImagePricing     func(string, *store.ImagePricingRecord) error
+	UpdateImagePricing     func(context.Context, string, *store.ImagePricingRecord) error
 	PricingDir             *metering.PricingDirectory
 	StaticPricing          map[string]StaticEntry
 	RefreshPricing         func() error
@@ -112,12 +113,12 @@ var adminRouteTable = []adminRouteEntry{
 }
 
 // New 按共享令牌或活跃账号开放管理面，认证装配失败不暴露空壳。
-func New(d Deps) http.Handler {
+func New(ctx context.Context, d Deps) http.Handler {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
 	if d.Token == "" {
-		active, err := store.HasActiveAdmins(d.DB)
+		active, err := store.HasActiveAdmins(ctx, d.DB)
 		if err != nil {
 			d.Logger.Error("管理员挂载条件查询失败", "error_detail", err.Error())
 			return nil
@@ -127,7 +128,7 @@ func New(d Deps) http.Handler {
 		}
 	}
 	if d.AdminAuth == nil {
-		svc, err := auth.NewAdminService(d.DB)
+		svc, err := auth.NewAdminService(ctx, d.DB)
 		if err != nil {
 			d.Logger.Error("管理员认证装配失败", "error_detail", err.Error())
 			return nil
@@ -191,7 +192,7 @@ func decode(r *http.Request, v any) error {
 
 func listTenants(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenants, err := store.ListTenants(d.DB)
+		tenants, err := store.ListTenants(r.Context(), d.DB)
 		if err != nil {
 			// 内部错误细节只进日志，对外统一归一 message
 			d.Logger.Error("列出租户失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
@@ -211,7 +212,7 @@ func createTenant(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
 			return
 		}
-		id, err := store.CreateTenant(d.DB, strings.TrimSpace(req.Name))
+		id, err := store.CreateTenant(r.Context(), d.DB, strings.TrimSpace(req.Name))
 		if err != nil {
 			respondErr(d, w, r, err, "tenant_create_failed")
 			return
@@ -239,7 +240,7 @@ func patchTenant(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "daily_quota_credits/tpm_limit 不可为负")
 			return
 		}
-		ok, err := store.UpdateTenant(d.DB, id, store.UpdateTenantPatch{
+		ok, err := store.UpdateTenant(r.Context(), d.DB, id, store.UpdateTenantPatch{
 			Status:              derefStr(req.Status),
 			DailyQuotaCredits:   req.DailyQuotaCredits,
 			TPMLimit:            req.TPMLimit,
@@ -264,7 +265,7 @@ func patchTenant(d Deps) http.HandlerFunc {
 
 func listKeys(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		keys, err := auth.ListKeys(d.DB)
+		keys, err := auth.ListKeys(r.Context(), d.DB)
 		if err != nil {
 			d.Logger.Error("列出 key 失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "内部错误")
@@ -316,7 +317,7 @@ func createKey(d Deps) http.HandlerFunc {
 			}
 			opts.ExpiresAt = &t
 		}
-		plaintext, rec, err := auth.CreateKey(d.DB, req.Tenant, req.Name, req.RPMLimit, opts)
+		plaintext, rec, err := auth.CreateKey(r.Context(), d.DB, req.Tenant, req.Name, req.RPMLimit, opts)
 		if err != nil {
 			respondErr(d, w, r, err, "key_create_failed")
 			return
@@ -408,7 +409,7 @@ func patchKey(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", msg)
 			return
 		}
-		rec, err := auth.UpdateKeyLimits(d.DB, r.PathValue("id"), patch)
+		rec, err := auth.UpdateKeyLimits(r.Context(), d.DB, r.PathValue("id"), patch)
 		if errors.Is(err, store.ErrNotFound) {
 			writeAdminError(w, r, http.StatusNotFound, protocol.TypeNotFound, "key_not_found", "key 不存在")
 			return
@@ -427,7 +428,7 @@ func patchKey(d Deps) http.HandlerFunc {
 func revokeKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		prefix := r.PathValue("prefix")
-		n, err := auth.RevokeKeyByPrefix(d.DB, prefix)
+		n, err := auth.RevokeKeyByPrefix(r.Context(), d.DB, prefix)
 		if err != nil {
 			d.Logger.Error("吊销 key 失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "内部错误")
@@ -500,7 +501,7 @@ func usage(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		pts, err := store.UsageAggregate(d.DB, store.UsageDim(groupBy), from, to,
+		pts, err := store.UsageAggregate(r.Context(), d.DB, store.UsageDim(groupBy), from, to,
 			q.Get("tenant_id"), q.Get("key_id"))
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")

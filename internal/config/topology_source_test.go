@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,7 +27,7 @@ func TestFetchTopology_OK(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	payload, etag, notModified, err := FetchTopology(srv.Client(), srv.URL, "")
+	payload, etag, notModified, err := FetchTopology(context.Background(), srv.Client(), srv.URL, "")
 	if err != nil {
 		t.Fatalf("拉取失败: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestFetchTopology_OK(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusNotModified)
 	})
-	_, _, notModified, err = FetchTopology(srv.Client(), srv.URL, `"v7"`)
+	_, _, notModified, err = FetchTopology(context.Background(), srv.Client(), srv.URL, `"v7"`)
 	if err != nil || !notModified {
 		t.Fatalf("304 条件请求异常: notModified=%v err=%v", notModified, err)
 	}
@@ -64,7 +65,7 @@ func TestFetchTopology_RejectCorrupt(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(payload))
 		}))
-		_, _, _, err := FetchTopology(srv.Client(), srv.URL, "")
+		_, _, _, err := FetchTopology(context.Background(), srv.Client(), srv.URL, "")
 		srv.Close()
 		if err == nil {
 			t.Fatalf("%s: 损坏快照应拒绝应用", name)
@@ -80,7 +81,7 @@ func TestFetchTopology_UpstreamError(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	if _, _, _, err := FetchTopology(srv.Client(), srv.URL, ""); err == nil {
+	if _, _, _, err := FetchTopology(context.Background(), srv.Client(), srv.URL, ""); err == nil {
 		t.Fatal("上游 5xx 应报错(调用方保持旧快照)")
 	}
 }

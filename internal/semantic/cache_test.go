@@ -189,7 +189,7 @@ func TestStats_命中计数(t *testing.T) {
 	c, _ := newTestCache(t, emb)
 	_ = c.Store(context.Background(), "t1", "fp", "a", []float32{1, 0, 0, 0}, []byte(`{"choices":[{"message":{"content":"a"},"finish_reason":"stop"}]}`))
 	_, _ = c.Lookup(context.Background(), "t1", "fp", []float32{1, 0, 0, 0})
-	stats := c.Stats()
+	stats := c.Stats(context.Background())
 	if stats["entries"].(int) != 1 || stats["hits"].(int64) != 1 {
 		t.Fatalf("统计不符: %+v", stats)
 	}

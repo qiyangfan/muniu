@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -27,7 +28,7 @@ func keysMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprint(stderr, keysUsage)
 		return 2
 	}
-	db, err := store.Open(cfg.Storage.SQLite.Path)
+	db, err := store.Open(context.Background(), cfg.Storage.SQLite.Path)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys: 打开存储失败: %v\n", err)
 		return 1
@@ -96,7 +97,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 		}
 		opts.ExpiresAt = &t
 	}
-	plaintext, rec, err := auth.CreateKey(db, *tenant, *name, *rpm, opts)
+	plaintext, rec, err := auth.CreateKey(context.Background(), db, *tenant, *name, *rpm, opts)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys create: %v\n", err)
 		return 1
@@ -140,7 +141,7 @@ func truncateDisplayBytes(s string, maxBytes int) string {
 
 // keysList 列出全部 key，不含任何明文与哈希。
 func keysList(db *sql.DB, stdout, stderr io.Writer) int {
-	keys, err := auth.ListKeys(db)
+	keys, err := auth.ListKeys(context.Background(), db)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys list: %v\n", err)
 		return 1
@@ -172,7 +173,7 @@ func keysRevoke(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "muniu keys revoke: 需要一个 <prefix> 参数")
 		return 2
 	}
-	n, err := auth.RevokeKeyByPrefix(db, args[0])
+	n, err := auth.RevokeKeyByPrefix(context.Background(), db, args[0])
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys revoke: %v\n", err)
 		return 1
@@ -199,7 +200,7 @@ func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Write
 		return 2
 	}
 	prefix := args[0]
-	keys, err := auth.ListKeys(db)
+	keys, err := auth.ListKeys(context.Background(), db)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys %s: %v\n", verb, err)
 		return 1
@@ -220,7 +221,7 @@ func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Write
 		return 1
 	}
 	v := disable
-	rec, err := auth.UpdateKeyLimits(db, target.ID, auth.LimitsPatch{Disabled: &v})
+	rec, err := auth.UpdateKeyLimits(context.Background(), db, target.ID, auth.LimitsPatch{Disabled: &v})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys %s: %v\n", verb, err)
 		return 1

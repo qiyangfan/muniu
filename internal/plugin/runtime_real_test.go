@@ -22,7 +22,7 @@ func compileReal(t *testing.T, path, name string, config map[string]string) *Plu
 		t.Skipf("真插件工件不存在(先跑 plugins/build.sh): %v", err)
 	}
 	// 首次加载包含 WASM 编译，探测超时按上限设置以覆盖冷启动耗时。
-	p, err := Compile(Options{Name: name, Binary: bin, Config: config, ProbeTimeoutMs: 60_000})
+	p, err := Compile(context.Background(), Options{Name: name, Binary: bin, Config: config, ProbeTimeoutMs: 60_000})
 	if err != nil {
 		t.Fatalf("编译/注册真插件 %s: %v", name, err)
 	}
@@ -85,7 +85,7 @@ func TestRealArtifact_PiiMasker_自定义规则与坏配置拒载(t *testing.T) 
 	if err != nil {
 		t.Skipf("真插件工件不存在: %v", err)
 	}
-	if _, err := Compile(Options{Name: "pii-masker-bad", Binary: bin,
+	if _, err := Compile(context.Background(), Options{Name: "pii-masker-bad", Binary: bin,
 		Config: map[string]string{"rules": `[{"pattern":"((","replacement":"x"}]`}}); err == nil {
 		t.Fatal("坏规则配置必须拒载")
 	} else if !strings.Contains(err.Error(), "退出码 1") {

@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -53,7 +54,7 @@ func newHealthHarness(t *testing.T, statusA int) *healthHarness {
 
 	h := &healthHarness{upA: upA, upB: upB, events: make(chan health.Event, 16)}
 	h.baseURLA.Store(upA.URL())
-	mgr := health.NewManager(health.Options{
+	mgr := health.NewManager(context.Background(), health.Options{
 		FailureThreshold: 1, // 探针单败即降级(测试加速)
 		Interval:         20 * time.Millisecond,
 		Logger:           slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -94,8 +95,12 @@ func newHealthHarness(t *testing.T, statusA int) *healthHarness {
 
 func (h *healthHarness) post(t *testing.T) (int, string) {
 	t.Helper()
-	resp, err := http.Post(h.ts.URL+"/v1/chat/completions", "application/json",
-		strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, h.ts.URL+"/v1/chat/completions", strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("请求失败: %v", err)
 	}
@@ -159,7 +164,7 @@ func TestUpstreamHealth_单候选熔断503快速失败(t *testing.T) {
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(upA.URL(), ""))
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
-	mgr := health.NewManager(health.Options{
+	mgr := health.NewManager(context.Background(), health.Options{
 		FailureThreshold: 1, Interval: time.Hour,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]health.Channel {
@@ -187,8 +192,13 @@ func TestUpstreamHealth_单候选熔断503快速失败(t *testing.T) {
 	})
 	ts := httptest.NewServer(p.Handler())
 	t.Cleanup(ts.Close)
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json",
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/chat/completions",
 		strings.NewReader(`{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

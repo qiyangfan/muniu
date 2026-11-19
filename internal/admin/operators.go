@@ -49,7 +49,7 @@ func exemptPaths(r *http.Request) bool {
 func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) {
 	actor := Actor{}
 	if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
-		u, err := d.AdminAuth.Session(cookie.Value)
+		u, err := d.AdminAuth.Session(r.Context(), cookie.Value)
 		if err == nil {
 			actor = Actor{Kind: "session", Name: u.Username}
 		} else if !errors.Is(err, auth.ErrAdminCredentials) {
@@ -99,7 +99,7 @@ func adminLogin(d Deps) http.HandlerFunc {
 		if identity, ok := r.Context().Value(loginIdentityKey{}).(*loginIdentity); ok {
 			identity.name = in.Username
 		}
-		token, u, err := d.AdminAuth.Login(in.Username, in.Password)
+		token, u, err := d.AdminAuth.Login(r.Context(), in.Username, in.Password)
 		if errors.Is(err, auth.ErrAdminCredentials) || errors.Is(err, auth.ErrAdminLocked) {
 			writeAdminError(w, r, 401, protocol.TypeAuthFailed, "auth_failed", err.Error())
 			return
@@ -117,7 +117,7 @@ func adminLogin(d Deps) http.HandlerFunc {
 func adminLogout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
-			if err := d.AdminAuth.Logout(c.Value); err != nil {
+			if err := d.AdminAuth.Logout(r.Context(), c.Value); err != nil {
 				respondErr(d, w, r, err, "auth_failed")
 				return
 			}
@@ -134,7 +134,7 @@ func adminWhoami(_ Deps) http.HandlerFunc {
 
 func adminUsersList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, err := store.ListAdminUsers(d.DB)
+		u, err := store.ListAdminUsers(r.Context(), d.DB)
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
@@ -153,7 +153,7 @@ func adminUsersCreate(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
 			return
 		}
-		u, err := d.AdminAuth.Create(in.Username, in.Password)
+		u, err := d.AdminAuth.Create(r.Context(), in.Username, in.Password)
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
@@ -180,7 +180,7 @@ func adminUsersPatch(d Deps) http.HandlerFunc {
 				return
 			}
 		}
-		err := d.AdminAuth.Patch(r.PathValue("id"), in.Disabled, password)
+		err := d.AdminAuth.Patch(r.Context(), r.PathValue("id"), in.Disabled, password)
 		if errors.Is(err, store.ErrNotFound) {
 			writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
 			return
@@ -204,7 +204,7 @@ func adminAuditList(d Deps) http.HandlerFunc {
 			}
 			limit = n
 		}
-		items, next, err := store.ListAdminAudit(d.DB, r.URL.Query().Get("cursor"), limit)
+		items, next, err := store.ListAdminAudit(r.Context(), d.DB, r.URL.Query().Get("cursor"), limit)
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
@@ -440,7 +440,7 @@ func (aw *auditWriter) finishAudit(
 		Detail:    detail,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := store.AppendAdminAudit(d.DB, a); err != nil {
+	if err := store.AppendAdminAudit(r.Context(), d.DB, a); err != nil {
 		d.Logger.Error("管理动作审计写入失败", "request_id", a.RequestID, "action", action, "error_detail", err.Error())
 	}
 }

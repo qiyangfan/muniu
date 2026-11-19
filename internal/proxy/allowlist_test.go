@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -62,9 +63,14 @@ func newAllowProxy(t *testing.T, up *testkit.Upstream, allow []string, reg *plug
 }
 
 // doPost 通用 lane 请求助手：JSON POST，读全响应体。
-func doPost(t *testing.T, baseURL, path, body string) (*http.Response, string) {
+func doPost(t *testing.T, baseURL, path, body string) (int, string) {
 	t.Helper()
-	resp, err := http.Post(baseURL+path, "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,14 +79,14 @@ func doPost(t *testing.T, baseURL, path, body string) (*http.Response, string) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	return resp, string(raw)
+	return resp.StatusCode, string(raw)
 }
 
 // assertForbidden 断言 403 信封：类型 forbidden、code model_not_allowed、上游零调用。
-func assertForbidden(t *testing.T, resp *http.Response, body string, up *testkit.Upstream) {
+func assertForbidden(t *testing.T, status int, body string, up *testkit.Upstream) {
 	t.Helper()
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("应 403,实际 %d: %s", resp.StatusCode, body)
+	if status != http.StatusForbidden {
+		t.Fatalf("应 403,实际 %d: %s", status, body)
 	}
 	if !strings.Contains(body, "forbidden") || !strings.Contains(body, "model_not_allowed") {
 		t.Fatalf("403 信封类型/机器码不符: %s", body)
@@ -94,8 +100,8 @@ func assertForbidden(t *testing.T, resp *http.Response, body string, up *testkit
 func TestAllowlist_chat_白名单外403零上游(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
-	resp, body := postChat(t, ts.URL, `{"model":"alias-b","messages":[{"role":"user","content":"hi"}]}`)
-	assertForbidden(t, resp, body, up)
+	status, body := doPost(t, ts.URL, "/v1/chat/completions", `{"model":"alias-b","messages":[{"role":"user","content":"hi"}]}`)
+	assertForbidden(t, status, body, up)
 	if !strings.Contains(body, "无权访问") {
 		t.Fatalf("message 应可读说明拒绝原因: %s", body)
 	}
@@ -105,17 +111,17 @@ func TestAllowlist_chat_白名单外403零上游(t *testing.T) {
 func TestAllowlist_chat_白名单内放行与空白名单恒放行(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
-	resp, body := postChat(t, ts.URL, `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("白名单内应放行 200: %d %s", resp.StatusCode, body)
+	status, body := doPost(t, ts.URL, "/v1/chat/completions", `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("白名单内应放行 200: %d %s", status, body)
 	}
 	if up.RequestCount() != 1 {
 		t.Fatalf("白名单内应正常出站: %d", up.RequestCount())
 	}
 	ts2 := newAllowProxy(t, up, nil, nil)
-	resp, body = postChat(t, ts2.URL, `{"model":"alias-b","messages":[{"role":"user","content":"hi"}]}`)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("空白名单应恒放行: %d %s", resp.StatusCode, body)
+	status, body = doPost(t, ts2.URL, "/v1/chat/completions", `{"model":"alias-b","messages":[{"role":"user","content":"hi"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("空白名单应恒放行: %d %s", status, body)
 	}
 }
 
@@ -123,7 +129,7 @@ func TestAllowlist_chat_白名单内放行与空白名单恒放行(t *testing.T)
 func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200,
 		`{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`)
-	c, err := semantic.NewCache(newTestDB(t), semantic.Options{
+	c, err := semantic.NewCache(context.Background(), newTestDB(t), semantic.Options{
 		Dim: 4, Threshold: 0.5, TTL: time.Hour, Capacity: 100, EmbeddingModel: "emb",
 	}, constEmbedder{})
 	if err != nil {
@@ -138,7 +144,7 @@ func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 			"alias-b": {{Provider: "fake", Model: "up-a", Priority: 0}},
 		},
 		Cache:        c,
-		TenantSwitch: func(string) bool { return true },
+		TenantSwitch: func(context.Context, string) bool { return true },
 		Timeouts:     defTimeouts(),
 		Pools: map[string]*keypool.Pool{
 			"fake": keypool.NewPool([]keypool.KeyInput{{ID: "K", Value: "sk-test", Weight: 1}}),
@@ -158,9 +164,9 @@ func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 	// 先证缓存通路工作：第一次 miss 出站入库，第二次命中回放，上游仍只 1 次。
 	// temperature 显式 ≤0.3 是缓存准入条件，缺省请求恒 skip。
 	for i := 0; i < 2; i++ {
-		resp, body := postChat(t, ts.URL, `{"model":"alias-a","temperature":0.1,"messages":[{"role":"user","content":"hi"}]}`)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("白名单内请求应 200: %d %s", resp.StatusCode, body)
+		status, body := doPost(t, ts.URL, "/v1/chat/completions", `{"model":"alias-a","temperature":0.1,"messages":[{"role":"user","content":"hi"}]}`)
+		if status != http.StatusOK {
+			t.Fatalf("白名单内请求应 200: %d %s", status, body)
 		}
 	}
 	if got := up.RequestCount(); got != 1 {
@@ -168,9 +174,9 @@ func TestAllowlist_chat_白名单外不吃语义缓存命中(t *testing.T) {
 	}
 	// 白名单外：可命中缓存存在仍 403，零上游；基线比较，命中请求已让上游计数为 1。
 	baseline := up.RequestCount()
-	resp, body := postChat(t, ts.URL, `{"model":"alias-b","temperature":0.1,"messages":[{"role":"user","content":"hi"}]}`)
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "model_not_allowed") {
-		t.Fatalf("白名单外应 403 model_not_allowed: %d %s", resp.StatusCode, body)
+	status, body := doPost(t, ts.URL, "/v1/chat/completions", `{"model":"alias-b","temperature":0.1,"messages":[{"role":"user","content":"hi"}]}`)
+	if status != http.StatusForbidden || !strings.Contains(body, "model_not_allowed") {
+		t.Fatalf("白名单外应 403 model_not_allowed: %d %s", status, body)
 	}
 	if got := up.RequestCount(); got != baseline {
 		t.Fatalf("被禁请求不得触达上游: 基线 %d,实际 %d", baseline, got)
@@ -183,8 +189,8 @@ func TestAllowlist_插件改写model后再校验(t *testing.T) {
 	reg := manualRegistry(t, "model-rewriter", testkit.FixtureModifyModel, 200)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, reg)
 	// 请求本身是白名单内的 alias-a，插件把请求体改成含 alias-b 的合法 chat 体。
-	resp, body := postChat(t, ts.URL, `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
-	assertForbidden(t, resp, body, up)
+	status, body := doPost(t, ts.URL, "/v1/chat/completions", `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
+	assertForbidden(t, status, body, up)
 }
 
 // 六 lane 同规：messages/responses/gemini/embeddings/images 白名单外一律同形 403、零上游，
@@ -206,9 +212,9 @@ func TestAllowlist_多lane同规(t *testing.T) {
 	for _, tc := range cases {
 		// gemini lane 返回原生信封形态：管道错误经 writer 改写为 Gemini 形态，不携带 muniu code，
 		// 故只断言 403 加访问拒绝语义，不强求 model_not_allowed 字面量。
-		resp, body := doPost(t, ts.URL, tc.path, tc.body)
-		if resp.StatusCode != http.StatusForbidden {
-			t.Fatalf("[%s] 应 403,实际 %d: %s", tc.name, resp.StatusCode, body)
+		status, body := doPost(t, ts.URL, tc.path, tc.body)
+		if status != http.StatusForbidden {
+			t.Fatalf("[%s] 应 403,实际 %d: %s", tc.name, status, body)
 		}
 		if tc.name != "gemini" && !strings.Contains(body, "model_not_allowed") {
 			t.Fatalf("[%s] 信封应含 model_not_allowed: %s", tc.name, body)
@@ -223,10 +229,10 @@ func TestAllowlist_多lane同规(t *testing.T) {
 func TestAllowlist_messages流式403信封类型(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
-	resp, body := doPost(t, ts.URL, "/v1/messages",
+	status, body := doPost(t, ts.URL, "/v1/messages",
 		`{"model":"alias-b","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
-	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("流式 messages 白名单外应 403,实际 %d: %s", resp.StatusCode, body)
+	if status != http.StatusForbidden {
+		t.Fatalf("流式 messages 白名单外应 403,实际 %d: %s", status, body)
 	}
 	if !strings.Contains(body, "permission_error") {
 		t.Fatalf("信封类型应映射为 Anthropic permission_error: %s", body)
@@ -244,27 +250,31 @@ func TestAllowlist_模型发现过滤与单查分支(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, `{"id":"x","choices":[]}`)
 	ts := newAllowProxy(t, up, []string{"alias-a"}, nil)
 
-	resp, body := doGet(t, ts.URL, "/v1/models")
-	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "alias-a") || strings.Contains(body, "alias-b") {
-		t.Fatalf("列表应为白名单过滤视图: %d %s", resp.StatusCode, body)
+	status, body := doGet(t, ts.URL, "/v1/models")
+	if status != http.StatusOK || !strings.Contains(body, "alias-a") || strings.Contains(body, "alias-b") {
+		t.Fatalf("列表应为白名单过滤视图: %d %s", status, body)
 	}
-	resp, body = doGet(t, ts.URL, "/v1/models/alias-a")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("白名单内单查应 200: %d %s", resp.StatusCode, body)
+	status, body = doGet(t, ts.URL, "/v1/models/alias-a")
+	if status != http.StatusOK {
+		t.Fatalf("白名单内单查应 200: %d %s", status, body)
 	}
-	resp, body = doGet(t, ts.URL, "/v1/models/alias-b")
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "model_not_allowed") {
-		t.Fatalf("在目录但白名单外应 403 model_not_allowed: %d %s", resp.StatusCode, body)
+	status, body = doGet(t, ts.URL, "/v1/models/alias-b")
+	if status != http.StatusForbidden || !strings.Contains(body, "model_not_allowed") {
+		t.Fatalf("在目录但白名单外应 403 model_not_allowed: %d %s", status, body)
 	}
-	resp, body = doGet(t, ts.URL, "/v1/models/nope")
-	if resp.StatusCode != http.StatusNotFound || !strings.Contains(body, "not_found") {
-		t.Fatalf("不在目录应 404 not_found: %d %s", resp.StatusCode, body)
+	status, body = doGet(t, ts.URL, "/v1/models/nope")
+	if status != http.StatusNotFound || !strings.Contains(body, "not_found") {
+		t.Fatalf("不在目录应 404 not_found: %d %s", status, body)
 	}
 }
 
-func doGet(t *testing.T, baseURL, path string) (*http.Response, string) {
+func doGet(t *testing.T, baseURL, path string) (int, string) {
 	t.Helper()
-	resp, err := http.Get(baseURL + path)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, baseURL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,5 +283,5 @@ func doGet(t *testing.T, baseURL, path string) (*http.Response, string) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	return resp, string(raw)
+	return resp.StatusCode, string(raw)
 }

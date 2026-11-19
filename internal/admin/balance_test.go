@@ -1,6 +1,7 @@
 package admin_test
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,7 +20,7 @@ import (
 // newBalanceAdmin 装配带余额观测的管理面:manual 渠道 + 假上游 Bearer 渠道。
 func newBalanceAdmin(t *testing.T) (http.Handler, *balance.Service) {
 	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "admin-balance.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "admin-balance.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,14 +39,14 @@ func newBalanceAdmin(t *testing.T) (http.Handler, *balance.Service) {
 		"ch":  {Kind: balance.SourceManual, Currency: "CNY"},
 		"dsx": {Kind: balance.SourceDeepseek, Querier: q, BelowCredits: &below, Keys: []balance.ChannelKey{{ID: "DSK", Value: "sk"}}},
 	}
-	svc := balance.NewService(balance.Options{
+	svc := balance.NewService(context.Background(), balance.Options{
 		DB: db, Notifier: alerting.New(alerting.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}),
 		Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]balance.ChannelBinding { return bindings },
 	})
 	svc.Start()
 	t.Cleanup(svc.Close)
-	h := admin.New(admin.Deps{
+	h := admin.New(context.Background(), admin.Deps{
 		DB: db, Token: "tk", Balance: svc,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})

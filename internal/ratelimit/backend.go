@@ -42,7 +42,7 @@ func (g *Gate) sharedMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		// 1) 日配额（key 级 + 租户聚合，本地）
-		if g.Quota != nil && g.Quota.exceeded(keyInfoFrom(r.Context()), timeNow()) {
+		if g.Quota != nil && g.Quota.exceeded(r.Context(), keyInfoFrom(r.Context()), timeNow()) {
 			g.denyQuota(w, r)
 			return
 		}

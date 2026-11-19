@@ -3,6 +3,7 @@
 package metering
 
 import (
+	"context"
 	"database/sql"
 	"io"
 	"log/slog"
@@ -21,7 +22,7 @@ func testLogger() *slog.Logger {
 
 func openStore(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "metering.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "metering.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func mkRow(id string) UsageRow {
 func countRows(t *testing.T, db *sql.DB) int {
 	t.Helper()
 	var n int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM usage_logs`).Scan(&n); err != nil {
+	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM usage_logs`).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	return n
@@ -50,7 +51,7 @@ func countRows(t *testing.T, db *sql.DB) int {
 
 func TestPipeline_批量落库与优雅排干(t *testing.T) {
 	db := openStore(t)
-	p := NewPipeline(db, Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64}, testLogger()) // 不靠定时/批量阈值触发。
+	p := NewPipeline(context.Background(), db, Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64}, testLogger()) // 不靠定时/批量阈值触发。
 	for i := 0; i < 5; i++ {
 		p.Submit(mkRow(string(rune('a' + i))))
 	}
@@ -63,9 +64,25 @@ func TestPipeline_批量落库与优雅排干(t *testing.T) {
 	p.Submit(mkRow("z")) // 关闭后提交：静默丢弃并告警，绝不 panic。
 }
 
+// 生命周期 ctx 取消(进程收到退出信号)后,Close 的排干仍须入账:计量是记账性副作用,
+// 与客户端断连同属「请求结束但账要落」,只有进程退出才放弃。
+func TestPipeline_生命周期取消后排干仍落库(t *testing.T) {
+	db := openStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	p := NewPipeline(ctx, db, Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64}, testLogger())
+	cancel()
+	p.Submit(mkRow("a"))
+	if err := p.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if got := countRows(t, db); got != 1 {
+		t.Fatalf("排干应落库 1 行,实际 %d", got)
+	}
+}
+
 func TestPipeline_攒满Batch即刷不等定时(t *testing.T) {
 	db := openStore(t)
-	p := NewPipeline(db, Options{Interval: time.Hour, Batch: 8, Capacity: 64}, testLogger())
+	p := NewPipeline(context.Background(), db, Options{Interval: time.Hour, Batch: 8, Capacity: 64}, testLogger())
 	for i := 0; i < 8; i++ {
 		p.Submit(mkRow(string(rune('a' + i))))
 	}
@@ -83,9 +100,9 @@ func TestPipeline_攒满Batch即刷不等定时(t *testing.T) {
 func TestPipeline_背压阻塞不丢单(t *testing.T) {
 	db := openStore(t)
 	// Batch=1 时 flusher 每行都落库；占住唯一连接使落库阻塞 → channel 必然充满 → Submit 阻塞。
-	p := NewPipeline(db, Options{Interval: time.Hour, Batch: 1, Capacity: 2}, testLogger())
+	p := NewPipeline(context.Background(), db, Options{Interval: time.Hour, Batch: 1, Capacity: 2}, testLogger())
 
-	held, err := db.Begin() // 占住 MaxOpenConns(1) 的唯一连接，模拟慢盘。
+	held, err := db.BeginTx(context.Background(), nil) // 占住 MaxOpenConns(1) 的唯一连接，模拟慢盘。
 	if err != nil {
 		t.Fatal(err)
 	}

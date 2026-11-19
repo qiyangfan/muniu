@@ -5,6 +5,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -56,13 +57,13 @@ func newOwnershipProxy(t *testing.T, up statefulUpstream) *httptest.Server {
 	return ts
 }
 
-func doWithKey(t *testing.T, ts *httptest.Server, method, path, keyID, body string) (*http.Response, string) {
+func doWithKey(t *testing.T, ts *httptest.Server, method, path, keyID, body string) (chatResponse, string) {
 	t.Helper()
 	var rd io.Reader
 	if body != "" {
 		rd = strings.NewReader(body)
 	}
-	req, err := http.NewRequest(method, ts.URL+path, rd)
+	req, err := http.NewRequestWithContext(context.Background(), method, ts.URL+path, rd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func doWithKey(t *testing.T, ts *httptest.Server, method, path, keyID, body stri
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	return resp, string(raw)
+	return chatResponse{StatusCode: resp.StatusCode, Header: resp.Header}, string(raw)
 }
 
 // 全链场景：同 key 创建、粘性链式、GET 全通；跨 key 三动词全部按未知拒绝且上游零调用。

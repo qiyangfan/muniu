@@ -148,8 +148,8 @@ func TestFlow_Token端点错误结构化(t *testing.T) {
 	defer srv.Close()
 	f := NewFlow(testCfg(srv.URL), srv.Client(), deterministicRand(1))
 	_, err := f.Refresh(context.Background(), "rt-bad")
-	te, ok := err.(*TokenError)
-	if !ok || te.Status != 400 || te.GrantType != "invalid_grant" {
+	var te *TokenError
+	if !errors.As(err, &te) || te.Status != 400 || te.GrantType != "invalid_grant" {
 		t.Fatalf("错误应结构化为 TokenError{400,invalid_grant}, got %T %v", err, err)
 	}
 	if !isAuthReject(err) {
@@ -218,7 +218,7 @@ func tokenServer(t *testing.T, st *memStore, status int, body string) *httptest.
 	}))
 }
 
-func newTestRefresher(t *testing.T, st AccountStore, srv *httptest.Server, sync func()) (*Refresher, *memStore) {
+func newTestRefresher(t *testing.T, st AccountStore, srv *httptest.Server, sync func(context.Context)) (*Refresher, *memStore) {
 	t.Helper()
 	f := NewFlow(testCfg(srv.URL), srv.Client(), deterministicRand(1))
 	r := NewRefresher(testCfg(srv.URL), st, f, nil, RefreshTuning{Interval: time.Minute, Window: time.Hour}, sync)
@@ -370,7 +370,7 @@ func TestRefresher_判定表(t *testing.T) {
 			srv := tokenServer(t, st, c.status, c.body)
 			defer srv.Close()
 			synced := false
-			r, _ := newTestRefresher(t, st, srv, func() { synced = true })
+			r, _ := newTestRefresher(t, st, srv, func(context.Context) { synced = true })
 			r.tick(context.Background())
 			c.probe(t, st, &synced)
 			if !synced {
@@ -387,7 +387,7 @@ func TestRefresher_传输层失败_保持active零回写(t *testing.T) {
 	st := newMemStore(Account{ID: "a1", Status: StatusActive, RefreshToken: "rt", ExpiresAt: time.Now().Add(time.Minute)})
 	srv := tokenServer(t, st, 200, `{}`)
 	srv.Close() // 预先拆除:tick 时连接拒绝
-	r, _ := newTestRefresher(t, st, srv, func() {})
+	r, _ := newTestRefresher(t, st, srv, func(context.Context) {})
 	r.tick(context.Background())
 	a := st.accs["a1"]
 	if a.Status != StatusActive || a.AccessToken != "" || a.RefreshToken != "rt" {

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -69,8 +70,8 @@ func parseBalanceTime(s string) (time.Time, error) {
 // RecordBalanceSuccess 记录成功查询的快照并清零失败计数;upsert 覆盖余额/币种/来源/时刻。
 // 前值平移:覆盖前把既有余额/币种/时刻挪入 prev_*(相邻转移判据);首次写入无既有值,
 // prev_balance_credits 保持 NULL(HasPrevTransition=false,无转移可判)。
-func RecordBalanceSuccess(db *sql.DB, snap BalanceSnapshot) error {
-	_, err := db.Exec(`INSERT INTO provider_balances (
+func RecordBalanceSuccess(ctx context.Context, db *sql.DB, snap BalanceSnapshot) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO provider_balances (
 		provider, key_id, source, balance_credits, currency, as_of_at,
 		prev_balance_credits, prev_currency, prev_as_of_at,
 		manual_amount, last_error, consecutive_failures, updated_at)
@@ -92,8 +93,9 @@ func RecordBalanceSuccess(db *sql.DB, snap BalanceSnapshot) error {
 
 // RecordBalanceFailure 记录失败:既有快照余额保持不变,仅累加失败计数与错误归类;
 // 首次查询即失败时落一行无余额占位,让失败计数有载体。
-func RecordBalanceFailure(db *sql.DB, provider, keyID, source, errClass string, now time.Time) error {
-	_, err := db.Exec(`INSERT INTO provider_balances (
+func RecordBalanceFailure(ctx context.Context, db *sql.DB,
+	provider, keyID, source, errClass string, now time.Time) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO provider_balances (
 		provider, key_id, source, balance_credits, currency, as_of_at,
 		last_error, consecutive_failures, updated_at)
 		VALUES (?,?,?,NULL,'','',?,1,?)
@@ -108,7 +110,7 @@ func RecordBalanceFailure(db *sql.DB, provider, keyID, source, errClass string, 
 }
 
 // ListBalanceSnapshots 列出快照;provider 为空 = 全渠道,非空 = 单渠道(含不存在时的空集)。
-func ListBalanceSnapshots(db *sql.DB, provider string) ([]BalanceSnapshot, error) {
+func ListBalanceSnapshots(ctx context.Context, db *sql.DB, provider string) ([]BalanceSnapshot, error) {
 	q := `SELECT provider, key_id, source, balance_credits, currency, as_of_at,
 		prev_balance_credits, prev_currency, prev_as_of_at,
 		manual_amount, last_error, consecutive_failures, updated_at FROM provider_balances`
@@ -118,7 +120,7 @@ func ListBalanceSnapshots(db *sql.DB, provider string) ([]BalanceSnapshot, error
 		args = append(args, provider)
 	}
 	q += ` ORDER BY provider, key_id`
-	rows, err := db.Query(q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列余额快照: %w", err)
 	}
@@ -185,7 +187,7 @@ func parseIntoTime(v sql.NullString, dst *time.Time, col string) error {
 
 // SpendSince 渠道自某 UTC 时刻起的已结算消耗(credit):有效余额衰减的减项。
 // 仅计 estimated=0 行,与 SumCostToday 同口径;as_of_at 为空串时不做时刻过滤(全量)。
-func SpendSince(db *sql.DB, provider, sinceUTC string) (int64, error) {
+func SpendSince(ctx context.Context, db *sql.DB, provider, sinceUTC string) (int64, error) {
 	q := `SELECT COALESCE(SUM(cost_credits),0) FROM usage_logs
 		WHERE provider = ? AND estimated = 0`
 	args := []any{provider}
@@ -194,21 +196,21 @@ func SpendSince(db *sql.DB, provider, sinceUTC string) (int64, error) {
 		args = append(args, sinceUTC)
 	}
 	var total int64
-	if err := db.QueryRow(q, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, q, args...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("store: 快照后消耗聚合: %w", err)
 	}
 	return total, nil
 }
 
 // BurnWindow 燃速窗口内逐日已结算消耗,日期升序;零行 = 窗口内零消耗。
-func BurnWindow(db *sql.DB, provider, fromUTC string) ([]BurnDay, error) {
-	return BurnWindowRange(db, provider, fromUTC, "")
+func BurnWindow(ctx context.Context, db *sql.DB, provider, fromUTC string) ([]BurnDay, error) {
+	return BurnWindowRange(ctx, db, provider, fromUTC, "")
 }
 
 // BurnWindowRange 区间 [fromUTC, toUTC) 内逐日已结算消耗,toUTC 为空 = 不设上界;
 // 零行 = 区间内零消耗。燃速突变告警的基线窗口(上一等长窗口)与当前窗口共用同一聚合形态,
 // 逐日行数即「窗口内有消耗天数」,与最小样本判定同源。
-func BurnWindowRange(db *sql.DB, provider, fromUTC, toUTC string) ([]BurnDay, error) {
+func BurnWindowRange(ctx context.Context, db *sql.DB, provider, fromUTC, toUTC string) ([]BurnDay, error) {
 	q := `SELECT substr(created_at,1,10) AS day,
 		COALESCE(SUM(cost_credits),0) FROM usage_logs
 		WHERE provider = ? AND estimated = 0 AND created_at >= ?`
@@ -218,7 +220,7 @@ func BurnWindowRange(db *sql.DB, provider, fromUTC, toUTC string) ([]BurnDay, er
 		args = append(args, toUTC)
 	}
 	q += ` GROUP BY day ORDER BY day`
-	rows, err := db.Query(q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: 燃速窗口聚合: %w", err)
 	}
@@ -238,24 +240,24 @@ func BurnWindowRange(db *sql.DB, provider, fromUTC, toUTC string) ([]BurnDay, er
 // 拓扑热替换移除 key 后,残留行会以幽灵余额参与 min-估算、并把渠道级失败计数
 // 钉死在 0,两者都是正确性污染而非仅展示问题。同步清理该 key 的逐 key 骤降规则
 // 状态行(cliff:<key_id>),防幽灵规则状态残留。
-func PruneBalanceKeys(db *sql.DB, provider string, keep []string) error {
+func PruneBalanceKeys(ctx context.Context, db *sql.DB, provider string, keep []string) error {
 	if len(keep) == 0 {
 		return nil
 	}
-	if err := deleteStaleBalanceKeys(db, provider, keep); err != nil {
+	if err := deleteStaleBalanceKeys(ctx, db, provider, keep); err != nil {
 		return err
 	}
-	return deleteStaleCliffStates(db, provider, keep)
+	return deleteStaleCliffStates(ctx, db, provider, keep)
 }
 
 // deleteStaleBalanceKeys 删掉渠道内不在 keep 中、且非账户哨兵的快照行。
 // keep 经 JSON 数组绑定进固定 SQL，避免拼接 IN 列表。
-func deleteStaleBalanceKeys(db *sql.DB, provider string, keep []string) error {
+func deleteStaleBalanceKeys(ctx context.Context, db *sql.DB, provider string, keep []string) error {
 	arr, err := json.Marshal(keep)
 	if err != nil {
 		return fmt.Errorf("store: 序列化保留 key: %w", err)
 	}
-	if _, err := db.Exec(`DELETE FROM provider_balances
+	if _, err := db.ExecContext(ctx, `DELETE FROM provider_balances
 		WHERE provider = ? AND key_id != ?
 		AND key_id NOT IN (SELECT value FROM json_each(?))`,
 		provider, AccountKeyID, string(arr)); err != nil {
@@ -265,7 +267,7 @@ func deleteStaleBalanceKeys(db *sql.DB, provider string, keep []string) error {
 }
 
 // deleteStaleCliffStates 删掉渠道内不在 keep 中的逐 key 骤降规则状态行。
-func deleteStaleCliffStates(db *sql.DB, provider string, keep []string) error {
+func deleteStaleCliffStates(ctx context.Context, db *sql.DB, provider string, keep []string) error {
 	cliffKeys := make([]string, len(keep))
 	for i, k := range keep {
 		cliffKeys[i] = ruleKeyCliffPrefix + k
@@ -274,7 +276,7 @@ func deleteStaleCliffStates(db *sql.DB, provider string, keep []string) error {
 	if err != nil {
 		return fmt.Errorf("store: 序列化保留规则: %w", err)
 	}
-	if _, err := db.Exec(`DELETE FROM balance_alert_states
+	if _, err := db.ExecContext(ctx, `DELETE FROM balance_alert_states
 		WHERE provider = ? AND rule_key LIKE 'cliff:%'
 		AND rule_key NOT IN (SELECT value FROM json_each(?))`,
 		provider, string(arr)); err != nil {
@@ -284,12 +286,12 @@ func deleteStaleCliffStates(db *sql.DB, provider string, keep []string) error {
 }
 
 // UpsertAlertState 写告警状态(评估循环与手动清理由此落库)。
-func UpsertAlertState(db *sql.DB, st AlertState) error {
+func UpsertAlertState(ctx context.Context, db *sql.DB, st AlertState) error {
 	var fired any
 	if st.LastFiredAt != nil {
 		fired = balanceTime(*st.LastFiredAt)
 	}
-	_, err := db.Exec(`INSERT INTO balance_alert_states (
+	_, err := db.ExecContext(ctx, `INSERT INTO balance_alert_states (
 		provider, rule_key, firing, severity, last_fired_at, context_json, updated_at)
 		VALUES (?,?,?,?,?,?,?)
 		ON CONFLICT(provider, rule_key) DO UPDATE SET
@@ -304,7 +306,7 @@ func UpsertAlertState(db *sql.DB, st AlertState) error {
 }
 
 // ListAlertStates 列出告警状态;provider 为空 = 全渠道。
-func ListAlertStates(db *sql.DB, provider string) ([]AlertState, error) {
+func ListAlertStates(ctx context.Context, db *sql.DB, provider string) ([]AlertState, error) {
 	q := `SELECT provider, rule_key, firing, severity, last_fired_at, context_json, updated_at
 		FROM balance_alert_states`
 	args := []any{}
@@ -313,7 +315,7 @@ func ListAlertStates(db *sql.DB, provider string) ([]AlertState, error) {
 		args = append(args, provider)
 	}
 	q += ` ORDER BY provider, rule_key`
-	rows, err := db.Query(q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列告警状态: %w", err)
 	}

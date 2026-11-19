@@ -1,6 +1,7 @@
 package balance
 
 import (
+	"context"
 	"sort"
 	"time"
 
@@ -53,7 +54,7 @@ type ProviderOverview struct {
 
 // Overview 全渠道观测总览:声明了余额源的渠道恒出现(未查询过也给出空态),
 // 估算口径与评估循环单源(同走 observe)。
-func (s *Service) Overview() []ProviderOverview {
+func (s *Service) Overview(ctx context.Context) []ProviderOverview {
 	out := []ProviderOverview{}
 	if s.opts.Sources == nil {
 		return out
@@ -65,21 +66,23 @@ func (s *Service) Overview() []ProviderOverview {
 	}
 	sort.Strings(names)
 
-	rowsBy, statesBy := s.overviewRowsByProvider()
+	rowsBy, statesBy := s.overviewRowsByProvider(ctx)
 	now := s.opts.Now()
 	for _, name := range names {
-		out = append(out, s.overviewOf(name, bindings[name], rowsBy, statesBy, now))
+		out = append(out, s.overviewOf(ctx, name, bindings[name], rowsBy, statesBy, now))
 	}
 	return out
 }
 
 // overviewRowsByProvider 一次读全量快照与告警态并按渠道分桶(逐渠道查询会放大读库次数)。
-func (s *Service) overviewRowsByProvider() (map[string][]store.BalanceSnapshot, map[string][]store.AlertState) {
-	rowsAll, rerr := store.ListBalanceSnapshots(s.opts.DB, "")
+func (s *Service) overviewRowsByProvider(ctx context.Context) (
+	map[string][]store.BalanceSnapshot, map[string][]store.AlertState,
+) {
+	rowsAll, rerr := store.ListBalanceSnapshots(ctx, s.opts.DB, "")
 	if rerr != nil {
 		s.log.Error("总览快照读取失败", "error_detail", rerr.Error())
 	}
-	statesAll, serr := store.ListAlertStates(s.opts.DB, "")
+	statesAll, serr := store.ListAlertStates(ctx, s.opts.DB, "")
 	if serr != nil {
 		s.log.Error("总览告警状态读取失败", "error_detail", serr.Error())
 	}
@@ -95,7 +98,7 @@ func (s *Service) overviewRowsByProvider() (map[string][]store.BalanceSnapshot, 
 }
 
 // overviewOf 单渠道总览行。
-func (s *Service) overviewOf(name string, binding ChannelBinding,
+func (s *Service) overviewOf(ctx context.Context, name string, binding ChannelBinding,
 	rowsBy map[string][]store.BalanceSnapshot, statesBy map[string][]store.AlertState,
 	now time.Time) ProviderOverview {
 	po := ProviderOverview{
@@ -106,7 +109,7 @@ func (s *Service) overviewOf(name string, binding ChannelBinding,
 	if binding.BelowCredits != nil {
 		po.Below = FormatCredits(*binding.BelowCredits)
 	}
-	est, keys := s.observe(name, now)
+	est, keys := s.observe(ctx, name, now)
 	po.Currency = est.PrimaryCurrency
 	po.BurnPerDayCredits = est.BurnPerDay
 	po.DaysWithUsage = est.DaysWithUsage

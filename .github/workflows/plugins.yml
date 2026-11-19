@@ -27,9 +27,13 @@ jobs:
       - name: Rust fmt check
         working-directory: plugins
         run: cargo fmt --all --check
-      - name: Rust clippy
+      - name: Rust clippy (host)
         working-directory: plugins
         run: cargo clippy --workspace --all-targets -- -D warnings
+      # wasm 专属代码路径(core::arch::wasm32 等)宿主目标看不到,补一遍 wasm 目标检查
+      - name: Rust clippy (wasm32)
+        working-directory: plugins
+        run: cargo clippy --workspace --target wasm32-unknown-unknown -- -D warnings
       - name: Build plugins (workspace)
         working-directory: plugins
         run: |
@@ -39,6 +43,14 @@ jobs:
       - name: Rust tests (host)
         working-directory: plugins
         run: cargo test
+      # 未用依赖:clippy 不报 Cargo.toml 里多余的 dependency,cargo-machete 补这一档
+      - name: Rust unused dependencies
+        run: |
+          VERSION=0.10.1
+          curl -sSfL "https://github.com/bnjbvr/cargo-machete/releases/download/v${VERSION}/cargo-machete-v${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin --strip-components=1 \
+                "cargo-machete-v${VERSION}-x86_64-unknown-linux-musl/cargo-machete"
+          cd plugins && cargo machete
       # 依赖策略:漏洞(RustSec)/许可证/来源/禁用项,配置单源 plugins/deny.toml;
       # 预编译二进制免去 CI 编译,版本钉死保证可复现
       - name: Rust deny

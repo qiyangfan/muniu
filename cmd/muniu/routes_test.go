@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -69,7 +70,7 @@ model_routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, routes, cleanup, err := assemble(cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	_, routes, cleanup, err := assemble(context.Background(), cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("装配失败: %v", err)
 	}

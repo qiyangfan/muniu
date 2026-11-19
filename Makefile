@@ -2,15 +2,15 @@ GO ?= go
 BIN := bin
 PKG := github.com/solvela/muniu
 
-## check: 全量门禁(vet、lint、基础设施 lint(含文件卫生)、依赖整洁、web 检查、race test/覆盖率、插件)
+## check: 全量门禁(vet、lint、死代码、许可证、密钥扫描、基础设施 lint(含文件卫生)、依赖整洁、web 检查、race test/覆盖率、插件)
 .PHONY: check
-check: vet lint infra-lint tidy-check web-check test plugin-check
+check: vet lint deadcode licenses secrets doclink infra-lint tidy-check web-check test plugin-check
 
 ## web-check: 控制台类型检查/lint/组件测试/契约类型漂移(pnpm 存在时执行,否则跳过)
 .PHONY: web-check
 web-check:
 	@command -v pnpm >/dev/null 2>&1 || { echo "[web-check] pnpm 未安装,跳过控制台门禁"; exit 0; }
-	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm knip && pnpm test && pnpm format:check && pnpm generate:api && git diff --exit-code -- src/lib/api-types.d.ts && pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
+	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm knip && pnpm test && pnpm format:check && node ../scripts/weblicensecheck.mjs && pnpm generate:api && git diff --exit-code -- src/lib/api-types.d.ts && pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
 
 ## web-build: 构建控制台产物到 web/dist(嵌入二进制)
 .PHONY: web-build
@@ -37,10 +37,30 @@ infra-lint:
 	@if command -v goreleaser >/dev/null 2>&1; then goreleaser check; else echo "[infra-lint] goreleaser 未安装,跳过"; fi
 	@if command -v pre-commit >/dev/null 2>&1; then SKIP=gitleaks pre-commit run --all-files; else echo "[infra-lint] pre-commit 未安装,跳过文件卫生检查"; fi
 
+## doclink: 文档相对链接与标题锚点检查(零网络依赖,287 篇 Markdown 全量)
+.PHONY: doclink
+doclink:
+	@python3 scripts/linkcheck.py
+
 ## tidy-check: go.mod/go.sum 与源码一致(防脏依赖文件过闸)
 .PHONY: tidy-check
 tidy-check:
 	$(GO) mod tidy -diff
+
+## deadcode: 跨包不可达函数(deadcode 未安装时跳过并提示,CI 全量执行)
+.PHONY: deadcode
+deadcode:
+	@if command -v deadcode >/dev/null 2>&1; then ./scripts/deadcodecheck.sh; else echo "[deadcode] deadcode 未安装,跳过"; fi
+
+## licenses: 依赖许可证白名单审计(白名单在 scripts/licensecheck.sh;go-licenses 未安装时跳过并提示,CI 全量执行)
+.PHONY: licenses
+licenses:
+	@if command -v go-licenses >/dev/null 2>&1; then ./scripts/licensecheck.sh; else echo "[licenses] go-licenses 未安装,跳过"; fi
+
+## secrets: gitleaks 全历史密钥扫描与 security.yml 同源(策略与 allowlist 在 .gitleaks.toml;gitleaks 未安装时跳过并提示)
+.PHONY: secrets
+secrets:
+	@if command -v gitleaks >/dev/null 2>&1; then gitleaks detect --source . --redact --no-banner --exit-code 1; else echo "[secrets] gitleaks 未安装,跳过(CI security.yml 全量执行)"; fi
 
 ## hooks: 安装提交期钩子(凭据/文件卫生走 pre-commit 阶段,提交信息走 commit-msg 阶段)
 .PHONY: hooks
@@ -50,7 +70,7 @@ hooks:
 ## test: race 全量测试 + 覆盖率门禁(聚合 65% + 逐包下限,见 scripts/covercheck.sh)
 .PHONY: test
 test:
-	$(GO) test -race -covermode=atomic -coverprofile=coverage.out ./...
+	$(GO) test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
 	GO=$(GO) ./scripts/covercheck.sh coverage.out
 
 ## build: 纯静态单二进制(CGO_ENABLED=0),版本号由 git tag 注入
@@ -115,6 +135,16 @@ dev-status:
 .PHONY: dev-restart
 dev-restart: dev-up
 
+## vuln: 可达漏洞扫描(govulncheck;需漏洞库网络.未安装时跳过并提示,CI vuln 作业全量执行)
+.PHONY: vuln
+vuln:
+	@if command -v govulncheck >/dev/null 2>&1; then govulncheck ./...; else echo "[vuln] govulncheck 未安装,跳过(安装: go install golang.org/x/vuln/cmd/govulncheck@latest)"; fi
+
+## audit: 控制台生产依赖高危审计(pnpm audit;需 registry 网络.本地可选,CI web-check 全量执行)
+.PHONY: audit
+audit:
+	@if command -v pnpm >/dev/null 2>&1; then cd web && pnpm audit --prod --audit-level high; else echo "[audit] pnpm 未安装,跳过"; fi
+
 ## fuzz: 协议解析 fuzz(手动档;FUZZ 指定目标,FUZZTIME 指定时长)
 FUZZ ?= FuzzParseChatRequest
 FUZZTIME ?= 30s
@@ -122,12 +152,18 @@ FUZZTIME ?= 30s
 fuzz:
 	$(GO) test ./internal/protocol/ -run='^$$' -fuzz='^$(FUZZ)$$' -fuzztime=$(FUZZTIME)
 
-## plugin-check: 插件侧门禁(fmt/clippy/test/依赖策略/覆盖率;工具缺失时跳过并提示,CI 全量执行)
+## plugin-check: 插件侧门禁(fmt/clippy/test/未用依赖/依赖策略/覆盖率;工具缺失时跳过并提示,CI 全量执行)
 ## 覆盖率下限 68 取 2026-11-19 实测 68.59% 向下取整(含 sdk 的 wasm ABI 垫片——宿主测试打不到,计 0%)
 .PHONY: plugin-check
 plugin-check:
 	@command -v cargo >/dev/null 2>&1 || { echo "[plugin-check] cargo 未安装,跳过"; exit 0; }
 	cd plugins && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test
+	@if rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then \
+		cd plugins && cargo clippy --workspace --target wasm32-unknown-unknown -- -D warnings; \
+	else \
+		echo "[plugin-check] wasm32 target 未安装,跳过 wasm 目标 clippy(安装: rustup target add wasm32-unknown-unknown)"; \
+	fi
+	@if command -v cargo-machete >/dev/null 2>&1; then cd plugins && cargo machete; else echo "[plugin-check] cargo-machete 未安装,跳过未用依赖检查"; fi
 	@if command -v cargo-deny >/dev/null 2>&1; then cd plugins && cargo deny check; else echo "[plugin-check] cargo-deny 未安装,跳过依赖策略检查"; fi
 	@if command -v cargo-llvm-cov >/dev/null 2>&1; then cd plugins && cargo llvm-cov --workspace --summary-only --fail-under-lines 68; else echo "[plugin-check] cargo-llvm-cov 未安装,跳过覆盖率门禁"; fi
 

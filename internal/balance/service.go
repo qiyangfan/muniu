@@ -74,9 +74,9 @@ type Service struct {
 }
 
 // NewService 构造并兜底缺省;调用方随后 Start()。
-func NewService(opts Options) *Service {
+func NewService(ctx context.Context, opts Options) *Service {
 	opts = withDefaults(opts)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	return &Service{
 		opts: opts, log: opts.Logger,
 		ctx: ctx, cancel: cancel,
@@ -135,7 +135,7 @@ func (s *Service) Start() { go s.loop() }
 
 func (s *Service) loop() {
 	defer close(s.done)
-	s.evaluateAll()
+	s.evaluateAll(s.ctx)
 	ticker := time.NewTicker(s.opts.Interval)
 	defer ticker.Stop()
 	for {
@@ -143,9 +143,9 @@ func (s *Service) loop() {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			s.evaluateAll()
+			s.evaluateAll(s.ctx)
 		case provider := <-s.refresh:
-			s.evaluateProvider(provider)
+			s.evaluateProvider(s.ctx, provider)
 		}
 	}
 }
@@ -172,18 +172,18 @@ func (s *Service) RequestRefresh(provider string) {
 	}
 }
 
-func (s *Service) evaluateAll() {
+func (s *Service) evaluateAll(ctx context.Context) {
 	if s.opts.Sources == nil {
 		return
 	}
 	for name := range s.opts.Sources() {
-		s.evaluateProvider(name)
+		s.evaluateProvider(ctx, name)
 	}
 }
 
 // evaluateProvider 单渠道评估:查询 → 落库 → 燃速估算 → 状态机 → 发射;
 // panic 按渠道隔离,观测面故障不得拖垮进程。
-func (s *Service) evaluateProvider(provider string) {
+func (s *Service) evaluateProvider(ctx context.Context, provider string) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.log.Error("余额评估 panic(已按渠道隔离)", "provider", provider, "error_detail", fmt.Sprint(r))
@@ -202,31 +202,32 @@ func (s *Service) evaluateProvider(provider string) {
 	for _, k := range binding.Keys {
 		keep = append(keep, k.ID)
 	}
-	if perr := store.PruneBalanceKeys(s.opts.DB, provider, keep); perr != nil {
+	if perr := store.PruneBalanceKeys(ctx, s.opts.DB, provider, keep); perr != nil {
 		s.log.Error("余额残留 key 清理失败", "provider", provider, "error_detail", perr.Error())
 	}
 	if binding.Querier != nil {
-		s.queryPhase(provider, binding, now)
+		s.queryPhase(ctx, provider, binding, now)
 	}
-	s.estimateAndAlert(provider, binding, now)
+	s.estimateAndAlert(ctx, provider, binding, now)
 }
 
 // queryPhase 逐目标查询落库;渠道级失败=全部目标失败(单 key 失败不牵连)。
-func (s *Service) queryPhase(provider string, binding ChannelBinding, now time.Time) {
+func (s *Service) queryPhase(ctx context.Context, provider string, binding ChannelBinding, now time.Time) {
 	targets := targetsOf(binding)
 	if len(targets) == 0 {
 		return // 全部 key 禁用:无查询即无成败信息,不得解除既有 source_error 态
 	}
 	failedAll := true
 	for _, tgt := range targets {
-		qctx, cancel := context.WithTimeout(s.ctx, s.opts.PollTimeout)
+		qctx, cancel := context.WithTimeout(ctx, s.opts.PollTimeout)
 		bal, err := binding.Querier.Query(qctx, tgt.Value)
 		cancel()
 		if err != nil {
 			class := classifyQueryErr(err)
 			s.log.Warn("余额查询失败", "provider", provider, "key_id", tgt.ID,
 				"error_class", string(class), "error_detail", err.Error())
-			if serr := store.RecordBalanceFailure(s.opts.DB, provider, tgt.ID, binding.Kind, string(class), now); serr != nil {
+			if serr := store.RecordBalanceFailure(ctx, s.opts.DB, provider,
+				tgt.ID, binding.Kind, string(class), now); serr != nil {
 				s.log.Error("余额失败留痕落库失败", "provider", provider, "error_detail", serr.Error())
 			}
 			continue
@@ -237,7 +238,7 @@ func (s *Service) queryPhase(provider string, binding ChannelBinding, now time.T
 			c := bal.Credits
 			credits = &c
 		}
-		if serr := store.RecordBalanceSuccess(s.opts.DB, store.BalanceSnapshot{
+		if serr := store.RecordBalanceSuccess(ctx, s.opts.DB, store.BalanceSnapshot{
 			Provider: provider, KeyID: tgt.ID, Source: binding.Kind,
 			BalanceCredits: credits, Currency: bal.Currency, AsOfAt: now, UpdatedAt: now,
 		}); serr != nil {
@@ -252,7 +253,7 @@ func (s *Service) queryPhase(provider string, binding ChannelBinding, now time.T
 			s.opts.OnKeyEvaluated(provider, tgt.ID, *credits <= 0, now)
 		}
 	}
-	s.evaluateSourceError(provider, failedAll, now)
+	s.evaluateSourceError(ctx, provider, failedAll, now)
 }
 
 // targetsOf 查询目标:Bearer 源逐 key(跳过禁用,401 禁用键查询必然失败徒增噪音);
@@ -274,8 +275,8 @@ func targetsOf(binding ChannelBinding) []ChannelKey {
 // 渠道级连续计数 = 各 key 行失败计数的最小值(全部 key 同步失败才推进)。
 const ruleKeySourceError = "source_error"
 
-func (s *Service) evaluateSourceError(provider string, failedAll bool, now time.Time) {
-	rows, err := store.ListBalanceSnapshots(s.opts.DB, provider)
+func (s *Service) evaluateSourceError(ctx context.Context, provider string, failedAll bool, now time.Time) {
+	rows, err := store.ListBalanceSnapshots(ctx, s.opts.DB, provider)
 	if err != nil || len(rows) == 0 {
 		return
 	}
@@ -285,7 +286,7 @@ func (s *Service) evaluateSourceError(provider string, failedAll bool, now time.
 			minF = r.ConsecutiveFailures
 		}
 	}
-	prev := s.prevStates(provider)
+	prev := s.prevStates(ctx, provider)
 	st := prev[ruleKeySourceError]
 	if minF >= int64(s.opts.FailureThreshold) {
 		if st.Firing {
@@ -297,7 +298,7 @@ func (s *Service) evaluateSourceError(provider string, failedAll bool, now time.
 			Context: map[string]any{"provider": provider, "rule": ruleKeySourceError, "consecutive_failures": minF},
 		}
 		s.emit(EventKey(provider, f.RuleKey), f)
-		if serr := store.UpsertAlertState(s.opts.DB, store.AlertState{
+		if serr := store.UpsertAlertState(ctx, s.opts.DB, store.AlertState{
 			Provider: provider, RuleKey: f.RuleKey, Firing: true, Severity: f.Severity,
 			LastFiredAt: &now, ContextJSON: marshalContext(f), UpdatedAt: now,
 		}); serr != nil {
@@ -307,7 +308,7 @@ func (s *Service) evaluateSourceError(provider string, failedAll bool, now time.
 	}
 	if st.Firing {
 		// 任一 key 成功即清零(minF=0),解除告警态;last_fired_at 保留供运维追溯
-		if serr := store.UpsertAlertState(s.opts.DB, store.AlertState{
+		if serr := store.UpsertAlertState(ctx, s.opts.DB, store.AlertState{
 			Provider: provider, RuleKey: ruleKeySourceError, Firing: false,
 			Severity: st.Severity, LastFiredAt: st.LastFiredAt, UpdatedAt: now,
 		}); serr != nil {
@@ -318,8 +319,8 @@ func (s *Service) evaluateSourceError(provider string, failedAll bool, now time.
 
 // observe 单渠道观测合成:逐 key 快照 − 快照后消耗(币种一致才衰减)+ 燃速窗口聚合;
 // 估算与总览共用,保证两处口径单源。
-func (s *Service) observe(provider string, now time.Time) (Estimate, []KeyBalance) {
-	rows, err := store.ListBalanceSnapshots(s.opts.DB, provider)
+func (s *Service) observe(ctx context.Context, provider string, now time.Time) (Estimate, []KeyBalance) {
+	rows, err := store.ListBalanceSnapshots(ctx, s.opts.DB, provider)
 	if err != nil {
 		s.log.Error("余额快照读取失败", "provider", provider, "error_detail", err.Error())
 		return Estimate{}, nil
@@ -330,7 +331,7 @@ func (s *Service) observe(provider string, now time.Time) (Estimate, []KeyBalanc
 		if r.BalanceCredits != nil {
 			c := *r.BalanceCredits
 			if r.Currency == s.opts.Settlement && !r.AsOfAt.IsZero() {
-				if sp, serr := store.SpendSince(s.opts.DB, provider, r.AsOfAt.UTC().Format(time.RFC3339)); serr == nil {
+				if sp, serr := store.SpendSince(ctx, s.opts.DB, provider, r.AsOfAt.UTC().Format(time.RFC3339)); serr == nil {
 					kb.SpendCredits = sp
 				} else {
 					s.log.Error("快照后消耗聚合失败", "provider", provider, "error_detail", serr.Error())
@@ -340,7 +341,7 @@ func (s *Service) observe(provider string, now time.Time) (Estimate, []KeyBalanc
 		}
 		keys = append(keys, kb)
 	}
-	burn, days := s.burnOf(provider, now)
+	burn, days := s.burnOf(ctx, provider, now)
 	est := EstimateChannel(EstimateObservation{
 		Keys: keys, Settlement: s.opts.Settlement,
 		BurnCredits: burn, DaysWithUsage: days,
@@ -350,9 +351,9 @@ func (s *Service) observe(provider string, now time.Time) (Estimate, []KeyBalanc
 }
 
 // burnOf 燃速窗口聚合:窗口总消耗与「有消耗天数」(SUM>0 的自然日;零值行不计样本)。
-func (s *Service) burnOf(provider string, now time.Time) (int64, int) {
+func (s *Service) burnOf(ctx context.Context, provider string, now time.Time) (int64, int) {
 	from := now.UTC().AddDate(0, 0, -s.opts.WindowDays).Format(time.RFC3339)
-	days, err := store.BurnWindow(s.opts.DB, provider, from)
+	days, err := store.BurnWindow(ctx, s.opts.DB, provider, from)
 	if err != nil {
 		s.log.Error("燃速窗口聚合失败", "provider", provider, "error_detail", err.Error())
 		return 0, 0
@@ -371,7 +372,7 @@ func (s *Service) burnOf(provider string, now time.Time) (int64, int) {
 // spikeRatioOf 燃速突变判据合成:当前窗口日均 ÷ 上一等长窗口日均(毫单位)与基线日均。
 // 判据不可得(禁用/零消耗/任一窗口样本不足/零基线)返回 nil,状态机保持原态——
 // 基线窗口零消耗=无基线不臆测,与档位估算「数据不足」同一诚实纪律。
-func (s *Service) spikeRatioOf(provider string, est Estimate, now time.Time) (*int64, int64) {
+func (s *Service) spikeRatioOf(ctx context.Context, provider string, est Estimate, now time.Time) (*int64, int64) {
 	if s.opts.SpikeRatioMilli <= 0 {
 		return nil, 0
 	}
@@ -380,7 +381,7 @@ func (s *Service) spikeRatioOf(provider string, est Estimate, now time.Time) (*i
 	}
 	from := now.UTC().AddDate(0, 0, -2*s.opts.WindowDays).Format(time.RFC3339)
 	to := now.UTC().AddDate(0, 0, -s.opts.WindowDays).Format(time.RFC3339)
-	days, err := store.BurnWindowRange(s.opts.DB, provider, from, to)
+	days, err := store.BurnWindowRange(ctx, s.opts.DB, provider, from, to)
 	if err != nil {
 		s.log.Error("上一燃速窗口聚合失败", "provider", provider, "error_detail", err.Error())
 		return nil, 0
@@ -404,11 +405,12 @@ func (s *Service) spikeRatioOf(provider string, est Estimate, now time.Time) (*i
 // cliffTransitionsOf 逐 key 相邻转移集(骤降判据):仅 Bearer 查询源参与——manual 人工录入
 // 天然跳变、云账务有月账单周期性大跌,均不适用;转移取快照行的 prev_* 平移列,
 // 由查询成功写入时平移维护,失败查询不产生新转移。
-func (s *Service) cliffTransitionsOf(provider string, binding ChannelBinding) map[string]CliffTransition {
+func (s *Service) cliffTransitionsOf(ctx context.Context, provider string,
+	binding ChannelBinding) map[string]CliffTransition {
 	if s.opts.DropRatioMilli <= 0 || !IsBearer(binding.Kind) {
 		return nil
 	}
-	rows, err := store.ListBalanceSnapshots(s.opts.DB, provider)
+	rows, err := store.ListBalanceSnapshots(ctx, s.opts.DB, provider)
 	if err != nil {
 		s.log.Error("骤降转移快照读取失败", "provider", provider, "error_detail", err.Error())
 		return nil
@@ -430,16 +432,16 @@ func (s *Service) cliffTransitionsOf(provider string, binding ChannelBinding) ma
 }
 
 // estimateAndAlert 燃速估算 → 状态机 → 全量状态落库 + 发射。
-func (s *Service) estimateAndAlert(provider string, binding ChannelBinding, now time.Time) {
-	est, _ := s.observe(provider, now)
-	prev := s.prevStates(provider)
-	cliffTrans := s.cliffTransitionsOf(provider, binding)
+func (s *Service) estimateAndAlert(ctx context.Context, provider string, binding ChannelBinding, now time.Time) {
+	est, _ := s.observe(ctx, provider, now)
+	prev := s.prevStates(ctx, provider)
+	cliffTrans := s.cliffTransitionsOf(ctx, provider, binding)
 	cliffKeys := make([]string, 0, len(cliffTrans))
 	for k := range cliffTrans {
 		cliffKeys = append(cliffKeys, k)
 	}
 	sort.Strings(cliffKeys) // 规则集顺序稳定,便于测试与状态表可读
-	spike, prevPerDay := s.spikeRatioOf(provider, est, now)
+	spike, prevPerDay := s.spikeRatioOf(ctx, provider, est, now)
 	rules := RulesFor(s.opts.TierHours, binding.BelowCredits, s.opts.SpikeRatioMilli, cliffKeys, s.opts.DropRatioMilli)
 	states, firings := Evaluate(EvaluateInput{
 		Provider: provider, Rules: rules, Prev: prev, Est: est,
@@ -456,7 +458,7 @@ func (s *Service) estimateAndAlert(provider string, binding ChannelBinding, now 
 			t := *st.LastFiredAt
 			sst.LastFiredAt = &t
 		}
-		if uerr := store.UpsertAlertState(s.opts.DB, sst); uerr != nil {
+		if uerr := store.UpsertAlertState(ctx, s.opts.DB, sst); uerr != nil {
 			s.log.Error("告警状态落库失败", "provider", provider, "rule", ruleKey, "error_detail", uerr.Error())
 		}
 	}
@@ -470,8 +472,8 @@ func (s *Service) emit(eventKey string, f Firing) {
 	s.opts.Notifier.EmitContext(eventKey, f.Severity, f.Summary, f.Context)
 }
 
-func (s *Service) prevStates(provider string) map[string]RuleState {
-	states, err := store.ListAlertStates(s.opts.DB, provider)
+func (s *Service) prevStates(ctx context.Context, provider string) map[string]RuleState {
+	states, err := store.ListAlertStates(ctx, s.opts.DB, provider)
 	if err != nil {
 		s.log.Error("告警状态读取失败", "provider", provider, "error_detail", err.Error())
 		return map[string]RuleState{}
@@ -530,7 +532,7 @@ func (s *Service) HasProvider(provider string) bool {
 
 // RecordManual 手动录入余额快照(manual 源唯一入口):金额十进制串,币种须与配置声明一致;
 // 录入即落库并请求立即评估。未声明余额源的渠道拒绝录入(零声明渠道零落库契约)。
-func (s *Service) RecordManual(provider, amount, currency string) error {
+func (s *Service) RecordManual(ctx context.Context, provider, amount, currency string) error {
 	if s.opts.Sources == nil {
 		return fmt.Errorf("balance: 余额观测未启用")
 	}
@@ -554,7 +556,7 @@ func (s *Service) RecordManual(provider, amount, currency string) error {
 	}
 	now := s.opts.Now()
 	cur := strings.ToUpper(currency)
-	if serr := store.RecordBalanceSuccess(s.opts.DB, store.BalanceSnapshot{
+	if serr := store.RecordBalanceSuccess(ctx, s.opts.DB, store.BalanceSnapshot{
 		Provider: provider, KeyID: store.AccountKeyID, Source: SourceManual,
 		BalanceCredits: &credits, Currency: cur, AsOfAt: now, UpdatedAt: now,
 		ManualAmount: amount,

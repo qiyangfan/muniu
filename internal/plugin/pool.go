@@ -29,6 +29,7 @@ type instance struct {
 // instancePool 池本体。
 type instancePool struct {
 	owner *Plugin
+	ctx   context.Context // 回收循环与实例关停的生命周期 ctx。
 
 	mu      sync.Mutex
 	live    int // 已创建未关闭，含借出。
@@ -80,7 +81,7 @@ func (p *Plugin) newInstance(ctx context.Context) (*instance, error) {
 	return inst, nil
 }
 
-func newPool(owner *Plugin, probe *instance, idleTTL time.Duration) *instancePool {
+func newPool(ctx context.Context, owner *Plugin, probe *instance, idleTTL time.Duration) *instancePool {
 	pl := &instancePool{
 		owner:   owner,
 		ch:      make(chan *instance, owner.opts.PoolSize),
@@ -266,7 +267,7 @@ func (pl *instancePool) recycleLoop() {
 				pl.idle-- // 出池。
 				if now-inst.lastUsed.Load() > pl.idleTTL.Nanoseconds() {
 					pl.mu.Unlock()
-					_ = inst.mod.Close(context.Background())
+					_ = inst.mod.Close(pl.ctx)
 					pl.closedTotal.Add(1)
 					pl.mu.Lock()
 					pl.live--

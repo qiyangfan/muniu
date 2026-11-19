@@ -26,8 +26,10 @@ func (a oauthStoreAdapter) toAccount(r store.OAuthAccountRow) oauth.Account {
 	}
 }
 
+// 本适配器服务于后台刷新与装配同步:账号状态维护不随单个请求取消,
+// 故 DB 写入固定 Background。
 func (a oauthStoreAdapter) List() ([]oauth.Account, error) {
-	rows, err := store.ListOAuthAccounts(a.db)
+	rows, err := store.ListOAuthAccounts(context.Background(), a.db)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +41,7 @@ func (a oauthStoreAdapter) List() ([]oauth.Account, error) {
 }
 
 func (a oauthStoreAdapter) UpdateTokens(id, accessToken, refreshToken string, expiresAt time.Time) error {
-	err := store.UpdateOAuthAccountTokens(a.db, id, accessToken, refreshToken, expiresAt, time.Now())
+	err := store.UpdateOAuthAccountTokens(context.Background(), a.db, id, accessToken, refreshToken, expiresAt, time.Now())
 	if errors.Is(err, store.ErrOAuthAccountNotFound) {
 		return oauth.ErrAccountNotFound
 	}
@@ -47,7 +49,7 @@ func (a oauthStoreAdapter) UpdateTokens(id, accessToken, refreshToken string, ex
 }
 
 func (a oauthStoreAdapter) SetStatus(id, status, reason string) error {
-	err := store.SetOAuthAccountStatus(a.db, id, status, reason, time.Now())
+	err := store.SetOAuthAccountStatus(context.Background(), a.db, id, status, reason, time.Now())
 	if errors.Is(err, store.ErrOAuthAccountNotFound) {
 		return oauth.ErrAccountNotFound
 	}
@@ -56,8 +58,8 @@ func (a oauthStoreAdapter) SetStatus(id, status, reason string) error {
 
 // syncAccountPools 池凭据同步闭包:遍历当前拓扑的 oauth 渠道,把存储侧账号状态对齐进池
 // (token 原位替换 / 删除或终态成员收缩)。刷新器每轮末调用;拓扑热替换后下一轮即对齐。
-func syncAccountPools(db *sql.DB, px *proxy.Proxy, logger *slog.Logger) func() {
-	return func() {
+func syncAccountPools(db *sql.DB, px *proxy.Proxy, logger *slog.Logger) func(context.Context) {
+	return func(ctx context.Context) {
 		provs, pools := px.Topology()
 		for _, prov := range provs {
 			if prov.Auth != adapter.AuthOAuth {
@@ -71,7 +73,7 @@ func syncAccountPools(db *sql.DB, px *proxy.Proxy, logger *slog.Logger) func() {
 				if kr.Account == "" {
 					continue // config 校验保证 oauth 渠道全账号引用,防御兜底
 				}
-				row, err := store.GetOAuthAccount(db, kr.Account)
+				row, err := store.GetOAuthAccount(ctx, db, kr.Account)
 				if err == nil {
 					pool.SyncAccount(kr.Account, row.AccessToken, row.Status == store.OAuthStatusActive)
 				} else { // 含 not found:运行中删除 → 成员收缩(禁用),留痕

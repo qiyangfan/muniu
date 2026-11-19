@@ -50,12 +50,12 @@ func newFoHarness(t *testing.T, upA *testkit.Upstream, statusB int, bodyB string
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
 	poolB = keypool.NewPool([]keypool.KeyInput{{ID: "KB", Value: "sk-b", Weight: 1}})
 
-	db, err := store.Open(filepath.Join(t.TempDir(), "fo.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "fo.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64},
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	p := New(Config{
@@ -101,7 +101,12 @@ func mustDir(t *testing.T, defs map[string]metering.Pricing) *metering.PricingDi
 
 func foPost(t *testing.T, ts *httptest.Server, body string) (int, string) {
 	t.Helper()
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("请求失败: %v", err)
 	}
@@ -115,26 +120,7 @@ func waitRows(t *testing.T, db *sql.DB, want int) []store.UsageRow {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		var rows []store.UsageRow
-		q := `SELECT request_id, provider, model_alias, upstream_model, stream, status,
-			IFNULL(error_class,''), prompt_tokens, completion_tokens, estimated, cost_credits, currency
-			FROM usage_logs`
-		rs, err := db.Query(q)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for rs.Next() {
-			var r store.UsageRow
-			var stream int64
-			if err := rs.Scan(&r.RequestID, &r.Provider, &r.ModelAlias, &r.UpstreamModel, &stream,
-				&r.Status, &r.ErrorClass, &r.PromptTokens, &r.CompletionTokens,
-				&r.Estimated, &r.CostCredits, &r.Currency); err != nil {
-				t.Fatal(err)
-			}
-			r.Stream = stream == 1
-			rows = append(rows, r)
-		}
-		_ = rs.Close()
+		rows := queryUsageRows(t, db)
 		if len(rows) >= want {
 			return rows
 		}
@@ -143,6 +129,31 @@ func waitRows(t *testing.T, db *sql.DB, want int) []store.UsageRow {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// queryUsageRows 查询一轮计量行,defer 关闭游标。
+func queryUsageRows(t *testing.T, db *sql.DB) []store.UsageRow {
+	t.Helper()
+	rs, err := db.QueryContext(context.Background(), `SELECT request_id, provider, model_alias, upstream_model, stream, status,
+		IFNULL(error_class,''), prompt_tokens, completion_tokens, estimated, cost_credits, currency
+		FROM usage_logs`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rs.Close() }()
+	var rows []store.UsageRow
+	for rs.Next() {
+		var r store.UsageRow
+		var stream int64
+		if err := rs.Scan(&r.RequestID, &r.Provider, &r.ModelAlias, &r.UpstreamModel, &stream,
+			&r.Status, &r.ErrorClass, &r.PromptTokens, &r.CompletionTokens,
+			&r.Estimated, &r.CostCredits, &r.Currency); err != nil {
+			t.Fatal(err)
+		}
+		r.Stream = stream == 1
+		rows = append(rows, r)
+	}
+	return rows
 }
 
 func TestFailover_429换道_三断言(t *testing.T) {
@@ -210,12 +221,12 @@ func TestFailover_断流断言_池只记EMA不冷却(t *testing.T) {
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
-	db, err := store.Open(filepath.Join(t.TempDir(), "cut.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "cut.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64},
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
@@ -272,12 +283,12 @@ func TestFailover_断连计量client_cancel(t *testing.T) {
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
-	db, err := store.Open(filepath.Join(t.TempDir(), "dc.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "dc.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
 		Routes: map[string][]config.Candidate{
@@ -323,12 +334,12 @@ func TestEmbeddings_透传与计量(t *testing.T) {
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
 	poolA := keypool.NewPool([]keypool.KeyInput{{ID: "KA", Value: "sk-a", Weight: 1}})
-	db, err := store.Open(filepath.Join(t.TempDir(), "emb.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "emb.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64},
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{Interval: time.Hour, Batch: 1 << 20, Capacity: 64},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,

@@ -5,6 +5,7 @@
 package proxy
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -82,7 +83,7 @@ func newAffinityE2EProxy(t *testing.T, upA, upB string) (*Proxy, *httptest.Serve
 
 func postSticky(t *testing.T, url, session string) int {
 	t.Helper()
-	req, err := http.NewRequest("POST", url+"/v1/chat/completions", strings.NewReader(streamChatBody))
+	req, err := http.NewRequestWithContext(context.Background(), "POST", url+"/v1/chat/completions", strings.NewReader(streamChatBody))
 	if err != nil {
 		t.Fatalf("构造请求: %v", err)
 	}

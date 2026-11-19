@@ -7,15 +7,11 @@ package ratelimit
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/solvela/muniu/internal/auth"
-	"github.com/solvela/muniu/internal/logging"
-	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/store"
 )
 
@@ -60,16 +56,16 @@ func NewQuota(db *sql.DB, opts Options, logger *slog.Logger) *Quota {
 }
 
 // exceeded 判定：先 key 级再租户聚合级，任一超限即拒。额度 0=不限。
-func (q *Quota) exceeded(info *KeyInfoLite, now time.Time) bool {
+func (q *Quota) exceeded(ctx context.Context, info *KeyInfoLite, now time.Time) bool {
 	dayStart := now.UTC().Format("2006-01-02T00:00:00Z")
 	if info.DailyQuotaCredits > 0 {
-		if q.cachedSum("k:"+info.ID, info.ID, "", dayStart, now) >= info.DailyQuotaCredits {
+		if q.cachedSum(ctx, "k:"+info.ID, info.ID, "", dayStart, now) >= info.DailyQuotaCredits {
 			return true
 		}
 	}
 	// 租户聚合第二道闸（额度存 tenants.daily_quota_credits）
-	if tq := q.tenantQuota(info.TenantID); tq > 0 {
-		if q.cachedSum("t:"+info.TenantID, "", info.TenantID, dayStart, now) >= tq {
+	if tq := q.tenantQuota(ctx, info.TenantID); tq > 0 {
+		if q.cachedSum(ctx, "t:"+info.TenantID, "", info.TenantID, dayStart, now) >= tq {
 			return true
 		}
 	}
@@ -77,7 +73,7 @@ func (q *Quota) exceeded(info *KeyInfoLite, now time.Time) bool {
 }
 
 // cachedSum 带 30s TTL 的聚合缓存；同一请求两道闸各自缓存，口径一致。
-func (q *Quota) cachedSum(scope, keyID, tenantID, dayStart string, now time.Time) int64 {
+func (q *Quota) cachedSum(ctx context.Context, scope, keyID, tenantID, dayStart string, now time.Time) int64 {
 	q.mu.Lock()
 	if e, ok := q.cache[scope]; ok && now.Before(e.expiresAt) {
 		q.mu.Unlock()
@@ -85,7 +81,7 @@ func (q *Quota) cachedSum(scope, keyID, tenantID, dayStart string, now time.Time
 	}
 	q.mu.Unlock()
 
-	sum, err := store.SumCostToday(q.db, tenantID, keyID, dayStart)
+	sum, err := store.SumCostToday(ctx, q.db, tenantID, keyID, dayStart)
 	if err != nil {
 		// 聚合失败放行并记日志：可用性优先，该失败仅影响配额精度，不影响计量正确性
 		if q.dbErrLog != nil {
@@ -100,31 +96,13 @@ func (q *Quota) cachedSum(scope, keyID, tenantID, dayStart string, now time.Time
 }
 
 // tenantQuota 租户聚合额度（tenants.daily_quota_credits），查不到按 0 不限。
-func (q *Quota) tenantQuota(tenantID string) int64 {
+func (q *Quota) tenantQuota(ctx context.Context, tenantID string) int64 {
 	var quota int64
-	err := q.db.QueryRow(`SELECT daily_quota_credits FROM tenants WHERE id = ?`, tenantID).Scan(&quota)
+	err := q.db.QueryRowContext(ctx, `SELECT daily_quota_credits FROM tenants WHERE id = ?`, tenantID).Scan(&quota)
 	if err != nil {
 		return 0
 	}
 	return quota
-}
-
-// Middleware 日配额中间件，挂载顺序 auth → quota → ratelimit；无鉴权信息的请求直接放行。
-func (q *Quota) Middleware(logger *slog.Logger) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			info := keyInfoFrom(r.Context())
-			if info != nil && q.exceeded(info, time.Now()) {
-				logger.Warn("日配额超限", "request_id", logging.RequestIDFrom(r.Context()), "key_id", info.ID)
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(protocol.StatusForType(protocol.TypeQuotaExceeded))
-				_ = json.NewEncoder(w).Encode(protocol.NewErrorEnvelope(
-					protocol.TypeQuotaExceeded, "quota_exceeded", "当日配额已用尽", logging.RequestIDFrom(r.Context())))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
 }
 
 // keyInfoFrom 从 ctx 取鉴权信息并裁剪为配额视角，字段显式拷贝——两型字段集不同，不可直接转换。

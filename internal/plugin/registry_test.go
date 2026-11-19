@@ -21,7 +21,7 @@ func testRegOptions(name string, kind testkit.PluginFixtureKind) Options {
 func TestRegistry_HotSwap_在途不扰(t *testing.T) {
 	reg := NewRegistry()
 	t.Cleanup(reg.Close)
-	if _, _, err := reg.Register(testRegOptions("p", testkit.FixtureModifyEcho)); err != nil {
+	if _, _, err := reg.Register(context.Background(), testRegOptions("p", testkit.FixtureModifyEcho)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -29,7 +29,7 @@ func TestRegistry_HotSwap_在途不扰(t *testing.T) {
 	snap := reg.acquireSnapshot()
 
 	// 并发替换为拒绝型新版本。
-	if _, replaced, err := reg.Register(testRegOptions("p", testkit.FixtureReject)); err != nil || !replaced {
+	if _, replaced, err := reg.Register(context.Background(), testRegOptions("p", testkit.FixtureReject)); err != nil || !replaced {
 		t.Fatalf("替换失败: replaced=%v err=%v", replaced, err)
 	}
 

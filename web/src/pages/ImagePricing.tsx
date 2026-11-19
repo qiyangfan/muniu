@@ -6,6 +6,7 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { errorMessage } from "../lib/utils";
 import { api, type ImagePricingEntry } from "../lib/api";
 import { DataList, type DataCol } from "../components/data-list";
 import { ErrorAlert } from "../components/error-alert";
@@ -47,7 +48,7 @@ export default function ImagePricing() {
         setErr("");
       })
       .catch((e) => {
-        if (current === version.current) setErr(e.message);
+        if (current === version.current) setErr(errorMessage(e));
       })
       .finally(() => {
         if (current === version.current) setLoading(false);
@@ -108,6 +109,35 @@ export default function ImagePricing() {
       ),
     },
   ];
+
+  const submitPricing = async () => {
+    if (editing === null) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const parsed: unknown = JSON.parse(tiers);
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed) ||
+        Object.values(parsed).some((v) => typeof v !== "string")
+      )
+        throw new Error("档位须为 JSON 对象，单价须写成字符串");
+      await api.putImagePricing(editing.trim(), {
+        alias: editing.trim(),
+        currency,
+        default: def,
+        tiers: parsed as Record<string, string>,
+      });
+      setEditing(null);
+      refresh();
+    } catch (e2) {
+      setErr(errorMessage(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -124,32 +154,9 @@ export default function ImagePricing() {
         {editing !== null && (
           <form
             className="grid grid-cols-1 gap-4 sm:grid-cols-2"
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault();
-              setBusy(true);
-              setErr("");
-              try {
-                const parsed: unknown = JSON.parse(tiers);
-                if (
-                  !parsed ||
-                  typeof parsed !== "object" ||
-                  Array.isArray(parsed) ||
-                  Object.values(parsed).some((v) => typeof v !== "string")
-                )
-                  throw new Error("档位须为 JSON 对象，单价须写成字符串");
-                await api.putImagePricing(editing.trim(), {
-                  alias: editing.trim(),
-                  currency,
-                  default: def,
-                  tiers: parsed as Record<string, string>,
-                });
-                setEditing(null);
-                refresh();
-              } catch (e2) {
-                setErr((e2 as Error).message);
-              } finally {
-                setBusy(false);
-              }
+              void submitPricing();
             }}
           >
             <FormRow label="模型别名" htmlFor="image-alias">
@@ -237,7 +244,7 @@ export default function ImagePricing() {
                       setRemove(null);
                       refresh();
                     })
-                    .catch((e) => setErr(e.message));
+                    .catch((e) => setErr(errorMessage(e)));
                 }}
               >
                 撤销覆盖

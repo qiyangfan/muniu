@@ -27,7 +27,7 @@ describe("CopyButton", () => {
   it("复制真实 Key ID:剪贴板获得完整原值,与展示无关", async () => {
     const writeText = stubClipboard().mockResolvedValue(undefined);
     render(<CopyButton value={REAL_UUID} label="复制 ID" />);
-    await act(async () => {
+    act(() => {
       fireEvent.click(screen.getByRole("button", { name: "复制 ID" }));
     });
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
@@ -38,7 +38,7 @@ describe("CopyButton", () => {
   it("长自定义字符串 ID 完整复制:不截断、不转换大小写、不加前缀", async () => {
     const writeText = stubClipboard().mockResolvedValue(undefined);
     render(<CopyButton value={LONG_CUSTOM_ID} label="复制 ID" />);
-    await act(async () => {
+    act(() => {
       fireEvent.click(screen.getByRole("button", { name: "复制 ID" }));
     });
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
@@ -55,7 +55,7 @@ describe("CopyButton", () => {
         <CopyButton value={REAL_UUID} label="复制 ID" failHint="复制失败,请手动复制" />
       </span>,
     );
-    await act(async () => {
+    act(() => {
       fireEvent.click(screen.getByRole("button", { name: "复制 ID" }));
     });
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
@@ -69,7 +69,7 @@ describe("CopyButton", () => {
   it("禁用态不触发复制(缺 ID 场景由调用方展示占位并禁用)", () => {
     const writeText = stubClipboard();
     render(<CopyButton value="" label="复制 ID" disabled />);
-    const btn = screen.getByRole("button", { name: "复制 ID" }) as HTMLButtonElement;
+    const btn = screen.getByRole<HTMLButtonElement>("button", { name: "复制 ID" });
     expect(btn.disabled).toBe(true);
     fireEvent.click(btn);
     expect(writeText).not.toHaveBeenCalled();

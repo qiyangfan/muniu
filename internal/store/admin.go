@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -22,8 +23,8 @@ type Tenant struct {
 }
 
 // ListTenants 租户列表，创建时间升序。
-func ListTenants(db *sql.DB) ([]Tenant, error) {
-	rows, err := db.Query(`SELECT id, name, status, daily_quota_credits, tpm_limit,
+func ListTenants(ctx context.Context, db *sql.DB) ([]Tenant, error) {
+	rows, err := db.QueryContext(ctx, `SELECT id, name, status, daily_quota_credits, tpm_limit,
 		semantic_cache_enabled, created_at FROM tenants ORDER BY created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列出租户: %w", err)
@@ -43,9 +44,9 @@ func ListTenants(db *sql.DB) ([]Tenant, error) {
 }
 
 // CreateTenant 创建租户，名称唯一。
-func CreateTenant(db *sql.DB, name string) (string, error) {
+func CreateTenant(ctx context.Context, db *sql.DB, name string) (string, error) {
 	id := uuid.NewV7().String()
-	_, err := db.Exec(`INSERT INTO tenants (id, name, created_at) VALUES (?,?,?)`,
+	_, err := db.ExecContext(ctx, `INSERT INTO tenants (id, name, created_at) VALUES (?,?,?)`,
 		id, name, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
@@ -65,7 +66,7 @@ type UpdateTenantPatch struct {
 }
 
 // UpdateTenant 按 id 更新租户；返回是否命中行。
-func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
+func UpdateTenant(ctx context.Context, db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 	sets, args := []string{}, []any{}
 	if p.Status != "" {
 		if p.Status != "active" && p.Status != "disabled" {
@@ -97,7 +98,7 @@ func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 	}
 	args = append(args, id)
 	sqlText := fmt.Sprintf(`UPDATE tenants SET %s WHERE id = ?`, strings.Join(sets, ", ")) //nolint:gosec // SET 列名仅内部常量
-	res, err := db.Exec(sqlText, args...)
+	res, err := db.ExecContext(ctx, sqlText, args...)
 	if err != nil {
 		return false, fmt.Errorf("store: 更新租户: %w", err)
 	}
@@ -146,7 +147,8 @@ type UsagePoint struct {
 
 // UsageAggregate 按维度与时间范围聚合 usage_logs，管理 API 用。
 // from/to 为 RFC3339 UTC；estimated 行不参与成本口径，但计入请求数。
-func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) ([]UsagePoint, error) {
+func UsageAggregate(ctx context.Context, db *sql.DB, dim UsageDim,
+	from, to, tenantID, keyID string) ([]UsagePoint, error) {
 	expr, err := usageDimExpr(dim)
 	if err != nil {
 		return nil, err
@@ -169,7 +171,7 @@ func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) 
 		args = append(args, keyID)
 	}
 	q += ` GROUP BY dim ORDER BY dim`
-	rows, err := db.Query(q, args...)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: usage 聚合: %w", err)
 	}

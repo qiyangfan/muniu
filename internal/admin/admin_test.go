@@ -2,6 +2,7 @@
 package admin_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -30,7 +31,7 @@ import (
 
 func openDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := store.Open(filepath.Join(t.TempDir(), "admin.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "admin.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +41,7 @@ func openDB(t *testing.T) *sql.DB {
 
 func newAdmin(t *testing.T, db *sql.DB, token string, pools map[string]*keypool.Pool) http.Handler {
 	t.Helper()
-	h := admin.New(admin.Deps{
+	h := admin.New(context.Background(), admin.Deps{
 		DB:        db,
 		Token:     token,
 		Providers: []config.Provider{{Name: "p1", Adapter: "openai", BaseURL: "https://x/v1", Keys: []config.KeyRef{{Env: "K1", Weight: 5}}}},
@@ -61,7 +62,7 @@ func call(t *testing.T, h http.Handler, method, path, token, body string) (int, 
 	} else {
 		rd = strings.NewReader(body)
 	}
-	req, _ := http.NewRequest(method, path, rd)
+	req, _ := http.NewRequestWithContext(context.Background(), method, path, rd)
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -76,7 +77,7 @@ func call(t *testing.T, h http.Handler, method, path, token, body string) (int, 
 
 func TestAdmin_token缺失整体关闭(t *testing.T) {
 	db := openDB(t)
-	if h := admin.New(admin.Deps{DB: db, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}); h != nil {
+	if h := admin.New(context.Background(), admin.Deps{DB: db, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}); h != nil {
 		t.Fatal("token 缺失必须返回 nil(管理面关闭)")
 	}
 }
@@ -247,7 +248,7 @@ func TestAdmin_providers拓扑与池状态(t *testing.T) {
 
 func TestAdmin_缓存统计空态(t *testing.T) {
 	db := openDB(t)
-	h := admin.New(admin.Deps{
+	h := admin.New(context.Background(), admin.Deps{
 		DB: db, Token: "tok", Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	code, body := call(t, h, "GET", "/admin/v1/cache/stats", "tok", "")
@@ -259,12 +260,12 @@ func TestAdmin_缓存统计空态(t *testing.T) {
 // 吊销 key 必须即时清空进程内验证缓存，验证依赖 Deps.Verifier 接线；未清前已缓存的 key 在 TTL 内仍可放行。
 func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 	db := openDB(t)
-	plaintext, rec, err := auth.CreateKey(db, "default", "revoke-pin", 60, auth.KeyOpts{})
+	plaintext, rec, err := auth.CreateKey(context.Background(), db, "default", "revoke-pin", 60, auth.KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifier := auth.NewVerifier(db, auth.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	h := admin.New(admin.Deps{
+	verifier := auth.NewVerifier(context.Background(), db, auth.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := admin.New(context.Background(), admin.Deps{
 		DB: db, Token: "t",
 		Providers: []config.Provider{{Name: "p1", Adapter: "openai", BaseURL: "https://x/v1", Keys: []config.KeyRef{{Env: "K1", Weight: 5}}}},
 		Verifier:  verifier,
@@ -273,7 +274,7 @@ func TestAdmin_吊销key即时失效验证缓存(t *testing.T) {
 
 	probe := func() int {
 		pr := httptest.NewRecorder()
-		req, _ := http.NewRequest("POST", "/v1/chat/completions", nil)
+		req, _ := http.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil)
 		req.Header.Set("Authorization", "Bearer "+plaintext)
 		verifier.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })).ServeHTTP(pr, req)
 		return pr.Code
@@ -306,7 +307,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 			}
 			tables[alias] = tbl
 		}
-		rows, err := store.ListPricing(db)
+		rows, err := store.ListPricing(context.Background(), db)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -335,7 +336,7 @@ func TestAdmin_动态改价全流程(t *testing.T) {
 		return metering.NewPricingDirectory(tables)
 	}
 	dir := rebuild()
-	h := admin.New(admin.Deps{
+	h := admin.New(context.Background(), admin.Deps{
 		DB: db, Token: "t",
 		Providers:     []config.Provider{{Name: "p1", Adapter: "openai", BaseURL: "https://x/v1", Keys: []config.KeyRef{{Env: "K1", Weight: 5}}}},
 		PricingDir:    dir,
@@ -422,7 +423,7 @@ func buildStaticEntries(defs map[string]metering.Pricing) map[string]admin.Stati
 
 func newAdminWithPlugins(t *testing.T, db *sql.DB, reg *plugin.Registry) http.Handler {
 	t.Helper()
-	h := admin.New(admin.Deps{
+	h := admin.New(context.Background(), admin.Deps{
 		DB:        db,
 		Token:     "tok",
 		Providers: []config.Provider{{Name: "p1", Adapter: "openai", BaseURL: "https://x/v1", Keys: []config.KeyRef{{Env: "K1", Weight: 5}}}},

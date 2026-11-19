@@ -33,6 +33,9 @@ coverage.out
 web/coverage/
 *.bench.txt
 
+# Python 脚本字节码(scripts/linkcheck.py 等)
+__pycache__/
+
 # 编辑器与系统
 .idea/
 .vscode/

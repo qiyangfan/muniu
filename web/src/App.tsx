@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, setToken, type AdminActor } from "./lib/api";
 import { useTheme } from "./lib/theme";
-import { cn } from "./lib/utils";
+import { cn, errorMessage } from "./lib/utils";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
@@ -37,6 +37,25 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
   const [token, setLoginToken] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const submitLogin = async () => {
+    setBusy(true);
+    setErr("");
+    try {
+      setToken("");
+      if (tokenMode) {
+        setToken(token.trim());
+        onOk(await api.whoami());
+      } else {
+        onOk(await api.login(username, password));
+      }
+      setPassword("");
+    } catch (e2) {
+      setToken("");
+      setErr(errorMessage(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <div className="min-h-dvh grid place-items-center bg-background px-4">
       <Card className="w-full max-w-96">
@@ -46,25 +65,9 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
         <CardContent className="space-y-4">
           <form
             className="grid gap-4"
-            onSubmit={async (e) => {
+            onSubmit={(e) => {
               e.preventDefault();
-              setBusy(true);
-              setErr("");
-              try {
-                setToken("");
-                if (tokenMode) {
-                  setToken(token.trim());
-                  onOk(await api.whoami());
-                } else {
-                  onOk(await api.login(username, password));
-                }
-                setPassword("");
-              } catch (e2) {
-                setToken("");
-                setErr(e2 instanceof Error ? e2.message : "登录失败，请稍后重试");
-              } finally {
-                setBusy(false);
-              }
+              void submitLogin();
             }}
           >
             {tokenMode ? (
@@ -154,7 +157,7 @@ export default function App() {
         if (live) setActor(a);
       })
       .catch((e) => {
-        if (live && (!(e instanceof ApiError) || e.status !== 401)) setProbeError(e.message);
+        if (live && (!(e instanceof ApiError) || e.status !== 401)) setProbeError(errorMessage(e));
       })
       .finally(() => {
         if (live) setChecking(false);
@@ -199,25 +202,28 @@ export default function App() {
       )}
     </Button>
   );
+  const doLogout = async () => {
+    try {
+      await api.logout();
+      setToken("");
+      setActor(null);
+      setProbeError("");
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        setToken("");
+        setActor(null);
+        setProbeError("");
+      } else {
+        setProbeError(errorMessage(e));
+      }
+    }
+  };
   const logout = (
     <Button
       size="sm"
       variant="ghost-destructive"
-      onClick={async () => {
-        try {
-          await api.logout();
-          setToken("");
-          setActor(null);
-          setProbeError("");
-        } catch (e) {
-          if (e instanceof ApiError && e.status === 401) {
-            setToken("");
-            setActor(null);
-            setProbeError("");
-          } else {
-            setProbeError((e as Error).message);
-          }
-        }
+      onClick={() => {
+        void doLogout();
       }}
     >
       退出

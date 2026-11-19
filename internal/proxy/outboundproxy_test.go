@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,7 +35,7 @@ func newRecordingProxy(t *testing.T) *recordingProxy {
 		rp.mu.Lock()
 		rp.targets = append(rp.targets, r.URL.Host)
 		rp.mu.Unlock()
-		req, err := http.NewRequest(r.Method, r.URL.String(), r.Body)
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			return
@@ -266,7 +267,7 @@ func TestOutboundProxy_env免疫的结构性断言(t *testing.T) {
 	snap := p.topo.Load()
 
 	declared := p.clientFor(snap, "pa").Transport.(*http.Transport)
-	got, err := declared.Proxy(httptest.NewRequest("GET", "http://placeholder", nil))
+	got, err := declared.Proxy(httptest.NewRequestWithContext(context.Background(), "GET", "http://placeholder", nil))
 	if err != nil || got == nil || got.String() != rp.URL {
 		t.Fatalf("声明渠道 Proxy 应恒为声明 URL(不得查环境): %v %v", got, err)
 	}

@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -17,7 +18,7 @@ type adminDBHandle = sqlDB
 
 func openAdminDB(t *testing.T) *adminDBHandle {
 	t.Helper()
-	db, err := Open(filepath.Join(t.TempDir(), "admin.db"))
+	db, err := Open(context.Background(), filepath.Join(t.TempDir(), "admin.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,26 +30,26 @@ func openAdminDB(t *testing.T) *adminDBHandle {
 func TestTenant_CRUD(t *testing.T) {
 	db := openAdminDB(t)
 
-	id, err := CreateTenant(db, "acme")
+	id, err := CreateTenant(context.Background(), db, "acme")
 	if err != nil {
 		t.Fatalf("创建租户: %v", err)
 	}
-	if _, err := CreateTenant(db, "acme"); err == nil {
+	if _, err := CreateTenant(context.Background(), db, "acme"); err == nil {
 		t.Fatal("重名租户应报错")
 	}
 
-	ok, err := UpdateTenant(db, id, UpdateTenantPatch{Status: "disabled"})
+	ok, err := UpdateTenant(context.Background(), db, id, UpdateTenantPatch{Status: "disabled"})
 	if err != nil || !ok {
 		t.Fatalf("更新租户: %v %v", ok, err)
 	}
-	if ok, err = UpdateTenant(db, "no-such", UpdateTenantPatch{Status: "active"}); err != nil || ok {
+	if ok, err = UpdateTenant(context.Background(), db, "no-such", UpdateTenantPatch{Status: "active"}); err != nil || ok {
 		t.Fatalf("不存在租户应 ok=false: %v %v", ok, err)
 	}
-	if _, err = UpdateTenant(db, id, UpdateTenantPatch{Status: "weird"}); err == nil {
+	if _, err = UpdateTenant(context.Background(), db, id, UpdateTenantPatch{Status: "weird"}); err == nil {
 		t.Fatal("非法 status 应报错")
 	}
 
-	tenants, err := ListTenants(db)
+	tenants, err := ListTenants(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +79,12 @@ func TestTenant_CRUD(t *testing.T) {
 
 func TestTenant_语义缓存开关(t *testing.T) {
 	db := openAdminDB(t)
-	id, _ := CreateTenant(db, "cache-on")
+	id, _ := CreateTenant(context.Background(), db, "cache-on")
 	en := true
-	if ok, err := UpdateTenant(db, id, UpdateTenantPatch{SemanticCacheEnable: &en}); err != nil || !ok {
+	if ok, err := UpdateTenant(context.Background(), db, id, UpdateTenantPatch{SemanticCacheEnable: &en}); err != nil || !ok {
 		t.Fatalf("开缓存开关: %v %v", ok, err)
 	}
-	tenants, _ := ListTenants(db)
+	tenants, _ := ListTenants(context.Background(), db)
 	for _, tn := range tenants {
 		if tn.ID == id && !tn.SemanticCacheEnable {
 			t.Fatal("开关未生效")
@@ -110,14 +111,14 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 			PromptTokens: 10, CompletionTokens: 0, VisionTokens: 1, Estimated: true, CostCredits: 999, Currency: "CNY",
 			LatencyTotalMs: 1, CreatedAt: now},
 	}
-	if err := InsertUsageBatch(db, rows); err != nil {
+	if err := InsertUsageBatch(context.Background(), db, rows); err != nil {
 		t.Fatal(err)
 	}
 	from := now.Add(-time.Minute).Format(time.RFC3339)
 	to := now.Add(time.Minute).Format(time.RFC3339)
 
 	// 按 provider 聚合：deepseek 成本只计 500，estimated 999 剔除；semantic-cache 命中 1 次。
-	pts, err := UsageAggregate(db, DimProvider, from, to, "", "")
+	pts, err := UsageAggregate(context.Background(), db, DimProvider, from, to, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +139,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 	}
 
 	// 按 day
-	days, err := UsageAggregate(db, DimDay, from, to, "", "")
+	days, err := UsageAggregate(context.Background(), db, DimDay, from, to, "", "")
 	if err != nil || len(days) != 1 {
 		t.Fatalf("按日聚合不符: %v %v", days, err)
 	}
@@ -147,7 +148,7 @@ func TestUsageAggregate_四维与口径(t *testing.T) {
 	}
 
 	// 按 key + tenant 过滤
-	keys, err := UsageAggregate(db, DimKey, from, to, "t1", "k2")
+	keys, err := UsageAggregate(context.Background(), db, DimKey, from, to, "t1", "k2")
 	if err != nil || len(keys) != 1 || keys[0].Dim != "k2" {
 		t.Fatalf("按 key 过滤不符: %v %v", keys, err)
 	}

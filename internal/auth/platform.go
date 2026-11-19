@@ -83,7 +83,7 @@ func ParsePlatformKey(key string, secrets [][]byte, now time.Time) (*PlatformCla
 
 // badPlatformKey 统一包成 ErrPlatformKey,底层原因保留供日志分辨。
 func badPlatformKey(err error) (*PlatformClaims, error) {
-	return nil, fmt.Errorf("%w: %v", ErrPlatformKey, err)
+	return nil, fmt.Errorf("%w: %w", ErrPlatformKey, err)
 }
 
 // platformKeyParts 解出前缀之后的载体与 tag 段。

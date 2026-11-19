@@ -42,3 +42,11 @@ export function formatCreditsExact(c: number): string {
   if (s === "") s = "0";
   return c < 0 ? `-${s}` : s;
 }
+
+/**
+ * 把任意拒绝值收敛为可展示文案：Error 取 message，其余转为字符串。
+ * fetch 链路的拒绝值按 unknown 处理，避免 catch 形参的 any 泄漏到页面状态。
+ */
+export function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}

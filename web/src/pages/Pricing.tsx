@@ -3,6 +3,7 @@ import ImagePricing from "./ImagePricing";
 // 价目为运营态数据:改价即时生效零重启;静态配置价的行经编辑即建 DB 覆盖。
 import { useCallback, useEffect, useState } from "react";
 import { Plus, X } from "lucide-react";
+import { errorMessage } from "../lib/utils";
 import { api, type PricingEntry } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -95,7 +96,7 @@ export default function Pricing() {
         setEntries(r.pricing);
         setErr("");
       })
-      .catch((e) => setErr(e.message));
+      .catch((e) => setErr(errorMessage(e)));
   }, []);
   useEffect(refresh, [refresh]);
 

@@ -47,7 +47,7 @@ conformance/
 当前只支持 `qwen3-vl-embedding` 与旧快照 `tongyi-embedding-vision-flash`。Qwen 支持独立及
 `enable_fusion=true` 融合向量；Tongyi Flash 支持独立向量与 `multi_images`。不包含
 `tongyi-embedding-vision-flash-2026-03-06`。上游能力和参数边界见
-[百炼原生多模态 Embeddings 契约](../design/upstream-adapters.md#百炼原生多模态-embeddings)。
+[百炼原生多模态 Embeddings 契约](../docs/design/upstream-adapters.md#百炼原生多模态-embeddings)。
 
 ## 贡献规范
 

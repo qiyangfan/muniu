@@ -40,7 +40,7 @@ type PricingWindowView struct {
 // yaml 行仅展示缺省价，窗口细节以配置文件为准；对其 PUT 即建 DB 覆盖。
 func pricingList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.ListPricing(d.DB)
+		rows, err := store.ListPricing(r.Context(), d.DB)
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
@@ -109,7 +109,7 @@ func pricingPut(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", verr.Error())
 			return
 		}
-		if err := store.UpsertPricing(d.DB, rec); err != nil {
+		if err := store.UpsertPricing(r.Context(), d.DB, rec); err != nil {
 			respondErr(d, w, r, err, "pricing_update_failed")
 			return
 		}
@@ -138,7 +138,7 @@ func pricingPut(d Deps) http.HandlerFunc {
 func pricingDelete(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		alias := r.PathValue("alias")
-		n, err := store.DeletePricing(d.DB, alias)
+		n, err := store.DeletePricing(r.Context(), d.DB, alias)
 		if err != nil {
 			respondErr(d, w, r, err, "pricing_delete_failed")
 			return

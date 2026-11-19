@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -87,13 +88,13 @@ pricing:
 	if err != nil {
 		t.Fatal(err)
 	}
-	plaintext, _, err := auth.CreateKey(kdb, "default", "e2e", 60, auth.KeyOpts{})
+	plaintext, _, err := auth.CreateKey(context.Background(), kdb, "default", "e2e", 60, auth.KeyOpts{})
 	if err != nil {
 		t.Fatalf("签发失败: %v", err)
 	}
 	_ = kdb.Close()
 
-	handler, _, cleanup, err := assemble(cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler, _, cleanup, err := assemble(context.Background(), cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("装配失败: %v", err)
 	}
@@ -110,13 +111,13 @@ pricing:
 }
 
 func config0Open(cfg *config.Config) (*sql.DB, error) {
-	return store.Open(cfg.Storage.SQLite.Path)
+	return store.Open(context.Background(), cfg.Storage.SQLite.Path)
 }
 
 func TestE2E_流式_透传与计量落账(t *testing.T) {
 	ts, plaintext, adb := newE2E(t, testkit.NormalEvents(), 0, "")
 
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(e2eStreamBody))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/chat/completions", strings.NewReader(e2eStreamBody))
 	req.Header.Set("Authorization", "Bearer "+plaintext)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -148,7 +149,7 @@ func TestE2E_流式_透传与计量落账(t *testing.T) {
 func TestE2E_非流式_透传与计量落账(t *testing.T) {
 	ts, plaintext, adb := newE2E(t, nil, 200, testkit.JSONOKBody)
 
-	req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(e2eJSONBody))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/chat/completions", strings.NewReader(e2eJSONBody))
 	req.Header.Set("Authorization", "Bearer "+plaintext)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -171,7 +172,12 @@ func TestE2E_非流式_透传与计量落账(t *testing.T) {
 
 func TestE2E_无鉴权被拒(t *testing.T) {
 	ts, _, _ := newE2E(t, nil, 200, testkit.JSONOKBody)
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json", strings.NewReader(e2eJSONBody))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/v1/chat/completions", strings.NewReader(e2eJSONBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +198,11 @@ func TestE2E_无鉴权被拒(t *testing.T) {
 
 func TestE2E_健康检查(t *testing.T) {
 	ts, _, _ := newE2E(t, nil, 200, "{}")
-	resp, err := http.Get(ts.URL + "/healthz")
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, ts.URL+"/healthz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +238,7 @@ func queryUsageLogs(t *testing.T, db *sql.DB, rows *[]map[string]any) {
 		IFNULL(currency,'') AS currency, IFNULL(model_alias,'') AS model_alias,
 		IFNULL(provider,'') AS provider, IFNULL(request_id,'') AS request_id
 		FROM usage_logs ORDER BY created_at`
-	rs, err := db.Query(q)
+	rs, err := db.QueryContext(context.Background(), q)
 	if err != nil {
 		t.Fatalf("查计量表: %v", err)
 	}
@@ -342,19 +352,19 @@ pricing:
 	}
 
 	// 种子 key + 打开 default 租户语义缓存开关。
-	kdb, err := store.Open(dbPath)
+	kdb, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plaintext, _, err := auth.CreateKey(kdb, "default", "cache-e2e", 600, auth.KeyOpts{})
+	plaintext, _, err := auth.CreateKey(context.Background(), kdb, "default", "cache-e2e", 600, auth.KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := kdb.Exec(`UPDATE tenants SET semantic_cache_enabled = 1 WHERE name = 'default'`); err != nil {
+	if _, err := kdb.ExecContext(context.Background(), `UPDATE tenants SET semantic_cache_enabled = 1 WHERE name = 'default'`); err != nil {
 		t.Fatal(err)
 	}
 
-	handler, _, cleanup, err := assemble(cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler, _, cleanup, err := assemble(context.Background(), cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("装配失败: %v", err)
 	}
@@ -364,7 +374,7 @@ pricing:
 
 	post := func(content string) (int, string) {
 		body := `{"model":"alias-a","temperature":0,"messages":[{"role":"user","content":"` + content + `"}]}`
-		req, _ := http.NewRequest("POST", ts.URL+"/v1/chat/completions", strings.NewReader(body))
+		req, _ := http.NewRequestWithContext(context.Background(), "POST", ts.URL+"/v1/chat/completions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+plaintext)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -387,7 +397,7 @@ pricing:
 	}
 
 	// 断言计量：上游行成本正常，命中行 provider=semantic-cache 且 cost 0。
-	assertDB, err := store.Open(dbPath)
+	assertDB, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,11 +407,18 @@ pricing:
 		CostCredits int64
 	}
 	deadline := time.Now().Add(3 * time.Second) // 计量批量落库窗口轮询
-	for {
-		rows = nil
-		rs, err := assertDB.Query(`SELECT provider, cost_credits FROM usage_logs ORDER BY created_at`)
+	readRows := func() []struct {
+		Provider    string
+		CostCredits int64
+	} {
+		rs, err := assertDB.QueryContext(context.Background(), `SELECT provider, cost_credits FROM usage_logs ORDER BY created_at`)
 		if err != nil {
 			t.Fatal(err)
+		}
+		defer func() { _ = rs.Close() }()
+		var out []struct {
+			Provider    string
+			CostCredits int64
 		}
 		for rs.Next() {
 			var p string
@@ -409,13 +426,16 @@ pricing:
 			if err := rs.Scan(&p, &c); err != nil {
 				t.Fatal(err)
 			}
-			rows = append(rows, struct {
+			out = append(out, struct {
 				Provider    string
 				CostCredits int64
 			}{p, c})
 		}
-		_ = rs.Close()
-		if len(rows) >= 2 || time.Now().After(deadline) {
+		return out
+	}
+	for {
+		rows = readRows()
+		if len(rows) >= 4 || time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -439,5 +459,25 @@ pricing:
 		if r.Provider == "chat-fake" && r.CostCredits != 86000 {
 			t.Fatalf("上游行成本不符: %+v", r)
 		}
+	}
+}
+
+// 冷却落库是记账性副作用:退出信号造成的生命周期 ctx 取消不得丢冷却行。
+func TestCooldownSink_生命周期取消仍落库(t *testing.T) {
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "cooldown.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	sink := cooldownSink{ctx: ctx, db: db, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	until := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	if err := sink.SaveCooldown("pa", "K1", "credit", until, 1, 7); err != nil {
+		t.Fatalf("SaveCooldown: %v", err)
+	}
+	rows, err := store.LoadKeyCooldowns(context.Background(), db, "pa")
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("取消后仍应落库 1 行: rows=%v err=%v", rows, err)
 	}
 }

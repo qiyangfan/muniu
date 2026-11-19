@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -10,13 +11,13 @@ func TestKeyCooldown_保存加载往返与清除(t *testing.T) {
 	db := openTestStore(t)
 	now := time.Now()
 
-	if err := SaveKeyCooldown(db, "pa", "K1", "credit", now.Add(30*time.Minute), 1, now, 1); err != nil {
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K1", "credit", now.Add(30*time.Minute), 1, now, 1); err != nil {
 		t.Fatalf("保存: %v", err)
 	}
-	if err := SaveKeyCooldown(db, "pa", "K2", "rate", now.Add(8*time.Minute), 4, now, 2); err != nil {
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K2", "rate", now.Add(8*time.Minute), 4, now, 2); err != nil {
 		t.Fatalf("保存: %v", err)
 	}
-	rows, err := LoadKeyCooldowns(db, "pa")
+	rows, err := LoadKeyCooldowns(context.Background(), db, "pa")
 	if err != nil {
 		t.Fatalf("加载: %v", err)
 	}
@@ -35,25 +36,25 @@ func TestKeyCooldown_保存加载往返与清除(t *testing.T) {
 	}
 
 	// 清除语义:空 bucket = 删行
-	if err := SaveKeyCooldown(db, "pa", "K1", "", time.Time{}, 0, now, 2); err != nil {
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K1", "", time.Time{}, 0, now, 2); err != nil {
 		t.Fatalf("清除: %v", err)
 	}
-	rows, _ = LoadKeyCooldowns(db, "pa")
+	rows, _ = LoadKeyCooldowns(context.Background(), db, "pa")
 	if len(rows) != 1 || rows[0].KeyID != "K2" {
 		t.Fatalf("K1 应被清除: %+v", rows)
 	}
 
 	// 孤儿对账:keep 之外的行删除
-	if err := PruneKeyCooldowns(db, "pa", map[string]bool{"K2": true}); err != nil {
+	if err := PruneKeyCooldowns(context.Background(), db, "pa", map[string]bool{"K2": true}); err != nil {
 		t.Fatalf("对账: %v", err)
 	}
-	if rows, _ = LoadKeyCooldowns(db, "pa"); len(rows) != 1 {
+	if rows, _ = LoadKeyCooldowns(context.Background(), db, "pa"); len(rows) != 1 {
 		t.Fatalf("对账后应剩一行: %+v", rows)
 	}
 	// 其他渠道不受影响
-	_ = SaveKeyCooldown(db, "pb", "K9", "credit", now.Add(time.Hour), 1, now, 1)
-	_ = PruneKeyCooldowns(db, "pa", nil)
-	if rows, _ = LoadKeyCooldowns(db, "pb"); len(rows) != 1 {
+	_ = SaveKeyCooldown(context.Background(), db, "pb", "K9", "credit", now.Add(time.Hour), 1, now, 1)
+	_ = PruneKeyCooldowns(context.Background(), db, "pa", nil)
+	if rows, _ = LoadKeyCooldowns(context.Background(), db, "pb"); len(rows) != 1 {
 		t.Fatalf("跨渠道不得误删: %+v", rows)
 	}
 }
@@ -66,32 +67,32 @@ func TestKeyCooldown_乱序守卫(t *testing.T) {
 	now := time.Now()
 
 	// 新事件:进入(seq=2)
-	if err := SaveKeyCooldown(db, "pa", "K", "credit", now.Add(30*time.Minute), 1, now, 2); err != nil {
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "credit", now.Add(30*time.Minute), 1, now, 2); err != nil {
 		t.Fatalf("保存: %v", err)
 	}
 	// 迟到旧事件:释放(seq=1)→ 守卫应忽略
-	if err := SaveKeyCooldown(db, "pa", "K", "", time.Time{}, 0, now, 1); err != nil {
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "", time.Time{}, 0, now, 1); err != nil {
 		t.Fatalf("旧释放: %v", err)
 	}
-	rows, _ := LoadKeyCooldowns(db, "pa")
+	rows, _ := LoadKeyCooldowns(context.Background(), db, "pa")
 	if len(rows) != 1 || rows[0].Bucket != "credit" {
 		t.Fatalf("旧释放不得覆盖新进入: %+v", rows)
 	}
 
 	// 迟到旧事件:更早的进入(seq=1)→ 守卫应忽略
-	if err := SaveKeyCooldown(db, "pa", "K", "rate", now.Add(time.Minute), 3, now, 1); err != nil {
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "rate", now.Add(time.Minute), 3, now, 1); err != nil {
 		t.Fatalf("旧进入: %v", err)
 	}
-	rows, _ = LoadKeyCooldowns(db, "pa")
+	rows, _ = LoadKeyCooldowns(context.Background(), db, "pa")
 	if len(rows) != 1 || rows[0].Bucket != "credit" || rows[0].Consec != 1 {
 		t.Fatalf("旧进入不得覆盖新进入: %+v", rows)
 	}
 
 	// 更新事件(seq=3):释放 → 生效删行
-	if err := SaveKeyCooldown(db, "pa", "K", "", time.Time{}, 0, now, 3); err != nil {
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "", time.Time{}, 0, now, 3); err != nil {
 		t.Fatalf("新释放: %v", err)
 	}
-	if rows, _ = LoadKeyCooldowns(db, "pa"); len(rows) != 0 {
+	if rows, _ = LoadKeyCooldowns(context.Background(), db, "pa"); len(rows) != 0 {
 		t.Fatalf("新释放应删行: %+v", rows)
 	}
 }

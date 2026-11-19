@@ -5,6 +5,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 )
 
 // InboundProtocol 入站协议标签，直通路径判定载体，随请求传入管道。
@@ -103,14 +104,15 @@ type NativeRequest struct {
 
 // isIneligible 机器码级失格判定，unsupported 内容类错误即直通可服务。
 func isIneligible(err error, code string) bool {
-	switch e := err.(type) {
-	case *MessagesUnsupportedError:
-		return e.Code == code
-	case *ResponsesUnsupportedError:
-		return e.Code == code
-	default:
-		return false
+	var me *MessagesUnsupportedError
+	if errors.As(err, &me) {
+		return me.Code == code
 	}
+	var re *ResponsesUnsupportedError
+	if errors.As(err, &re) {
+		return re.Code == code
+	}
+	return false
 }
 
 // lightRouting 失格请求的轻量路由解析，取 model 与 stream；canonical 不可得但路由仍需。

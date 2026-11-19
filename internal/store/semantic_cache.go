@@ -2,6 +2,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -29,18 +30,9 @@ type CacheRow struct {
 const cacheCols = `id, tenant_id, fingerprint, model_alias, embedding, response,
 		native_response, native_proto, native_form, hits, created_at, expires_at`
 
-// UpsertCacheRow 写入或覆盖缓存条目，同 tenant+fingerprint 覆盖，属翻译路径条目。
-func UpsertCacheRow(
-	db *sql.DB,
-	tenantID, fingerprint, modelAlias string,
-	embedding, response []byte,
-	ttl time.Duration,
-) error {
-	return UpsertCacheRowNative(db, tenantID, fingerprint, modelAlias, embedding, response, nil, "", "", ttl)
-}
-
 // UpsertCacheRowNative 写入或覆盖缓存条目，直通双存形态：canonical 加原生体、标签、表单。
 func UpsertCacheRowNative(
+	ctx context.Context,
 	db *sql.DB,
 	tenantID, fingerprint, modelAlias string,
 	embedding, response, nativeResponse []byte,
@@ -49,7 +41,7 @@ func UpsertCacheRowNative(
 ) error {
 	// 本表时间列用 RFC3339Nano：短 TTL 测试与亚秒边界需要亚秒精度。
 	now := time.Now().UTC()
-	_, err := db.Exec(`INSERT INTO semantic_cache
+	_, err := db.ExecContext(ctx, `INSERT INTO semantic_cache
 		(id, tenant_id, fingerprint, model_alias, embedding, response,
 		 native_response, native_proto, native_form, hits, created_at, expires_at)
 		VALUES (?,?,?,?,?,?,?,?,?,0,?,?)
@@ -69,8 +61,9 @@ func UpsertCacheRowNative(
 }
 
 // GetCacheByFingerprint 按租户与指纹精确查，过期行视为不存在。
-func GetCacheByFingerprint(db *sql.DB, tenantID, fingerprint string, now time.Time) (*CacheRow, error) {
-	row := db.QueryRow(`SELECT `+cacheCols+`
+func GetCacheByFingerprint(ctx context.Context, db *sql.DB,
+	tenantID, fingerprint string, now time.Time) (*CacheRow, error) {
+	row := db.QueryRowContext(ctx, `SELECT `+cacheCols+`
 		FROM semantic_cache
 		WHERE tenant_id = ? AND fingerprint = ? AND expires_at > ?`,
 		tenantID, fingerprint, now.UTC().Format(time.RFC3339Nano))
@@ -78,28 +71,28 @@ func GetCacheByFingerprint(db *sql.DB, tenantID, fingerprint string, now time.Ti
 }
 
 // GetCacheByID 按 id 查，用于向量 TopK 命中后回取。
-func GetCacheByID(db *sql.DB, id string, now time.Time) (*CacheRow, error) {
-	row := db.QueryRow(`SELECT `+cacheCols+`
+func GetCacheByID(ctx context.Context, db *sql.DB, id string, now time.Time) (*CacheRow, error) {
+	row := db.QueryRowContext(ctx, `SELECT `+cacheCols+`
 		FROM semantic_cache WHERE id = ? AND expires_at > ?`, id, now.UTC().Format(time.RFC3339Nano))
 	return scanCacheInto(row)
 }
 
 // TouchCacheHits 命中计数 +1。
-func TouchCacheHits(db *sql.DB, id string) error {
-	_, err := db.Exec(`UPDATE semantic_cache SET hits = hits + 1 WHERE id = ?`, id)
+func TouchCacheHits(ctx context.Context, db *sql.DB, id string) error {
+	_, err := db.ExecContext(ctx, `UPDATE semantic_cache SET hits = hits + 1 WHERE id = ?`, id)
 	return err
 }
 
 // DeleteCache 删除条目，用于 LRU 淘汰与清理。
-func DeleteCache(db *sql.DB, id string) error {
-	_, err := db.Exec(`DELETE FROM semantic_cache WHERE id = ?`, id)
+func DeleteCache(ctx context.Context, db *sql.DB, id string) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM semantic_cache WHERE id = ?`, id)
 	return err
 }
 
 // DeleteExpiredCache 删除全部已过期条目，返回删除行数。
 // TTL 只在读取侧过滤，存储侧靠本调用回收，启动期调用一次即可防止表无限膨胀。
-func DeleteExpiredCache(db *sql.DB, now time.Time) (int64, error) {
-	res, err := db.Exec(`DELETE FROM semantic_cache WHERE expires_at <= ?`, now.UTC().Format(time.RFC3339Nano))
+func DeleteExpiredCache(ctx context.Context, db *sql.DB, now time.Time) (int64, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM semantic_cache WHERE expires_at <= ?`, now.UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return 0, fmt.Errorf("store: 清理过期语义缓存: %w", err)
 	}
@@ -108,8 +101,8 @@ func DeleteExpiredCache(db *sql.DB, now time.Time) (int64, error) {
 }
 
 // LoadCacheRows 启动加载全部未过期条目，索引内存态重启后由此重建。
-func LoadCacheRows(db *sql.DB) ([]CacheRow, error) {
-	rows, err := db.Query(`SELECT `+cacheCols+`
+func LoadCacheRows(ctx context.Context, db *sql.DB) ([]CacheRow, error) {
+	rows, err := db.QueryContext(ctx, `SELECT `+cacheCols+`
 		FROM semantic_cache WHERE expires_at > ? ORDER BY created_at`, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("store: 加载语义缓存: %w", err)
@@ -147,9 +140,9 @@ type CacheStatsRow struct {
 }
 
 // CacheStatsRowGet 统计：条数与累计命中。
-func CacheStatsRowGet(db *sql.DB) (CacheStatsRow, error) {
+func CacheStatsRowGet(ctx context.Context, db *sql.DB) (CacheStatsRow, error) {
 	var s CacheStatsRow
-	err := db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(hits),0) FROM semantic_cache WHERE expires_at > ?`,
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(hits),0) FROM semantic_cache WHERE expires_at > ?`,
 		time.Now().UTC().Format(time.RFC3339Nano)).Scan(&s.Entries, &s.Hits)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, nil

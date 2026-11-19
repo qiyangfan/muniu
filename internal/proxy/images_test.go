@@ -102,18 +102,18 @@ func TestImages_候选与计费契约(t *testing.T) {
 			if tc.unsupported {
 				reg.Register("a", bridge.NewAnthropic(up1.URL, adapter.Options{}))
 			}
-			db, err := store.Open(filepath.Join(t.TempDir(), "images.db"))
+			db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "images.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer func() { _ = db.Close() }()
-			pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			var prices *metering.ImagePriceDirectory
 			if !tc.noPrice {
 				prices = metering.NewImagePriceDirectory(map[string]metering.ImagePrice{"paint": {Currency: "CNY", DefaultCredits: 80, Tiers: map[string]int64{"1024|hd": 100}}})
 			}
 			p := New(Config{Registry: reg, Routes: map[string][]config.Candidate{"paint": {{Provider: "a", Model: "up-paint", Weight: 1}, {Provider: "b", Model: "up-paint", Priority: 1, Weight: 1}}}, Pools: map[string]*keypool.Pool{"a": keypool.NewPool([]keypool.KeyInput{{ID: "a", Value: "x", Weight: 1}}), "b": keypool.NewPool([]keypool.KeyInput{{ID: "b", Value: "x", Weight: 1}})}, ImagePricing: prices, Pipeline: pipeline, Timeouts: Timeouts{Dial: time.Second, FirstToken: time.Second}, RandIntn: func(int) int { return 0 }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-			r := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(tc.body))
+			r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/images/generations", strings.NewReader(tc.body))
 			r = r.WithContext(auth.WithKeyInfo(r.Context(), &auth.KeyInfo{MaxRequestCostCredits: tc.budget}))
 			w := httptest.NewRecorder()
 			p.HandlerImages().ServeHTTP(w, r)
@@ -125,7 +125,7 @@ func TestImages_候选与计费契约(t *testing.T) {
 			}
 			var n int
 			var cost, tokens, estimated int64
-			if err := db.QueryRow(`SELECT count(*),coalesce(sum(cost_credits),0),coalesce(sum(prompt_tokens+completion_tokens+reasoning_tokens+cached_tokens),0),coalesce(sum(estimated),0) FROM usage_logs`).Scan(&n, &cost, &tokens, &estimated); err != nil {
+			if err := db.QueryRowContext(context.Background(), `SELECT count(*),coalesce(sum(cost_credits),0),coalesce(sum(prompt_tokens+completion_tokens+reasoning_tokens+cached_tokens),0),coalesce(sum(estimated),0) FROM usage_logs`).Scan(&n, &cost, &tokens, &estimated); err != nil {
 				t.Fatal(err)
 			}
 			if n != tc.wantRows || cost != tc.wantCost || tokens != 0 || estimated != 0 {
@@ -163,7 +163,7 @@ func TestImages_响应读取期间取消不换道(t *testing.T) {
 	})}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r := httptest.NewRequest("POST", "/v1/images/generations", nil).WithContext(ctx)
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/images/generations", nil).WithContext(ctx)
 	tw := &trackWriter{ResponseWriter: httptest.NewRecorder()}
 	m := &meterState{start: time.Now(), status: "ok"}
 	result := make(chan failover.ErrorClass, 1)

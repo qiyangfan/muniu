@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -31,16 +33,16 @@ func TestAdminsCLI_全生命周期与纯账号挂载(t *testing.T) {
 	if strings.Contains(out.String(), "password123") {
 		t.Fatal("CLI 泄漏口令")
 	}
-	db, err := store.Open(cfg.Storage.SQLite.Path)
+	db, err := store.Open(context.Background(), cfg.Storage.SQLite.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	svc, err := auth.NewAdminService(db)
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := svc.Login("alice", "password123"); err != nil {
+	if _, _, err := svc.Login(context.Background(), "alice", "password123"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("MUNIU_ADMIN_TOKEN", "")
@@ -54,7 +56,7 @@ func TestAdminsCLI_全生命周期与纯账号挂载(t *testing.T) {
 	loaded.ModelRoutes = nil
 	loaded.Pricing = nil
 	// 不带数据面拓扑的配置直接装配，仅验证管理面挂载。
-	h, routes, cleanup, err := assemble(loaded, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, routes, cleanup, err := assemble(context.Background(), loaded, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +71,7 @@ func TestAdminsCLI_全生命周期与纯账号挂载(t *testing.T) {
 		t.Fatal("无 token 活跃账号未挂载")
 	}
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/admin/v1/auth/whoami", nil))
+	h.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), "GET", "/admin/v1/auth/whoami", nil))
 	if w.Header().Get("X-Muniu-Request-Id") == "" {
 		t.Fatal("管理面 request_id 未接入")
 	}
@@ -79,13 +81,13 @@ func TestAdminsCLI_全生命周期与纯账号挂载(t *testing.T) {
 }
 
 func TestImagePricing_热更与脏目录保持(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "prices.db"))
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "prices.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
 	cfg := &config.Config{ImagePricing: map[string]config.ImagePrice{"paint": {Currency: "CNY", Default: "0.35", Tiers: map[string]string{"1024|hd": "0.3"}}}}
-	dir, _, update, err := assembleImagePricing(db, cfg, "CNY", 0)
+	dir, _, update, err := assembleImagePricing(context.Background(), db, cfg, "CNY", 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,35 +95,35 @@ func TestImagePricing_热更与脏目录保持(t *testing.T) {
 		t.Fatal("静态价")
 	}
 	r := &store.ImagePricingRecord{Alias: "paint", Currency: "CNY", DefaultCredits: 500, Tiers: map[string]int64{}}
-	if err := update("paint", r); err != nil {
+	if err := update(context.Background(), "paint", r); err != nil {
 		t.Fatal(err)
 	}
 	if dir.Get("paint").DefaultCredits != 500 {
 		t.Fatal("未热更")
 	}
-	if err := update("paint", nil); err != nil {
+	if err := update(context.Background(), "paint", nil); err != nil {
 		t.Fatal(err)
 	}
 	if dir.Get("paint").DefaultCredits != 350000000 {
 		t.Fatal("未回落")
 	}
-	if err := update("paint", nil); err != store.ErrNotFound {
+	if err := update(context.Background(), "paint", nil); !errors.Is(err, store.ErrNotFound) {
 		t.Fatal("重复删除未404", err)
 	}
 	bad := &store.ImagePricingRecord{Alias: "broken", Currency: "CNY", DefaultCredits: 500, Tiers: map[string]int64{"bad": 1}}
-	if err := update("broken", bad); err == nil {
+	if err := update(context.Background(), "broken", bad); err == nil {
 		t.Fatal("非法整单未拒绝")
 	}
-	if _, err := db.Exec(`INSERT INTO image_pricing VALUES('broken','CNY',500,'{"bad":"0.2"}','now')`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO image_pricing VALUES('broken','CNY',500,'{"bad":"0.2"}','now')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := update("paint", r); err == nil {
+	if err := update(context.Background(), "paint", r); err == nil {
 		t.Fatal("脏目录未拒绝重建")
 	}
 	if dir.Get("paint").DefaultCredits != 350000000 {
 		t.Fatal("旧目录被破坏")
 	}
-	if _, err := db.Exec(`DELETE FROM image_pricing WHERE alias='broken'`); err != nil {
+	if _, err := db.ExecContext(context.Background(), `DELETE FROM image_pricing WHERE alias='broken'`); err != nil {
 		t.Fatal(err)
 	}
 	q := metering.ImagePrice{Currency: "USD", DefaultCredits: 100, Tiers: map[string]int64{"1024|hd": 50}}
@@ -161,21 +163,21 @@ func TestImages_无价目仍使用网关本位币(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, _, cleanup, err := assemble(cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h, _, cleanup, err := assemble(context.Background(), cfg, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	db, err := store.Open(dbPath)
+	db, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	key, _, err := auth.CreateKey(db, "default", "images", 60, auth.KeyOpts{})
+	key, _, err := auth.CreateKey(context.Background(), db, "default", "images", 60, auth.KeyOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{"model":"paint","prompt":"x"}`))
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/images/generations", strings.NewReader(`{"model":"paint","prompt":"x"}`))
 	r.Header.Set("Authorization", "Bearer "+key)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -185,7 +187,7 @@ func TestImages_无价目仍使用网关本位币(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		var currency string
-		err := db.QueryRow(`SELECT currency FROM usage_logs LIMIT 1`).Scan(&currency)
+		err := db.QueryRowContext(context.Background(), `SELECT currency FROM usage_logs LIMIT 1`).Scan(&currency)
 		if err == nil {
 			if currency != "USD" {
 				t.Fatalf("无价目行币种=%s，应为USD", currency)

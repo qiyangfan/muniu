@@ -2,6 +2,7 @@
 package testkit
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -12,7 +13,11 @@ import (
 
 func readAll(t *testing.T, url string) (string, error) {
 	t.Helper()
-	resp, err := http.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +93,11 @@ func TestFakeStream_慢帧按时到达(t *testing.T) {
 
 func TestFakeJSON_状态与body透传(t *testing.T) {
 	u := StartJSONUpstream(t, http.StatusInternalServerError, JSON500Body)
-	resp, err := http.Get(u.URL())
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, u.URL(), nil)
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("请求失败: %v", err)
 	}
@@ -101,7 +110,7 @@ func TestFakeJSON_状态与body透传(t *testing.T) {
 
 func TestFakeUpstream_请求记录(t *testing.T) {
 	u := StartJSONUpstream(t, http.StatusOK, JSONOKBody)
-	req, _ := http.NewRequest("POST", u.URL(), strings.NewReader(`{"model":"m"}`))
+	req, _ := http.NewRequestWithContext(context.Background(), "POST", u.URL(), strings.NewReader(`{"model":"m"}`))
 	req.Header.Set("Authorization", "Bearer sk-test")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -123,7 +132,12 @@ func TestFakeUpstream_请求记录(t *testing.T) {
 // TestResponsesUpstream_有状态替身 验证创建响应后可读取资源，未知 ID 返回 404。
 func TestResponsesUpstream_有状态替身(t *testing.T) {
 	u := StartResponsesUpstream(t)
-	resp, err := http.Post(u.URL()+"/responses", "application/json", strings.NewReader(`{"model":"m","input":"hi"}`))
+	postReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.URL()+"/responses", strings.NewReader(`{"model":"m","input":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(postReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +150,11 @@ func TestResponsesUpstream_有状态替身(t *testing.T) {
 		t.Fatalf("创建体应入内存存储: %q %v", stored, ok)
 	}
 	// GET 命中。
-	get, err := http.Get(u.URL() + "/responses/resp_1")
+	getReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, u.URL()+"/responses/resp_1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get, err := http.DefaultClient.Do(getReq)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +164,11 @@ func TestResponsesUpstream_有状态替身(t *testing.T) {
 		t.Fatalf("GET 应原样返回存储体: %d %s", get.StatusCode, gb)
 	}
 	// 未知 id 应 404。
-	miss, err := http.Get(u.URL() + "/responses/resp_404")
+	missReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, u.URL()+"/responses/resp_404", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	miss, err := http.DefaultClient.Do(missReq)
 	if err != nil {
 		t.Fatal(err)
 	}

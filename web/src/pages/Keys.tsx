@@ -23,7 +23,7 @@ import { DataList, type DataCol } from "../components/data-list";
 import { FormRow } from "../components/form-row";
 import { StatusBadge, type StatusMeta } from "../components/status-badge";
 import { formatDateTime, formatNumber } from "../lib/datetime";
-import { fmtCredits, rfc3339ToLocal } from "../lib/utils";
+import { fmtCredits, rfc3339ToLocal, errorMessage } from "../lib/utils";
 
 // 状态优先级：已吊销、已停用、启用。
 const KEY_STATUS_META: StatusMeta = {
@@ -102,7 +102,7 @@ export default function Keys() {
         setLoaded(true);
       })
       .catch((e) => {
-        setErr(e.message);
+        setErr(errorMessage(e));
         setLoaded(true);
       });
   }, []);
@@ -310,41 +310,45 @@ export default function Keys() {
     },
   ];
 
+  const submitKey = async () => {
+    setBusy(true);
+    try {
+      const r = await api.createKey(tenant, name, rpm, {
+        tpm_limit: tpm,
+        daily_quota_credits: quota,
+        max_request_cost_credits: budget,
+        // 留空表示不限；填写后按行设置白名单。
+        ...(textToAllowlist(allowed).length > 0
+          ? { allowed_models: textToAllowlist(allowed) }
+          : {}),
+        ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
+      });
+      setIssued({ key: r.key, id: r.id });
+      setErr("");
+      setName("");
+      // 重置表单，避免沿用上一把 key 的过期时间。
+      setExpires("");
+      setTpm(0);
+      setQuota(0);
+      setBudget(0);
+      setAllowed("");
+      refresh();
+    } catch (e2) {
+      setErr(errorMessage(e2));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* datetime-local 控件与快捷按钮需要较宽布局。 */}
       <Card className="p-4">
         <form
           className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-          onSubmit={async (e) => {
+          onSubmit={(e) => {
             e.preventDefault();
-            setBusy(true);
-            try {
-              const r = await api.createKey(tenant, name, rpm, {
-                tpm_limit: tpm,
-                daily_quota_credits: quota,
-                max_request_cost_credits: budget,
-                // 留空表示不限；填写后按行设置白名单。
-                ...(textToAllowlist(allowed).length > 0
-                  ? { allowed_models: textToAllowlist(allowed) }
-                  : {}),
-                ...(expires ? { expires_at: new Date(expires).toISOString() } : {}),
-              });
-              setIssued({ key: r.key, id: r.id });
-              setErr("");
-              setName("");
-              // 重置表单，避免沿用上一把 key 的过期时间。
-              setExpires("");
-              setTpm(0);
-              setQuota(0);
-              setBudget(0);
-              setAllowed("");
-              refresh();
-            } catch (e2) {
-              setErr((e2 as Error).message);
-            } finally {
-              setBusy(false);
-            }
+            void submitKey();
           }}
         >
           <FormRow label="租户" htmlFor="key-tenant">

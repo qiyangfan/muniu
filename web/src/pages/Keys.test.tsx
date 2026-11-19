@@ -81,13 +81,13 @@ describe("密钥页 Key ID", () => {
     fireEvent.change(await screen.findByLabelText("key 名称"), {
       target: { value: "e2e" },
     });
-    await act(async () => {
+    act(() => {
       fireEvent.click(screen.getByRole("button", { name: "签发" }));
     });
     await screen.findByText(issuedID);
     expect(screen.getByText(/明文仅此一次/)).toBeDefined();
 
-    await act(async () => {
+    act(() => {
       fireEvent.click(screen.getByRole("button", { name: "复制 Key ID" }));
     });
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(issuedID));

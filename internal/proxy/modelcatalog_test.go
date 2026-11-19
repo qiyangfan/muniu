@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -26,7 +27,7 @@ func TestModelCatalog_列表与快照同源且升序(t *testing.T) {
 	p := New(cfg)
 
 	rec := httptest.NewRecorder()
-	modelsMux(p).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	modelsMux(p).ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/models", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("应 200: %d", rec.Code)
 	}
@@ -71,7 +72,7 @@ func TestModelCatalog_热替换同步(t *testing.T) {
 		t.Fatalf("别名目录应随快照更新: %v", aliases)
 	}
 	rec := httptest.NewRecorder()
-	modelsMux(p).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	modelsMux(p).ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/models", nil))
 	if !containsAll(rec.Body.String(), `"id":"beta-alias"`) || containsAll(rec.Body.String(), `"id":"m1"`) {
 		t.Fatalf("热替换后应只含新目录: %s", rec.Body.String())
 	}
@@ -82,7 +83,7 @@ func TestModelCatalog_单查命中与未命中404(t *testing.T) {
 	mux := modelsMux(p)
 
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models/m1", nil))
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/models/m1", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("命中应 200: %d", rec.Code)
 	}
@@ -91,7 +92,7 @@ func TestModelCatalog_单查命中与未命中404(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models/nope", nil))
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/v1/models/nope", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("未命中应 404: %d", rec.Code)
 	}

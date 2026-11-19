@@ -4,6 +4,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -71,12 +72,12 @@ func (p TopologyPayload) ToTopology() (providers []Provider,
 
 // FetchTopology 拉取并解析；etag 非空时带 If-None-Match，304 返回 notModified。
 // err 非空时调用方保持旧快照并告警。
-func FetchTopology(client *http.Client, url, etag string) (payload TopologyPayload,
+func FetchTopology(ctx context.Context, client *http.Client, url, etag string) (payload TopologyPayload,
 	newETag string, notModified bool, err error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	resp, err := doTopologyRequest(client, url, etag)
+	resp, err := doTopologyRequest(ctx, client, url, etag)
 	if err != nil {
 		return payload, etag, false, err
 	}
@@ -102,8 +103,8 @@ func FetchTopology(client *http.Client, url, etag string) (payload TopologyPaylo
 }
 
 // doTopologyRequest 发条件 GET;构造失败返回空 etag,传输失败原样回带 etag 供调用方保留。
-func doTopologyRequest(client *http.Client, url, etag string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func doTopologyRequest(ctx context.Context, client *http.Client, url, etag string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造拓扑拉取请求: %w", err)
 	}

@@ -19,6 +19,14 @@ linters:
     - dupl
     # 安全:handoff P1 Go 口径。
     - gosec
+    # 正确性与生命周期:错误包装、响应体关闭、context 传导与取消。
+    # noctx 要求 DB/HTTP/监听调用走 *Context 形态,调用链因此贯通 ctx(store 层亦如此)。
+    - errorlint
+    - bodyclose
+    - contextcheck
+    - nilerr
+    - sqlclosecheck
+    - noctx
     # import 卫生:把 AGENTS 的分层方向固化成可执行规则。
     - depguard
   settings:

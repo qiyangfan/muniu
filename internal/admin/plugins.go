@@ -103,7 +103,7 @@ func pluginPut(d Deps) http.HandlerFunc {
 			return
 		}
 		oldSHA, _ := d.Plugins.SHA256(name)
-		info, replaced, err := d.Plugins.Register(plugin.Options{
+		info, replaced, err := d.Plugins.Register(r.Context(), plugin.Options{
 			Name:             name,
 			Binary:           bin,
 			Config:           req.Config,

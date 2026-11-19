@@ -26,9 +26,14 @@ if [ "${1:-}" = "--file" ]; then
   check_subject "$subject" "$file"
 else
   range="${1:?用法: commitcheck.sh --file <path> | <base>..<head>}"
+  # 进程替换的失败不会回传退出码:范围不可解析必须显式失败,不能空集放行。
+  if ! subjects=$(git log --format=%s "$range"); then
+    echo "提交范围不可解析: $range" >&2
+    exit 1
+  fi
   while IFS= read -r subject; do
     check_subject "$subject" "$range"
-  done < <(git log --format=%s "$range")
+  done <<< "$subjects"
 fi
 
 if [ "$bad" -ne 0 ]; then

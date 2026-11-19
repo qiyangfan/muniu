@@ -2,6 +2,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -73,9 +74,9 @@ func TestBridgeGate_多候选豁免换道(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	toolBody := `{"model":"alias-a","messages":[{"role":"user","content":"hi"},{"role":"tool","tool_call_id":"call_1","content":"res"}]}`
-	resp, body := postChat(t, ts.URL, toolBody)
-	if resp.StatusCode != 200 {
-		t.Fatalf("应经 openai 候选服务成功: %d %s", resp.StatusCode, body)
+	status, body := bridgePost(t, ts.URL+"/v1/chat/completions", toolBody)
+	if status != 200 {
+		t.Fatalf("应经 openai 候选服务成功: %d %s", status, body)
 	}
 	if strings.Contains(body, "bridge_tool") {
 		t.Fatalf("多候选豁免不应暴露边界: %s", body)
@@ -103,9 +104,9 @@ func TestBridgeGate_独占别名明确信封(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	toolBody := `{"model":"alias-a","messages":[{"role":"user","content":"hi"},{"role":"tool","tool_call_id":"call_1","content":"res"}]}`
-	resp, body := postChat(t, ts.URL, toolBody)
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("应 400: %d %s", resp.StatusCode, body)
+	status, body := bridgePost(t, ts.URL+"/v1/chat/completions", toolBody)
+	if status != http.StatusBadRequest {
+		t.Fatalf("应 400: %d %s", status, body)
 	}
 	var env struct {
 		Error struct {
@@ -140,9 +141,9 @@ func TestBridgeGate_豁免无健康度副作用(t *testing.T) {
 	t.Cleanup(ts.Close)
 	for i := 0; i < 5; i++ {
 		toolBody := `{"model":"alias-a","messages":[{"role":"tool","content":"res"}]}`
-		resp, _ := postChat(t, ts.URL, toolBody)
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("第 %d 次应 400: %d", i, resp.StatusCode)
+		status, _ := bridgePost(t, ts.URL+"/v1/chat/completions", toolBody)
+		if status != http.StatusBadRequest {
+			t.Fatalf("第 %d 次应 400: %d", i, status)
 		}
 	}
 	if st := pool.StateOf("K2", time.Now()); st != "healthy" {
@@ -179,9 +180,9 @@ func TestBridgeGate_anthropic翻正后工具多轮出站(t *testing.T) {
 			{"role":"tool","tool_call_id":"call_1","content":"晴 25°C"}
 		],
 		"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]}`
-	resp, body := postChat(t, ts.URL, toolBody)
-	if resp.StatusCode != 200 {
-		t.Fatalf("翻正后应经翻译路径出站成功: %d %s", resp.StatusCode, body)
+	status, body := bridgePost(t, ts.URL+"/v1/chat/completions", toolBody)
+	if status != 200 {
+		t.Fatalf("翻正后应经翻译路径出站成功: %d %s", status, body)
 	}
 	// 出站 wire 为 anthropic 形态：assistant tool_use 块 + user tool_result 块。
 	wire := string(up.LastBody())
@@ -220,7 +221,7 @@ func TestBridgeGate_首轮tools声明放行(t *testing.T) {
 	ts := httptest.NewServer(p.Handler())
 	t.Cleanup(ts.Close)
 	toolsBody := `{"model":"alias-a","tools":[{"type":"function","function":{"name":"f"}}],"messages":[{"role":"user","content":"hi"}]}`
-	postChat(t, ts.URL, toolsBody)
+	bridgePost(t, ts.URL+"/v1/chat/completions", toolsBody)
 	if !called {
 		t.Fatal("首轮 tools 声明应照常出站(不被豁免)")
 	}
@@ -249,8 +250,8 @@ func TestAlerting_候选全失败通知(t *testing.T) {
 	ts := httptest.NewServer(p.Handler())
 	t.Cleanup(ts.Close)
 
-	resp, body := postChat(t, ts.URL, `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
-	if resp.StatusCode == 0 || body == "" {
+	status, body := bridgePost(t, ts.URL+"/v1/chat/completions", `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
+	if status == 0 || body == "" {
 		t.Fatal("请求必须有响应")
 	}
 	deadline := time.Now().Add(2 * time.Second)
@@ -260,4 +261,24 @@ func TestAlerting_候选全失败通知(t *testing.T) {
 	if hits.Load() == 0 {
 		t.Fatal("候选全失败应触发告警通知")
 	}
+}
+
+// bridgePost 本地 POST 助手:返回状态码与响应体,响应体在助手内关闭。
+func bridgePost(t *testing.T, url, body string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode, string(b)
 }

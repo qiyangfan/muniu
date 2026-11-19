@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -38,8 +39,8 @@ type AdminService struct {
 }
 
 // NewAdminService 启动时清扫过期会话，失败拒绝装配。
-func NewAdminService(db *sql.DB) (*AdminService, error) {
-	if err := store.CleanAdminSessions(db, time.Now().UTC().Format(time.RFC3339)); err != nil {
+func NewAdminService(ctx context.Context, db *sql.DB) (*AdminService, error) {
+	if err := store.CleanAdminSessions(ctx, db, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		return nil, err
 	}
 	dummy, err := HashAdminPassword("invalid-account-dummy")
@@ -50,7 +51,7 @@ func NewAdminService(db *sql.DB) (*AdminService, error) {
 }
 
 // Create API 与 CLI 共用用户名及口令校验。
-func (s *AdminService) Create(username, password string) (store.AdminUser, error) {
+func (s *AdminService) Create(ctx context.Context, username, password string) (store.AdminUser, error) {
 	username = strings.TrimSpace(username)
 	if !utf8.ValidString(username) {
 		return store.AdminUser{}, store.MarkBusiness(fmt.Errorf("用户名须为有效 UTF-8 文本"))
@@ -66,14 +67,14 @@ func (s *AdminService) Create(username, password string) (store.AdminUser, error
 		ID: uuid.NewV7().String(), Username: username, PasswordHash: hash,
 		Status: "active", CreatedAt: s.now().UTC().Format(time.RFC3339),
 	}
-	if err := store.CreateAdminUser(s.db, u); err != nil {
+	if err := store.CreateAdminUser(ctx, s.db, u); err != nil {
 		return store.AdminUser{}, err
 	}
 	return u, nil
 }
 
 // Patch 改密或停用后旧会话即刻失效；启用不恢复旧会话。
-func (s *AdminService) Patch(id string, disabled *bool, password string) error {
+func (s *AdminService) Patch(ctx context.Context, id string, disabled *bool, password string) error {
 	hash := ""
 	if password != "" {
 		var err error
@@ -82,11 +83,11 @@ func (s *AdminService) Patch(id string, disabled *bool, password string) error {
 			return store.MarkBusiness(err)
 		}
 	}
-	return store.PatchAdminUser(s.db, id, disabled, hash)
+	return store.PatchAdminUser(ctx, s.db, id, disabled, hash)
 }
 
 // Login 以真实账号累计失败；不存在账号仍计算等成本哈希，但不积累无界用户名状态。
-func (s *AdminService) Login(username, password string) (string, store.AdminUser, error) {
+func (s *AdminService) Login(ctx context.Context, username, password string) (string, store.AdminUser, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now().UTC()
@@ -97,7 +98,7 @@ func (s *AdminService) Login(username, password string) (string, store.AdminUser
 	if !f.until.IsZero() {
 		f = adminFailures{}
 	}
-	u, err := store.GetAdminUser(s.db, username)
+	u, err := store.GetAdminUser(ctx, s.db, username)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return "", u, err
 	}
@@ -114,7 +115,7 @@ func (s *AdminService) Login(username, password string) (string, store.AdminUser
 		return "", store.AdminUser{}, s.recordFailure(username, f, now)
 	}
 	delete(s.failures, username)
-	return s.openSession(u, now)
+	return s.openSession(ctx, u, now)
 }
 
 // loginMaxFailures 同一用户名连续失败达此数即锁定;锁定窗口固定 15 分钟。
@@ -134,14 +135,17 @@ func (s *AdminService) recordFailure(username string, f adminFailures, now time.
 }
 
 // openSession 签发会话令牌；会话落库时用户已消失仍归凭据无效。
-func (s *AdminService) openSession(u store.AdminUser, now time.Time) (string, store.AdminUser, error) {
+func (s *AdminService) openSession(ctx context.Context, u store.AdminUser, now time.Time) (
+	string, store.AdminUser, error,
+) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", u, err
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)
 	expires := now.Add(12 * time.Hour).Format(time.RFC3339)
-	if err := store.CreateAdminSession(s.db, u, adminTokenHash(token), now.Format(time.RFC3339), expires); err != nil {
+	if err := store.CreateAdminSession(ctx, s.db, u, adminTokenHash(token),
+		now.Format(time.RFC3339), expires); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return "", u, ErrAdminCredentials
 		}
@@ -156,11 +160,11 @@ func adminTokenHash(token string) string {
 }
 
 // Session 逐请求查服务端状态，账户失效、会话不存在与过期统一拒绝。
-func (s *AdminService) Session(token string) (store.AdminUser, error) {
+func (s *AdminService) Session(ctx context.Context, token string) (store.AdminUser, error) {
 	if token == "" {
 		return store.AdminUser{}, ErrAdminCredentials
 	}
-	u, err := store.AdminSession(s.db, adminTokenHash(token), s.now().UTC().Format(time.RFC3339))
+	u, err := store.AdminSession(ctx, s.db, adminTokenHash(token), s.now().UTC().Format(time.RFC3339))
 	if errors.Is(err, store.ErrNotFound) {
 		return u, ErrAdminCredentials
 	}
@@ -168,6 +172,6 @@ func (s *AdminService) Session(token string) (store.AdminUser, error) {
 }
 
 // Logout 删除哈希记录，令牌明文不进入数据库。
-func (s *AdminService) Logout(token string) error {
-	return store.DeleteAdminSession(s.db, adminTokenHash(token))
+func (s *AdminService) Logout(ctx context.Context, token string) error {
+	return store.DeleteAdminSession(ctx, s.db, adminTokenHash(token))
 }

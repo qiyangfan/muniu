@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -62,7 +63,7 @@ func TestStickyRoute(t *testing.T) {
 		},
 	}
 	p := New(Config{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	r := httptest.NewRequest("POST", "/v1/responses", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1/responses", nil)
 	cands := snap.routes["alias-r"]
 
 	// 无原生候选即声明关闭：翻译路径维持既有拒绝。
@@ -181,9 +182,14 @@ func TestStickyE2E_创建亲和GET代理(t *testing.T) {
 }
 
 // postPath 显式路径版 postChat，mux 装配下路径参与路由。
-func postPath(t *testing.T, url, path, body string) (*http.Response, string) {
+func postPath(t *testing.T, url, path, body string) (chatResponse, string) {
 	t.Helper()
-	resp, err := http.Post(url+path, "application/json", strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url+path, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("请求失败: %v", err)
 	}
@@ -192,7 +198,7 @@ func postPath(t *testing.T, url, path, body string) (*http.Response, string) {
 		t.Fatalf("读响应失败: %v", err)
 	}
 	_ = resp.Body.Close()
-	return resp, string(b)
+	return chatResponse{StatusCode: resp.StatusCode, Header: resp.Header}, string(b)
 }
 
 type httpGetResult struct {
@@ -202,7 +208,11 @@ type httpGetResult struct {
 
 func httpGet(t *testing.T, url string) (*httpGetResult, error) {
 	t.Helper()
-	resp, err := http.DefaultClient.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +340,7 @@ func TestStickyE2E_DELETE代理(t *testing.T) {
 
 func httpVerb(t *testing.T, verb, url string) (*httpGetResult, error) {
 	t.Helper()
-	req, err := http.NewRequest(verb, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), verb, url, nil)
 	if err != nil {
 		return nil, err
 	}

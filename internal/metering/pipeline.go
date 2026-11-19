@@ -3,6 +3,7 @@
 package metering
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"log/slog"
@@ -43,7 +44,7 @@ type Pipeline struct {
 }
 
 // NewPipeline 启动管道与 flusher goroutine。
-func NewPipeline(db *sql.DB, opts Options, logger *slog.Logger) *Pipeline {
+func NewPipeline(ctx context.Context, db *sql.DB, opts Options, logger *slog.Logger) *Pipeline {
 	if opts.Capacity <= 0 {
 		opts.Capacity = 4096
 	}
@@ -64,7 +65,7 @@ func NewPipeline(db *sql.DB, opts Options, logger *slog.Logger) *Pipeline {
 	p := &Pipeline{
 		opts:   opts,
 		logger: logger,
-		local:  NewLocalSink(db),
+		local:  NewLocalSink(ctx, db),
 		remote: opts.Remote,
 		buffer: opts.Buffer,
 		ch:     make(chan UsageRow, opts.Capacity),

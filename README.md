@@ -129,6 +129,19 @@ muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:
 - **conformance fixture 回放测试**([conformance/](conformance/)):七家上游(OpenAI 兼容基座 / DeepSeek / Moonshot / GLM / Qwen / Doubao / Anthropic)的真实响应形态固化为 fixture,适配器正确性可离线回归。
 - **chaos 演练**(`internal/proxy/chaos_test.go`):failover 判定表 26 格覆盖 + 上游故障注入(半帧、断连、超时)。
 - **全仓 `-race`**:`make check` 即全量门禁,数据竞争零容忍。
+- **发布产物可验证**:每个归档附 syft 生成的 SPDX SBOM;`checksums.txt` 与各 SBOM 由 cosign keyless(GitHub OIDC)签名,签名以 `.sigstore.json` 包随 release 发布。校验方式:
+  ```bash
+  cosign verify-blob --bundle checksums.txt.sigstore.json \
+    --certificate-identity-regexp 'https://github.com/qiyangfan/muniu/.github/workflows/release.yml@refs/tags/.*' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+  sha256sum -c checksums.txt
+  gh attestation verify muniu_<版本>_linux_amd64.tar.gz -R qiyangfan/muniu
+  ```
+- **正确性与上下文门禁**:`errorlint`/`bodyclose`/`contextcheck`/`nilerr`/`sqlclosecheck`/`noctx` 全开——DB/HTTP/监听的每个阻塞调用都可被 context 取消,请求 ctx 一路贯通到 store 层。
+- **前端类型感知 lint**:ESLint 走 `recommendedTypeChecked`(`no-floating-promises`/`no-misused-promises`/`no-unsafe-*`),组件测试与逐文件覆盖率闸兜底。
+- **文档链接检查**:287 篇 Markdown 的相对链接与标题锚点零网络校验(`make doclink`),死链直接红。
+- **依赖许可证三方审计**:Go(`go-licenses`)、web 生产依赖(`pnpm licenses --prod`)、Rust(`cargo-deny`)各自白名单独立维护,新依赖带出清单外许可证直接红。
+- **密钥扫描**:`gitleaks` 全历史扫描接入 `make check`(`.gitleaks.toml` 默认规则 + 逐条路径级 allowlist,均写明原因/负责人/到期),提交历史中的凭据形态直接红。
 - **openspec 变更管理**:每个行为变更走提案 → 实现 → 归档,specs 与实现的一致性可审计。
 - **12 步请求生命周期契约**([docs/design/architecture.md](docs/design/architecture.md)):middleware 链序即契约,stdlib-first,无框架。
 

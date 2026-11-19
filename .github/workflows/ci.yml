@@ -38,9 +38,10 @@ jobs:
           FILES=$(git diff --name-only "${BASE}...HEAD")
           echo "$FILES"
           match() { echo "$FILES" | grep -Eq "$1" && echo true || echo false; }
-          # migrations/*.sql 经 go:embed 进二进制,归入 Go 侧
-          echo "go=$(match '(\.go$|^go\.mod$|^go\.sum$|^internal/store/migrations/|^\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
-          echo "web=$(match '(^web/|^\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
+          # migrations/*.sql 经 go:embed 进二进制,归入 Go 侧;门禁资产(脚本/Makefile/lint 配置)
+          # 改动必须触发门禁本身,否则改门禁会成为唯一绕过门禁的路径
+          echo "go=$(match '(\.go$|^go\.mod$|^go\.sum$|^internal/store/migrations/|^scripts/|^Makefile$|^\.golangci\.yml$|^\.pre-commit-config\.yaml$|^\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
+          echo "web=$(match '(^web/|^scripts/|^Makefile$|^\.github/workflows/ci\.yml$)')" >> "$GITHUB_OUTPUT"
 
   check:
     needs: changes
@@ -64,10 +65,22 @@ jobs:
           # 与 mise.toml 钉死的版本一致:latest 会随上游大版本漂移,门禁不可复现
           # (action 要求 v 前缀的完整版本号)
           version: "v2.15"
+      # 跨包死代码:golangci 的 unused 只看包内,这里从 main 出发做全程序可达性分析;
+      # -test 把测试可达函数一并算存活,避免误报仅供测试使用的导出;
+      # 包装脚本负责把「有输出」转成非零退出(deadcode 本身发现死代码仍退 0)
+      - name: deadcode
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.53.0
+          ./scripts/deadcodecheck.sh
+      # 许可证白名单在 scripts/licensecheck.sh(与本地 make licenses 同源)
+      - name: license check
+        run: |
+          go install github.com/google/go-licenses/v2@v2.0.1
+          ./scripts/licensecheck.sh
       # 覆盖率门禁与 make test 同式:race + atomic profile,聚合下限 + 逐包下限(scripts/covercheck.sh)
       - name: go test (race) + coverage gate
         run: |
-          go test -race -covermode=atomic -coverprofile=coverage.out ./...
+          go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
           GO=go ./scripts/covercheck.sh coverage.out
       - name: build (CGO_ENABLED=0)
         run: CGO_ENABLED=0 go build ./...
@@ -144,6 +157,7 @@ jobs:
           pnpm knip
           pnpm test
           pnpm format:check
+          node ../scripts/weblicensecheck.mjs
       # 只拦生产依赖:开发链(vitest→jsdom)的告警不影响发布产物,dev 侧由 dependabot 跟进;
       # 本地 make check 不跑(需 registry 网络),CI 是权威口径
       - name: audit (prod, high+)
@@ -200,6 +214,9 @@ jobs:
           curl -sSfL "https://github.com/goreleaser/goreleaser/releases/download/v${VERSION}/goreleaser_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin goreleaser
           goreleaser check
+      # 文档本地链接与锚点(零网络依赖;http 外链不在此检)
+      - name: doc links
+        run: python3 scripts/linkcheck.py
       # 文件卫生 + YAML/JSON 语法:与本地提交钩子同一份 .pre-commit-config.yaml;
       # gitleaks 由 secrets 作业做全历史扫描,这里跳过避免重复
       - name: file hygiene (pre-commit)

@@ -48,7 +48,7 @@ func TestGateShared_quota闸在共享模式生效(t *testing.T) {
 	proxy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	rec := httptest.NewRecorder()
-	g.Middleware(proxy).ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", nil).
+	g.Middleware(proxy).ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil).
 		WithContext(auth.WithKeyInfo(context.Background(), info)))
 
 	if rec.Code != http.StatusPaymentRequired {
@@ -66,7 +66,7 @@ func TestGateShared_未超限走共享RPM判定(t *testing.T) {
 	proxy := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	rec := httptest.NewRecorder()
-	g.Middleware(proxy).ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", nil).
+	g.Middleware(proxy).ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), "POST", "/v1/chat/completions", nil).
 		WithContext(auth.WithKeyInfo(context.Background(), info)))
 
 	if !shared.rpmCalled {

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -39,7 +40,7 @@ func seedRows(t *testing.T, db *sql.DB) {
 
 func mustExec(t *testing.T, db *sql.DB, q string) {
 	t.Helper()
-	if _, err := db.Exec(q); err != nil {
+	if _, err := db.ExecContext(context.Background(), q); err != nil {
 		t.Fatalf("exec %q: %v", q, err)
 	}
 }
@@ -47,7 +48,7 @@ func mustExec(t *testing.T, db *sql.DB, q string) {
 func countOf(t *testing.T, db *sql.DB, table string) int {
 	t.Helper()
 	var n int
-	if err := db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&n); err != nil {
+	if err := db.QueryRowContext(context.Background(), fmt.Sprintf("SELECT COUNT(*) FROM %s", table)).Scan(&n); err != nil {
 		t.Fatalf("count %s: %v", table, err)
 	}
 	return n
@@ -55,7 +56,7 @@ func countOf(t *testing.T, db *sql.DB, table string) int {
 
 func openDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
-	db, err := Open(path)
+	db, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
@@ -72,12 +73,12 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db2, err := Open(src)
+	db2, err := Open(context.Background(), src)
 	if err != nil {
 		t.Fatal(err)
 	}
 	backupDir := filepath.Join(dir, "bak")
-	man, err := Snapshot(db2, backupDir, time.Now())
+	man, err := Snapshot(context.Background(), db2, backupDir, time.Now())
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 	}
 
 	dest := filepath.Join(dir, "restored.db")
-	if err := Restore(backupDir, dest, false); err != nil {
+	if err := Restore(context.Background(), backupDir, dest, false); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	rdb := openDB(t, dest)
@@ -106,7 +107,7 @@ func TestSnapshotRestoreRoundtrip(t *testing.T) {
 	}
 	// 内容级一致，key 前缀逐字比对。
 	var prefix string
-	if err := rdb.QueryRow("SELECT prefix FROM api_keys WHERE id='k2'").Scan(&prefix); err != nil {
+	if err := rdb.QueryRowContext(context.Background(), "SELECT prefix FROM api_keys WHERE id='k2'").Scan(&prefix); err != nil {
 		t.Fatal(err)
 	}
 	if prefix != "mk-BBBBBBBB" {
@@ -124,13 +125,13 @@ func TestSnapshotIncludesUnmergedWAL(t *testing.T) {
 	// 保持连接打开，让已提交数据留在 WAL 帧中；快照仍须包含这些帧。
 	// 测试连接池只允许一个连接，因此不要在此连接上另开读事务。
 	backupDir := filepath.Join(dir, "bak")
-	if _, err := Snapshot(db, backupDir, time.Now()); err != nil {
+	if _, err := Snapshot(context.Background(), db, backupDir, time.Now()); err != nil {
 		t.Fatalf("snapshot(连接未关闭): %v", err)
 	}
 	_ = db.Close()
 
 	dest := filepath.Join(dir, "restored.db")
-	if err := Restore(backupDir, dest, false); err != nil {
+	if err := Restore(context.Background(), backupDir, dest, false); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	rdb := openDB(t, dest)
@@ -151,7 +152,7 @@ func TestSnapshotRefusesExistingDir(t *testing.T) {
 	if err := os.MkdirAll(existing, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Snapshot(db, existing, time.Now()); err == nil {
+	if _, err := Snapshot(context.Background(), db, existing, time.Now()); err == nil {
 		t.Fatal("期望拒绝已存在目录")
 	}
 }
@@ -173,7 +174,7 @@ func TestSnapshotDeletesArtifactOnFailure(t *testing.T) {
 	defer func() { _ = ro.Close() }()
 	ro.SetMaxOpenConns(1)
 	backupDir := filepath.Join(dir, "bak")
-	if _, err := Snapshot(ro, backupDir, time.Now()); err == nil {
+	if _, err := Snapshot(context.Background(), ro, backupDir, time.Now()); err == nil {
 		t.Fatal("期望快照失败")
 	}
 	if _, err := os.Stat(backupDir); !errors.Is(err, os.ErrNotExist) {
@@ -189,7 +190,7 @@ func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 	db := openDB(t, src)
 	seedRows(t, db) // 备份源 3 条 usage，manifest 记 3。
 	backupDir := filepath.Join(dir, "bak")
-	man, err := Snapshot(db, backupDir, time.Now())
+	man, err := Snapshot(context.Background(), db, backupDir, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +207,7 @@ func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 			" 4, '2026-09-30T02:00:00Z')")
 	_ = ddb.Close()
 
-	if err := Restore(backupDir, dest, false); err == nil {
+	if err := Restore(context.Background(), backupDir, dest, false); err == nil {
 		t.Fatal("期望拒绝覆盖")
 	}
 	// 目标零改动：仍 4 条，manifest 记的是 3 条备份。
@@ -219,7 +220,7 @@ func TestRestoreRefusesExistingDestWithoutForce(t *testing.T) {
 		t.Fatalf("manifest usage = %d, want 3", man.UsageLogs)
 	}
 	// force 后成功覆盖。
-	if err := Restore(backupDir, dest, true); err != nil {
+	if err := Restore(context.Background(), backupDir, dest, true); err != nil {
 		t.Fatalf("force restore: %v", err)
 	}
 	rdb2 := openDB(t, dest)
@@ -237,7 +238,7 @@ func TestRestoreRejectsManifestMismatch(t *testing.T) {
 	db := openDB(t, src)
 	seedRows(t, db)
 	backupDir := filepath.Join(dir, "bak")
-	if _, err := Snapshot(db, backupDir, time.Now()); err != nil {
+	if _, err := Snapshot(context.Background(), db, backupDir, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.Close()
@@ -262,7 +263,7 @@ func TestRestoreRejectsManifestMismatch(t *testing.T) {
 	}
 
 	dest := filepath.Join(dir, "dest.db")
-	if err := Restore(backupDir, dest, false); err == nil {
+	if err := Restore(context.Background(), backupDir, dest, false); err == nil {
 		t.Fatal("期望拒收行数不符的备份")
 	}
 	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
@@ -277,7 +278,7 @@ func TestRestoreRejectsTamperedSnapshot(t *testing.T) {
 	db := openDB(t, src)
 	seedRows(t, db)
 	backupDir := filepath.Join(dir, "bak")
-	if _, err := Snapshot(db, backupDir, time.Now()); err != nil {
+	if _, err := Snapshot(context.Background(), db, backupDir, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.Close()
@@ -292,7 +293,7 @@ func TestRestoreRejectsTamperedSnapshot(t *testing.T) {
 	_ = f.Close()
 
 	dest := filepath.Join(dir, "dest.db")
-	if err := Restore(backupDir, dest, false); err == nil {
+	if err := Restore(context.Background(), backupDir, dest, false); err == nil {
 		t.Fatal("期望 sha256 不符拒收")
 	}
 }
@@ -300,7 +301,7 @@ func TestRestoreRejectsTamperedSnapshot(t *testing.T) {
 // TestRestoreRejectsMissingManifestDir：非 muniu 备份目录即缺 manifest → 拒。
 func TestRestoreRejectsMissingManifestDir(t *testing.T) {
 	dir := t.TempDir()
-	if err := Restore(dir, filepath.Join(dir, "x.db"), false); err == nil {
+	if err := Restore(context.Background(), dir, filepath.Join(dir, "x.db"), false); err == nil {
 		t.Fatal("期望拒绝无 manifest 的目录")
 	}
 }
@@ -316,7 +317,7 @@ func TestRestoreRefusesLockedTarget(t *testing.T) {
 	db := openDB(t, src)
 	seedRows(t, db)
 	backupDir := filepath.Join(dir, "bak")
-	if _, err := Snapshot(db, backupDir, time.Now()); err != nil {
+	if _, err := Snapshot(context.Background(), db, backupDir, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	_ = db.Close()
@@ -326,7 +327,7 @@ func TestRestoreRefusesLockedTarget(t *testing.T) {
 	seedRows(t, hdb)
 
 	// 子进程持有 dest 的 SQLite 连接，空闲连接亦持 POSIX 锁。
-	cmd := exec.Command(os.Args[0], "-test.run=TestLockHolderHelper", "-test.v=false") //nolint:gosec // 测试二进制自身
+	cmd := exec.CommandContext(context.Background(), os.Args[0], "-test.run=TestLockHolderHelper", "-test.v=false") //nolint:gosec // 测试二进制自身
 	cmd.Env = append(os.Environ(), "MUNIU_LOCK_DB="+dest)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -356,7 +357,7 @@ func TestRestoreRefusesLockedTarget(t *testing.T) {
 		t.Fatal("等待锁持有子进程超时")
 	}
 
-	err = Restore(backupDir, dest, true) // force 也不行：占用闸先于覆盖闸。
+	err = Restore(context.Background(), backupDir, dest, true) // force 也不行：占用闸先于覆盖闸。
 	if !errors.Is(err, ErrLocked) {
 		t.Fatalf("期望 ErrLocked,实际: %v", err)
 	}
@@ -374,13 +375,13 @@ func TestLockHolderHelper(t *testing.T) {
 	if path == "" {
 		t.Skip("非锁持有子进程,跳过")
 	}
-	db, err := Open(path)
+	db, err := Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
 	var n int
-	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master").Scan(&n); err != nil {
+	if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM sqlite_master").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
 	fmt.Println("ready")
@@ -414,7 +415,7 @@ func TestRestoreReplacesStaleWalSidecars(t *testing.T) {
 	sdb := openDB(t, src)
 	seedRows(t, sdb)
 	backupDir := filepath.Join(dir, "bak")
-	if _, err := Snapshot(sdb, backupDir, time.Now()); err != nil {
+	if _, err := Snapshot(context.Background(), sdb, backupDir, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	_ = sdb.Close()
@@ -444,7 +445,7 @@ func TestRestoreReplacesStaleWalSidecars(t *testing.T) {
 	_ = tdb.Close() // 关旧库，其自身 sidecar 清掉，目标侧副本保留。
 	// 恢复前不要打开 dest，否则 SQLite 会恢复并清理待测的 WAL sidecar。
 
-	if err := Restore(backupDir, dest, true); err != nil {
+	if err := Restore(context.Background(), backupDir, dest, true); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
 	rdb := openDB(t, dest)
@@ -453,7 +454,7 @@ func TestRestoreReplacesStaleWalSidecars(t *testing.T) {
 		t.Fatalf("恢复后 usage = %d, want 3(陈旧 WAL 帧被叠加到新库!)", got)
 	}
 	var staleRow int
-	if err := rdb.QueryRow(
+	if err := rdb.QueryRowContext(context.Background(),
 		"SELECT COUNT(*) FROM usage_logs WHERE id = 'uX'").Scan(&staleRow); err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +462,7 @@ func TestRestoreReplacesStaleWalSidecars(t *testing.T) {
 		t.Fatal("陈旧 WAL 中的 uX 行复活=数据混杂缺陷")
 	}
 	var integrity string
-	if err := rdb.QueryRow("PRAGMA integrity_check").Scan(&integrity); err != nil {
+	if err := rdb.QueryRowContext(context.Background(), "PRAGMA integrity_check").Scan(&integrity); err != nil {
 		t.Fatal(err)
 	}
 	if integrity != "ok" {

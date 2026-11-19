@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"sync"
 
@@ -24,15 +25,15 @@ func imagePrices(
 	return out, nil
 }
 
-func assembleImagePricing(db *sql.DB, cfg *config.Config, settlement string, fx int64) (
+func assembleImagePricing(ctx context.Context, db *sql.DB, cfg *config.Config, settlement string, fx int64) (
 	*metering.ImagePriceDirectory, map[string]metering.ImagePrice,
-	func(string, *store.ImagePricingRecord) error, error,
+	func(context.Context, string, *store.ImagePricingRecord) error, error,
 ) {
 	static, err := staticImagePrices(cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	all, err := mergeImagePricing(db, static, "", nil, false)
+	all, err := mergeImagePricing(ctx, db, static, "", nil, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -43,10 +44,10 @@ func assembleImagePricing(db *sql.DB, cfg *config.Config, settlement string, fx 
 	dir := metering.NewImagePriceDirectory(prices)
 	// 序列化「读取→校验候选目录→持久化→发布」，避免并发改价丢更新或发布旧图。
 	var mu sync.Mutex
-	update := func(alias string, rec *store.ImagePricingRecord) error {
+	update := func(ctx context.Context, alias string, rec *store.ImagePricingRecord) error {
 		mu.Lock()
 		defer mu.Unlock()
-		return updateImagePricing(db, dir, static, settlement, fx, alias, rec)
+		return updateImagePricing(ctx, db, dir, static, settlement, fx, alias, rec)
 	}
 	return dir, static, update, nil
 }
@@ -66,14 +67,14 @@ func staticImagePrices(cfg *config.Config) (map[string]metering.ImagePrice, erro
 
 // mergeImagePricing 合并静态价与运行态覆盖；apply=true 时按 alias 应用变更（删除请求 rec=nil）。
 func mergeImagePricing(
-	db *sql.DB, static map[string]metering.ImagePrice, alias string,
+	ctx context.Context, db *sql.DB, static map[string]metering.ImagePrice, alias string,
 	change *store.ImagePricingRecord, apply bool,
 ) (map[string]store.ImagePricingRecord, error) {
 	all := map[string]store.ImagePricingRecord{}
 	for a, p := range static {
 		all[a] = store.ImagePricingRecord{Alias: a, Currency: p.Currency, DefaultCredits: p.DefaultCredits, Tiers: p.Tiers}
 	}
-	rows, err := store.ListImagePricing(db)
+	rows, err := store.ListImagePricing(ctx, db)
 	if err != nil {
 		return nil, err
 	}
@@ -98,9 +99,10 @@ func mergeImagePricing(
 }
 
 // updateImagePricing 应用单条图价变更：先算候选目录再落库，最后发布。
-func updateImagePricing(db *sql.DB, dir *metering.ImagePriceDirectory, static map[string]metering.ImagePrice,
+func updateImagePricing(ctx context.Context, db *sql.DB, dir *metering.ImagePriceDirectory,
+	static map[string]metering.ImagePrice,
 	settlement string, fx int64, alias string, rec *store.ImagePricingRecord) error {
-	all, err := mergeImagePricing(db, static, alias, rec, true)
+	all, err := mergeImagePricing(ctx, db, static, alias, rec, true)
 	if err != nil {
 		return err
 	}
@@ -109,9 +111,9 @@ func updateImagePricing(db *sql.DB, dir *metering.ImagePriceDirectory, static ma
 		return store.MarkBusiness(err)
 	}
 	if rec != nil {
-		err = store.UpsertImagePricing(db, *rec)
+		err = store.UpsertImagePricing(ctx, db, *rec)
 	} else {
-		_, err = store.DeleteImagePricing(db, alias)
+		_, err = store.DeleteImagePricing(ctx, db, alias)
 	}
 	if err != nil {
 		return err

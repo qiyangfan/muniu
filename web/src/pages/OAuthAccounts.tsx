@@ -2,6 +2,7 @@
 // 授权发起(consent URL 新窗口打开)。凭据原文任何界面不回显;明文落库事实在页头如实披露。
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Plus, ShieldQuestion } from "lucide-react";
+import { errorMessage } from "../lib/utils";
 import { api, type OAuthAccountView } from "../lib/api";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -50,7 +51,7 @@ export default function OAuthAccounts() {
         setFlowConfigured(r.meta?.flow_configured ?? false);
         setErr("");
       })
-      .catch((e) => setErr(e.message))
+      .catch((e) => setErr(errorMessage(e)))
       .finally(() => setLoaded(true));
   }, []);
 
@@ -134,7 +135,9 @@ export default function OAuthAccounts() {
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              onClick={() => deleteTarget && remove(deleteTarget.id)}
+              onClick={() => {
+                if (deleteTarget) void remove(deleteTarget.id);
+              }}
             >
               删除
             </AlertDialogAction>
@@ -190,7 +193,7 @@ function CreateEntry({
   return (
     <div className="flex flex-wrap items-center gap-2">
       {flowConfigured && (
-        <Button variant="outline" size="sm" onClick={() => onAuthorize("")}>
+        <Button variant="outline" size="sm" onClick={() => void onAuthorize("")}>
           <ShieldQuestion aria-hidden />
           发起授权
         </Button>

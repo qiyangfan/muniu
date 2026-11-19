@@ -35,7 +35,7 @@ func imagePricingView(r store.ImagePricingRecord, source string) ImagePricingVie
 
 func imagePricingList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		rows, err := store.ListImagePricing(d.DB)
+		rows, err := store.ListImagePricing(r.Context(), d.DB)
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
@@ -80,7 +80,7 @@ func imagePricingPut(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "价目目录未装配")
 			return
 		}
-		if err := d.UpdateImagePricing(alias, &rec); err != nil {
+		if err := d.UpdateImagePricing(r.Context(), alias, &rec); err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
 		}
@@ -94,7 +94,7 @@ func imagePricingDelete(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "价目目录未装配")
 			return
 		}
-		err := d.UpdateImagePricing(r.PathValue("alias"), nil)
+		err := d.UpdateImagePricing(r.Context(), r.PathValue("alias"), nil)
 		if errors.Is(err, store.ErrNotFound) {
 			writeAdminError(w, r, 404, protocol.TypeNotFound, "pricing_not_found", "没有该运行态价目")
 			return

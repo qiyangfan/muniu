@@ -12,4 +12,8 @@ paths = [
   # generic-api-key 按熵误报(10 处,均非凭据);历史提交无法改写。
   # 负责人:qiyangfan;到期:2027-02-19 复审(届时把证据迁出或改存摘要清单的假值形态)。
   '''^docs/acceptance/2026-10-13-review-evidence/scope\.json$''',
+  # 原因:gitleaks 上线验收探针按「非示例形态」记录在 tasks.md(前缀 AKIA + 16 位),
+  # 探针值已作废,当前归档件已清理,仅存在于历史提交且历史不可改写。
+  # 负责人:qiyangfan;到期:2027-02-19 复审(届时若已重写历史可删除本条)。
+  '''^openspec/changes/2026-11-19-add-secret-scanning/tasks\.md$''',
 ]

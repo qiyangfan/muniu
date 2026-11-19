@@ -41,7 +41,13 @@ func newTestProxy(t *testing.T, upstreamURL string, timeouts Timeouts) *httptest
 }
 
 // postChat 发一条 /v1/chat/completions 请求，返回响应与 body 全文。
-func postChat(t *testing.T, url, body string) (*http.Response, string) {
+// chatResponse 只保留断言所需字段：响应体已由 postChat 读取并关闭，不再暴露 Body。
+type chatResponse struct {
+	StatusCode int
+	Header     http.Header
+}
+
+func postChat(t *testing.T, url, body string) (chatResponse, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -55,7 +61,7 @@ func postChat(t *testing.T, url, body string) (*http.Response, string) {
 		t.Fatalf("读响应失败: %v", err)
 	}
 	_ = resp.Body.Close()
-	return resp, string(b)
+	return chatResponse{StatusCode: resp.StatusCode, Header: resp.Header}, string(b)
 }
 
 const chatBody = `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`

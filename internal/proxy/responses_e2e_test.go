@@ -2,6 +2,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -24,12 +25,12 @@ func newMeteredProxyForResponses(t *testing.T, jsonBody string) *httptest.Server
 	up := testkit.StartJSONUpstream(t, 200, jsonBody)
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(up.URL(), ""))
-	db, err := store.Open(t.TempDir() + "/r.db")
+	db, err := store.Open(context.Background(), t.TempDir()+"/r.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	pipeline := metering.NewPipeline(db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pipeline := metering.NewPipeline(context.Background(), db, metering.Options{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	p := New(Config{
 		Registry: reg,
 		Routes: map[string][]config.Candidate{

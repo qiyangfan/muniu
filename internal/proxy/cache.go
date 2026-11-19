@@ -44,7 +44,7 @@ func (p *Proxy) lookupCacheFor(tenantID string, r *http.Request,
 		SemanticCacheQueries.Inc(req.Model, "skip")
 		return nil, nil
 	}
-	if tenantID == "" || !p.cacheTenantEnabled(tenantID) {
+	if tenantID == "" || !p.cacheTenantEnabled(r.Context(), tenantID) {
 		return skip()
 	}
 	// 带工具的请求不参与缓存：二级语义检索按 messages 向量全局 TopK，无法感知 tools 差异，

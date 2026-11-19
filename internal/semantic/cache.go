@@ -93,7 +93,7 @@ func ResponseAdmissible(responseBody []byte, inputTokens int) bool {
 }
 
 // NewCache 构造并从 DB 加载未过期条目；索引与计数的内存态重启后由此重建。
-func NewCache(db *sql.DB, opts Options, embedder Embedder) (*Cache, error) {
+func NewCache(ctx context.Context, db *sql.DB, opts Options, embedder Embedder) (*Cache, error) {
 	if opts.Dim <= 0 || opts.Capacity <= 0 || opts.TTL <= 0 {
 		return nil, fmt.Errorf("semantic: Options 不完整(dim/capacity/ttl 必须显式配置)")
 	}
@@ -105,26 +105,23 @@ func NewCache(db *sql.DB, opts Options, embedder Embedder) (*Cache, error) {
 		lru:      list.New(),
 		lruKeys:  map[string]*list.Element{},
 	}
-	rows, err := store.LoadCacheRows(db)
+	rows, err := store.LoadCacheRows(ctx, db)
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range rows {
 		vec, n := decodeVec(r.Embedding)
 		if n != opts.Dim {
-			_ = store.DeleteCache(db, r.ID) // 清除维度不符的脏数据
+			_ = store.DeleteCache(ctx, db, r.ID) // 清除维度不符的脏数据
 			continue
 		}
 		c.ixAdd(r.ID, r.TenantID, r.Fingerprint, vec)
 	}
 	// 启动时清理过期行，尽力而为：失败不阻断启动，下次启动会重试；
 	// 读取侧的 expires_at 过滤兜底正确性，此处只影响磁盘回收。
-	_, _ = store.DeleteExpiredCache(db, time.Now())
+	_, _ = store.DeleteExpiredCache(ctx, db, time.Now())
 	return c, nil
 }
-
-// Options 返回配置的只读副本，调用方不得修改。
-func (c *Cache) Options() Options { return c.opts }
 
 // EmbedInput 经嵌入通道计算输入向量；检索与入库共用一次嵌入，免重复调用。
 func (c *Cache) EmbedInput(ctx context.Context, input string) ([]float32, error) {
@@ -135,26 +132,26 @@ func (c *Cache) EmbedInput(ctx context.Context, input string) ([]float32, error)
 func (c *Cache) Lookup(ctx context.Context, tenantID, fingerprint string, vec []float32) (*LookupResult, bool) {
 	now := time.Now()
 	// 一级：精确指纹。
-	if row, err := store.GetCacheByFingerprint(c.db, tenantID, fingerprint, now); err == nil && row != nil {
-		return c.hit(row)
+	if row, err := store.GetCacheByFingerprint(ctx, c.db, tenantID, fingerprint, now); err == nil && row != nil {
+		return c.hit(ctx, row)
 	}
 	// 二级：语义相似，经向量检索、租户过滤和阈值判断。
 	for _, h := range c.ix.TopK(vec, 5) {
 		if h.Score < c.opts.Threshold {
 			break // 分数降序，后续更低。
 		}
-		row, err := store.GetCacheByID(c.db, h.ID, now)
+		row, err := store.GetCacheByID(ctx, c.db, h.ID, now)
 		if err != nil || row.TenantID != tenantID {
 			continue // 跨租户不命中。
 		}
-		return c.hit(row)
+		return c.hit(ctx, row)
 	}
 	return nil, false
 }
 
 // hit 命中收尾：hits+1、提升 LRU、返回回放体；含直通双存侧，回放路径由 proxy 按协议与表单择优。
-func (c *Cache) hit(row *store.CacheRow) (*LookupResult, bool) {
-	_ = store.TouchCacheHits(c.db, row.ID)
+func (c *Cache) hit(ctx context.Context, row *store.CacheRow) (*LookupResult, bool) {
+	_ = store.TouchCacheHits(ctx, c.db, row.ID)
 	c.mu.Lock()
 	c.hits++
 	if e, ok := c.lruKeys[row.Fingerprint+"\x00"+row.TenantID]; ok {
@@ -181,24 +178,24 @@ type LookupResult struct {
 
 // Store 写入缓存条目：vec 为调用方在检索阶段已计算的查询向量，一次嵌入两用，免重复调用。
 // 写入 = DB upsert + 索引 + LRU；容量满时淘汰最久未使用。
-func (c *Cache) Store(_ context.Context, tenantID, fingerprint, modelAlias string,
+func (c *Cache) Store(ctx context.Context, tenantID, fingerprint, modelAlias string,
 	vec []float32, response []byte) error {
-	return c.put(tenantID, fingerprint, modelAlias, vec, response, nil, "", "")
+	return c.put(ctx, tenantID, fingerprint, modelAlias, vec, response, nil, "", "")
 }
 
 // StoreNative 直通双存写入：canonical 供跨协议命中，原生体与协议标签、表单标记供同构恒等回放。
-func (c *Cache) StoreNative(_ context.Context, tenantID, fingerprint, modelAlias string, vec []float32,
+func (c *Cache) StoreNative(ctx context.Context, tenantID, fingerprint, modelAlias string, vec []float32,
 	canonical, native []byte, proto, form string) error {
-	return c.put(tenantID, fingerprint, modelAlias, vec, canonical, native, proto, form)
+	return c.put(ctx, tenantID, fingerprint, modelAlias, vec, canonical, native, proto, form)
 }
 
 // put 落库、索引、LRU；容量满时淘汰最久未使用。
-func (c *Cache) put(tenantID, fingerprint, modelAlias string, vec []float32,
+func (c *Cache) put(ctx context.Context, tenantID, fingerprint, modelAlias string, vec []float32,
 	response, native []byte, proto, form string) error {
 	if len(vec) != c.opts.Dim {
 		return fmt.Errorf("semantic: 嵌入维度不符: %d ≠ %d", len(vec), c.opts.Dim)
 	}
-	if err := store.UpsertCacheRowNative(c.db, tenantID, fingerprint, modelAlias, encodeVec(vec),
+	if err := store.UpsertCacheRowNative(ctx, c.db, tenantID, fingerprint, modelAlias, encodeVec(vec),
 		response, native, proto, form, c.opts.TTL); err != nil {
 		return err
 	}
@@ -211,7 +208,7 @@ func (c *Cache) put(tenantID, fingerprint, modelAlias string, vec []float32,
 		c.ix.Remove(old.id)
 		delete(c.lruKeys, key)
 	}
-	row, err := store.GetCacheByFingerprint(c.db, tenantID, fingerprint, time.Now())
+	row, err := store.GetCacheByFingerprint(ctx, c.db, tenantID, fingerprint, time.Now())
 	if err != nil {
 		return fmt.Errorf("semantic: 回读缓存行失败: %w", err)
 	}
@@ -230,7 +227,7 @@ func (c *Cache) put(tenantID, fingerprint, modelAlias string, vec []float32,
 		c.lru.Remove(back)
 		delete(c.lruKeys, e.fp+"\x00"+e.tenant)
 		c.ix.Remove(e.id)
-		_ = store.DeleteCache(c.db, e.id)
+		_ = store.DeleteCache(ctx, c.db, e.id)
 	}
 	return nil
 }
@@ -243,8 +240,8 @@ func (c *Cache) ixAdd(id, tenantID, fp string, vec []float32) {
 }
 
 // Stats 管理面统计：条数、累计命中、容量、阈值。
-func (c *Cache) Stats() map[string]any {
-	s, _ := store.CacheStatsRowGet(c.db)
+func (c *Cache) Stats(ctx context.Context) map[string]any {
+	s, _ := store.CacheStatsRowGet(ctx, c.db)
 	c.mu.Lock()
 	entries := c.lru.Len()
 	hits := c.hits

@@ -2,6 +2,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -28,9 +29,9 @@ func mountGemini(t *testing.T, p *Proxy) *httptest.Server {
 	return ts
 }
 
-func postGemini(t *testing.T, url, model, body string, header http.Header, query string) (*http.Response, string) {
+func postGemini(t *testing.T, url, model, body string, header http.Header, query string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequest("POST", url+"/v1beta/models/"+model+query, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), "POST", url+"/v1beta/models/"+model+query, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +49,7 @@ func postGemini(t *testing.T, url, model, body string, header http.Header, query
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	return resp, string(b)
+	return resp.StatusCode, string(b)
 }
 
 // newGeminiProxy gemini 出站候选拓扑。
@@ -79,10 +80,10 @@ func TestGeminiE2E_非流式(t *testing.T) {
 	p := newGeminiProxy(t, up)
 	ts := mountGemini(t, p)
 
-	resp, body := postGemini(t, ts.URL, "gemini-x:generateContent",
+	status, body := postGemini(t, ts.URL, "gemini-x:generateContent",
 		`{"contents":[{"role":"user","parts":[{"text":"你好"}]}]}`, http.Header{}, "")
-	if resp.StatusCode != 200 {
-		t.Fatalf("应 200: %d %s", resp.StatusCode, body)
+	if status != 200 {
+		t.Fatalf("应 200: %d %s", status, body)
 	}
 	var obj struct {
 		Candidates []struct {
@@ -131,10 +132,10 @@ func TestGeminiE2E_流式(t *testing.T) {
 	p := newGeminiProxy(t, up)
 	ts := mountGemini(t, p)
 
-	resp, body := postGemini(t, ts.URL, "gemini-x:streamGenerateContent",
+	status, body := postGemini(t, ts.URL, "gemini-x:streamGenerateContent",
 		`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, http.Header{}, "?alt=sse")
-	if resp.StatusCode != 200 {
-		t.Fatalf("应 200: %d %s", resp.StatusCode, body)
+	if status != 200 {
+		t.Fatalf("应 200: %d %s", status, body)
 	}
 	if !strings.Contains(body, `{"text":"今天"}`) || !strings.Contains(body, `{"text":"晴天"}`) {
 		t.Fatalf("缺增量帧: %s", body)
@@ -152,9 +153,9 @@ func TestGeminiE2E_流式(t *testing.T) {
 func TestGeminiE2E_streamForm校验(t *testing.T) {
 	p := newGeminiProxy(t, testkit.StartJSONUpstream(t, 200, usageJSONBody))
 	ts := mountGemini(t, p)
-	resp, body := postGemini(t, ts.URL, "gemini-x:streamGenerateContent", `{"contents":[{"role":"user","parts":[{"text":"x"}]}]}`, http.Header{}, "")
-	if resp.StatusCode != 400 || !strings.Contains(body, "stream_form_unsupported") || !strings.Contains(body, `"status":"INVALID_ARGUMENT"`) {
-		t.Fatalf("缺 alt=sse 应 400 机器码信封: %d %s", resp.StatusCode, body)
+	status, body := postGemini(t, ts.URL, "gemini-x:streamGenerateContent", `{"contents":[{"role":"user","parts":[{"text":"x"}]}]}`, http.Header{}, "")
+	if status != 400 || !strings.Contains(body, "stream_form_unsupported") || !strings.Contains(body, `"status":"INVALID_ARGUMENT"`) {
+		t.Fatalf("缺 alt=sse 应 400 机器码信封: %d %s", status, body)
 	}
 }
 
@@ -165,18 +166,18 @@ func TestGeminiE2E_路径别名与翻译拒绝(t *testing.T) {
 	ts := mountGemini(t, p)
 
 	// 别名不存在：与 chat model_not_found 同规，400 加同文案，信封改写为 Gemini 形态。
-	resp, body := postGemini(t, ts.URL, "no-such:generateContent", `{"contents":[{"role":"user","parts":[{"text":"x"}]}]}`, http.Header{}, "")
-	if resp.StatusCode != 400 || !strings.Contains(body, "模型别名不存在: no-such") || !strings.Contains(body, `"status":"INVALID_ARGUMENT"`) {
-		t.Fatalf("别名不存在应同规 400(Gemini 信封): %d %s", resp.StatusCode, body)
+	status, body := postGemini(t, ts.URL, "no-such:generateContent", `{"contents":[{"role":"user","parts":[{"text":"x"}]}]}`, http.Header{}, "")
+	if status != 400 || !strings.Contains(body, "模型别名不存在: no-such") || !strings.Contains(body, `"status":"INVALID_ARGUMENT"`) {
+		t.Fatalf("别名不存在应同规 400(Gemini 信封): %d %s", status, body)
 	}
 	if up.RequestCount() != 0 {
 		t.Fatal("不得触达上游")
 	}
 	// fileData 显式拒绝
-	resp, body = postGemini(t, ts.URL, "gemini-x:generateContent",
+	status, body = postGemini(t, ts.URL, "gemini-x:generateContent",
 		`{"contents":[{"role":"user","parts":[{"fileData":{"fileUri":"gs://x"}}]}]}`, http.Header{}, "")
-	if resp.StatusCode != 400 || !strings.Contains(body, "content_part_unsupported") {
-		t.Fatalf("fileData 应显式拒绝: %d %s", resp.StatusCode, body)
+	if status != 400 || !strings.Contains(body, "content_part_unsupported") {
+		t.Fatalf("fileData 应显式拒绝: %d %s", status, body)
 	}
 }
 
@@ -207,7 +208,7 @@ func TestGeminiE2E_鉴权适配剥离(t *testing.T) {
 	}
 	_ = up
 	// AdaptGeminiKey 单元语义：?key= 剥离，无 Authorization 时补写 Bearer。
-	r := httptest.NewRequest("POST", "/v1beta/models/m:generateContent?key=sekrit", nil)
+	r := httptest.NewRequestWithContext(context.Background(), "POST", "/v1beta/models/m:generateContent?key=sekrit", nil)
 	r.Header.Set("X-Goog-Api-Key", "")
 	got := make(chan *http.Request, 1)
 	next := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) { got <- req })
@@ -234,9 +235,9 @@ func TestGeminiE2E_bridgegate声明式缺口(t *testing.T) {
 		{"role":"model","parts":[{"functionCall":{"name":"weather","args":{"city":"北京"}}}]},
 		{"role":"user","parts":[{"functionResponse":{"name":"weather","response":{"temp":"晴"}}}]},
 		{"role":"user","parts":[{"text":"谢谢"}]}]}`
-	resp, body := postGemini(t, ts.URL, "gemini-x:generateContent", raw, http.Header{}, "")
-	if resp.StatusCode != 200 {
-		t.Fatalf("gemini 候选工具多轮应正常服务: %d %s", resp.StatusCode, body)
+	status, body := postGemini(t, ts.URL, "gemini-x:generateContent", raw, http.Header{}, "")
+	if status != 200 {
+		t.Fatalf("gemini 候选工具多轮应正常服务: %d %s", status, body)
 	}
 	if !strings.Contains(string(up.LastBody()), `"functionResponse"`) {
 		t.Fatalf("出站应含 functionResponse: %s", up.LastBody())

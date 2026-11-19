@@ -9,7 +9,7 @@ import { NoticeBanner } from "../components/notice-banner";
 import { Skeleton } from "../components/ui/skeleton";
 import { StatCard } from "../components/stat-card";
 import { formatNumber } from "../lib/datetime";
-import { fmtCredits } from "../lib/utils";
+import { fmtCredits, errorMessage } from "../lib/utils";
 
 export default function Overview() {
   const [points, setPoints] = useState<UsagePoint[]>([]);
@@ -23,7 +23,7 @@ export default function Overview() {
     api
       .usage({ group_by: "day" })
       .then((r) => setPoints(r.points))
-      .catch((e) => setErr(e instanceof Error ? e.message : "加载失败,请稍后重试"))
+      .catch((e) => setErr(errorMessage(e)))
       .finally(() => setLoaded(true));
     api
       .cacheStats()

@@ -286,7 +286,7 @@ func (b *topologyBuild) rebuild(prov config.Provider) (reuseEntry, error) {
 	if prov.ProxyURL != "" && e.client == nil {
 		cl, cerr := ProxiedClient(prov.ProxyURL, b.dialTimeout)
 		if cerr != nil {
-			return reuseEntry{}, fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法: %v", prov.Name, cerr)
+			return reuseEntry{}, fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法: %w", prov.Name, cerr)
 		}
 		e.client = cl
 	}

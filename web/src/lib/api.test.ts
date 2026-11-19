@@ -25,7 +25,7 @@ it("旧登录态的迟到401不能清除新登录态", async () => {
   window.addEventListener("muniu-session-expired", expired);
   try {
     setToken("old-token");
-    const old = api.listTenants().catch((e) => e);
+    const old = api.listTenants().catch((e: unknown) => e);
     setToken("");
     await api.login("alice", "password123");
     finish(new Response('{"error":{"message":"凭据已过期"}}', { status: 401 }));

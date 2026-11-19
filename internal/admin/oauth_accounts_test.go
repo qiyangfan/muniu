@@ -2,6 +2,7 @@
 package admin_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -22,7 +23,7 @@ import (
 
 func newOAuthAdmin(t *testing.T, db *sql.DB, token string, topo func() ([]config.Provider, map[string]*keypool.Pool), flow *oauth.Flow) http.Handler {
 	t.Helper()
-	h := admin.New(admin.Deps{
+	h := admin.New(context.Background(), admin.Deps{
 		DB:        db,
 		Token:     token,
 		Providers: []config.Provider{},
@@ -72,7 +73,7 @@ func TestOAuthAccounts_未鉴权401与凭据脱敏(t *testing.T) {
 func TestOAuthAccounts_引用删除拒绝(t *testing.T) {
 	db := openDB(t)
 	now := time.Now()
-	if err := store.CreateOAuthAccount(db, store.OAuthAccountRow{
+	if err := store.CreateOAuthAccount(context.Background(), db, store.OAuthAccountRow{
 		ID: "acc-1", ProviderType: "claude", Status: store.OAuthStatusActive,
 		AccessToken: "at", RefreshToken: "rt", ExpiresAt: now.Add(time.Hour),
 		CreatedAt: now, UpdatedAt: now,
@@ -108,7 +109,7 @@ func TestOAuthAccounts_回调state重放拒绝与授权完成落库(t *testing.T
 	now := time.Now()
 	// 预建 auth_failed 账号:回调走真正重授权分支(UpdateTokens 成功→mode=reauthorize,
 	// 终态恢复 active);NotFound→创建分支由 acc-new 用例钉住
-	if err := store.CreateOAuthAccount(db, store.OAuthAccountRow{
+	if err := store.CreateOAuthAccount(context.Background(), db, store.OAuthAccountRow{
 		ID: "acc-r1", ProviderType: "claude", Status: store.OAuthStatusAuthFailed, StatusReason: "stale",
 		AccessToken: "old", RefreshToken: "rt-old", ExpiresAt: now.Add(time.Hour),
 		CreatedAt: now, UpdatedAt: now,
@@ -168,7 +169,7 @@ func TestOAuthAccounts_回调state重放拒绝与授权完成落库(t *testing.T
 	if code != 200 || !strings.Contains(body, `"mode":"reauthorize"`) {
 		t.Fatalf("重授权回调应 200 mode=reauthorize, got %d: %s", code, body)
 	}
-	row, err := store.GetOAuthAccount(db, "acc-r1")
+	row, err := store.GetOAuthAccount(context.Background(), db, "acc-r1")
 	if err != nil || row.AccessToken != "at-cb" || row.RefreshToken != "rt-cb" ||
 		row.Status != store.OAuthStatusActive || row.StatusReason != "" {
 		t.Fatalf("重授权落库失真: %+v err=%v", row, err)
@@ -192,7 +193,7 @@ func TestOAuthAccounts_回调state重放拒绝与授权完成落库(t *testing.T
 	if code != 502 || !strings.Contains(body, "oauth_exchange_failed") {
 		t.Fatalf("缺 RT 回调应 502, got %d: %s", code, body)
 	}
-	if _, gerr := store.GetOAuthAccount(db, "acc-nort"); !errors.Is(gerr, store.ErrOAuthAccountNotFound) {
+	if _, gerr := store.GetOAuthAccount(context.Background(), db, "acc-nort"); !errors.Is(gerr, store.ErrOAuthAccountNotFound) {
 		t.Fatalf("缺 RT 凭据不得落库: err=%v", gerr)
 	}
 }
@@ -230,7 +231,7 @@ func TestProviders_projection_oauth成员键与装配同源(t *testing.T) {
 	// unknown——渠道完全不可观测。键规则必须与 buildPool 一致(env 优先,account 兜底)。
 	db := openDB(t)
 	now := time.Now()
-	if err := store.CreateOAuthAccount(db, store.OAuthAccountRow{
+	if err := store.CreateOAuthAccount(context.Background(), db, store.OAuthAccountRow{
 		ID: "acc-1", ProviderType: "claude", Status: store.OAuthStatusActive,
 		AccessToken: "at", RefreshToken: "rt", ExpiresAt: now.Add(time.Hour),
 		CreatedAt: now, UpdatedAt: now,

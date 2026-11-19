@@ -4,6 +4,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"embed"
 	"encoding/json"
@@ -24,7 +25,7 @@ var migrationsFS embed.FS
 
 // Open 打开必要时创建的 SQLite 库并执行未应用迁移。
 // pragma 随 DSN 传入：WAL、busy_timeout 5s、foreign_keys。
-func Open(path string) (*sql.DB, error) {
+func Open(ctx context.Context, path string) (*sql.DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // 路径来自运维配置的数据目录,非请求输入
 			return nil, fmt.Errorf("store: 创建数据目录: %w", err)
@@ -37,11 +38,11 @@ func Open(path string) (*sql.DB, error) {
 	}
 	// 单文件库：连接复用同一句柄，规避多连接写锁竞争；读并发由 WAL 承担。
 	db.SetMaxOpenConns(1)
-	if err := db.Ping(); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("store: 连接数据库: %w", err)
 	}
-	if err := migrate(db); err != nil {
+	if err := migrate(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -52,19 +53,19 @@ func Open(path string) (*sql.DB, error) {
 // 幂等：schema_migrations 已记录的版本跳过，重复打开与并发打开安全。
 // 注意：账表由 0001 迁移的 DDL 逐字创建，禁在此预建，否则与迁移冲突；
 // 执行器经 sqlite_master 探测其存在性。
-func migrate(db *sql.DB) error {
+func migrate(ctx context.Context, db *sql.DB) error {
 	entries, err := fs.Glob(migrationsFS, "migrations/*.sql")
 	if err != nil {
 		return fmt.Errorf("store: 读取迁移清单: %w", err)
 	}
 	sort.Strings(entries) // 文件名 0001_init.sql 顺序编号，字典序即应用序。
 
-	applied, err := appliedMigrations(db)
+	applied, err := appliedMigrations(ctx, db)
 	if err != nil {
 		return err
 	}
 	for _, name := range entries {
-		if err := applyMigration(db, name, applied); err != nil {
+		if err := applyMigration(ctx, db, name, applied); err != nil {
 			return err
 		}
 	}
@@ -72,11 +73,11 @@ func migrate(db *sql.DB) error {
 }
 
 // appliedMigrations 读账表已应用版本；账表尚未建（首启）时返回空集。
-func appliedMigrations(db *sql.DB) (map[int64]bool, error) {
+func appliedMigrations(ctx context.Context, db *sql.DB) (map[int64]bool, error) {
 	applied := map[int64]bool{}
 	var accountExists int
 	// 首次打开时账表尚不存在，这里只探测不建表（建表归 0001 迁移 DDL）。
-	if err := db.QueryRow(
+	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`,
 	).Scan(&accountExists); err != nil {
 		return nil, fmt.Errorf("store: 探测迁移账表: %w", err)
@@ -84,19 +85,21 @@ func appliedMigrations(db *sql.DB) (map[int64]bool, error) {
 	if accountExists == 0 {
 		return applied, nil
 	}
-	rows, err := db.Query(`SELECT version FROM schema_migrations`)
+	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
 	if err != nil {
 		return nil, fmt.Errorf("store: 读迁移账: %w", err)
 	}
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var v int64
 		if err := rows.Scan(&v); err != nil {
-			_ = rows.Close()
 			return nil, fmt.Errorf("store: 扫迁移账: %w", err)
 		}
 		applied[v] = true
 	}
-	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: 遍历迁移账: %w", err)
+	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: 遍历迁移账: %w", err)
 	}
@@ -104,7 +107,7 @@ func appliedMigrations(db *sql.DB) (map[int64]bool, error) {
 }
 
 // applyMigration 单文件单事务应用；已记录版本跳过。
-func applyMigration(db *sql.DB, name string, applied map[int64]bool) error {
+func applyMigration(ctx context.Context, db *sql.DB, name string, applied map[int64]bool) error {
 	version, err := versionOf(name)
 	if err != nil {
 		return err
@@ -116,15 +119,15 @@ func applyMigration(db *sql.DB, name string, applied map[int64]bool) error {
 	if err != nil {
 		return fmt.Errorf("store: 读迁移 %s: %w", name, err)
 	}
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: 开迁移事务 %s: %w", name, err)
 	}
-	if _, err := tx.Exec(string(body)); err != nil {
+	if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: 应用迁移 %s: %w", name, err)
 	}
-	if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+	if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
 		version, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("store: 记迁移账 %s: %w", name, err)
@@ -215,9 +218,9 @@ func MarshalAllowlist(allowed []string) any {
 var ErrNotFound = errors.New("store: 未找到")
 
 // TenantIDByName 按租户名取 id，签发与管理命令解析 --tenant 用。
-func TenantIDByName(db *sql.DB, name string) (string, error) {
+func TenantIDByName(ctx context.Context, db *sql.DB, name string) (string, error) {
 	var id string
-	err := db.QueryRow(`SELECT id FROM tenants WHERE name = ?`, name).Scan(&id)
+	err := db.QueryRowContext(ctx, `SELECT id FROM tenants WHERE name = ?`, name).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
 	}
@@ -229,8 +232,8 @@ func TenantIDByName(db *sql.DB, name string) (string, error) {
 
 // GetAPIKeyByHash 按 sha256 hex 查 key；吊销行也返回，启用与否由调用方按 Status/TenantStatus 判定。
 // expires_at 列损坏即非 RFC3339 时按查询错误返回，宁可拒绝该 key，不放行时间语义不明的凭据。
-func GetAPIKeyByHash(db *sql.DB, hash string) (*APIKey, error) {
-	row := db.QueryRow(`SELECT k.id, k.tenant_id, k.name, k.key_hash, k.prefix, k.status,
+func GetAPIKeyByHash(ctx context.Context, db *sql.DB, hash string) (*APIKey, error) {
+	row := db.QueryRowContext(ctx, `SELECT k.id, k.tenant_id, k.name, k.key_hash, k.prefix, k.status,
 		k.rpm_limit, k.tpm_limit, k.daily_quota_credits, k.currency, IFNULL(t.status,''), k.expires_at, k.disabled_at,
 		k.max_request_cost_credits, k.allowed_models
 		FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
@@ -294,16 +297,16 @@ type UsageRow struct {
 }
 
 // InsertUsageBatch 单事务批量落库；重复主键忽略，作为背压重投的幂等兜底。
-func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
+func InsertUsageBatch(ctx context.Context, db *sql.DB, rows []UsageRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("store: 开计量事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }() // Commit 后为 no-op
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO usage_logs (
+	stmt, err := tx.PrepareContext(ctx, `INSERT OR IGNORE INTO usage_logs (
 		id, request_id, tenant_id, api_key_id, provider, model_alias, upstream_model,
 		stream, status, error_class,
 		prompt_tokens, completion_tokens, reasoning_tokens, cached_tokens, vision_tokens,
@@ -326,7 +329,7 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 		if r.LatencyFirstTokenMs != nil {
 			firstToken = *r.LatencyFirstTokenMs
 		}
-		if _, err := stmt.Exec(r.ID, r.RequestID, r.TenantID, r.APIKeyID, r.Provider,
+		if _, err := stmt.ExecContext(ctx, r.ID, r.RequestID, r.TenantID, r.APIKeyID, r.Provider,
 			r.ModelAlias, r.UpstreamModel, stream, r.Status, nullIfEmpty(r.ErrorClass),
 			r.PromptTokens, r.CompletionTokens, r.ReasoningTokens, r.CachedTokens, r.VisionTokens,
 			estimated, r.CostCredits, r.Currency, firstToken, r.LatencyTotalMs,
@@ -344,7 +347,7 @@ func InsertUsageBatch(db *sql.DB, rows []UsageRow) error {
 // 仅计 estimated=0 行，与 metering 对账口径一致；dayStartUTC 为当日零点，
 // RFC3339 字符串序比较成立。
 // tenantID 或 apiKeyID 为空时不按该维度过滤。
-func SumCostToday(db *sql.DB, tenantID, apiKeyID, dayStartUTC string) (int64, error) {
+func SumCostToday(ctx context.Context, db *sql.DB, tenantID, apiKeyID, dayStartUTC string) (int64, error) {
 	q := `SELECT COALESCE(SUM(cost_credits),0) FROM usage_logs
 		WHERE estimated = 0 AND created_at >= ?`
 	args := []any{dayStartUTC}
@@ -357,7 +360,7 @@ func SumCostToday(db *sql.DB, tenantID, apiKeyID, dayStartUTC string) (int64, er
 		args = append(args, apiKeyID)
 	}
 	var total int64
-	if err := db.QueryRow(q, args...).Scan(&total); err != nil {
+	if err := db.QueryRowContext(ctx, q, args...).Scan(&total); err != nil {
 		return 0, fmt.Errorf("store: 日成本聚合: %w", err)
 	}
 	return total, nil

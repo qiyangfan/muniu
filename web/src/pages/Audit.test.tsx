@@ -41,7 +41,7 @@ it("StrictMode的迟到首屏不能覆盖已加载后页", async () => {
   );
   await screen.findAllByText("first");
   await waitFor(() =>
-    expect((screen.getByRole("button", { name: "加载更多" }) as HTMLButtonElement).disabled).toBe(
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "加载更多" }).disabled).toBe(
       false,
     ),
   );
@@ -49,6 +49,7 @@ it("StrictMode的迟到首屏不能覆盖已加载后页", async () => {
   await screen.findAllByText("second");
   await act(async () => {
     resolveOld({ items: [row("old")], next_cursor: "cursor" });
+    await Promise.resolve();
   });
   expect(screen.getAllByText("second").length).toBeGreaterThan(0);
   expect(screen.queryAllByText("old").length).toBe(0);
