@@ -18,7 +18,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       web: ${{ steps.filter.outputs.web }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
       - id: filter
@@ -48,26 +48,47 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.mod
           cache: true
+      # 依赖文件必须与源码一致:脏 go.mod/go.sum 不能被后续构建掩盖
+      - name: go mod tidy check
+        run: go mod tidy -diff
       - name: go vet
         run: go vet ./...
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           # 与 mise.toml 钉死的版本一致:latest 会随上游大版本漂移,门禁不可复现
           # (action 要求 v 前缀的完整版本号)
           version: "v2.15"
-      # 覆盖率门禁与 make test 同式:race + atomic profile,聚合 total <65% 即红
+      # 覆盖率门禁与 make test 同式:race + atomic profile,聚合下限 + 逐包下限(scripts/covercheck.sh)
       - name: go test (race) + coverage gate
         run: |
           go test -race -covermode=atomic -coverprofile=coverage.out ./...
-          go tool cover -func=coverage.out | awk '/^total:/ {gsub("%","",$3); if ($3+0 < 65) { printf "coverage gate FAIL: %.1f%% < 65%%\n", $3; exit 1 } printf "coverage gate PASS: %.1f%%\n", $3 }'
+          GO=go ./scripts/covercheck.sh coverage.out
       - name: build (CGO_ENABLED=0)
         run: CGO_ENABLED=0 go build ./...
+
+  vuln:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      # 版本钉死同 golangci-lint:govulncheck 会随漏洞库与规则演进,latest 不可复现;
+      # 有可达漏洞时退出码 3,直接红
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          govulncheck ./...
 
   web-check:
     needs: changes
@@ -76,14 +97,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
         # 版本经 web/package.json 的 packageManager 字段钉死:pnpm 9 不认识
         # pnpm-workspace.yaml 的 allowBuilds(pnpm 11 字段)会报 packages field missing;
         # action 默认只读仓库根 package.json,须显式指向 web/
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: pnpm
@@ -97,3 +118,43 @@ jobs:
           pnpm lint:css
           pnpm test
           pnpm format:check
+      # 只拦生产依赖:开发链(vitest→jsdom)的告警不影响发布产物,dev 侧由 dependabot 跟进;
+      # 本地 make check 不跑(需 registry 网络),CI 是权威口径
+      - name: audit (prod, high+)
+        working-directory: web
+        run: pnpm audit --prod --audit-level high
+      # 契约单源在 contracts/openapi.yaml:契约改了但生成类型没重生成,这里直接红
+      - name: openapi types drift
+        working-directory: web
+        run: |
+          pnpm generate:api
+          git diff --exit-code -- src/lib/api-types.d.ts
+      # 产物校验:typecheck 看不到打包期错误(gofmt 同理),构建落 /tmp 不碰 web/dist
+      - name: build
+        working-directory: web
+        run: pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
+
+  infra-lint:
+    # 不做路径裁剪:workflow/容器/脚本检查是秒级成本,全跑才能拦住语法与 shell 缺陷
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      # 版本钉死:actionlint 规则集随版本演进,latest 不可复现
+      - name: actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          actionlint
+      # ubuntu-latest 预装 shellcheck;脚本清单从 git 索引取,新增脚本自动纳入
+      - name: shellcheck
+        run: git ls-files -z '*.sh' | xargs -0 shellcheck
+      - name: hadolint
+        run: |
+          VERSION=2.15.1
+          curl -sSfL "https://github.com/hadolint/hadolint/releases/download/v${VERSION}/hadolint-linux-x86_64" -o /tmp/hadolint
+          chmod +x /tmp/hadolint
+          /tmp/hadolint Containerfile

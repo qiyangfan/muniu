@@ -23,7 +23,7 @@
 
 ## 铁律(违反即返工)
 
-1. **质量门禁是完成的唯一标准**:每个任务收尾必须 `make check` 全绿(vet + lint + race test);绿之前不得勾选任务、不得声称完成。
+1. **质量门禁是完成的唯一标准**:每个任务收尾必须 `make check` 全绿(vet + lint + infra-lint + tidy-check + web-check + race test/覆盖率);绿之前不得勾选任务、不得声称完成。
 2. **测试先行域**:协议适配(quirk 归一化)、failover 判定、计量计费、限流配额——先写失败测试再实现(负面用例必须覆盖:非法请求/上游半途断流/usage 缺失/超限)。
 3. **依赖白名单制**:每个 phase 的 plan 列出「允许新增依赖」;白名单之外的任何 `go get` 禁止,确需引入 → 记 HANDOFF 开放项。选型原则:stdlib 优先,单一职责的小库优先,禁止框架(web 框架/DI 容器/ORM 一律不引)。
 4. **git 写操作(add/commit/push/tag)必须等用户逐次明确指令**,只读查询(status/diff/log)随时可以;这是用户全局铁律,在本仓库同样生效。
@@ -45,11 +45,12 @@
 ## 命令速查
 
 ```bash
-make check          # 全量门禁 = vet + lint + race test(完成标准)
-make test / bench   # 单跑测试 / 基准
+make check          # 全量门禁 = vet + lint + infra-lint + tidy-check + web-check + race test/覆盖率(完成标准)
+make test / bench   # 单跑测试(含聚合+逐包覆盖率闸)/ 基准
 make build / run    # 单二进制构建 / 启动(读 muniu.yaml,冒烟 GET /healthz)
 make smoke PROVIDER=deepseek   # 真上游冒烟(需环境变量注 key,仅手动)
-make tidy           # 白名单内新增依赖后必跑
+make tidy / tidy-check         # 白名单内新增依赖后必跑 / 校验依赖文件与源码一致
+make hooks                     # 安装提交期 gitleaks 钩子(每台开发机一次)
 ```
 
 ## 目录地图
@@ -108,9 +109,10 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
   亮暗,移动端按移动范式逐页走查,桌面确认无移动范式泄漏(Article 9)。
 - **web 依赖白名单**(对齐铁律 3 的白名单制):react 系 / vite 系 / tailwind v4 / tw-animate-css /
   lucide-react / recharts / clsx / tailwind-merge / class-variance-authority / radix-ui /
-  openapi-typescript;之外的任何 `pnpm add` 先记 HANDOFF 开放项。
+  openapi-typescript / @vitest/coverage-v8(覆盖率门禁)/ eslint-plugin-jsx-a11y(无障碍静态执法);
+  之外的任何 `pnpm add` 先记 HANDOFF 开放项。
   (2026-10-02 增补 tw-animate-css:随三仓标准件视觉收敛入仓,聚合层宪法 Article 4 同步。)
-- 收尾门禁:`pnpm typecheck && pnpm lint && pnpm lint:css && pnpm format:check` +
+- 收尾门禁:`pnpm typecheck && pnpm lint && pnpm lint:css && pnpm test && pnpm format:check` +
   `pnpm exec vite build --outDir /tmp/dist-check`(禁直接写 web/dist,那是 Go embed 的发布产物)
   + 裸元素自检 grep(business 代码禁裸 button/input/select/textarea)+ 亮暗两态 ×
   375/768/1280 走查。

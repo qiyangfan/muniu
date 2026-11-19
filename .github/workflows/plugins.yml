@@ -18,10 +18,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # 上游是 stable 分支而非 tag:钉提交保证工具链可复现,dependabot 会跟进更新
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable 分支 @ 2026-11-15
         with:
           targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - name: Rust fmt check
+        working-directory: plugins
+        run: cargo fmt --all --check
+      - name: Rust clippy
+        working-directory: plugins
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Build plugins (workspace)
         working-directory: plugins
         run: |
@@ -33,13 +41,13 @@ jobs:
         run: cargo test
       # 工件仅存档用(无人消费):账号存储配额受限期间上传被拒,不应拖红整个
       # workflow;retention 缩短到 3 天,别让 90 天默认保留占账号 500MB 配额。
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         continue-on-error: true
         with:
           name: pii-masker-wasm
           path: plugins/pii-masker/pii_masker.wasm
           retention-days: 3
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         continue-on-error: true
         with:
           name: json-redactor-wasm

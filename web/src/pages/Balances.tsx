@@ -167,6 +167,15 @@ export default function Balances() {
     reload();
   }, [reload]);
 
+  // 刷新后的延迟重取:定时器由 effect 持有,卸载或再次刷新时自动清理,
+  // 避免卸载后回写状态(测试中还会打进下一个用例共享的 mock)
+  const [refreshTick, setRefreshTick] = useState(0);
+  useEffect(() => {
+    if (refreshTick === 0) return;
+    const id = setTimeout(reload, 600);
+    return () => clearTimeout(id);
+  }, [refreshTick, reload]);
+
   const providers = data?.providers ?? [];
   const manualProviders = providers.filter((p) => p.source === "manual");
 
@@ -175,7 +184,7 @@ export default function Balances() {
     try {
       await api.balanceRefresh(provider);
       // 查询是异步的:短延迟后重取,错过也无损(下个评估周期兜底)。
-      setTimeout(reload, 600);
+      setRefreshTick((n) => n + 1);
     } catch (e) {
       setActionErr(e instanceof Error ? e.message : "刷新失败");
     }

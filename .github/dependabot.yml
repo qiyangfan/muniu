@@ -1,0 +1,47 @@
+# 依赖更新自动化:四个生态各自成组,minor/patch 合并成一个 PR,major 单独提。
+# git 写操作仍由人审:这里只负责开 PR,不自动合并。
+version: 2
+
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # 控制台依赖在 web/ 下独立管理(pnpm lockfile 与 packageManager 字段都在该目录)
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # 样例插件是独立 Cargo workspace
+  - package-ecosystem: cargo
+    directory: /plugins
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # workflow 里的 action 已按提交 SHA 钉死,dependabot 负责在 SHA 与注释版本上跟进
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

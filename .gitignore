@@ -30,6 +30,7 @@ web/dist/*
 
 # 覆盖率与压测产物
 coverage.out
+web/coverage/
 *.bench.txt
 
 # 编辑器与系统

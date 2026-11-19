@@ -2,15 +2,15 @@ GO ?= go
 BIN := bin
 PKG := github.com/solvela/muniu
 
-## check: 全量门禁(vet、lint、web 检查、race test 和覆盖率)
+## check: 全量门禁(vet、lint、基础设施 lint、依赖整洁、web 检查、race test 和覆盖率)
 .PHONY: check
-check: vet lint web-check test
+check: vet lint infra-lint tidy-check web-check test
 
-## web-check: 控制台类型检查/lint/组件测试(pnpm 存在时执行,否则跳过)
+## web-check: 控制台类型检查/lint/组件测试/契约类型漂移(pnpm 存在时执行,否则跳过)
 .PHONY: web-check
 web-check:
 	@command -v pnpm >/dev/null 2>&1 || { echo "[web-check] pnpm 未安装,跳过控制台门禁"; exit 0; }
-	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm test && pnpm format:check
+	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm test && pnpm format:check && pnpm generate:api && git diff --exit-code -- src/lib/api-types.d.ts && pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
 
 ## web-build: 构建控制台产物到 web/dist(嵌入二进制)
 .PHONY: web-build
@@ -27,11 +27,28 @@ vet:
 lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; else echo "[lint] golangci-lint 未安装,跳过"; fi
 
-## test: race 全量测试和 65% 最低覆盖率门禁
+## infra-lint: workflow / 容器 / shell 脚本静态检查(工具缺失时跳过并提示,CI 全量执行)
+.PHONY: infra-lint
+infra-lint:
+	@if command -v actionlint >/dev/null 2>&1; then actionlint; else echo "[infra-lint] actionlint 未安装,跳过"; fi
+	@if command -v shellcheck >/dev/null 2>&1; then git ls-files '*.sh' | while IFS= read -r f; do shellcheck "$$f" || exit 1; done; else echo "[infra-lint] shellcheck 未安装,跳过"; fi
+	@if command -v hadolint >/dev/null 2>&1; then hadolint Containerfile; else echo "[infra-lint] hadolint 未安装,跳过"; fi
+
+## tidy-check: go.mod/go.sum 与源码一致(防脏依赖文件过闸)
+.PHONY: tidy-check
+tidy-check:
+	$(GO) mod tidy -diff
+
+## hooks: 安装提交期钩子(gitleaks 在提交前拦截凭据;需 pre-commit)
+.PHONY: hooks
+hooks:
+	@if command -v pre-commit >/dev/null 2>&1; then pre-commit install; else echo "[hooks] pre-commit 未安装,见 .pre-commit-config.yaml"; fi
+
+## test: race 全量测试 + 覆盖率门禁(聚合 65% + 逐包下限,见 scripts/covercheck.sh)
 .PHONY: test
 test:
 	$(GO) test -race -covermode=atomic -coverprofile=coverage.out ./...
-	$(GO) tool cover -func=coverage.out | awk '/^total:/ {gsub("%",""); total=$$3; if (total+0 < 65) { printf "coverage gate FAIL: %.1f%% < 65%%\n", total; exit 1 } printf "coverage gate PASS: %.1f%%\n", total }'
+	GO=$(GO) ./scripts/covercheck.sh coverage.out
 
 ## build: 纯静态单二进制(CGO_ENABLED=0),版本号由 git tag 注入
 .PHONY: build

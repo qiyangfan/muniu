@@ -17,20 +17,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.mod
           cache: true
       # 控制台必须先于 goreleaser 构建:go:embed 静态嵌入 dist,缺步会发布出空壳控制台的二进制
       # pnpm 版本经 web/package.json 的 packageManager 字段钉死(与本地/ci 一致);
       # action 默认只读仓库根 package.json,须显式指向 web/
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           # 与 ci.yml 收敛同一 LTS 线(node 26 于 2026-10-28 转 LTS 后另行评估)
           node-version: 24
@@ -43,7 +43,7 @@ jobs:
           # vite build 清空 dist 会连带删掉 gitignore 豁免的 .gitkeep(tracked 文件被删
           # = git 状态 dirty = goreleaser 拒发),构建后恢复占位
           [ -f dist/.gitkeep ] || touch dist/.gitkeep
-      - uses: goreleaser/goreleaser-action@v7
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           args: release --clean
         env:

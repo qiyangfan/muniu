@@ -18,6 +18,11 @@ func Handler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
+	return handler(sub)
+}
+
+// handler 接收已定位到 dist 根的文件系统，便于用内存 FS 覆盖回退与内容类型分支。
+func handler(sub fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/console/")
 		if p == "" || p == "/" {
