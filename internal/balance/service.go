@@ -75,38 +75,7 @@ type Service struct {
 
 // NewService 构造并兜底缺省;调用方随后 Start()。
 func NewService(opts Options) *Service {
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
-	}
-	if opts.Interval <= 0 {
-		opts.Interval = time.Hour
-	}
-	if opts.PollTimeout <= 0 {
-		opts.PollTimeout = 10 * time.Second
-	}
-	if opts.WindowDays <= 0 {
-		opts.WindowDays = 7
-	}
-	if opts.MinSampleDays <= 0 {
-		opts.MinSampleDays = 2
-	}
-	if len(opts.TierHours) == 0 {
-		opts.TierHours = []int64{720, 336, 168, 72, 24}
-	}
-	if opts.RearmMilli <= 0 {
-		opts.RearmMilli = 1200
-	}
-	if opts.FailureThreshold <= 0 {
-		opts.FailureThreshold = 3
-	}
-	if opts.Settlement == "" {
-		opts.Settlement = "CNY"
-	}
-	now := opts.Now
-	if now == nil {
-		now = time.Now
-	}
-	opts.Now = now
+	opts = withDefaults(opts)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
 		opts: opts, log: opts.Logger,
@@ -114,6 +83,51 @@ func NewService(opts Options) *Service {
 		stop: make(chan struct{}), done: make(chan struct{}),
 		refresh: make(chan string, 16),
 	}
+}
+
+// withDefaults 零值兜底:<=0 视为未配置;燃速突变/骤降触发线不在此兜底(0 = 显式禁用)。
+func withDefaults(opts Options) Options {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	opts.Interval = defaultDur(opts.Interval, time.Hour)
+	opts.PollTimeout = defaultDur(opts.PollTimeout, 10*time.Second)
+	opts.WindowDays = defaultPositive(opts.WindowDays, 7)
+	opts.MinSampleDays = defaultPositive(opts.MinSampleDays, 2)
+	opts.RearmMilli = defaultPositive64(opts.RearmMilli, 1200)
+	opts.FailureThreshold = defaultPositive(opts.FailureThreshold, 3)
+	if len(opts.TierHours) == 0 {
+		opts.TierHours = []int64{720, 336, 168, 72, 24}
+	}
+	if opts.Settlement == "" {
+		opts.Settlement = "CNY"
+	}
+	return opts
+}
+
+// defaultDur / defaultPositive* 非正值一律视为未配置(显式零值不构成合法配置)。
+func defaultDur(v, def time.Duration) time.Duration {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+func defaultPositive(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+func defaultPositive64(v, def int64) int64 {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // Start 启动评估循环(启动即评一轮,不等首个间隔)。

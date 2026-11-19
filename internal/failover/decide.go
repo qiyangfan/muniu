@@ -22,35 +22,20 @@ func Decide(class ErrorClass, pastFirstToken bool, stream bool) Action {
 	if !stream {
 		pastFirstToken = false
 	}
-	switch class {
-	case ClassDialFail, ClassTimeoutFirst:
-		if pastFirstToken {
-			return ActionAbort // 防御格：定义上不可出现
-		}
-		return ActionNextCandidate
-	case ClassUpstream5xx, ClassRateLimited, ClassAuthFailed, ClassUnknown:
-		if pastFirstToken {
-			return ActionAbort
-		}
-		return ActionNextCandidate
-	case ClassBadRequest:
-		if pastFirstToken {
-			return ActionAbort
-		}
-		return ActionReturn
-	case ClassMidStreamFail:
-		if pastFirstToken {
-			return ActionAbort
-		}
-		return ActionNextCandidate
-	case ClassContextCanceled, ClassCostBudget:
-		// 网关策略类与客户端断连同族：静默终结、不换道（同别名跨候选价目相同，换道无解），
-		// 不计 key 失败（调用方 reportKeyOutcome 同样不回写）
+	if isSilentClass(class) { // 策略类/断连不受首 token 影响
 		return ActionSilent
-	default:
-		if pastFirstToken {
-			return ActionAbort
-		}
-		return ActionNextCandidate
 	}
+	if pastFirstToken { // 已过首 token 无法换道重放，统一断言出口
+		return ActionAbort
+	}
+	if class == ClassBadRequest {
+		return ActionReturn
+	}
+	return ActionNextCandidate
+}
+
+// isSilentClass 网关策略类与客户端断连同族：静默终结、不换道（同别名跨候选价目相同，
+// 换道无解），不计 key 失败（调用方 reportKeyOutcome 同样不回写）。
+func isSilentClass(class ErrorClass) bool {
+	return class == ClassContextCanceled || class == ClassCostBudget
 }

@@ -117,6 +117,17 @@ func Restore(dir, destPath string, force bool) error {
 	if _, err := os.Stat(snap); err != nil {
 		return fmt.Errorf("store: 备份缺快照文件: %w", err)
 	}
+	if err := verifyBackup(snap, man); err != nil {
+		return err
+	}
+	if err := checkTarget(destPath, force); err != nil {
+		return err
+	}
+	return swapInSnapshot(snap, destPath)
+}
+
+// verifyBackup 恢复前校验备份：文件哈希、整库自检与行数都须与清单一致。
+func verifyBackup(snap string, man Manifest) error {
 	// 先检查快照文件哈希，避免触碰目标前接受损坏备份。
 	sum, err := fileSHA256(snap)
 	if err != nil {
@@ -129,15 +140,21 @@ func Restore(dir, destPath string, force bool) error {
 	if _, err := verifySnapshot(snap, time.Now().UTC()); err != nil {
 		return err
 	}
-	if got, err := snapshotCounts(snap); err != nil {
+	got, err := snapshotCounts(snap)
+	if err != nil {
 		return err
-	} else if got.APIKeys != man.APIKeys || got.UsageLogs != man.UsageLogs {
+	}
+	if got.APIKeys != man.APIKeys || got.UsageLogs != man.UsageLogs {
 		return fmt.Errorf(
 			"store: 备份行数与 manifest 不符(keys %d/%d, usage %d/%d)",
 			got.APIKeys, man.APIKeys, got.UsageLogs, man.UsageLogs,
 		)
 	}
-	// 目标被数据库连接占用时拒绝恢复。
+	return nil
+}
+
+// checkTarget 目标被数据库连接占用时拒绝恢复；未置 force 时拒绝覆盖。
+func checkTarget(destPath string, force bool) error {
 	if _, err := os.Stat(destPath); err == nil {
 		if err := probeLocked(destPath); err != nil {
 			return err
@@ -148,6 +165,11 @@ func Restore(dir, destPath string, force bool) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("store: 探测目标路径: %w", err)
 	}
+	return nil
+}
+
+// swapInSnapshot 落位快照并复校验；任一步失败都把原库(及其侧车)换回原位。
+func swapInSnapshot(snap, destPath string) error {
 	// 主库及其 WAL/SHM 文件必须整体替换，避免旧 WAL 帧写入恢复后的数据库。
 	sidecars := []string{"", "-wal", "-shm"}
 	tmp := destPath + ".restore-tmp"
@@ -156,29 +178,14 @@ func Restore(dir, destPath string, force bool) error {
 		return fmt.Errorf("store: 写入恢复临时文件: %w", err)
 	}
 	preRestore := destPath + ".pre-restore"
-	hadDest := false
-	var moved []string // 已换名成功的后缀，供回滚用。
-	if _, err := os.Stat(destPath); err == nil {
-		hadDest = true
-		for _, s := range sidecars {
-			if _, err := os.Stat(destPath + s); err != nil {
-				continue // 侧车文件可能本就不存在，跳过。
-			}
-			if err := os.Rename(destPath+s, preRestore+s); err != nil {
-				for _, m := range moved {
-					_ = os.Rename(preRestore+m, destPath+m)
-				}
-				_ = os.Remove(tmp)
-				return fmt.Errorf("store: 保留现场失败: %w", err)
-			}
-			moved = append(moved, s)
-		}
+	hadDest, moved, err := moveAside(destPath, preRestore, sidecars)
+	if err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	if err := os.Rename(tmp, destPath); err != nil {
 		if hadDest {
-			for _, m := range moved {
-				_ = os.Rename(preRestore+m, destPath+m) // 回滚现场
-			}
+			restoreAside(destPath, preRestore, moved)
 		}
 		_ = os.Remove(tmp)
 		return fmt.Errorf("store: 落位恢复文件: %w", err)
@@ -189,9 +196,7 @@ func Restore(dir, destPath string, force bool) error {
 			_ = os.Remove(destPath + s)
 		}
 		if hadDest {
-			for _, m := range moved {
-				_ = os.Rename(preRestore+m, destPath+m) // 回滚
-			}
+			restoreAside(destPath, preRestore, moved)
 		}
 		return fmt.Errorf("store: 恢复后校验未过,已回滚现场: %w", err)
 	}
@@ -203,10 +208,37 @@ func Restore(dir, destPath string, force bool) error {
 	return nil
 }
 
+// moveAside 把目标库及其已存在的侧车文件改名到 preRestore 前缀下，返回已移动后缀供回滚。
+// 中途失败时已移动的文件当场换回，不留半态现场。
+func moveAside(destPath, preRestore string, sidecars []string) (bool, []string, error) {
+	if _, err := os.Stat(destPath); err != nil {
+		return false, nil, nil
+	}
+	var moved []string
+	for _, s := range sidecars {
+		if _, err := os.Stat(destPath + s); err != nil {
+			continue // 侧车文件可能本就不存在，跳过。
+		}
+		if err := os.Rename(destPath+s, preRestore+s); err != nil {
+			restoreAside(destPath, preRestore, moved)
+			return false, nil, fmt.Errorf("store: 保留现场失败: %w", err)
+		}
+		moved = append(moved, s)
+	}
+	return true, moved, nil
+}
+
+// restoreAside 把 moveAside 换走的文件换回原位；单文件失败不阻断其余回滚。
+func restoreAside(destPath, preRestore string, moved []string) {
+	for _, m := range moved {
+		_ = os.Rename(preRestore+m, destPath+m)
+	}
+}
+
 // probeLocked 尝试获取数据库文件的写锁；失败表示目标可能仍被 SQLite 连接占用。
 func probeLocked(path string) error {
 	for _, p := range []string{path, path + "-shm"} {
-		f, err := os.OpenFile(p, os.O_RDWR, 0)
+		f, err := os.OpenFile(p, os.O_RDWR, 0) //nolint:gosec // 路径为运维指定的库文件及其 -shm
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				continue
@@ -246,7 +278,7 @@ func snapshotCounts(snap string) (counts, error) {
 }
 
 func readManifest(dir string) (Manifest, error) {
-	raw, err := os.ReadFile(filepath.Join(dir, manifestName))
+	raw, err := os.ReadFile(filepath.Join(dir, manifestName)) //nolint:gosec // dir 为运维指定的备份目录
 	if err != nil {
 		return Manifest{}, fmt.Errorf("store: 读取 manifest(非 muniu 备份目录?): %w", err)
 	}
@@ -286,7 +318,7 @@ func openPlain(path string) (*sql.DB, error) {
 }
 
 func fileSHA256(path string) (string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // 备份目录内文件路径由本包快照产物派生
 	if err != nil {
 		return "", fmt.Errorf("store: 打开快照算哈希: %w", err)
 	}
@@ -299,12 +331,12 @@ func fileSHA256(path string) (string, error) {
 }
 
 func copyFile(src, dst string, perm os.FileMode) error {
-	in, err := os.Open(src)
+	in, err := os.Open(src) //nolint:gosec // 备份目录内文件路径由本包快照产物派生
 	if err != nil {
 		return err
 	}
 	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm) //nolint:gosec // 同上,目标在备份/恢复目录内
 	if err != nil {
 		return err
 	}

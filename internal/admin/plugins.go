@@ -29,6 +29,43 @@ type pluginPutRequest struct {
 
 // 插件路由经 adminRouteTable 挂载（pluginsList/pluginPut/pluginPatch），不再单独注册。
 
+// pluginResourceError 校验资源参数硬顶；超限返回给调用方的错误文案，空串表示通过。
+func pluginResourceError(req *pluginPutRequest) string {
+	// 资源硬顶与 config 层同源，取值用 plugin 包常量：超限直达 wazero 会 panic，
+	// admin 链无 recover；负值经 uint32 换算会溢出成巨大上限，入口即拒。
+	if req.TimeoutMs < 0 || req.TimeoutMs > plugin.MaxTimeoutMs {
+		return "timeout_ms 须在 0.." + strconv.Itoa(plugin.MaxTimeoutMs)
+	}
+	if req.MemoryLimitMiB < 0 || req.MemoryLimitMiB > plugin.MaxMemoryLimitPages/16 {
+		return "memory_limit_mib 须在 0.." + strconv.Itoa(plugin.MaxMemoryLimitPages/16) + "(0=缺省 64)"
+	}
+	if req.PoolSize < 0 || req.PoolSize > plugin.MaxPoolSize {
+		return "pool_size 须在 0.." + strconv.Itoa(plugin.MaxPoolSize)
+	}
+	return ""
+}
+
+// pinnedMemoryPages MiB 转 wazero 内存页数；已由 pluginResourceError 限定非负且不超页数上限。
+func pinnedMemoryPages(mib int) uint32 {
+	pages := mibOrDefault(mib) * 16 // 64KiB/页
+	if pages < 0 || pages > int(plugin.MaxMemoryLimitPages) {
+		return plugin.MaxMemoryLimitPages
+	}
+	return uint32(pages) //nolint:gosec // 上一行已限定 0..MaxMemoryLimitPages 的 int 值域
+}
+
+// logPluginPut 按注册/替换记日志；替换额外带旧版本哈希。
+func logPluginPut(d Deps, r *http.Request, name string, info plugin.Info, replaced bool, oldSHA string) {
+	if replaced {
+		d.Logger.Info("插件版本替换", "plugin", name,
+			"old_sha256", oldSHA, "new_sha256", info.SHA256,
+			"request_id", logging.RequestIDFrom(r.Context()))
+		return
+	}
+	d.Logger.Info("插件注册", "plugin", name, "sha256", info.SHA256,
+		"request_id", logging.RequestIDFrom(r.Context()))
+}
+
 func pluginsList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if d.Plugins == nil {
@@ -56,21 +93,8 @@ func pluginPut(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "path 必填")
 			return
 		}
-		// 资源硬顶与 config 层同源，取值用 plugin 包常量：超限直达 wazero 会 panic，
-		// admin 链无 recover；负值经 uint32 换算会溢出成巨大上限，入口即拒。
-		if req.TimeoutMs < 0 || req.TimeoutMs > plugin.MaxTimeoutMs {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
-				"timeout_ms 须在 0.."+strconv.Itoa(plugin.MaxTimeoutMs))
-			return
-		}
-		if req.MemoryLimitMiB < 0 || req.MemoryLimitMiB > plugin.MaxMemoryLimitPages/16 {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
-				"memory_limit_mib 须在 0.."+strconv.Itoa(plugin.MaxMemoryLimitPages/16)+"(0=缺省 64)")
-			return
-		}
-		if req.PoolSize < 0 || req.PoolSize > plugin.MaxPoolSize {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
-				"pool_size 须在 0.."+strconv.Itoa(plugin.MaxPoolSize))
+		if msg := pluginResourceError(&req); msg != "" {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", msg)
 			return
 		}
 		bin, err := os.ReadFile(req.Path)
@@ -86,7 +110,7 @@ func pluginPut(d Deps) http.HandlerFunc {
 			Enabled:          req.Enabled == nil || *req.Enabled,
 			FailOpen:         req.FailOpen,
 			TimeoutMs:        req.TimeoutMs,
-			MemoryLimitPages: uint32(mibOrDefault(req.MemoryLimitMiB)) * 16, // 64KiB/页
+			MemoryLimitPages: pinnedMemoryPages(req.MemoryLimitMiB),
 			PoolSize:         req.PoolSize,
 			Logger:           d.Logger,
 		})
@@ -95,14 +119,7 @@ func pluginPut(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "plugin_rejected", err.Error())
 			return
 		}
-		if replaced {
-			d.Logger.Info("插件版本替换", "plugin", name,
-				"old_sha256", oldSHA, "new_sha256", info.SHA256,
-				"request_id", logging.RequestIDFrom(r.Context()))
-		} else {
-			d.Logger.Info("插件注册", "plugin", name, "sha256", info.SHA256,
-				"request_id", logging.RequestIDFrom(r.Context()))
-		}
+		logPluginPut(d, r, name, info, replaced, oldSHA)
 		writeJSON(w, 200, map[string]any{
 			"name": info.Name, "sha256": info.SHA256, "enabled": info.Enabled,
 			"fail_open": info.FailOpen, "binary_bytes": info.ByteLen, "replaced": replaced,

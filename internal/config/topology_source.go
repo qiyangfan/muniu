@@ -71,26 +71,21 @@ func (p TopologyPayload) ToTopology() (providers []Provider,
 
 // FetchTopology 拉取并解析；etag 非空时带 If-None-Match，304 返回 notModified。
 // err 非空时调用方保持旧快照并告警。
-func FetchTopology(client *http.Client, url, etag string) (payload TopologyPayload, newETag string, notModified bool, err error) {
+func FetchTopology(client *http.Client, url, etag string) (payload TopologyPayload,
+	newETag string, notModified bool, err error) {
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	resp, err := doTopologyRequest(client, url, etag)
 	if err != nil {
-		return payload, "", false, fmt.Errorf("构造拓扑拉取请求: %w", err)
-	}
-	if etag != "" {
-		req.Header.Set("If-None-Match", etag)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return payload, etag, false, fmt.Errorf("拓扑拉取失败: %w", err)
+		return payload, etag, false, err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	switch {
-	case resp.StatusCode == http.StatusNotModified:
+	// 304 = 快照未变,不解析不判完整性
+	if resp.StatusCode == http.StatusNotModified {
 		return payload, etag, true, nil
-	case resp.StatusCode != http.StatusOK:
+	}
+	if resp.StatusCode != http.StatusOK {
 		return payload, etag, false, fmt.Errorf("拓扑拉取状态 %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -104,4 +99,20 @@ func FetchTopology(client *http.Client, url, etag string) (payload TopologyPaylo
 		return payload, etag, false, fmt.Errorf("拓扑快照不完整: providers/model_routes 缺失")
 	}
 	return payload, resp.Header.Get("ETag"), false, nil
+}
+
+// doTopologyRequest 发条件 GET;构造失败返回空 etag,传输失败原样回带 etag 供调用方保留。
+func doTopologyRequest(client *http.Client, url, etag string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("构造拓扑拉取请求: %w", err)
+	}
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("拓扑拉取失败: %w", err)
+	}
+	return resp, nil
 }

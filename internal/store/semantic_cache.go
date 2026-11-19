@@ -30,12 +30,23 @@ const cacheCols = `id, tenant_id, fingerprint, model_alias, embedding, response,
 		native_response, native_proto, native_form, hits, created_at, expires_at`
 
 // UpsertCacheRow 写入或覆盖缓存条目，同 tenant+fingerprint 覆盖，属翻译路径条目。
-func UpsertCacheRow(db *sql.DB, tenantID, fingerprint, modelAlias string, embedding, response []byte, ttl time.Duration) error {
+func UpsertCacheRow(
+	db *sql.DB,
+	tenantID, fingerprint, modelAlias string,
+	embedding, response []byte,
+	ttl time.Duration,
+) error {
 	return UpsertCacheRowNative(db, tenantID, fingerprint, modelAlias, embedding, response, nil, "", "", ttl)
 }
 
 // UpsertCacheRowNative 写入或覆盖缓存条目，直通双存形态：canonical 加原生体、标签、表单。
-func UpsertCacheRowNative(db *sql.DB, tenantID, fingerprint, modelAlias string, embedding, response, nativeResponse []byte, nativeProto, nativeForm string, ttl time.Duration) error {
+func UpsertCacheRowNative(
+	db *sql.DB,
+	tenantID, fingerprint, modelAlias string,
+	embedding, response, nativeResponse []byte,
+	nativeProto, nativeForm string,
+	ttl time.Duration,
+) error {
 	// 本表时间列用 RFC3339Nano：短 TTL 测试与亚秒边界需要亚秒精度。
 	now := time.Now().UTC()
 	_, err := db.Exec(`INSERT INTO semantic_cache

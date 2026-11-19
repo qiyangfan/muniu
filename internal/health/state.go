@@ -115,43 +115,48 @@ func applyProbe(st ProviderState, outcome ProbeOutcome, class string, layer Reas
 	case ProbeLimited:
 		return st, nil // 存活但受限:不计成败,维持原态
 	case ProbeOK:
-		st.OKStreak++
-		st.FailStreak = 0
-		switch st.Phase {
-		case PhaseHealthy:
-			return st, nil
-		case PhaseDegraded:
-			// 跨层成功不解除(被动/推理面阴性不因免费探针阳性翻案)
-			if layer != st.Reason {
-				return st, nil
-			}
-			if recoveryStreak(st.Reason, threshold) <= st.OKStreak {
-				return exitDegraded(st, now), recoveredEvent(st, now)
-			}
-			return st, nil
-		default: // half-open:同层探针成功即恢复
-			if layer == st.Reason {
-				return exitDegraded(st, now), recoveredEvent(st, now)
-			}
-			return st, nil
+		return applyProbeOK(st, layer, now, threshold)
+	default:
+		return applyProbeFail(st, layer, now, threshold, openFor)
+	}
+}
+
+// applyProbeOK 探针阳性推进:健康态无动作;降级/半开态仅同层成功才恢复。
+func applyProbeOK(st ProviderState, layer Reason, now time.Time, threshold int) (ProviderState, *Event) {
+	st.OKStreak++
+	st.FailStreak = 0
+	if st.Phase == PhaseHealthy {
+		return st, nil
+	}
+	// 跨层成功不解除(被动/推理面阴性不因免费探针阳性翻案);半开态同层成功即恢复
+	// (控制面层仍要求连续达阈值,推理面层单次成功即可)。
+	if layer != st.Reason {
+		return st, nil
+	}
+	if st.Phase == PhaseDegraded && recoveryStreak(st.Reason, threshold) > st.OKStreak {
+		return st, nil
+	}
+	return exitDegraded(st, now), recoveredEvent(st, now)
+}
+
+// applyProbeFail 探针阴性推进:健康态达阈值降级;降级态同层续期熔断;半开态回降级。
+func applyProbeFail(st ProviderState, layer Reason, now time.Time, threshold int,
+	openFor time.Duration) (ProviderState, *Event) {
+	st.OKStreak = 0
+	st.FailStreak++
+	switch st.Phase {
+	case PhaseHealthy:
+		if st.FailStreak >= threshold {
+			return enterDegraded(st, layer, now, openFor), degradedEvent(st, now)
 		}
-	default: // ProbeFail
-		st.OKStreak = 0
-		st.FailStreak++
-		switch st.Phase {
-		case PhaseHealthy:
-			if st.FailStreak >= threshold {
-				return enterDegraded(st, layer, now, openFor), degradedEvent(st, now)
-			}
-			return st, nil
-		case PhaseDegraded:
-			if layer == st.Reason {
-				st.OpenUntil = now.Add(openFor) // 同层继续阴性:续期熔断计时
-			}
-			return st, nil
-		default: // half-open:试探失败回降级
-			return enterDegraded(st, st.Reason, now, openFor), nil
+		return st, nil
+	case PhaseDegraded:
+		if layer == st.Reason {
+			st.OpenUntil = now.Add(openFor) // 同层继续阴性:续期熔断计时
 		}
+		return st, nil
+	default: // half-open:试探失败回降级
+		return enterDegraded(st, st.Reason, now, openFor), nil
 	}
 }
 

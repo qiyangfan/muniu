@@ -26,7 +26,7 @@ var migrationsFS embed.FS
 // pragma 随 DSN 传入：WAL、busy_timeout 5s、foreign_keys。
 func Open(path string) (*sql.DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // 路径来自运维配置的数据目录,非请求输入
 			return nil, fmt.Errorf("store: 创建数据目录: %w", err)
 		}
 	}
@@ -59,58 +59,78 @@ func migrate(db *sql.DB) error {
 	}
 	sort.Strings(entries) // 文件名 0001_init.sql 顺序编号，字典序即应用序。
 
-	applied := map[int64]bool{}
-	var accountExists int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).Scan(&accountExists); err != nil {
-		return fmt.Errorf("store: 探测迁移账表: %w", err)
+	applied, err := appliedMigrations(db)
+	if err != nil {
+		return err
 	}
-	if accountExists > 0 {
-		rows, err := db.Query(`SELECT version FROM schema_migrations`)
-		if err != nil {
-			return fmt.Errorf("store: 读迁移账: %w", err)
-		}
-		for rows.Next() {
-			var v int64
-			if err := rows.Scan(&v); err != nil {
-				_ = rows.Close()
-				return fmt.Errorf("store: 扫迁移账: %w", err)
-			}
-			applied[v] = true
-		}
-		_ = rows.Close()
-		if err := rows.Err(); err != nil {
-			return fmt.Errorf("store: 遍历迁移账: %w", err)
-		}
-	}
-
 	for _, name := range entries {
-		version, err := versionOf(name)
-		if err != nil {
+		if err := applyMigration(db, name, applied); err != nil {
 			return err
 		}
-		if applied[version] {
-			continue
+	}
+	return nil
+}
+
+// appliedMigrations 读账表已应用版本；账表尚未建（首启）时返回空集。
+func appliedMigrations(db *sql.DB) (map[int64]bool, error) {
+	applied := map[int64]bool{}
+	var accountExists int
+	// 首次打开时账表尚不存在，这里只探测不建表（建表归 0001 迁移 DDL）。
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`,
+	).Scan(&accountExists); err != nil {
+		return nil, fmt.Errorf("store: 探测迁移账表: %w", err)
+	}
+	if accountExists == 0 {
+		return applied, nil
+	}
+	rows, err := db.Query(`SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("store: 读迁移账: %w", err)
+	}
+	for rows.Next() {
+		var v int64
+		if err := rows.Scan(&v); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("store: 扫迁移账: %w", err)
 		}
-		body, err := fs.ReadFile(migrationsFS, name)
-		if err != nil {
-			return fmt.Errorf("store: 读迁移 %s: %w", name, err)
-		}
-		tx, err := db.Begin()
-		if err != nil {
-			return fmt.Errorf("store: 开迁移事务 %s: %w", name, err)
-		}
-		if _, err := tx.Exec(string(body)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("store: 应用迁移 %s: %w", name, err)
-		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
-			version, time.Now().UTC().Format(time.RFC3339)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("store: 记迁移账 %s: %w", name, err)
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("store: 提交迁移 %s: %w", name, err)
-		}
+		applied[v] = true
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: 遍历迁移账: %w", err)
+	}
+	return applied, nil
+}
+
+// applyMigration 单文件单事务应用；已记录版本跳过。
+func applyMigration(db *sql.DB, name string, applied map[int64]bool) error {
+	version, err := versionOf(name)
+	if err != nil {
+		return err
+	}
+	if applied[version] {
+		return nil
+	}
+	body, err := fs.ReadFile(migrationsFS, name)
+	if err != nil {
+		return fmt.Errorf("store: 读迁移 %s: %w", name, err)
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: 开迁移事务 %s: %w", name, err)
+	}
+	if _, err := tx.Exec(string(body)); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: 应用迁移 %s: %w", name, err)
+	}
+	if _, err := tx.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
+		version, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("store: 记迁移账 %s: %w", name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交迁移 %s: %w", name, err)
 	}
 	return nil
 }

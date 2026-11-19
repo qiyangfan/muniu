@@ -258,36 +258,57 @@ type billingUsageResp struct {
 const billingMaxHardCredits = int64(10_000_000) * 1_000_000_000
 
 func (q *billingCompatQuerier) Query(ctx context.Context, key string) (Balance, error) {
+	hard, err := q.hardLimitCredits(ctx, key)
+	if err != nil {
+		return Balance{}, err
+	}
+	usageCredits, err := q.usageCredits(ctx, key)
+	if err != nil {
+		return Balance{}, err
+	}
+	return Balance{Credits: hard - usageCredits, Currency: q.currency}, nil
+}
+
+// hardLimitCredits 取订阅端点额度并做货币量级护栏。
+func (q *billingCompatQuerier) hardLimitCredits(ctx context.Context, key string) (int64, error) {
 	var sub billingSubResp
 	if err := getJSON(ctx, q.client, q.subscription, key, &sub); err != nil {
-		return Balance{}, err
+		return 0, err
 	}
-	if sub.HardLimitUSD.String() == "" || sub.HardLimitUSD.String() == "null" {
-		return Balance{}, qerr(ClassParse, "balance: billing-compat 响应缺 hard_limit_usd")
-	}
-	hard, err := upstreamCredits(sub.HardLimitUSD)
+	hard, err := nonNullCredits(sub.HardLimitUSD, "balance: billing-compat 响应缺 hard_limit_usd")
 	if err != nil {
-		return Balance{}, err
+		return 0, err
 	}
+	// 超过量级即判「quota 原始值」形态(one-api 关闭货币显示时金额字段实为配额数)
 	if hard > billingMaxHardCredits {
-		return Balance{}, qerr(ClassParse,
+		return 0, qerr(ClassParse,
 			"balance: billing-compat hard_limit_usd 超出货币量级(疑为 quota 原始值形态)")
 	}
+	return hard, nil
+}
+
+// usageCredits 取用量端点并折算 credit。
+func (q *billingCompatQuerier) usageCredits(ctx context.Context, key string) (int64, error) {
 	var use billingUsageResp
 	if err := getJSON(ctx, q.client, q.usage, key, &use); err != nil {
-		return Balance{}, err
+		return 0, err
 	}
-	if use.TotalUsage.String() == "" || use.TotalUsage.String() == "null" {
-		return Balance{}, qerr(ClassParse, "balance: billing-compat 响应缺 total_usage")
-	}
-	usageRaw, err := upstreamCredits(use.TotalUsage)
+	usageRaw, err := nonNullCredits(use.TotalUsage, "balance: billing-compat 响应缺 total_usage")
 	if err != nil {
-		return Balance{}, err
+		return 0, err
 	}
 	if usageRaw < 0 {
-		return Balance{}, qerr(ClassParse, "balance: billing-compat total_usage 出现负值")
+		return 0, qerr(ClassParse, "balance: billing-compat total_usage 出现负值")
 	}
 	// total_usage 数值单位按声明币种的百分之一(OpenAI legacy 口径的分):1 分 = 1e-2 币种单位
 	// = 1e7 credit,即 usageRaw(数值×1e9)除以 100;除法精确,1e9 刻度天然整除。
-	return Balance{Credits: hard - usageRaw/100, Currency: q.currency}, nil
+	return usageRaw / 100, nil
+}
+
+// nonNullCredits 缺字段(空串/字面 null)按解析失败处理,不走数值换算。
+func nonNullCredits(v json.Number, missingMsg string) (int64, error) {
+	if v.String() == "" || v.String() == "null" {
+		return 0, qerr(ClassParse, "%s", missingMsg)
+	}
+	return upstreamCredits(v)
 }

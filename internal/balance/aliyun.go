@@ -5,7 +5,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // 阿里云 RPC 签名规范强制 HMAC-SHA1,此处为协议要求而非安全散列用途
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -96,14 +96,23 @@ func aliyunExecute(ctx context.Context, req *http.Request, cl *http.Client) (Bal
 		return Balance{}, qerr(ClassParse, "balance: aliyun 响应读取失败: %v", rerr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// 阿里云 RPC 惯例:凭证/签名类错误以非 2xx + JSON body(Code 字段)返回,
-		// 此处必须读 body 归类,否则凭证问题退化为通用 HTTP 错误
-		var errBody aliyunBSSResp
-		if jerr := json.Unmarshal(bodyBytes, &errBody); jerr == nil && errBody.Code != "" {
-			return Balance{}, qerr(aliyunClassOf(errBody.Code), "balance: aliyun 错误 %s", errBody.Code)
-		}
-		return Balance{}, qerr(ClassHTTP, "balance: aliyun HTTP %d", resp.StatusCode)
+		return Balance{}, aliyunHTTPError(resp.StatusCode, bodyBytes)
 	}
+	return aliyunBalanceOf(bodyBytes)
+}
+
+// aliyunHTTPError 非 2xx 归类:阿里云 RPC 惯例把凭证/签名类错误以 JSON body(Code 字段)返回,
+// 此处必须读 body 归类,否则凭证问题退化为通用 HTTP 错误。
+func aliyunHTTPError(status int, bodyBytes []byte) error {
+	var errBody aliyunBSSResp
+	if jerr := json.Unmarshal(bodyBytes, &errBody); jerr == nil && errBody.Code != "" {
+		return qerr(aliyunClassOf(errBody.Code), "balance: aliyun 错误 %s", errBody.Code)
+	}
+	return qerr(ClassHTTP, "balance: aliyun HTTP %d", status)
+}
+
+// aliyunBalanceOf 解析 2xx 响应体。
+func aliyunBalanceOf(bodyBytes []byte) (Balance, error) {
 	var body aliyunBSSResp
 	// UseNumber 解码:余额数值形态保住十进制原样,不落 float64(金额整数纪律)
 	dec := json.NewDecoder(bytes.NewReader(bodyBytes))
@@ -111,12 +120,11 @@ func aliyunExecute(ctx context.Context, req *http.Request, cl *http.Client) (Bal
 	if err := dec.Decode(&body); err != nil {
 		return Balance{}, qerr(ClassParse, "balance: aliyun 响应解析失败: %v", err)
 	}
-	if body.Code != "" && body.Code != "200" {
-		return Balance{}, qerr(aliyunClassOf(body.Code),
-			"balance: aliyun 错误 %s", body.Code)
-	}
 	// business 域名的现行成功惯例带 "Code":"200"+"Success":true(2026-10-30 真机实证),
 	// 与旧惯例「成功无 Code 字段」并存;错误判定只认非 200 的非空 Code。
+	if body.Code != "" && body.Code != "200" {
+		return Balance{}, qerr(aliyunClassOf(body.Code), "balance: aliyun 错误 %s", body.Code)
+	}
 	amount, err := balanceAmountOf(body.Data.AvailableAmount)
 	if err != nil {
 		return Balance{}, err

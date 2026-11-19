@@ -14,6 +14,20 @@ import (
 // 完整性的全量判定;返回违规描述列表,零违规返回 nil。
 func AuthDeclarationViolations(provs []Provider, oauth OAuthCfg) []string {
 	var out []string
+	out = append(out, oauthViolations(oauth)...)
+	// 渠道内重复账号引用:同渠道重复引用同一账号会建两个同 ID 池成员,凭据同步只达首个,
+	// 其余成员持装配期旧 token 永久 401 摆动——加载期拒绝(对齐 providers 重名先例)。
+	accountsByRef := map[string]string{}
+	for _, p := range provs {
+		out = append(out, providerAuthViolations(p, oauth)...)
+		out = append(out, keyDeclarationViolations(p, accountsByRef)...)
+	}
+	return out
+}
+
+// oauthViolations oauth 段完整性:成套声明,且各 URL 须为 http(s) 绝对 URL 无 fragment。
+func oauthViolations(oauth OAuthCfg) []string {
+	var out []string
 	if oauth.Declared() && !oauth.Complete() {
 		out = append(out, "oauth 段部分声明非法: authorize_url/token_url/client_id/callback_url 必须成套声明")
 	}
@@ -30,40 +44,60 @@ func AuthDeclarationViolations(provs []Provider, oauth OAuthCfg) []string {
 			out = append(out, fmt.Sprintf("oauth.%s 非法: %q(须为 http(s) 绝对 URL)", u.name, u.v))
 		}
 	}
-	// 渠道内重复账号引用:同渠道重复引用同一账号会建两个同 ID 池成员,凭据同步只达首个,
-	// 其余成员持装配期旧 token 永久 401 摆动——加载期拒绝(对齐 providers 重名先例)。
-	accountsByRef := map[string]string{}
-	for _, p := range provs {
-		if p.Auth != "" {
-			// 仅 Anthropic 支持声明鉴权方式;值域文案经 adapter.AuthDecl 单源渲染。
-			if p.Adapter != "anthropic" {
-				out = append(out, fmt.Sprintf("provider(%s) auth 仅 anthropic 适配器支持(其余形态鉴权固有)", p.Name))
-			} else if p.Auth != adapter.AuthDefault && p.Auth != adapter.AuthBearer && p.Auth != adapter.AuthOAuth {
-				out = append(out, fmt.Sprintf("provider(%s) auth 非法 %q(允许 %s)", p.Name, p.Auth, adapter.AuthDecl()))
-			}
+	return out
+}
+
+// providerAuthViolations 渠道级 auth 声明:仅 anthropic 支持声明,值域与 oauth 段依赖。
+func providerAuthViolations(p Provider, oauth OAuthCfg) []string {
+	if p.Auth == "" {
+		return nil
+	}
+	var out []string
+	// 仅 Anthropic 支持声明鉴权方式;值域文案经 adapter.AuthDecl 单源渲染。
+	if p.Adapter != "anthropic" {
+		out = append(out, fmt.Sprintf("provider(%s) auth 仅 anthropic 适配器支持(其余形态鉴权固有)", p.Name))
+	} else if p.Auth != adapter.AuthDefault && p.Auth != adapter.AuthBearer && p.Auth != adapter.AuthOAuth {
+		out = append(out, fmt.Sprintf("provider(%s) auth 非法 %q(允许 %s)", p.Name, p.Auth, adapter.AuthDecl()))
+	}
+	if p.Auth == adapter.AuthOAuth && !oauth.Complete() {
+		out = append(out,
+			fmt.Sprintf("provider(%s) auth=oauth 需要 oauth 段完整声明(authorize_url/token_url/client_id/callback_url)",
+				p.Name))
+	}
+	return out
+}
+
+// keyDeclarationViolations 渠道内 key 声明:oauth 渠道须全为账号引用、同渠道账号不得重复引用。
+func keyDeclarationViolations(p Provider, accountsByRef map[string]string) []string {
+	var out []string
+	for _, k := range p.Keys {
+		out = append(out, keyRefFormViolations(p, k)...)
+		if k.Account == "" {
+			continue
 		}
-		if p.Auth == adapter.AuthOAuth && !oauth.Complete() {
-			out = append(out, fmt.Sprintf("provider(%s) auth=oauth 需要 oauth 段完整声明(authorize_url/token_url/client_id/callback_url)", p.Name))
+		if prev, dup := accountsByRef[k.Account]; dup && prev == p.Name {
+			out = append(out, fmt.Sprintf(
+				"provider(%s) keys 账号引用重复: %s(同渠道重复引用使凭据同步失准,每账号至多一个成员)",
+				p.Name, k.Account))
 		}
-		for _, k := range p.Keys {
-			// 渠道内同构:鉴权头形态是适配器级语义,混编成员会让适配器 per-key 分叉特例
-			if p.Auth == adapter.AuthOAuth {
-				if k.Env != "" || k.Account == "" {
-					out = append(out, fmt.Sprintf("provider(%s) keys oauth 渠道 keys 须全部为账号引用(account)", p.Name))
-				}
-			} else if k.Account != "" {
-				out = append(out, fmt.Sprintf("provider(%s) keys 账号引用仅限 auth: oauth 渠道", p.Name))
-			}
-			if k.Env == "" && k.Account == "" {
-				out = append(out, fmt.Sprintf("provider(%s) keys 缺 env 或 account 引用", p.Name))
-			}
-			if k.Account != "" {
-				if prev, dup := accountsByRef[k.Account]; dup && prev == p.Name {
-					out = append(out, fmt.Sprintf("provider(%s) keys 账号引用重复: %s(同渠道重复引用使凭据同步失准,每账号至多一个成员)", p.Name, k.Account))
-				}
-				accountsByRef[k.Account] = p.Name
-			}
+		accountsByRef[k.Account] = p.Name
+	}
+	return out
+}
+
+// keyRefFormViolations 单 key 引用形态:oauth 渠道须全为 account,其余渠道不得用 account。
+func keyRefFormViolations(p Provider, k KeyRef) []string {
+	var out []string
+	// 渠道内同构:鉴权头形态是适配器级语义,混编成员会让适配器 per-key 分叉特例
+	if p.Auth == adapter.AuthOAuth {
+		if k.Env != "" || k.Account == "" {
+			out = append(out, fmt.Sprintf("provider(%s) keys oauth 渠道 keys 须全部为账号引用(account)", p.Name))
 		}
+	} else if k.Account != "" {
+		out = append(out, fmt.Sprintf("provider(%s) keys 账号引用仅限 auth: oauth 渠道", p.Name))
+	}
+	if k.Env == "" && k.Account == "" {
+		out = append(out, fmt.Sprintf("provider(%s) keys 缺 env 或 account 引用", p.Name))
 	}
 	return out
 }

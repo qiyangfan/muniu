@@ -128,7 +128,7 @@ func New(cfg Config) *Proxy {
 	}
 	randIntn := cfg.RandIntn
 	if randIntn == nil {
-		randIntn = func(n int) int { return rand.IntN(n) }
+		randIntn = func(n int) int { return rand.IntN(n) } //nolint:gosec // 退避抖动,非安全随机
 	}
 	settlement := cfg.Settlement
 	if settlement == "" {
@@ -188,7 +188,8 @@ func initialClients(cfg Config, logger *slog.Logger) map[string]*http.Client {
 		}
 		cl, err := ProxiedClient(prov.ProxyURL, cfg.Timeouts.Dial)
 		if err != nil {
-			logger.Warn("渠道出站代理非法,降级默认出站", "provider", prov.Name, "proxy_url", redactProxyURL(prov.ProxyURL), "error", err.Error())
+			logger.Warn("渠道出站代理非法,降级默认出站", "provider", prov.Name,
+				"proxy_url", redactProxyURL(prov.ProxyURL), "error", err.Error())
 			continue
 		}
 		if out == nil {
@@ -310,16 +311,9 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nat := inboundFrom(r) // chat 入站为 nil，以下所有直通分支短路，不改变既有行为
-	var req *protocol.ChatRequest
-	if nat != nil && nat.ineligCode != "" {
-		// 翻译失格：canonical 不可得，最小路由载体，治理与缓存不可评估，直通专属语义
-		req = &protocol.ChatRequest{Model: nat.model, Stream: nat.stream}
-	} else {
-		req, err = protocol.ParseChatRequest(body)
-		if err != nil {
-			p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求不符合 OpenAI Chat Completions 格式")
-			return
-		}
+	req, parsed := p.parseChatInbound(tw, r, nat, body)
+	if !parsed {
+		return
 	}
 	topo := p.topo.Load() // 请求入口加载一次，全程同一快照，换道候选视图一致
 	cands, ok := topo.routes[req.Model]
@@ -332,295 +326,489 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 有状态粘性路由只走原生 responses 路径：候选域收缩至亲和 provider 或自解释错误。
-	// 状态请求旁路插件改写与语义缓存：上下文在服务端指纹无意义，原始体不得被改写过期。
-	pluginModified := false
-	if nat.sticky() {
-		var sre *stickyError
-		cands, sre = p.stickyRoute(r, nat, topo, cands)
-		if sre != nil {
-			p.writeError(tw, r, protocol.TypeBadRequest, sre.code, sre.msg)
-			return
-		}
-	} else if nat == nil || nat.ineligCode == "" {
-		// 插件请求体钩子单次执行，先于语义缓存检索：脱敏必须发生在缓存键计算之前，
-		// 敏感载荷不得进语义缓存；改写未发生不做重解析，零开销路径
-		if p.plugins != nil {
-			res, done := p.applyPlugins(tw, r, body)
-			if done {
-				return
-			}
-			if len(res.ModifiedBy) > 0 {
-				nreq, err := protocol.ParseChatRequest(res.Body)
-				if err != nil {
-					p.writeError(tw, r, protocol.TypeBadRequest, "plugin_rejected", "插件改写后的请求体不是合法请求")
-					return
-				}
-				req = nreq
-				if cands, ok = topo.routes[req.Model]; !ok || len(cands) == 0 {
-					p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
-					return
-				}
-				// key 级模型白名单闸之二：插件改写 model 后以最终出站别名为准再校验
-				if !p.enforceModelAllowlist(tw, r, req.Model) {
-					return
-				}
-				p.markPluginModified(tw, r, res.ModifiedBy)
-				pluginModified = true // 直通回落信号：canonical 已被改写，原始体过期
-			}
-		}
+	cands, req, pluginModified, done := p.applyChatPreHooks(tw, r, body, topo, nat, req, cands)
+	if done {
+		return
 	}
 
-	// 语义缓存命中时直接回放；未命中则在成功响应后尝试写入。
-	// 直通路径：失格请求无指纹，状态请求上下文在服务端，均旁路检索与入库；
-	// 不可回放条目如 canonical 缺失且协议或表单不符按未命中继续，命中是优化，不得阻断请求。
-	var cph *cachePhase
-	if nat == nil || (nat.ineligCode == "" && !nat.sticky()) {
-		hitStart := time.Now()
-		if cres, phase := p.lookupCache(r, req); cres != nil && cacheReplayable(cres, nat, req.Stream) {
-			p.recordCacheHit(r, req, cres, hitStart)
-			p.replayHit(tw, r, cres, nat, req.Stream)
-			return
-		} else if cres == nil {
-			cph = phase
-		}
+	cph, done := p.chatCacheLookup(tw, r, nat, req)
+	if done {
+		return
 	}
 
-	// 价目在请求入口选定；预检、候选尝试与落账均使用这份不可变快照。
-	var requestPrices *metering.Pricing
-	if pt := p.pricing.Get(req.Model); pt != nil {
-		pr := pt.At(time.Now())
-		requestPrices = &pr
-	}
-	var requestBudget int64
-	if info := auth.KeyFrom(r.Context()); info != nil {
-		requestBudget = info.MaxRequestCostCredits
-	}
-	if requestBudget > 0 && (nat == nil || nat.ineligCode == "") {
-		if msg, over := preflightBudgetExceeded(req, requestBudget, requestPrices); over {
-			p.writeError(tw, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, msg)
-			return
-		}
+	requestPrices, requestBudget, over := p.chatBudgetPreflight(tw, r, nat, req)
+	if over {
+		return
 	}
 
-	// 构造候选迭代器：同 priority 加权随机起点，priority 递增降级
-	fcs := make([]failover.Candidate, len(cands))
-	for i, c := range cands {
-		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}
-	}
-	// 会话缓存亲和(ADR-0020):仅 chat/messages 两条入站 lane 参与(nat 为空且无 lane 标记
-	// =chat 原生;InboundMessages=翻译后;gemini 经 lane 标记排除——先前 gemini 委托管道
-	// 不携带任何身份,被误当 chat 参与亲和,违反其零触碰声明,本次以 lane 标记根修)。
-	// 身份解析一次;stick 健康时 iterator 组内起点提示+池内同键提示。亲和永不新增候选/重试
-	// ——熔断收缩与池冷却在循环内既有跳过语义恒优先于提示。pendingHit:lookup 命中尚未终判,
-	// 请求终结时按「stick 成功服务=hit,其余出口=stale」落定,保证三分计数每请求恰一者。
-	affinityLane := (nat == nil && laneFrom(r) == "") || (nat != nil && nat.proto == protocol.InboundMessages)
-	stickID, stickProvider, stickKeyID := "", "", ""
-	stickHit, entryFound, pendingHit := false, false, false
-	if affinityLane {
-		stickID = sessionStickID(r, apiKeyIDOf(r), req)
-		if stickID != "" {
-			sp, sk, status := p.cacheAffinity.lookup(stickID, apiKeyIDOf(r), time.Now())
-			switch status {
-			case "hit":
-				stickProvider, stickKeyID, stickHit, entryFound, pendingHit = sp, sk, true, true, true
-			case "stale":
-				cacheAffinityRequests.Inc("stale")
-			default:
-				cacheAffinityRequests.Inc("miss")
-			}
-		} else {
-			cacheAffinityRequests.Inc("miss")
-		}
-	}
-	iter := failover.NewIteratorWithStick(fcs, p.randIntn, stickProvider)
-	var last failover.ErrorClass
+	// 身份先于 iterator 解析:stick 健康时作为组内起点提示
+	sk := p.resolveStick(r, nat, req)
+	iter := failover.NewIteratorWithStick(chatCandidates(cands), p.randIntn, sk.provider)
 	// 桥接工具多轮边界：多轮中途流量对翻译路径的桥接候选不可服务，
 	// 直通候选正常服务，不受此边界约束
 	midLoop := chatToolLoopInflight(req)
-	bridgeSkipped := false
-	otherSkipped := false   // 非桥接原因的候选跳过，如 key 池全冷却
-	circuitSkipped := false // 健康熔断收缩的候选跳过;唯一跳过原因时快速失败
-	oauthSkipped := false   // oauth lane 收窄跳过(responses/gemini 入站的 oauth 候选);唯一跳过原因时显式信封
 	if p.health != nil {
 		p.health.AliasRequest(req.Model) // 换道率分母:每请求一次
 	}
+	lc := &chatLoopCtrl{tw: tw, r: r, topo: topo, req: req, nat: nat, midLoop: midLoop,
+		pluginModified: pluginModified, prices: requestPrices, budget: requestBudget}
+	p.runChatCandidates(iter, lc, &chatLoopState{}, &sk, cph)
+}
+
+// chatBudgetPreflight 价目在请求入口选定；预检、候选尝试与落账均使用这份不可变快照。
+// over 表示预检已写出超限信封。
+func (p *Proxy) chatBudgetPreflight(tw *trackWriter, r *http.Request, nat *inboundNative,
+	req *protocol.ChatRequest) (*metering.Pricing, int64, bool) {
+	var prices *metering.Pricing
+	if pt := p.pricing.Get(req.Model); pt != nil {
+		pr := pt.At(time.Now())
+		prices = &pr
+	}
+	var budget int64
+	if info := auth.KeyFrom(r.Context()); info != nil {
+		budget = info.MaxRequestCostCredits
+	}
+	if budget <= 0 || (nat != nil && nat.ineligCode != "") {
+		return prices, budget, false
+	}
+	if msg, over := preflightBudgetExceeded(req, budget, prices); over {
+		p.writeError(tw, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, msg)
+		return prices, budget, true
+	}
+	return prices, budget, false
+}
+
+// parseChatInbound 解析入站体为 canonical chat 请求；失格请求给最小路由载体。
+func (p *Proxy) parseChatInbound(tw *trackWriter, r *http.Request, nat *inboundNative,
+	body []byte) (*protocol.ChatRequest, bool) {
+	if nat != nil && nat.ineligCode != "" {
+		// 翻译失格：canonical 不可得，最小路由载体，治理与缓存不可评估，直通专属语义
+		return &protocol.ChatRequest{Model: nat.model, Stream: nat.stream}, true
+	}
+	req, err := protocol.ParseChatRequest(body)
+	if err != nil {
+		p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求不符合 OpenAI Chat Completions 格式")
+		return nil, false
+	}
+	return req, true
+}
+
+// chatLoopCtrl 候选循环的请求级不可变上下文。
+type chatLoopCtrl struct {
+	tw             *trackWriter
+	r              *http.Request
+	topo           *topologySnapshot
+	req            *protocol.ChatRequest
+	nat            *inboundNative
+	midLoop        bool
+	pluginModified bool
+	prices         *metering.Pricing
+	budget         int64
+}
+
+// runChatCandidates 候选循环：跳过、路径判定、取 key、执行、按 Decide 动作分支。
+func (p *Proxy) runChatCandidates(iter failover.Iterator, lc *chatLoopCtrl, st *chatLoopState,
+	sk *stickState, cph *cachePhase) {
 	for {
 		cand, ok := iter.Next()
 		if !ok {
-			// 候选耗尽：code=all_candidates_failed，类型沿用最后错误映射，
-			// message 如实说明已尝试全部候选。
-			// 能走到耗尽说明每个候选都未对客户端产出，即 decide 为 next_candidate，信封可安全写出
-			if tw.committed {
-				return
-			}
-			if pendingHit {
-				cacheAffinityRequests.Inc("stale") // hit 已判定但请求未由 stick 成功服务
-			}
-			// 仅当桥接豁免是唯一的跳过原因时，返回具体提示。
-			if bridgeSkipped && last == "" && !otherSkipped {
-				p.writeError(tw, r, protocol.TypeBadRequest, bridgeToolUnsupportedCode,
-					"Anthropic 桥接暂不支持工具多轮对话(role=tool / tool_calls),请改用原生兼容上游或去除工具上下文")
-				return
-			}
-			// 仅当健康收缩是唯一跳过原因时快速失败:零上游调用,不空走全超时链
-			if circuitSkipped && last == "" && !otherSkipped {
-				p.writeError(tw, r, protocol.TypeUnavailable, providerCircuitOpenCode,
-					"上游渠道处于健康熔断期,请稍后重试;可为该别名配置多候选实现透明降级")
-				return
-			}
-			// 仅当 oauth 收窄是唯一跳过原因时显式信封:零上游调用,不伪装成供应商不可用
-			if oauthSkipped && last == "" && !otherSkipped {
-				p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
-					"该别名的候选均为 OAuth 订阅渠道,不支持当前入站 lane(仅 chat/messages 可达),请为别名配置非 oauth 候选")
-				return
-			}
-			typ := classToType(last)
-			p.alerts.Emit("all_candidates_failed", "critical",
-				"别名 "+req.Model+" 全部候选失败(最后错误: "+string(last)+")")
-			p.writeError(tw, r, typ, "all_candidates_failed",
-				"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
+			p.finishChatExhausted(lc.tw, lc.r, lc.req, lc.nat, st, sk)
 			return
 		}
-		// 健康熔断收缩:降级渠道整路跳过,先于路径判定与取 key,不计错误类;
-		// 半开相位 Contracted 为 false,放行流量作试探(试探结果经 TrialResult 回填)
-		if p.health != nil && p.health.Contracted(cand.Provider) {
-			circuitSkipped = true
-			p.logger.Warn("provider 健康熔断中,跳过候选",
-				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+		if kind, skip := p.skipChatCandidate(lc.r, lc.topo, lc.nat, cand, lc.midLoop); skip {
+			st.noteSkip(kind)
 			continue
 		}
 		// 每 attempt 直通或翻译路径判定，决策点唯一，chat 入站恒翻译
-		path := decideNativePath(nat, topo.adapters, topo.nativeResps, cand, pluginModified)
-		// oauth lane 收窄(oauth-subscription-lane 契约):仅 chat/messages 入站可达 oauth 渠道,
-		// responses/gemini 入站的 oauth 候选跳过(上游零调用,不计错误类),全跳过时耗尽分支
-		// 显式信封。nat 为空=chat 入站,恒放行。
-		if oauthSkippedLane(r, nat, topo.authModes, cand.Provider) {
-			oauthSkipped = true
-			p.logger.Warn("oauth 渠道不支持当前入站 lane,跳过候选",
-				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
-			continue
-		}
-		// 适配性豁免先于取 key：仅作用于翻译路径，直通候选正常服务工具多轮不豁免；
-		// 不计 EMA 与冷却，多候选别名换道继续
-		if !path.native && bridgeExempted(topo.adapters[cand.Provider], midLoop) {
-			bridgeSkipped = true
-			p.logger.Warn("桥接候选对工具多轮流量适配性豁免,跳过候选",
-				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
-			continue
-		}
-		// 翻译路径维持无状态拒绝：粘性请求落到翻译候选含治理与插件回落时，服务端状态无处安放
-		if nat.sticky() && !path.native {
-			p.writeError(tw, r, protocol.TypeBadRequest, protocol.CodePreviousResponseIDUnsupported,
-				responsesRejectMessage(protocol.CodePreviousResponseIDUnsupported))
+		path := decideNativePath(lc.nat, lc.topo.adapters, lc.topo.nativeResps, cand, lc.pluginModified)
+		if p.rejectBeforeOutbound(lc.tw, lc.r, lc.nat, path, sk) {
 			return
 		}
-		// 惰性拒绝升格：该尝试需要翻译出站而请求不可翻译，出站前升格既有 400 信封
-		if nat != nil && nat.ineligCode != "" && !path.native {
-			if pendingHit {
-				cacheAffinityRequests.Inc("stale") // 升格拒绝未由 stick 成功服务,计数三分不缺口(评审 R3)
-			}
-			p.upgradeIneligible(tw, r, nat)
-			return
-		}
-
-		// 取 key、执行、按 Decide 动作分支、结果回写 key 池
-		pool := topo.pools[cand.Provider]
-		hint := ""
-		if cand.Provider == stickProvider {
-			hint = stickKeyID // 亲和提示:池内同键直取(健康再判在池内,冷却让位语义不变)
-		}
-		key := pool.PickWithHint(hint, time.Now())
+		key := p.pickChatKey(lc.r, lc.topo, cand, sk, st)
 		if key == nil {
-			// 该 provider 全部 key 冷却或禁用：跳过候选，不计错误类
-			otherSkipped = true
-			p.alerts.Emit("keypool_exhausted:"+cand.Provider, "warning",
-				"provider "+cand.Provider+" key 池不可用(全部冷却/禁用)")
-			p.logger.Warn("provider key 池不可用,跳过候选",
-				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
 			continue
 		}
-		m := &meterState{start: time.Now(), status: "ok", priceSnapshot: requestPrices, priceSnapshotTaken: true, budget: requestBudget, budgetPrices: requestPrices}
-		handled, class := p.attempt(tw, r, topo, req, nat, path, cand, key, m)
-		if pool != nil {
+		m := &meterState{
+			start: time.Now(), status: "ok",
+			priceSnapshot: lc.prices, priceSnapshotTaken: true,
+			budget: lc.budget, budgetPrices: lc.prices,
+		}
+		handled, class := p.attempt(lc.tw, lc.r, lc.topo, lc.req, lc.nat, path, cand, key, m)
+		if pool := lc.topo.pools[cand.Provider]; pool != nil {
 			p.reportKeyOutcome(pool, key, class, handled, m)
 		}
 		if class == "" {
-			if p.health != nil {
-				p.health.ProviderTraffic(cand.Provider, false) // 被动失败窗口
-				p.health.TrialResult(cand.Provider, true)      // 半开试探成功即恢复
-			}
-			// 直通成功：responses 入站回写亲和，供粘性路由使用，TTL+LRU 见 affinity.go
-			if nat != nil && nat.proto == protocol.InboundResponses && m.nativeRespID != "" {
-				p.affinity.Put(m.nativeRespID, cand.Provider, apiKeyIDOf(r))
-			}
-			// 会话缓存亲和写侧:缓存读>0(worth 闸门)才建/续粘。无条目 → 首建粘当次服务者;
-			// stick 命中 → 续期;stick 让位转原序服务 → **不改写条目**(保留原 stick,恢复即复粘)。
-			if stickID != "" && m.cacheReadSum() > 0 && (!entryFound || cand.Provider == stickProvider) {
-				p.cacheAffinity.note(stickID, cand.Provider, key.ID, apiKeyIDOf(r))
-			}
-			if stickHit {
-				if cand.Provider == stickProvider {
-					cacheAffinityRequests.Inc("hit")
-				} else {
-					cacheAffinityRequests.Inc("stale") // stick 不可用转原序服务
-				}
-			}
-			p.storePhase(r, cph, req, cand, m, nat)
+			p.finishChatSuccess(lc.r, lc.nat, cand, key, m, sk, cph, lc.req)
 			return
 		}
-		// attempt 已对客户端产出即早退信封或断言出口：请求终结，绝不换道重写
-		if tw.committed {
-			if stickHit && cand.Provider == stickProvider {
-				// 断言出口=stick 键上的真实失败：缓存前提已破，立即清条(spec「失败即清」)
-				p.cacheAffinity.drop(stickID)
-			}
-			if pendingHit {
-				cacheAffinityRequests.Inc("stale")
-			}
-			return
-		}
-		switch failover.Decide(class, m.firstSet, req.Stream) {
-		case failover.ActionNextCandidate:
-			last = class
-			if stickHit && cand.Provider == stickProvider {
-				p.cacheAffinity.drop(stickID) // 换道即清：stick 键上的失败已实证(评审 C1 契约接线)
-			}
-			if p.health != nil {
-				p.health.AliasSwitch(req.Model)               // 换道率分子
-				p.health.ProviderTraffic(cand.Provider, true) // 被动失败窗口
-				p.health.TrialResult(cand.Provider, false)    // 半开试探失败回降
-			}
-			continue
-		case failover.ActionReturn:
-			if stickHit && cand.Provider == stickProvider {
-				p.cacheAffinity.drop(stickID) // 不换道类的上游失败同样实证前提已破
-			}
-			if pendingHit {
-				cacheAffinityRequests.Inc("stale")
-			}
-			if path.native && len(m.upstreamBody) > 0 {
-				// 直通错误透传：不换道类的上游错误信封原样到达客户端，零归一改写
-				p.writeUpstreamPassthrough(tw, m)
-				return
-			}
-			// 不换道直接返回，参数问题换候选也会拒：归一信封携带上游可读 message
-			p.writeError(tw, r, classToType(class), string(class), m.upstreamMsg)
-			return
-		case failover.ActionSilent, failover.ActionAbort:
-			// 静默退出(客户端断连/预算中断)属网关侧策略：premise 未破不清条;
-			// 断言出口已写出不再有输出。亲和计数落 stale(请求未由 stick 成功服务)。
-			if pendingHit {
-				cacheAffinityRequests.Inc("stale")
-			}
+		if p.handleChatFailure(lc, path, cand, class, m, st, sk) {
 			return
 		}
 	}
 }
 
+// rejectBeforeOutbound 出站前拒绝：翻译路径不可用的粘性/失格请求在此终结。
+func (p *Proxy) rejectBeforeOutbound(tw *trackWriter, r *http.Request, nat *inboundNative,
+	path attemptPath, sk *stickState) bool {
+	// 翻译路径维持无状态拒绝：粘性请求落到翻译候选含治理与插件回落时，服务端状态无处安放
+	if nat.sticky() && !path.native {
+		p.writeError(tw, r, protocol.TypeBadRequest, protocol.CodePreviousResponseIDUnsupported,
+			responsesRejectMessage(protocol.CodePreviousResponseIDUnsupported))
+		return true
+	}
+	// 惰性拒绝升格：该尝试需要翻译出站而请求不可翻译，出站前升格既有 400 信封
+	if nat == nil || nat.ineligCode == "" || path.native {
+		return false
+	}
+	// 升格拒绝未由 stick 成功服务,计数三分不缺口(评审 R3)
+	if sk.pending {
+		cacheAffinityRequests.Inc("stale")
+	}
+	p.upgradeIneligible(tw, r, nat)
+	return true
+}
+
+// pickChatKey 取候选 key；池内无可用 key 时登记跳过并告警，返回 nil 交循环继续。
+func (p *Proxy) pickChatKey(r *http.Request, topo *topologySnapshot, cand failover.Candidate,
+	sk *stickState, st *chatLoopState) *keypool.Key {
+	hint := ""
+	if cand.Provider == sk.provider {
+		hint = sk.keyID // 亲和提示:池内同键直取(健康再判在池内,冷却让位语义不变)
+	}
+	pool := topo.pools[cand.Provider]
+	key := pool.PickWithHint(hint, time.Now())
+	if key != nil {
+		return key
+	}
+	// 该 provider 全部 key 冷却或禁用：跳过候选，不计错误类
+	st.otherSkipped = true
+	p.alerts.Emit("keypool_exhausted:"+cand.Provider, "warning",
+		"provider "+cand.Provider+" key 池不可用(全部冷却/禁用)")
+	p.logger.Warn("provider key 池不可用,跳过候选",
+		"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+	return nil
+}
+
+// chatCandidates 路由候选转评估表候选：同 priority 加权随机起点，priority 递增降级。
+func chatCandidates(cands []config.Candidate) []failover.Candidate {
+	fcs := make([]failover.Candidate, len(cands))
+	for i, c := range cands {
+		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}
+	}
+	return fcs
+}
+
+// applyChatPreHooks 入站前置钩子：有状态粘性路由收缩候选域，或执行插件改写并重路由。
+// 直通路径一律旁路插件改写：状态请求上下文在服务端指纹无意义，原始体不得被改写过期。
+func (p *Proxy) applyChatPreHooks(tw *trackWriter, r *http.Request, body []byte, topo *topologySnapshot,
+	nat *inboundNative, req *protocol.ChatRequest,
+	cands []config.Candidate) ([]config.Candidate, *protocol.ChatRequest, bool, bool) {
+	if nat.sticky() {
+		out, sre := p.stickyRoute(r, nat, topo, cands)
+		if sre != nil {
+			p.writeError(tw, r, protocol.TypeBadRequest, sre.code, sre.msg)
+			return nil, req, false, true
+		}
+		return out, req, false, false
+	}
+	if nat != nil && nat.ineligCode != "" {
+		return cands, req, false, false
+	}
+	// 插件请求体钩子单次执行，先于语义缓存检索：脱敏必须发生在缓存键计算之前，
+	// 敏感载荷不得进语义缓存；改写未发生不做重解析，零开销路径
+	if p.plugins == nil {
+		return cands, req, false, false
+	}
+	res, done := p.applyPlugins(tw, r, body)
+	if done {
+		return nil, req, false, true
+	}
+	if len(res.ModifiedBy) == 0 {
+		return cands, req, false, false
+	}
+	ncands, nreq, ok := p.rerouteAfterPlugin(tw, r, topo, res)
+	if !ok {
+		return nil, req, false, true
+	}
+	p.markPluginModified(tw, r, res.ModifiedBy)
+	return ncands, nreq, true, false // 直通回落信号：canonical 已被改写，原始体过期
+}
+
+// rerouteAfterPlugin 插件改写产物重解析与重路由，含最终别名的白名单复核。
+func (p *Proxy) rerouteAfterPlugin(tw *trackWriter, r *http.Request, topo *topologySnapshot,
+	res plugin.ApplyResult) ([]config.Candidate, *protocol.ChatRequest, bool) {
+	nreq, err := protocol.ParseChatRequest(res.Body)
+	if err != nil {
+		p.writeError(tw, r, protocol.TypeBadRequest, "plugin_rejected", "插件改写后的请求体不是合法请求")
+		return nil, nil, false
+	}
+	ncands, ok := topo.routes[nreq.Model]
+	if !ok || len(ncands) == 0 {
+		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+nreq.Model)
+		return nil, nil, false
+	}
+	// key 级模型白名单闸之二：插件改写 model 后以最终出站别名为准再校验
+	if !p.enforceModelAllowlist(tw, r, nreq.Model) {
+		return nil, nil, false
+	}
+	return ncands, nreq, true
+}
+
+// chatCacheLookup 语义缓存命中即回放并终结；未命中返回入库阶段，直通旁路情况为 nil。
+// 直通路径：失格请求无指纹，状态请求上下文在服务端，均旁路检索与入库；
+// 不可回放条目如 canonical 缺失且协议或表单不符按未命中继续，命中是优化，不得阻断请求。
+func (p *Proxy) chatCacheLookup(tw *trackWriter, r *http.Request, nat *inboundNative,
+	req *protocol.ChatRequest) (*cachePhase, bool) {
+	if nat != nil && (nat.ineligCode != "" || nat.sticky()) {
+		return nil, false
+	}
+	hitStart := time.Now()
+	cres, phase := p.lookupCache(r, req)
+	if cres != nil && cacheReplayable(cres, nat, req.Stream) {
+		p.recordCacheHit(r, req, cres, hitStart)
+		p.replayHit(tw, r, cres, nat, req.Stream)
+		return nil, true
+	}
+	if cres == nil {
+		return phase, false
+	}
+	return nil, false
+}
+
+// stickState 会话缓存亲和的一次性解析结果。
+// pending 表示 lookup 命中尚未终判，请求终结时按「stick 成功服务=hit,其余出口=stale」
+// 落定，保证三分计数每请求恰一者。亲和永不新增候选/重试——熔断收缩与池冷却在循环内
+// 既有跳过语义恒优先于提示。
+type stickState struct {
+	id       string
+	provider string
+	keyID    string
+	hit      bool
+	found    bool // 存在亲和条目(命中或过期仍保留)
+	pending  bool
+}
+
+// resolveStick 解析会话缓存亲和(ADR-0020):仅 chat/messages 两条入站 lane 参与(nat 为空
+// 且无 lane 标记 =chat 原生;InboundMessages=翻译后;gemini 经 lane 标记排除——gemini 委托
+// 管道不携带任何身份,不得被误当 chat 参与亲和)。
+func (p *Proxy) resolveStick(r *http.Request, nat *inboundNative, req *protocol.ChatRequest) stickState {
+	var sk stickState
+	affinityLane := (nat == nil && laneFrom(r) == "") || (nat != nil && nat.proto == protocol.InboundMessages)
+	if !affinityLane {
+		return sk
+	}
+	sk.id = sessionStickID(r, apiKeyIDOf(r), req)
+	if sk.id == "" {
+		cacheAffinityRequests.Inc("miss")
+		return sk
+	}
+	sp, skey, status := p.cacheAffinity.lookup(sk.id, apiKeyIDOf(r), time.Now())
+	switch status {
+	case "hit":
+		sk.provider, sk.keyID, sk.hit, sk.found, sk.pending = sp, skey, true, true, true
+	case "stale":
+		cacheAffinityRequests.Inc("stale")
+	default:
+		cacheAffinityRequests.Inc("miss")
+	}
+	return sk
+}
+
+// skipChatCandidate 候选级跳过判定，先于路径判定与取 key，不计错误类。
+func (p *Proxy) skipChatCandidate(r *http.Request, topo *topologySnapshot, nat *inboundNative,
+	cand failover.Candidate, midLoop bool) (skipKind, bool) {
+	// 健康熔断收缩:降级渠道整路跳过;半开相位 Contracted 为 false,放行流量作试探
+	if p.health != nil && p.health.Contracted(cand.Provider) {
+		p.logger.Warn("provider 健康熔断中,跳过候选",
+			"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+		return skipCircuit, true
+	}
+	// oauth lane 收窄(oauth-subscription-lane 契约):仅 chat/messages 入站可达 oauth 渠道,
+	// responses/gemini 入站的 oauth 候选跳过(上游零调用,不计错误类)。nat 为空=chat 入站,恒放行。
+	if oauthSkippedLane(r, nat, topo.authModes, cand.Provider) {
+		p.logger.Warn("oauth 渠道不支持当前入站 lane,跳过候选",
+			"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+		return skipOAuth, true
+	}
+	// 适配性豁免先于取 key：仅作用于翻译路径，直通候选正常服务工具多轮不豁免；
+	// 不计 EMA 与冷却，多候选别名换道继续
+	if !pathIsNative(nat, topo, cand) && bridgeExempted(topo.adapters[cand.Provider], midLoop) {
+		p.logger.Warn("桥接候选对工具多轮流量适配性豁免,跳过候选",
+			"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
+		return skipBridge, true
+	}
+	return 0, false
+}
+
+// pathIsNative 判定候选是否走直通路径；跳过判定先于插件改写，故按未改写形态评估。
+func pathIsNative(nat *inboundNative, topo *topologySnapshot, cand failover.Candidate) bool {
+	return decideNativePath(nat, topo.adapters, topo.nativeResps, cand, false).native
+}
+
+// skipKind 跳过原因，耗尽分支据此在「唯一跳过原因」时给出具体信封。
+type skipKind int
+
+const (
+	skipCircuit skipKind = iota // 健康熔断收缩
+	skipOAuth                   // oauth lane 收窄
+	skipBridge                  // 桥接适配性豁免
+)
+
+// noteSkip 登记跳过因由。
+func (st *chatLoopState) noteSkip(k skipKind) {
+	switch k {
+	case skipCircuit:
+		st.circuitSkipped = true
+	case skipOAuth:
+		st.oauthSkipped = true
+	case skipBridge:
+		st.bridgeSkipped = true
+	}
+}
+
+// chatLoopState 候选循环的跨轮状态。
+type chatLoopState struct {
+	last           failover.ErrorClass
+	bridgeSkipped  bool // 桥接适配性豁免跳过
+	otherSkipped   bool // 非桥接原因的候选跳过，如 key 池全冷却
+	circuitSkipped bool // 健康熔断收缩的候选跳过;唯一跳过原因时快速失败
+	oauthSkipped   bool // oauth lane 收窄跳过;唯一跳过原因时显式信封
+}
+
+// finishChatExhausted 候选耗尽出口：单因若为唯一跳过原因则给具体提示，否则统一 all_candidates_failed。
+// 能走到耗尽说明每个候选都未对客户端产出，即 decide 为 next_candidate，信封可安全写出。
+func (p *Proxy) finishChatExhausted(tw *trackWriter, r *http.Request, req *protocol.ChatRequest,
+	nat *inboundNative, st *chatLoopState, sk *stickState) {
+	if tw.committed {
+		return
+	}
+	noteStaleIfPending(sk) // hit 已判定但请求未由 stick 成功服务
+	unique := st.last == "" && !st.otherSkipped
+	// 仅当桥接豁免是唯一的跳过原因时，返回具体提示。
+	if st.bridgeSkipped && unique {
+		p.writeError(tw, r, protocol.TypeBadRequest, bridgeToolUnsupportedCode,
+			"Anthropic 桥接暂不支持工具多轮对话(role=tool / tool_calls),请改用原生兼容上游或去除工具上下文")
+		return
+	}
+	// 仅当健康收缩是唯一跳过原因时快速失败:零上游调用,不空走全超时链
+	if st.circuitSkipped && unique {
+		p.writeError(tw, r, protocol.TypeUnavailable, providerCircuitOpenCode,
+			"上游渠道处于健康熔断期,请稍后重试;可为该别名配置多候选实现透明降级")
+		return
+	}
+	// 仅当 oauth 收窄是唯一跳过原因时显式信封:零上游调用,不伪装成供应商不可用
+	if st.oauthSkipped && unique {
+		p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
+			"该别名的候选均为 OAuth 订阅渠道,不支持当前入站 lane(仅 chat/messages 可达),请为别名配置非 oauth 候选")
+		return
+	}
+	p.alerts.Emit("all_candidates_failed", "critical",
+		"别名 "+req.Model+" 全部候选失败(最后错误: "+string(st.last)+")")
+	p.writeError(tw, r, classToType(st.last), "all_candidates_failed",
+		"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(st.last)+")")
+}
+
+// finishChatSuccess 成功出口：健康回填、直通亲和回写、会话缓存亲和写侧与缓存入库。
+func (p *Proxy) finishChatSuccess(r *http.Request, nat *inboundNative, cand failover.Candidate,
+	key *keypool.Key, m *meterState, sk *stickState, cph *cachePhase, req *protocol.ChatRequest) {
+	if p.health != nil {
+		p.health.ProviderTraffic(cand.Provider, false) // 被动失败窗口
+		p.health.TrialResult(cand.Provider, true)      // 半开试探成功即恢复
+	}
+	p.putNativeAffinity(r, nat, cand, m)
+	// 会话缓存亲和写侧:缓存读>0(worth 闸门)才建/续粘。无条目 → 首建粘当次服务者;
+	// stick 命中 → 续期;stick 让位转原序服务 → **不改写条目**(保留原 stick,恢复即复粘)。
+	if sk.id != "" && m.cacheReadSum() > 0 && (!sk.found || cand.Provider == sk.provider) {
+		p.cacheAffinity.note(sk.id, cand.Provider, key.ID, apiKeyIDOf(r))
+	}
+	if sk.hit && cand.Provider == sk.provider {
+		cacheAffinityRequests.Inc("hit")
+	} else if sk.hit {
+		cacheAffinityRequests.Inc("stale") // stick 不可用转原序服务
+	}
+	p.storePhase(r, cph, req, cand, m, nat)
+}
+
+// handleChatFailure 失败出口分派：返回 true 表示请求已终结，false 表示换道继续。
+func (p *Proxy) handleChatFailure(lc *chatLoopCtrl, path attemptPath, cand failover.Candidate,
+	class failover.ErrorClass, m *meterState,
+	st *chatLoopState, sk *stickState) bool {
+	// attempt 已对客户端产出即早退信封或断言出口：请求终结，绝不换道重写
+	if lc.tw.committed {
+		p.noteCommittedFailure(cand, sk)
+		return true
+	}
+	switch failover.Decide(class, m.firstSet, lc.req.Stream) {
+	case failover.ActionNextCandidate:
+		st.nextCandidate(p, lc.req, cand, class, sk)
+		return false
+	case failover.ActionReturn:
+		p.returnChat(lc.tw, lc.r, path, cand, class, m, sk)
+	default:
+		// 静默退出(客户端断连/预算中断)属网关侧策略：premise 未破不清条;
+		// 断言出口已写出不再有输出。亲和计数落 stale(请求未由 stick 成功服务)。
+		noteStaleIfPending(sk)
+	}
+	return true
+}
+
+// putNativeAffinity 直通成功：responses 入站回写亲和，供粘性路由使用，TTL+LRU 见 affinity.go。
+func (p *Proxy) putNativeAffinity(r *http.Request, nat *inboundNative, cand failover.Candidate, m *meterState) {
+	if nat != nil && nat.proto == protocol.InboundResponses && m.nativeRespID != "" {
+		p.affinity.Put(m.nativeRespID, cand.Provider, apiKeyIDOf(r))
+	}
+}
+
+// noteStaleIfPending 请求未由 stick 成功服务即落 stale，保证三分计数每请求恰一者。
+func noteStaleIfPending(sk *stickState) {
+	if sk.pending {
+		cacheAffinityRequests.Inc("stale")
+	}
+}
+
+// noteCommittedFailure 已提交出口：stick 键上的真实失败清条，亲和计数落 stale。
+func (p *Proxy) noteCommittedFailure(cand failover.Candidate, sk *stickState) {
+	p.dropStickOnFailure(cand, sk)
+	noteStaleIfPending(sk)
+}
+
+// dropStickOnFailure stick 键上的真实失败即缓存前提已破，立即清条(spec「失败即清」)。
+func (p *Proxy) dropStickOnFailure(cand failover.Candidate, sk *stickState) {
+	if sk.hit && cand.Provider == sk.provider {
+		p.cacheAffinity.drop(sk.id)
+	}
+}
+
+// nextCandidate 换道出口：记录最后错误，实证 stick 键失败，回填健康换道统计。
+func (st *chatLoopState) nextCandidate(p *Proxy, req *protocol.ChatRequest, cand failover.Candidate,
+	class failover.ErrorClass, sk *stickState) {
+	st.last = class
+	p.dropStickOnFailure(cand, sk) // 换道即清：stick 键上的失败已实证(评审 C1 契约接线)
+	if p.health != nil {
+		p.health.AliasSwitch(req.Model)               // 换道率分子
+		p.health.ProviderTraffic(cand.Provider, true) // 被动失败窗口
+		p.health.TrialResult(cand.Provider, false)    // 半开试探失败回降
+	}
+}
+
+// returnChat 不换道终结出口：直通错误原样透传，翻译路径归一信封携带上游可读 message。
+func (p *Proxy) returnChat(tw *trackWriter, r *http.Request, path attemptPath, cand failover.Candidate,
+	class failover.ErrorClass, m *meterState, sk *stickState) {
+	p.dropStickOnFailure(cand, sk) // 不换道类的上游失败同样实证前提已破
+	noteStaleIfPending(sk)
+	if path.native && len(m.upstreamBody) > 0 {
+		// 直通错误透传：不换道类的上游错误信封原样到达客户端，零归一改写
+		p.writeUpstreamPassthrough(tw, m)
+		return
+	}
+	// 不换道直接返回，参数问题换候选也会拒：归一信封携带上游可读 message
+	p.writeError(tw, r, classToType(class), string(class), m.upstreamMsg)
+}
+
 // govern 按目标候选解析能力约束并执行治理，目录未声明时原件零干预返回。
 // s 由调用方传入，与适配器取自同一快照，治理与出站构造不跨快照错位。
-func (p *Proxy) govern(s *topologySnapshot, req *protocol.ChatRequest, cand failover.Candidate) (*protocol.ChatRequest, []governChange, string) {
+func (p *Proxy) govern(s *topologySnapshot, req *protocol.ChatRequest,
+	cand failover.Candidate) (*protocol.ChatRequest, []governChange, string) {
 	capability, ok := s.caps[governKey{cand.Provider, cand.Model}]
 	if !ok {
 		return req, nil, ""
@@ -651,7 +839,9 @@ func (p *Proxy) traceGovern(w http.ResponseWriter, r *http.Request, cand failove
 // 成功、失败、断连三态都记，defer 保证任何出口都落账。
 // snap 由调用方传入，即请求入口加载的同一快照，路径判定与执行取自同一视图，
 // 在途请求持入口快照完成，attempt 内不得二次 Load 混用新旧。
-func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySnapshot, req *protocol.ChatRequest, nat *inboundNative, path attemptPath, cand failover.Candidate, key *keypool.Key, m *meterState) (handled bool, class failover.ErrorClass) {
+func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySnapshot,
+	req *protocol.ChatRequest, nat *inboundNative, path attemptPath, cand failover.Candidate,
+	key *keypool.Key, m *meterState) (handled bool, class failover.ErrorClass) {
 	ad, ok := snap.adapters[cand.Provider]
 	if !ok {
 		// 拓扑快照保证 provider 已装配，防御性兜底
@@ -661,34 +851,66 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
 	}
 	// 出站 client 按渠道解析：声明代理渠道走独立 client（对 env 免疫），其余默认（见 clientFor）
 	upstream := p.clientFor(snap, cand.Provider)
-	// 请求级成本预算装填：每 attempt 从 canonical 估算输入，价目按别名解析且跨候选同价；
-	// 失格请求 canonical 不可得估算为 0，usage 真值路径仍生效
-	if info := auth.KeyFrom(r.Context()); info != nil && info.MaxRequestCostCredits > 0 {
-		m.budget = info.MaxRequestCostCredits
-		m.budgetModel = req.Model
+	p.fillBudgetEstimate(r, req, nat, m)
 
-		if nat == nil || nat.ineligCode == "" {
-			inputText, _ := json.Marshal(req.Messages)
-			m.budgetEstIn = estimateInputTokens(string(inputText), req.Model)
-		}
+	prep := p.prepareAttempt(w, r, snap, req, nat, &path, cand, m)
+	if prep.done() {
+		return true, prep.class
 	}
-	// 请求参数治理：每次 attempt 从原始请求出发按目标 (provider, model) 重新治理，
-	// 换道后不得沿用上一目标的收敛结果，strict 命中即 400 终结。
-	// 直通 attempt 以原始体评估治理，翻译器静默丢弃的参数不在 canonical，只评 canonical 会漏；
-	// 失格请求 raw 同样可评，声明约束经干预回落翻译，由升格拒绝兜底，语义一致。
-	// 翻译路径治理消费 canonical：失格请求 canonical 不可得，治理不可评估，直通免治。
-	var greq *protocol.ChatRequest
-	var gchanges []governChange
+	p.traceGovern(w, r, cand, prep.changes)
+	setWriterNativeMode(w, path.native) // writer 模式位：首字节提交前唯一切换点
+
+	if path.native {
+		return p.execNativeAttempt(w, r, upstream, ad, path, key, m, nat, cand)
+	}
+	return p.execTranslateAttempt(w, r, upstream, ad, req, prep.req, key, m, cand)
+}
+
+// attemptPrep 治理阶段结论：done 表示已在治理阶段终结，req 为翻译路径消费的 canonical。
+type attemptPrep struct {
+	req     *protocol.ChatRequest
+	changes []governChange
+	class   failover.ErrorClass // 非空即治理阶段终结
+}
+
+// done 治理阶段是否已对客户端写出终结信封。
+func (a attemptPrep) done() bool { return a.class != "" }
+
+// fillBudgetEstimate 请求级成本预算装填：每 attempt 从 canonical 估算输入，价目按别名解析且
+// 跨候选同价；失格请求 canonical 不可得估算为 0，usage 真值路径仍生效。
+func (p *Proxy) fillBudgetEstimate(r *http.Request, req *protocol.ChatRequest, nat *inboundNative, m *meterState) {
+	info := auth.KeyFrom(r.Context())
+	if info == nil || info.MaxRequestCostCredits <= 0 {
+		return
+	}
+	m.budget = info.MaxRequestCostCredits
+	m.budgetModel = req.Model
+	if nat == nil || nat.ineligCode == "" {
+		inputText, _ := json.Marshal(req.Messages)
+		m.budgetEstIn = estimateInputTokens(string(inputText), req.Model)
+	}
+}
+
+// prepareAttempt 请求参数治理：每次 attempt 从原始请求出发按目标 (provider, model) 重新治理，
+// 换道后不得沿用上一目标的收敛结果，strict 命中即 400 终结。
+// 直通 attempt 以原始体评估治理，翻译器静默丢弃的参数不在 canonical，只评 canonical 会漏；
+// 失格请求 raw 同样可评，声明约束经干预回落翻译，由升格拒绝兜底，语义一致。
+// 翻译路径治理消费 canonical：失格请求 canonical 不可得，治理不可评估，直通免治。
+// 治理干预可把直通降级为翻译路径，故 path 经指针就地改写。
+func (p *Proxy) prepareAttempt(w http.ResponseWriter, r *http.Request, snap *topologySnapshot,
+	req *protocol.ChatRequest, nat *inboundNative, path *attemptPath, cand failover.Candidate,
+	m *meterState) attemptPrep {
+	var out attemptPrep
 	var greject string
 	if path.native {
 		if capability, ok := snap.caps[governKey{cand.Provider, cand.Model}]; ok {
-			_, gchanges, greject = governChat(&protocol.ChatRequest{Raw: nat.raw}, capability, p.strictGov)
-			if len(gchanges) > 0 {
+			_, out.changes, greject = governChat(&protocol.ChatRequest{Raw: nat.raw}, capability, p.strictGov)
+			if len(out.changes) > 0 {
 				path.native = false
 				path.fallback = "governance_intervened"
 				p.logger.Info("直通回落翻译路径(治理干预)",
 					"request_id", loggingRequestID(r.Context()),
-					"provider", cand.Provider, "model", cand.Model, "changes", len(gchanges))
+					"provider", cand.Provider, "model", cand.Model, "changes", len(out.changes))
 			}
 		}
 	}
@@ -697,32 +919,40 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
 		// canonical 不可得翻译本就不可服务，param 冲突相对失格是次要原因
 		if !path.native || greject != "" {
 			p.upgradeIneligible(w, r, nat)
-			return true, failover.ClassBadRequest
+			out.class = failover.ClassBadRequest
 		}
-	} else {
-		if !path.native {
-			greq, gchanges, greject = p.govern(snap, req, cand)
-		}
-		if greject != "" {
-			p.writeError(w, r, protocol.TypeBadRequest, "param_rejected", greject)
-			return true, failover.ClassBadRequest
-		}
+		return out
 	}
-	p.traceGovern(w, r, cand, gchanges)
-	setWriterNativeMode(w, path.native) // writer 模式位：首字节提交前唯一切换点
-
-	if path.native {
-		out, err := path.preparer.PrepareNative(&protocol.NativeRequest{Proto: nat.proto, Raw: nat.raw}, cand.Model, key.Value)
-		if err != nil {
-			p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "出站请求构造失败")
-			return true, failover.ClassBadRequest
-		}
-		if nat.stream {
-			return p.attemptNativeStream(w, r, upstream, ad, path.preparer, out, m, nat, cand)
-		}
-		return p.attemptNativeNonStream(w, r, upstream, ad, path.preparer, out, m, nat, cand)
+	if !path.native {
+		out.req, out.changes, greject = p.govern(snap, req, cand)
 	}
+	if greject != "" {
+		p.writeError(w, r, protocol.TypeBadRequest, "param_rejected", greject)
+		out.class = failover.ClassBadRequest
+		return out
+	}
+	return out
+}
 
+// execNativeAttempt 直通路径出站构造与分发：原始体加鉴权注入，流式与否各走专路径。
+func (p *Proxy) execNativeAttempt(w http.ResponseWriter, r *http.Request, upstream *http.Client,
+	ad adapter.Adapter, path attemptPath, key *keypool.Key, m *meterState, nat *inboundNative,
+	cand failover.Candidate) (bool, failover.ErrorClass) {
+	out, err := path.preparer.PrepareNative(&protocol.NativeRequest{Proto: nat.proto, Raw: nat.raw}, cand.Model, key.Value)
+	if err != nil {
+		p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "出站请求构造失败")
+		return true, failover.ClassBadRequest
+	}
+	if nat.stream {
+		return p.attemptNativeStream(w, r, upstream, ad, path.preparer, out, m, nat, cand)
+	}
+	return p.attemptNativeNonStream(w, r, upstream, ad, path.preparer, out, m, nat, cand)
+}
+
+// execTranslateAttempt 翻译路径出站构造与分发：计量落账 defer 覆盖任何出口。
+func (p *Proxy) execTranslateAttempt(w http.ResponseWriter, r *http.Request, upstream *http.Client,
+	ad adapter.Adapter, req, greq *protocol.ChatRequest, key *keypool.Key, m *meterState,
+	cand failover.Candidate) (bool, failover.ErrorClass) {
 	out, err := ad.Prepare(greq, cand.Model, key.Value)
 	if err != nil {
 		p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "出站请求构造失败")
@@ -748,7 +978,8 @@ func (p *Proxy) attempt(w http.ResponseWriter, r *http.Request, snap *topologySn
 
 // outboundRequest 组装上游请求，是 context 链断连传导的必经环节。
 func (p *Proxy) outboundRequest(r *http.Request, opCtx context.Context, out *adapter.Outbound) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(opCtx, http.MethodPost, out.URL, strings.NewReader(string(out.Body)))
+	req, err := http.NewRequestWithContext(opCtx, http.MethodPost, out.URL, //nolint:gosec // URL 由适配器按渠道 base_url 构造
+		strings.NewReader(string(out.Body)))
 	if err != nil {
 		return nil, err
 	}

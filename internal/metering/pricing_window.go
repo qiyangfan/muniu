@@ -22,29 +22,18 @@ const MaxScaleBp = maxScaleBp
 // ParseMultiplier 人类可读倍率 → 基点，"0.5" 表半价。最多 4 位小数即基点精度，
 // 取值 (0, 10]；逐位十进制解析，不经 float，与 ParsePrice 同纪律，哨兵同为 ErrInvalidPrice。
 func ParseMultiplier(human string) (int64, error) {
-	intPart, fracPart, ok := strings.Cut(human, ".")
-	if !ok {
-		fracPart = ""
-	}
-	if intPart == "" || (fracPart == "" && ok) {
-		return 0, ErrInvalidPrice // "0.5." / ".5" 拒绝，与 ParsePrice 同形态纪律。
-	}
-	if !isDigits(intPart) || !isDigits(fracPart) {
-		return 0, ErrInvalidPrice
-	}
-	if len(fracPart) > 4 {
+	// "0.5." / ".5" 拒绝，与 ParsePrice 同形态纪律。
+	intPart, fracPart, ok := splitDecimal(human)
+	if !ok || !isDigits(intPart) || !isDigits(fracPart) || len(fracPart) > 4 {
 		return 0, ErrInvalidPrice
 	}
 	intVal, err := strconv.ParseInt(intPart, 10, 64)
 	if err != nil {
 		return 0, ErrInvalidPrice
 	}
-	fracVal := int64(0)
-	if fracPart != "" {
-		fracVal, err = strconv.ParseInt(fracPart+strings.Repeat("0", 4-len(fracPart)), 10, 64)
-		if err != nil {
-			return 0, ErrInvalidPrice
-		}
+	fracVal, err := parseScaledFraction(fracPart, 4)
+	if err != nil {
+		return 0, err
 	}
 	// 乘法溢出防护：整数部分超上限直接拒，否则回绕可把非法输入洗成合法倍率。
 	if intVal > maxScaleBp/scaleDenom {
@@ -97,10 +86,18 @@ func parseClockMinutes(s string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if h < 0 || h > 24 || m < 0 || m > 59 || (h == 24 && m != 0) {
-		return 0, fmt.Errorf("metering: 时刻越界 %q", s)
+	if err := checkClockBounds(h, m, s); err != nil {
+		return 0, err
 	}
 	return h*60 + m, nil
+}
+
+// checkClockBounds 校验时刻在 [00:00, 24:00] 内且 24 点只允许整点。
+func checkClockBounds(h, m int, s string) error {
+	if h < 0 || h > 24 || m < 0 || m > 59 || (h == 24 && m != 0) {
+		return fmt.Errorf("metering: 时刻越界 %q", s)
+	}
+	return nil
 }
 
 // ParseZoneOffset 固定偏移时区："UTC" 或 "+08:00"/"-05:30" 形态。
@@ -109,30 +106,44 @@ func ParseZoneOffset(s string) (*time.Location, error) {
 	if s == "UTC" {
 		return time.UTC, nil
 	}
-	sign := ""
-	rest := ""
-	switch {
-	case strings.HasPrefix(s, "+"):
-		sign, rest = "+", s[1:]
-	case strings.HasPrefix(s, "-"):
-		sign, rest = "-", s[1:]
-	default:
-		return nil, fmt.Errorf("metering: 非法时区 %q(须为 UTC 或 ±HH:MM 固定偏移)", s)
+	sign, rest, err := splitZoneSign(s)
+	if err != nil {
+		return nil, err
 	}
-	hs, ms, ok := strings.Cut(rest, ":")
-	if !ok {
-		return nil, fmt.Errorf("metering: 非法时区 %q(须为 ±HH:MM)", s)
+	off, err := parseZoneMinutes(s, rest)
+	if err != nil {
+		return nil, err
 	}
-	h, err1 := strconv.Atoi(hs)
-	m, err2 := strconv.Atoi(ms)
-	if err1 != nil || err2 != nil || len(hs) != 2 || len(ms) != 2 || h > 23 || m > 59 {
-		return nil, fmt.Errorf("metering: 非法时区 %q", s)
-	}
-	off := h*3600 + m*60
 	if sign == "-" {
 		off = -off
 	}
 	return time.FixedZone(s, off), nil
+}
+
+// splitZoneSign 剥离时区串首位的 "+"/"-" 符号并返回余下部分。
+func splitZoneSign(s string) (sign, rest string, err error) {
+	switch {
+	case strings.HasPrefix(s, "+"):
+		return "+", s[1:], nil
+	case strings.HasPrefix(s, "-"):
+		return "-", s[1:], nil
+	default:
+		return "", "", fmt.Errorf("metering: 非法时区 %q(须为 UTC 或 ±HH:MM 固定偏移)", s)
+	}
+}
+
+// parseZoneMinutes 解析 "HH:MM" 为无符号秒偏移；两位定宽，越界与非法形态同报错。
+func parseZoneMinutes(s, rest string) (int, error) {
+	hs, ms, ok := strings.Cut(rest, ":")
+	if !ok {
+		return 0, fmt.Errorf("metering: 非法时区 %q(须为 ±HH:MM)", s)
+	}
+	h, err1 := strconv.Atoi(hs)
+	m, err2 := strconv.Atoi(ms)
+	if err1 != nil || err2 != nil || len(hs) != 2 || len(ms) != 2 || h > 23 || m > 59 {
+		return 0, fmt.Errorf("metering: 非法时区 %q", s)
+	}
+	return h*3600 + m*60, nil
 }
 
 // ScalePrice 倍率缩放：ceil(credits × bp / 1e4)，向上取整保守计价，窗口价永不低估；

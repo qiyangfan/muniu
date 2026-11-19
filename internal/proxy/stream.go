@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -32,7 +31,8 @@ type eventResult struct {
 // attemptStream 单候选流式执行。首个内容帧前对客户端零输出，首 token 前失败可安全换道重放；
 // 首个内容帧即开闸：写响应头并缓冲事件，此后失败走断言出口，即流内错误帧加 [DONE]。
 // 计量包括 usage 帧抽取、delta 文本累计作估算 fallback、首 token 延迟。
-func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, upstream *http.Client, ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
+func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, upstream *http.Client,
+	ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
 	m.stream, m.normalize = true, ad.NormalizeUsage
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
@@ -56,27 +56,59 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, upstream *
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		// 上游拒绝即流未开始：就地读错误体归类，交候选循环统一出口；
-		// 不重发第二次请求，429 场景会双重计数上游限流器，计量 stream 列保持客户端意图
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
-		class := ad.Classify(resp.StatusCode, b)
-
-		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
-		m.status, m.class = "error", class
-		if class == failover.ClassRateLimited {
-			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
-		}
-		m.upstreamMsg = upstreamMessage(b, "上游供应商返回错误")
-		p.logger.Warn("上游非 2xx",
-			"request_id", loggingRequestID(r.Context()),
-			"status", resp.StatusCode,
-			"error_detail", truncateForLog(b),
-		)
-		return true, class
+		return p.streamRejected(w, r, ad, m, resp)
 	}
 
-	// 读帧 goroutine：阻塞读交给它，主 select 才能同时盯超时与断连
-	br := bufio.NewReaderSize(resp.Body, sseBufSize)
+	evCh := startEventReader(resp.Body, opCtx)
+
+	// 每流测序优先，实现 adapter.StreamSequencer 者启用；gemini 等无序号 wire 需要跨帧工具调用计数，
+	// 未实现者维持无状态 StreamEvent 既有行为。
+	streamEvent := ad.StreamEvent
+	if sq, ok := ad.(adapter.StreamSequencer); ok {
+		streamEvent = sq.NewStreamSequencer()
+	}
+
+	frame := &streamFrame{tok: &firstTokGate{gateOpen: false, firstTokFired: &firstTokFired, firstTok: firstTok,
+		chunkIdle: p.timeouts.ChunkIdle}}
+	for {
+		select {
+		case <-r.Context().Done():
+			return p.streamClientGone(opCancel, m, frame.tok)
+		case <-frame.tok.idleC:
+			return p.streamIdleAbort(opCancel, w, r, m)
+		case res, ok := <-evCh:
+			done, handled, class := p.streamStep(w, r, ad, streamEvent, m, frame, res, ok, opCancel)
+			if done {
+				return handled, class
+			}
+		}
+	}
+}
+
+// streamRejected 上游非 2xx：流未开始即就地读错误体归类，交候选循环统一出口；
+// 不重发第二次请求，429 场景会双重计数上游限流器，计量 stream 列保持客户端意图。
+func (p *Proxy) streamRejected(w http.ResponseWriter, r *http.Request, ad adapter.Adapter,
+	m *meterState, resp *http.Response) (bool, failover.ErrorClass) {
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
+	class := ad.Classify(resp.StatusCode, b)
+
+	m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
+	m.status, m.class = "error", class
+	if class == failover.ClassRateLimited {
+		m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+	}
+	m.upstreamMsg = upstreamMessage(b, "上游供应商返回错误")
+	p.logger.Warn("上游非 2xx",
+		"request_id", loggingRequestID(r.Context()),
+		"status", resp.StatusCode,
+		"error_detail", truncateForLog(b),
+	)
+	return true, class
+}
+
+// startEventReader 读帧 goroutine：阻塞读交给它，主 select 才能同时盯超时与断连。
+func startEventReader(body io.Reader, opCtx context.Context) <-chan eventResult {
+	br := bufio.NewReaderSize(body, sseBufSize)
 	evCh := make(chan eventResult, 8)
 	go func() {
 		// close 与投递对 opCtx 取消竞态的兜底：即使最后一个错误被 Done 分支吞掉，
@@ -94,190 +126,230 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, upstream *
 			}
 		}
 	}()
+	return evCh
+}
 
-	// 每流测序优先，实现 adapter.StreamSequencer 者启用；gemini 等无序号 wire 需要跨帧工具调用计数，
-	// 未实现者维持无状态 StreamEvent 既有行为。
-	streamEvent := ad.StreamEvent
-	if sq, ok := ad.(adapter.StreamSequencer); ok {
-		streamEvent = sq.NewStreamSequencer()
+// firstTokGate 首 token 开闸状态：开闸前对客户端零输出，失败可安全换道重放；
+// 开闸后失败走断言出口。idle 计时器仅在开闸后才存在。
+type firstTokGate struct {
+	gateOpen      bool   // 是否已过首 token，已向客户端开闸输出
+	pending       []byte // 开闸前缓冲的完整事件，半帧绝不进入
+	idleC         <-chan time.Time
+	idleT         *time.Timer
+	firstTokFired *atomic.Bool
+	firstTok      *time.Timer
+	chunkIdle     time.Duration
+}
+
+// open 首 token：停 first_token，启 chunk_idle，开闸放行缓冲。
+func (g *firstTokGate) open(p *Proxy, w http.ResponseWriter, m *meterState) {
+	g.gateOpen = true
+	m.markFirstToken()
+	g.firstTok.Stop()
+	p.openGate(w)
+	p.writeEvents(w, g.pending)
+	g.pending = nil
+	g.idleT = time.NewTimer(g.chunkIdle)
+	g.idleC = g.idleT.C
+}
+
+// reset 开闸后逐帧重置帧间计时。
+func (g *firstTokGate) reset() { g.idleT.Reset(g.chunkIdle) }
+
+// streamFrame 单流的帧门与计时状态。
+type streamFrame struct {
+	tok *firstTokGate
+}
+
+// streamStep 处理单个读帧事件；done=false 表示继续 select 下一事件。
+func (p *Proxy) streamStep(w http.ResponseWriter, r *http.Request, ad adapter.Adapter,
+	streamEvent func([]byte) ([]byte, adapter.EventMeta, error), m *meterState, frame *streamFrame,
+	res eventResult, ok bool, opCancel context.CancelFunc) (done, handled bool, class failover.ErrorClass) {
+	if !ok {
+		handled, class := p.streamReaderClosed(r, m, frame.tok, opCancel)
+		return true, handled, class
 	}
+	if res.err != nil {
+		handled, class := p.streamReadErr(w, r, ad, m, frame.tok, res.err, opCancel)
+		return true, handled, class
+	}
+	return p.streamFrame(w, r, ad, m, frame, streamEvent, res, opCancel)
+}
 
-	var (
-		pending  []byte // 开闸前缓冲的完整事件，半帧绝不进入
-		gateOpen bool   // 是否已过首 token，已向客户端开闸输出
-		idleC    <-chan time.Time
-		idleT    *time.Timer
-	)
-	for {
-		select {
-		case <-r.Context().Done():
-			// 客户端断连：cancel 沿 context 传导至上游，静默退出，不换道不计失败；
-			// 已过首 token 的部分内容按估算计量，判定表口径为计量已发生部分
-			opCancel()
-			m.status = "client_cancel"
-			if gateOpen {
-				m.est = true
-			}
-			return true, failover.ClassContextCanceled
+// streamClientGone 客户端断连：cancel 沿 context 传导至上游，静默退出，不换道不计失败；
+// 已过首 token 的部分内容按估算计量，判定表口径为计量已发生部分。
+func (p *Proxy) streamClientGone(opCancel context.CancelFunc, m *meterState,
+	g *firstTokGate) (bool, failover.ErrorClass) {
+	opCancel()
+	m.status = "client_cancel"
+	if g.gateOpen {
+		m.est = true
+	}
+	return true, failover.ClassContextCanceled
+}
 
-		case <-idleC:
-			// 帧间超时即上游僵死，已过首 token 走断言出口，已转发部分按估算
-			opCancel()
-			m.status, m.class = "error", failover.ClassMidStreamFail
-			m.est = true
-			p.writeStreamAbort(w, r, "mid_stream_fail")
-			return true, failover.ClassMidStreamFail
+// streamIdleAbort 帧间超时即上游僵死，已过首 token 走断言出口，已转发部分按估算。
+func (p *Proxy) streamIdleAbort(opCancel context.CancelFunc, w http.ResponseWriter, r *http.Request,
+	m *meterState) (bool, failover.ErrorClass) {
+	opCancel()
+	m.status, m.class = "error", failover.ClassMidStreamFail
+	m.est = true
+	p.writeStreamAbort(w, r, "mid_stream_fail")
+	return true, failover.ClassMidStreamFail
+}
 
-		case res, ok := <-evCh:
-			if !ok {
-				// 读者退出且最终状态被取消竞态吞掉：按取消原因归类
-				opCancel()
-				if r.Context().Err() != nil {
-					m.status = "client_cancel"
-					if gateOpen {
-						m.est = true
-					}
-					return true, failover.ClassContextCanceled
-				}
-				if firstTokFired.Load() {
-					m.status, m.class = "error", failover.ClassTimeoutFirst
-					return false, failover.ClassTimeoutFirst
-				}
-				m.status, m.class = "error", failover.ClassMidStreamFail
-				return true, failover.ClassMidStreamFail
-			}
-			if res.err != nil {
-				opCancel()
-				if r.Context().Err() != nil {
-					// 客户端断连的常见时序之一：cancel 使在途读报错，错误事件先于 Done 分支抵达
-					m.status = "client_cancel"
-					if gateOpen {
-						m.est = true
-					}
-					return true, failover.ClassContextCanceled
-				}
-				// 无终止标记协议如 gemini 实现 StreamCloseDone：干净关流即正常收尾，等价 IsDone；
-				// 未实现者维持断流按 mid_stream_fail 处理的既有契约。
-				if errors.Is(res.err, io.EOF) && gateOpen {
-					if scd, ok := ad.(adapter.StreamCloseDone); ok && scd.StreamCloseIsDone() {
-						m.markFirstToken()
-						if len(m.usageFrames) == 0 {
-							m.est = true
-						}
-						if fz, ok := w.(streamFinalizer); ok {
-							fz.finishClean() // 翻译 wrapper 合成协议终态，如 Gemini 终帧或 message_delta+stop
-						} else {
-							// 裸 chat writer 补 [DONE] 干净收尾，上游无终止标记时契约由网关兑现
-							_, _ = w.Write([]byte("data: [DONE]\n\n"))
-							flush(w)
-						}
-						return true, ""
-					}
-				}
-				if !gateOpen {
-					if firstTokFired.Load() {
-						m.status, m.class = "error", failover.ClassTimeoutFirst
-						return false, failover.ClassTimeoutFirst // 首 token 超时，零输出，可换道
-					}
-					m.status, m.class = "error", failover.ClassMidStreamFail
-					return false, failover.ClassMidStreamFail // 上游断流未过首 token，可换道
-				}
-				// 已过首 token 走断言出口：客户端已收到部分内容，如实断言并计量已发生部分
-				m.status, m.class = "error", failover.ClassMidStreamFail
-				m.est = true
-				p.writeStreamAbort(w, r, "mid_stream_fail")
-				return true, failover.ClassMidStreamFail
-			}
+// streamTimeoutFirst 首 token 超时：零输出或未开闸，可换道。
+func (m *meterState) streamTimeoutFirst() (bool, failover.ErrorClass) {
+	m.status, m.class = "error", failover.ClassTimeoutFirst
+	return false, failover.ClassTimeoutFirst
+}
 
-			passthrough, meta, perr := streamEvent([]byte(res.payload))
-			if perr != nil {
-				opCancel()
-				p.logger.Warn("上游 SSE 帧解析失败", "request_id", loggingRequestID(r.Context()), "error_detail", perr.Error())
-				if !gateOpen {
-					m.status, m.class = "error", failover.ClassMidStreamFail
-					return false, failover.ClassMidStreamFail
-				}
-				m.status, m.class = "error", failover.ClassMidStreamFail
-				p.writeStreamAbort(w, r, "mid_stream_fail")
-				return true, failover.ClassMidStreamFail
-			}
-			// 计量消费统一走适配器翻译帧，基座透传时 passthrough 即原字节；
-			// 桥接原始事件是 Anthropic 形态，按 OpenAI chunk 解析恒为空，估算会静默归零
-			src := passthrough
-			if len(src) == 0 {
-				src = []byte(res.payload)
-			}
-			// 内容与推理入估算累计，tool_call 参数一并计入，finish_reason 捕获供语义缓存准入
-			m.accumulateDelta(src)
+// streamMidStreamFail 未开闸的上游断流：零输出，可换道。
+func (m *meterState) streamMidStreamFail() (bool, failover.ErrorClass) {
+	m.status, m.class = "error", failover.ClassMidStreamFail
+	return false, failover.ClassMidStreamFail
+}
 
-			if meta.IsUsage {
-				// usage 帧：抽内层 usage 对象供归一，多帧合并适配桥接 start/delta 分离
-				var frame struct {
-					Usage json.RawMessage `json:"usage"`
-				}
-				if err := json.Unmarshal(src, &frame); err == nil && len(frame.Usage) > 0 && string(frame.Usage) != "null" {
-					m.usageFrames = append(m.usageFrames, frame.Usage)
-					// 预算真值并入，真值覆盖估算，归一失败不影响计量主路径
-					if m.budget > 0 && m.normalize != nil {
-						if u, uerr := m.normalize(frame.Usage); uerr == nil {
-							m.budgetObserveUsage(u)
-						}
-					}
-				}
-			}
-			// 请求级成本预算流中闸：终态帧不拦，响应已完成后事后无中断意义，其余帧超限即断言；
-			// 已开闸走流内错误帧干净收尾并保留已收部分，未开闸回 402 信封
-			if !meta.IsDone && m.budgetExceeded() {
-				opCancel()
-				m.status, m.class = "error", failover.ClassCostBudget
-				if len(m.usageFrames) == 0 {
-					m.est = true
-				}
-				if gateOpen {
-					p.writeStreamAbortCode(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode,
-						"单请求成本预算已超限,已生成部分保留")
-				} else {
-					p.writeError(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, "单请求成本预算已超限")
-				}
-				return true, failover.ClassCostBudget
-			}
+// streamReaderClosed 读者退出且最终状态被取消竞态吞掉：按取消原因归类。
+func (p *Proxy) streamReaderClosed(r *http.Request, m *meterState, g *firstTokGate,
+	opCancel context.CancelFunc) (bool, failover.ErrorClass) {
+	opCancel()
+	if r.Context().Err() != nil {
+		return p.streamClientGone(func() {}, m, g)
+	}
+	if g.firstTokFired.Load() {
+		return m.streamTimeoutFirst()
+	}
+	return m.streamMidStreamFail()
+}
 
-			if meta.IsDone && !gateOpen {
-				// 未开闸即收尾且上游无内容帧：放行缓冲事件干净收尾，无内容帧不计首 token 延迟
-				p.openGate(w)
-				p.writeEvents(w, pending)
-				p.writeEvent(w, res.raw)
-				if len(m.usageFrames) == 0 {
-					m.est = true
-				}
-				return true, ""
-			}
-			if !gateOpen {
-				pending = append(pending, wireOf(ad, passthrough, res.payload, res.raw)...)
-				if meta.HasContent {
-					// 首 token：停 first_token，启 chunk_idle，开闸放行缓冲
-					gateOpen = true
-					m.markFirstToken()
-					firstTok.Stop()
-					p.openGate(w)
-					p.writeEvents(w, pending)
-					pending = nil
-					idleT = time.NewTimer(p.timeouts.ChunkIdle)
-					defer idleT.Stop()
-					idleC = idleT.C
-				}
-				continue
-			}
-			p.writeEvent(w, wireOf(ad, passthrough, res.payload, res.raw))
-			idleT.Reset(p.timeouts.ChunkIdle) // 帧间计时重置
-			if meta.IsDone {
-				if len(m.usageFrames) == 0 {
-					m.est = true // usage 缺失走估算路径，累计 delta 已缓冲
-				}
-				return true, ""
-			}
+// streamReadErr 读帧出错：区分客户端断连、协议干净关流、未开闸断流与已开闸断言出口。
+func (p *Proxy) streamReadErr(w http.ResponseWriter, r *http.Request, ad adapter.Adapter,
+	m *meterState, g *firstTokGate, err error, opCancel context.CancelFunc) (bool, failover.ErrorClass) {
+	opCancel()
+	// 客户端断连的常见时序之一：cancel 使在途读报错，错误事件先于 Done 分支抵达
+	if r.Context().Err() != nil {
+		return p.streamClientGone(func() {}, m, g)
+	}
+	if p.finishCleanStream(w, ad, m, g, err) {
+		return true, ""
+	}
+	if !g.gateOpen {
+		if g.firstTokFired.Load() {
+			return m.streamTimeoutFirst() // 首 token 超时，零输出，可换道
 		}
+		return m.streamMidStreamFail() // 上游断流未过首 token，可换道
 	}
+	// 已过首 token 走断言出口：客户端已收到部分内容，如实断言并计量已发生部分
+	m.status, m.class = "error", failover.ClassMidStreamFail
+	m.est = true
+	p.writeStreamAbort(w, r, "mid_stream_fail")
+	return true, failover.ClassMidStreamFail
+}
+
+// finishCleanStream 无终止标记协议如 gemini 实现 StreamCloseDone：干净关流即正常收尾，等价 IsDone；
+// 未实现者维持断流按 mid_stream_fail 处理的既有契约。返回 true 表示已按正常收尾处理。
+func (p *Proxy) finishCleanStream(w http.ResponseWriter, ad adapter.Adapter, m *meterState,
+	g *firstTokGate, err error) bool {
+	if !errors.Is(err, io.EOF) || !g.gateOpen {
+		return false
+	}
+	scd, ok := ad.(adapter.StreamCloseDone)
+	if !ok || !scd.StreamCloseIsDone() {
+		return false
+	}
+	m.markFirstToken()
+	if len(m.usageFrames) == 0 {
+		m.est = true
+	}
+	if fz, ok := w.(streamFinalizer); ok {
+		fz.finishClean() // 翻译 wrapper 合成协议终态，如 Gemini 终帧或 message_delta+stop
+	} else {
+		// 裸 chat writer 补 [DONE] 干净收尾，上游无终止标记时契约由网关兑现
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		flush(w)
+	}
+	return true
+}
+
+// streamFrame 正常读帧：解析、计量、预算闸与开闸/透传。done=true 表示流已终结。
+func (p *Proxy) streamFrame(w http.ResponseWriter, r *http.Request, ad adapter.Adapter, m *meterState,
+	frame *streamFrame, streamEvent func([]byte) ([]byte, adapter.EventMeta, error), res eventResult,
+	opCancel context.CancelFunc) (done, handled bool, class failover.ErrorClass) {
+	g := frame.tok
+	passthrough, meta, perr := streamEvent([]byte(res.payload))
+	if perr != nil {
+		return p.streamParseErr(w, r, m, g, perr, opCancel)
+	}
+	// 计量消费统一走适配器翻译帧，基座透传时 passthrough 即原字节；
+	// 桥接原始事件是 Anthropic 形态，按 OpenAI chunk 解析恒为空，估算会静默归零
+	src := passthrough
+	if len(src) == 0 {
+		src = []byte(res.payload)
+	}
+	// 内容与推理入估算累计，tool_call 参数一并计入，finish_reason 捕获供语义缓存准入
+	m.accumulateDelta(src)
+	m.absorbStreamUsage(src, meta)
+
+	// 请求级成本预算流中闸：终态帧不拦，响应已完成后事后无中断意义，其余帧超限即断言；
+	// 已开闸走流内错误帧干净收尾并保留已收部分，未开闸回 402 信封
+	if !meta.IsDone && m.budgetExceeded() {
+		return p.streamBudgetAbort(w, r, m, g, opCancel)
+	}
+	wire := wireOf(ad, passthrough, res.payload, res.raw)
+	if meta.IsDone && !g.gateOpen {
+		// 未开闸即收尾且上游无内容帧：放行缓冲事件干净收尾，无内容帧不计首 token 延迟
+		p.openGate(w)
+		p.writeEvents(w, g.pending)
+		p.writeEvent(w, res.raw)
+		m.noteUsageMissing()
+		return true, true, ""
+	}
+	if !g.gateOpen {
+		g.pending = append(g.pending, wire...)
+		if meta.HasContent {
+			g.open(p, w, m) // 首 token
+		}
+		return false, false, ""
+	}
+	p.writeEvent(w, wire)
+	g.reset() // 帧间计时重置
+	if meta.IsDone {
+		m.noteUsageMissing() // usage 缺失走估算路径，累计 delta 已缓冲
+		return true, true, ""
+	}
+	return false, false, ""
+}
+
+// streamParseErr 上游 SSE 帧解析失败：未开闸零输出可换道，已开闸走断言出口。
+func (p *Proxy) streamParseErr(w http.ResponseWriter, r *http.Request, m *meterState,
+	g *firstTokGate, perr error, opCancel context.CancelFunc) (bool, bool, failover.ErrorClass) {
+	opCancel()
+	p.logger.Warn("上游 SSE 帧解析失败", "request_id", loggingRequestID(r.Context()), "error_detail", perr.Error())
+	if !g.gateOpen {
+		handled, class := m.streamMidStreamFail()
+		return true, handled, class
+	}
+	m.status, m.class = "error", failover.ClassMidStreamFail
+	p.writeStreamAbort(w, r, "mid_stream_fail")
+	return true, true, failover.ClassMidStreamFail
+}
+
+// streamBudgetAbort 流中预算超限：已开闸流内错误帧干净收尾并保留已收部分，未开闸回 402 信封。
+func (p *Proxy) streamBudgetAbort(w http.ResponseWriter, r *http.Request, m *meterState,
+	g *firstTokGate, opCancel context.CancelFunc) (bool, bool, failover.ErrorClass) {
+	opCancel()
+	m.status, m.class = "error", failover.ClassCostBudget
+	if len(m.usageFrames) == 0 {
+		m.est = true
+	}
+	if g.gateOpen {
+		p.writeStreamAbortCode(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode,
+			"单请求成本预算已超限,已生成部分保留")
+	} else {
+		p.writeError(w, r, protocol.TypeQuotaExceeded, costBudgetExceededCode, "单请求成本预算已超限")
+	}
+	return true, true, failover.ClassCostBudget
 }
 
 // wireOf 计算事件应写出的线上字节：适配器判定不可见即空翻译优先跳过；

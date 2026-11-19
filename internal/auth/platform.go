@@ -61,43 +61,58 @@ func FormatPlatformKey(c PlatformClaims, secret []byte) (string, error) {
 
 // ParsePlatformKey 验真：任一密钥验通过即有效，以支持密钥轮换；过期、篡改、格式非法一律 ErrPlatformKey。
 func ParsePlatformKey(key string, secrets [][]byte, now time.Time) (*PlatformClaims, error) {
-	bad := func(err error) (*PlatformClaims, error) { return nil, fmt.Errorf("%w: %v", ErrPlatformKey, err) }
 	if !strings.HasPrefix(key, PlatformKeyPrefix) || len(secrets) == 0 {
-		return bad(errors.New("形态不符"))
+		return badPlatformKey(errors.New("形态不符"))
 	}
-	rest := strings.TrimPrefix(key, PlatformKeyPrefix)
-	payloadB64, tagB64, ok := strings.Cut(rest, ".")
-	if !ok {
-		return bad(errors.New("缺少签名段"))
-	}
-	payloadBytes, err := base64.RawURLEncoding.DecodeString(payloadB64)
+	payloadBytes, tag, err := platformKeyParts(strings.TrimPrefix(key, PlatformKeyPrefix))
 	if err != nil {
-		return bad(errors.New("载体非 base64url"))
+		return badPlatformKey(err)
 	}
-	tag, err := base64.RawURLEncoding.DecodeString(tagB64)
-	if err != nil || len(tag) != platformTagBytes {
-		return bad(errors.New("签名长度不符"))
-	}
-	valid := false
-	for _, secret := range secrets {
-		mac := hmac.New(sha256.New, secret)
-		mac.Write(payloadBytes)
-		if hmac.Equal(tag, mac.Sum(nil)[:platformTagBytes]) {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return bad(errors.New("签名验真失败"))
+	if !platformTagValid(payloadBytes, tag, secrets) {
+		return badPlatformKey(errors.New("签名验真失败"))
 	}
 	claims, err := parsePlatformPayload(string(payloadBytes))
 	if err != nil {
-		return bad(err)
+		return badPlatformKey(err)
 	}
 	if now.Unix() >= claims.ExpiresUnix {
-		return bad(errors.New("已过期"))
+		return badPlatformKey(errors.New("已过期"))
 	}
 	return claims, nil
+}
+
+// badPlatformKey 统一包成 ErrPlatformKey,底层原因保留供日志分辨。
+func badPlatformKey(err error) (*PlatformClaims, error) {
+	return nil, fmt.Errorf("%w: %v", ErrPlatformKey, err)
+}
+
+// platformKeyParts 解出前缀之后的载体与 tag 段。
+func platformKeyParts(rest string) ([]byte, []byte, error) {
+	payloadB64, tagB64, ok := strings.Cut(rest, ".")
+	if !ok {
+		return nil, nil, errors.New("缺少签名段")
+	}
+	payloadBytes, err := base64.RawURLEncoding.DecodeString(payloadB64)
+	if err != nil {
+		return nil, nil, errors.New("载体非 base64url")
+	}
+	tag, err := base64.RawURLEncoding.DecodeString(tagB64)
+	if err != nil || len(tag) != platformTagBytes {
+		return nil, nil, errors.New("签名长度不符")
+	}
+	return payloadBytes, tag, nil
+}
+
+// platformTagValid 任一密钥验真通过即有效(密钥轮换窗口内新旧密钥并存)。
+func platformTagValid(payload, tag []byte, secrets [][]byte) bool {
+	for _, secret := range secrets {
+		mac := hmac.New(sha256.New, secret)
+		mac.Write(payload)
+		if hmac.Equal(tag, mac.Sum(nil)[:platformTagBytes]) {
+			return true
+		}
+	}
+	return false
 }
 
 // platformPayload 载体序列化，以 | 分隔；字段值不得含 |，由签发方校验。

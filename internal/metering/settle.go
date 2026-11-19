@@ -29,27 +29,40 @@ func SettlePrice(quote Pricing, settlement string, fxCnyPerUsdMilli int64) (Pric
 	if !ValidSettlement(quote.Currency) || !ValidSettlement(settlement) {
 		return Pricing{}, false
 	}
-	// 方向判定：USD 报价→CNY 本位 = 乘汇率；CNY 报价→USD 本位 = 除汇率(ceil)。
-	var num, denom int64 = 1000, 1000
-	switch {
-	case quote.Currency == SettlementUSD && settlement == SettlementCNY:
-		num = fxCnyPerUsdMilli
-	case quote.Currency == SettlementCNY && settlement == SettlementUSD:
-		denom = fxCnyPerUsdMilli
-	default:
-		return Pricing{}, false // 同币种已在上方短路；剩余组合为非法币种。
+	num, denom, ok := fxRatio(quote.Currency, settlement, fxCnyPerUsdMilli)
+	if !ok {
+		return Pricing{}, false
 	}
-	// 乘法溢出会生成负价格；任一段越界即拒绝整张价目。
+	return scalePricing(quote, settlement, num, denom)
+}
+
+// fxRatio 返回换算乘数与除数：USD 报价→CNY 本位 = 乘汇率；CNY 报价→USD 本位 = 除汇率。
+// 同币种已在调用方短路，剩余组合只有在币种非法时才会走到 false。
+func fxRatio(from, to string, fxCnyPerUsdMilli int64) (num, denom int64, ok bool) {
+	switch {
+	case from == SettlementUSD && to == SettlementCNY:
+		return fxCnyPerUsdMilli, 1000, true
+	case from == SettlementCNY && to == SettlementUSD:
+		return 1000, fxCnyPerUsdMilli, true
+	default:
+		return 0, 0, false
+	}
+}
+
+// scalePricing 对四段价统一做 ceil(credits × num / denom) 换算并改写币种。
+// 乘法溢出会生成负价格；任一段越界即拒绝整张价目。
+func scalePricing(quote Pricing, settlement string, num, denom int64) (Pricing, bool) {
 	if quote.InputCreditsPerM > math.MaxInt64/num ||
 		quote.CachedInputCreditsPerM > math.MaxInt64/num ||
 		quote.VisionInputCreditsPerM > math.MaxInt64/num ||
 		quote.OutputCreditsPerM > math.MaxInt64/num {
 		return Pricing{}, false
 	}
-	out := Pricing{Currency: settlement}
-	out.InputCreditsPerM = ceilDiv(quote.InputCreditsPerM*num, denom)
-	out.CachedInputCreditsPerM = ceilDiv(quote.CachedInputCreditsPerM*num, denom)
-	out.VisionInputCreditsPerM = ceilDiv(quote.VisionInputCreditsPerM*num, denom)
-	out.OutputCreditsPerM = ceilDiv(quote.OutputCreditsPerM*num, denom)
-	return out, true
+	return Pricing{
+		Currency:               settlement,
+		InputCreditsPerM:       ceilDiv(quote.InputCreditsPerM*num, denom),
+		CachedInputCreditsPerM: ceilDiv(quote.CachedInputCreditsPerM*num, denom),
+		VisionInputCreditsPerM: ceilDiv(quote.VisionInputCreditsPerM*num, denom),
+		OutputCreditsPerM:      ceilDiv(quote.OutputCreditsPerM*num, denom),
+	}, true
 }

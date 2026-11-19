@@ -16,11 +16,13 @@ const (
 
 // Preset 单条官方端点预设。adapter/base_url/env 与 config.Provider 同轴，可逐字抄进 YAML。
 type Preset struct {
-	Alias   string   `json:"alias"`          // 目录内唯一别名，建议直接用作 provider name
-	Display string   `json:"display"`        // 展示名，中文
-	Group   string   `json:"group"`          // domestic|global|local
-	Adapter string   `json:"adapter"`        // 适配器类型；仅收 adapter.Types()，即 adapter.For 可实现集合
-	Auth    string   `json:"auth,omitempty"` // 鉴权形态声明，透传 config.Provider.Auth：bearer 为 Authorization Bearer，国内厂商 Anthropic 兼容分支的通行形态；空为适配器缺省
+	Alias   string `json:"alias"`   // 目录内唯一别名，建议直接用作 provider name
+	Display string `json:"display"` // 展示名，中文
+	Group   string `json:"group"`   // domestic|global|local
+	Adapter string `json:"adapter"` // 适配器类型；仅收 adapter.Types()，即 adapter.For 可实现集合
+	// 鉴权形态声明,透传 config.Provider.Auth:bearer 为 Authorization Bearer,
+	// 国内厂商 Anthropic 兼容分支的通行形态;空为适配器缺省。
+	Auth    string   `json:"auth,omitempty"`
 	BaseURL string   `json:"base_url"`
 	Env     string   `json:"env"`    // 建议的 key 环境变量名，约定俗成非强制；本地运行时 = 任意非空占位
 	Docs    string   `json:"docs"`   // 官方接入文档入口

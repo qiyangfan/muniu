@@ -1,5 +1,6 @@
 // quirk patch 只声明与 OpenAI 基座的差异；每项差异均对应 conformance fixture。
-//   - deepseek：usage 缓存命中为顶层 prompt_cache_hit_tokens（非 OpenAI 的 details 嵌套），reasoning_tokens 在 completion_tokens_details；
+//   - deepseek：usage 缓存命中为顶层 prompt_cache_hit_tokens（非 OpenAI 的 details 嵌套），
+//     reasoning_tokens 在 completion_tokens_details；
 //   - moonshot：cached_tokens 为顶层 OpenAI 风格命名，流式 usage 依赖 include_usage，缺省无 usage 帧；
 //   - glm：流式形态与基座无已实证差异，流式 usage 返回方式仍待实证。
 package adapter

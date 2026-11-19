@@ -331,19 +331,63 @@ func createKey(d Deps) http.HandlerFunc {
 	}
 }
 
+// keyPatchRequest PATCH /admin/v1/keys/{id} 请求体；raw 字段需区分「缺省/显式 null/设定值」三态。
+type keyPatchRequest struct {
+	RPMLimit              *int64          `json:"rpm_limit"`
+	TPMLimit              *int64          `json:"tpm_limit"`
+	DailyQuotaCredits     *int64          `json:"daily_quota_credits"`
+	ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动；null=清除；"RFC3339"=设定
+	Disabled              *bool           `json:"disabled"`                 // 缺省=不动；true=停用，false=恢复
+	MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动；0=不限
+	AllowedModels         json.RawMessage `json:"allowed_models"`           // 缺省=不动；null=清除即不限；数组=整体设定
+}
+
+// applyAllowModels 把白名单字段折进补丁：缺省不动、null 清除、数组整体设定。
+func applyAllowModels(raw json.RawMessage, patch *auth.LimitsPatch) (string, bool) {
+	switch {
+	case len(raw) == 0: // 字段缺省：不动
+		return "", true
+	case string(raw) == "null":
+		patch.ClearAllowModels = true
+		return "", true
+	default:
+		var models []string
+		if err := json.Unmarshal(raw, &models); err != nil {
+			// 空白条目整单拒绝在 auth 归一化，返回 400
+			return "allowed_models 须为字符串数组或 null", false
+		}
+		patch.AllowedModels = models
+		return "", true
+	}
+}
+
+// applyExpiresAt 把过期时刻字段折进补丁：缺省不动、null 清除、RFC3339 字符串设定。
+func applyExpiresAt(raw json.RawMessage, patch *auth.LimitsPatch) (string, bool) {
+	switch {
+	case len(raw) == 0: // 字段缺省：不动
+		return "", true
+	case string(raw) == "null":
+		patch.ClearExpires = true
+		return "", true
+	default:
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return "expires_at 须为 RFC3339 字符串或 null", false
+		}
+		t, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			return "expires_at 须为 RFC3339 形态", false
+		}
+		patch.ExpiresAt = &t
+		return "", true
+	}
+}
+
 // patchKey 局部更新 key 运行态限额：省略字段不动，expires_at 显式 null 表示清除。
 // 写后 Invalidate：限额是 DB 可变状态，须走吊销同款失效协议，下一请求即新限额。
 func patchKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			RPMLimit              *int64          `json:"rpm_limit"`
-			TPMLimit              *int64          `json:"tpm_limit"`
-			DailyQuotaCredits     *int64          `json:"daily_quota_credits"`
-			ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动；null=清除；"RFC3339"=设定
-			Disabled              *bool           `json:"disabled"`                 // 缺省=不动；true=停用，false=恢复
-			MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动；0=不限
-			AllowedModels         json.RawMessage `json:"allowed_models"`           // 缺省=不动；null=清除即不限；数组=整体设定
-		}
+		var req keyPatchRequest
 		if err := decode(r, &req); err != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
 			return
@@ -356,34 +400,13 @@ func patchKey(d Deps) http.HandlerFunc {
 			RPMLimit: req.RPMLimit, TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
 			Disabled: req.Disabled, MaxRequestCostCredits: req.MaxRequestCostCredits,
 		}
-		switch {
-		case len(req.AllowedModels) == 0: // 字段缺省：不动
-		case string(req.AllowedModels) == "null":
-			patch.ClearAllowModels = true
-		default:
-			var models []string
-			if err := json.Unmarshal(req.AllowedModels, &models); err != nil {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "allowed_models 须为字符串数组或 null")
-				return
-			}
-			patch.AllowedModels = models // 空白条目整单拒绝在 auth 归一化，返回 400
+		if msg, ok := applyAllowModels(req.AllowedModels, &patch); !ok {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", msg)
+			return
 		}
-		switch {
-		case len(req.ExpiresAt) == 0: // 字段缺省：不动
-		case string(req.ExpiresAt) == "null":
-			patch.ClearExpires = true
-		default:
-			var s string
-			if err := json.Unmarshal(req.ExpiresAt, &s); err != nil {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 字符串或 null")
-				return
-			}
-			t, perr := time.Parse(time.RFC3339, s)
-			if perr != nil {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 形态")
-				return
-			}
-			patch.ExpiresAt = &t
+		if msg, ok := applyExpiresAt(req.ExpiresAt, &patch); !ok {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", msg)
+			return
 		}
 		rec, err := auth.UpdateKeyLimits(d.DB, r.PathValue("id"), patch)
 		if errors.Is(err, store.ErrNotFound) {
@@ -423,6 +446,46 @@ func revokeKey(d Deps) http.HandlerFunc {
 
 // ---- usage 聚合 ----
 
+// parseUsageTS 解析可选 RFC3339 时间参数：空值返回空串交由调用方补缺省；
+// 非法时写出 400 并返回 false。
+func parseUsageTS(w http.ResponseWriter, r *http.Request, v, label string) (string, bool) {
+	if v == "" {
+		return "", true
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", label+" 须为 RFC3339 形态")
+		return "", false
+	}
+	// 必须归一为 UTC：usage_logs.created_at 存 Z 后缀形态，SQL 按字典序比较，
+	// 带时区偏移的入参不归一会让区间过滤整体错位
+	return t.UTC().Format(time.RFC3339), true
+}
+
+// usageRange 解析 from/to 区间，缺省为最近 7 天至当前时刻。
+func usageRange(w http.ResponseWriter, r *http.Request, now time.Time) (from, to string, ok bool) {
+	q := r.URL.Query()
+	from, ok = parseUsageTS(w, r, q.Get("from"), "from")
+	if !ok {
+		return "", "", false
+	}
+	if from == "" {
+		from = now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	}
+	to, ok = parseUsageTS(w, r, q.Get("to"), "to")
+	if !ok {
+		return "", "", false
+	}
+	if to == "" {
+		to = now.Format(time.RFC3339)
+	}
+	if from > to {
+		writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "from 不可晚于 to")
+		return "", "", false
+	}
+	return from, to, true
+}
+
 func usage(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -433,36 +496,8 @@ func usage(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "group_by 须为 day|key|model|provider")
 			return
 		}
-		now := time.Now().UTC()
-		parseTS := func(v, label string) (string, bool) {
-			if v == "" {
-				return "", true
-			}
-			t, err := time.Parse(time.RFC3339, v)
-			if err != nil {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", label+" 须为 RFC3339 形态")
-				return "", false
-			}
-			// 必须归一为 UTC：usage_logs.created_at 存 Z 后缀形态，SQL 按字典序比较，
-			// 带时区偏移的入参不归一会让区间过滤整体错位
-			return t.UTC().Format(time.RFC3339), true
-		}
-		from, ok := parseTS(q.Get("from"), "from")
+		from, to, ok := usageRange(w, r, time.Now().UTC())
 		if !ok {
-			return
-		}
-		if from == "" {
-			from = now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)
-		}
-		to, ok := parseTS(q.Get("to"), "to")
-		if !ok {
-			return
-		}
-		if to == "" {
-			to = now.Format(time.RFC3339)
-		}
-		if from > to {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "from 不可晚于 to")
 			return
 		}
 		pts, err := store.UsageAggregate(d.DB, store.UsageDim(groupBy), from, to,

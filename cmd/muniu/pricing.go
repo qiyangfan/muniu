@@ -20,7 +20,9 @@ type staticPricing struct {
 }
 
 // buildPricingTables 合并静态与运行态价目，装配期与管理面刷新共用；调用方包装为目录并原子替换。
-func buildPricingTables(db *sql.DB, static map[string]staticPricing, settlement string, fxCnyPerUsdMilli int64) (map[string]*metering.PricingTable, error) {
+func buildPricingTables(
+	db *sql.DB, static map[string]staticPricing, settlement string, fxCnyPerUsdMilli int64,
+) (map[string]*metering.PricingTable, error) {
 	tables := make(map[string]*metering.PricingTable, len(static))
 	for alias, sp := range static {
 		// 本位币结算：异币种报价按汇率一次换算，热路径零变化。
@@ -49,30 +51,57 @@ func buildPricingTables(db *sql.DB, static map[string]staticPricing, settlement 
 }
 
 // pricingTableFromRecord 运行态记录转价目表；管理面写入前已过校验，此处失败即数据损坏，拒绝启动或刷新。
-func pricingTableFromRecord(r store.PricingRecord, settlement string, fxCnyPerUsdMilli int64) (*metering.PricingTable, error) {
+func pricingTableFromRecord(
+	r store.PricingRecord, settlement string, fxCnyPerUsdMilli int64,
+) (*metering.PricingTable, error) {
 	if r.Currency != "CNY" && r.Currency != "USD" {
 		return nil, fmt.Errorf("pricing[%s] currency 非法 %q", r.Alias, r.Currency)
 	}
 	// 按汇率将原报价换算为本位币，保证配额汇总使用同一币种。
-	quote := metering.Pricing{
+	def, ok := metering.SettlePrice(pricingQuote(r), settlement, fxCnyPerUsdMilli)
+	if !ok {
+		return nil, fmt.Errorf("pricing[%s] 报价币种 %s 与本位币 %s 不同且未配置 fx_usd_cny_milli", r.Alias, r.Currency, settlement)
+	}
+	zone, err := pricingZone(r)
+	if err != nil {
+		return nil, err
+	}
+	specs, err := pricingWindows(r)
+	if err != nil {
+		return nil, err
+	}
+	tbl, err := metering.NewPricingTable(def, zone, specs)
+	if err != nil {
+		return nil, fmt.Errorf("pricing[%s]: %w", r.Alias, err)
+	}
+	return tbl, nil
+}
+
+// pricingQuote 运行态记录 → 原始报价（未结算）。
+func pricingQuote(r store.PricingRecord) metering.Pricing {
+	return metering.Pricing{
 		Currency:               r.Currency,
 		InputCreditsPerM:       r.InputCredits,
 		CachedInputCreditsPerM: r.CachedInputCredits,
 		VisionInputCreditsPerM: r.VisionInputCredits,
 		OutputCreditsPerM:      r.OutputCredits,
 	}
-	def, ok := metering.SettlePrice(quote, settlement, fxCnyPerUsdMilli)
-	if !ok {
-		return nil, fmt.Errorf("pricing[%s] 报价币种 %s 与本位币 %s 不同且未配置 fx_usd_cny_milli", r.Alias, r.Currency, settlement)
+}
+
+// pricingZone 解析时区声明，缺省 UTC。
+func pricingZone(r store.PricingRecord) (*time.Location, error) {
+	if r.Timezone == "" {
+		return time.UTC, nil
 	}
-	zone := time.UTC
-	if r.Timezone != "" {
-		loc, err := metering.ParseZoneOffset(r.Timezone)
-		if err != nil {
-			return nil, fmt.Errorf("pricing[%s] timezone: %w", r.Alias, err)
-		}
-		zone = loc
+	loc, err := metering.ParseZoneOffset(r.Timezone)
+	if err != nil {
+		return nil, fmt.Errorf("pricing[%s] timezone: %w", r.Alias, err)
 	}
+	return loc, nil
+}
+
+// pricingWindows 重建时段窗；带外写入的越界倍率在此拦截。
+func pricingWindows(r store.PricingRecord) ([]metering.WindowSpec, error) {
 	specs := make([]metering.WindowSpec, 0, len(r.Windows))
 	for _, w := range r.Windows {
 		s, e, err := metering.ParseWindowMinutes(w.Window)
@@ -85,11 +114,7 @@ func pricingTableFromRecord(r store.PricingRecord, settlement string, fxCnyPerUs
 		}
 		specs = append(specs, metering.WindowSpec{StartMin: s, EndMin: e, BasisPoints: w.BasisPoints})
 	}
-	tbl, err := metering.NewPricingTable(def, zone, specs)
-	if err != nil {
-		return nil, fmt.Errorf("pricing[%s]: %w", r.Alias, err)
-	}
-	return tbl, nil
+	return specs, nil
 }
 
 // formatClockMinutes 当日分钟转 "HH:MM"；1440 输出 24:00，即窗口终点语义。

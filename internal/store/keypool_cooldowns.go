@@ -30,7 +30,14 @@ type KeyCooldownRow struct {
 // 的提前释放与成功清零都走这里)。ev_seq 单调守卫:同键新事件覆盖旧事件、旧事件被忽略
 // (锁外落库的完成顺序不可控,行状态必须由事件序裁决);幂等(同序号重复迁移无副作用,
 // UPSERT 的 WHERE 与 DELETE 的 ev_seq<? 均为严格小于)。
-func SaveKeyCooldown(db *sql.DB, provider, keyID, bucket string, until time.Time, consec int, now time.Time, seq int64) error {
+func SaveKeyCooldown(
+	db *sql.DB,
+	provider, keyID, bucket string,
+	until time.Time,
+	consec int,
+	now time.Time,
+	seq int64,
+) error {
 	if bucket == "" {
 		_, err := db.Exec(`DELETE FROM key_cooldowns
 			WHERE provider=? AND key_id=? AND ev_seq<?`, provider, keyID, seq)

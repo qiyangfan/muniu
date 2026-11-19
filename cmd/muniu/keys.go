@@ -52,7 +52,8 @@ func keysMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
 }
 
 const keysUsage = `用法:
-  muniu keys create --tenant default --name kongming [--rpm 120] [--tpm 0] [--daily-quota-credits 0] [--allowed-models a,b] [--expires-at RFC3339]
+  muniu keys create --tenant default --name kongming [--rpm 120] [--tpm 0] ` +
+	`[--daily-quota-credits 0] [--allowed-models a,b] [--expires-at RFC3339]
   muniu keys list
   muniu keys revoke <prefix>
   muniu keys disable <prefix>
@@ -109,8 +110,11 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	if len(rec.AllowedModels) > 0 {
 		allow = strings.Join(rec.AllowedModels, ",")
 	}
-	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\nrpm:      %d\ntpm:      %d\nquota:    %d credit/日\nbudget:   %d credit/请求\nmodels:   %s\nexpires:  %s\n",
-		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, rec.MaxRequestCostCredits, allow, exp)
+	_, _ = fmt.Fprintf(stdout, "key:      %s\nprefix:   %s\nname:     %s\ntenant:   %s\n"+
+		"rpm:      %d\ntpm:      %d\nquota:    %d credit/日\nbudget:   %d credit/请求\n"+
+		"models:   %s\nexpires:  %s\n",
+		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits,
+		rec.MaxRequestCostCredits, allow, exp)
 	return 0
 }
 
@@ -145,7 +149,8 @@ func keysList(db *sql.DB, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "(无 key)")
 		return 0
 	}
-	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %-9s %-12s %-18s %s\n", "PREFIX", "NAME", "TENANT", "RPM", "STATUS", "REQ-BUDGET", "MODELS", "ID")
+	_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6s %-9s %-12s %-18s %s\n",
+		"PREFIX", "NAME", "TENANT", "RPM", "STATUS", "REQ-BUDGET", "MODELS", "ID")
 	for _, k := range keys {
 		status := k.Status
 		if status == "active" && k.Disabled {
@@ -155,7 +160,8 @@ func keysList(db *sql.DB, stdout, stderr io.Writer) int {
 		if len(k.AllowedModels) > 0 {
 			models = truncateDisplayBytes(strings.Join(k.AllowedModels, ","), 18)
 		}
-		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %-9s %-12d %-18s %s\n", k.Prefix, k.Name, k.TenantID, k.RPMLimit, status, k.MaxRequestCostCredits, models, k.ID)
+		_, _ = fmt.Fprintf(stdout, "%-14s %-16s %-10s %-6d %-9s %-12d %-18s %s\n",
+			k.Prefix, k.Name, k.TenantID, k.RPMLimit, status, k.MaxRequestCostCredits, models, k.ID)
 	}
 	return 0
 }
@@ -192,6 +198,7 @@ func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Write
 		_, _ = fmt.Fprintf(stderr, "muniu keys %s: 需要一个 <prefix> 参数\n", verb)
 		return 2
 	}
+	prefix := args[0]
 	keys, err := auth.ListKeys(db)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "muniu keys %s: %v\n", verb, err)
@@ -199,17 +206,17 @@ func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Write
 	}
 	var target *auth.KeyRecord
 	for i := range keys {
-		if keys[i].Prefix == args[0] {
+		if keys[i].Prefix == prefix {
 			target = &keys[i]
 			break
 		}
 	}
 	if target == nil {
-		_, _ = fmt.Fprintf(stdout, "未找到 prefix %s 的 key\n", args[0])
+		_, _ = fmt.Fprintf(stdout, "未找到 prefix %s 的 key\n", prefix)
 		return 1
 	}
 	if target.Status != "active" {
-		_, _ = fmt.Fprintf(stdout, "key %s 已吊销(终态),启停操作不改变其语义\n", args[0])
+		_, _ = fmt.Fprintf(stdout, "key %s 已吊销(终态),启停操作不改变其语义\n", prefix)
 		return 1
 	}
 	v := disable

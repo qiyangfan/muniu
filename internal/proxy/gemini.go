@@ -26,7 +26,9 @@ func (p *Proxy) HandlerGemini() http.Handler {
 		seg := r.PathValue("modelMethod")
 		idx := strings.LastIndex(seg, ":")
 		if idx <= 0 {
-			writeGeminiError(w, http.StatusNotFound, 404, "模型路径非法(须为 /v1beta/models/{model}:generateContent)", "NOT_FOUND", "model_not_found")
+			writeGeminiError(w, http.StatusNotFound, 404,
+				"模型路径非法(须为 /v1beta/models/{model}:generateContent)",
+				"NOT_FOUND", "model_not_found")
 			return
 		}
 		pathModel, method := seg[:idx], seg[idx+1:]
@@ -57,7 +59,9 @@ func (p *Proxy) HandlerGemini() http.Handler {
 				writeGeminiError(w, http.StatusBadRequest, 400, geminiRejectMessage(ge.Code), ge.Status, ge.Code)
 				return
 			}
-			writeGeminiError(w, http.StatusBadRequest, 400, "请求不符合 Gemini generateContent 格式", "INVALID_ARGUMENT", protocol.CodeGeminiInputInvalid)
+			writeGeminiError(w, http.StatusBadRequest, 400,
+				"请求不符合 Gemini generateContent 格式",
+				"INVALID_ARGUMENT", protocol.CodeGeminiInputInvalid)
 			return
 		}
 		// 用 canonical chat 字节替换入站体：治理 Raw 层、缓存指纹、适配器透传等下游与等价 chat 完全同构
@@ -286,7 +290,7 @@ func (w *geminiStreamWriter) finish() {
 }
 
 func (w *geminiStreamWriter) emit(frame []byte) {
-	_, _ = w.ResponseWriter.Write(frame)
+	_, _ = w.ResponseWriter.Write(frame) //nolint:gosec // 帧由适配器按协议编码后透传
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}

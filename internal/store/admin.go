@@ -96,7 +96,8 @@ func UpdateTenant(db *sql.DB, id string, p UpdateTenantPatch) (bool, error) {
 		sets = append(sets, "status = status")
 	}
 	args = append(args, id)
-	res, err := db.Exec(`UPDATE tenants SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	sqlText := fmt.Sprintf(`UPDATE tenants SET %s WHERE id = ?`, strings.Join(sets, ", ")) //nolint:gosec // SET 列名仅内部常量
+	res, err := db.Exec(sqlText, args...)
 	if err != nil {
 		return false, fmt.Errorf("store: 更新租户: %w", err)
 	}
@@ -146,25 +147,18 @@ type UsagePoint struct {
 // UsageAggregate 按维度与时间范围聚合 usage_logs，管理 API 用。
 // from/to 为 RFC3339 UTC；estimated 行不参与成本口径，但计入请求数。
 func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) ([]UsagePoint, error) {
-	var expr string
-	switch dim {
-	case DimDay:
-		expr = `substr(created_at,1,10)`
-	case DimKey:
-		expr = `api_key_id`
-	case DimModel:
-		expr = `model_alias`
-	case DimProvider:
-		expr = `provider`
-	default:
-		return nil, MarkBusiness(fmt.Errorf("store: 未知聚合维度 %q", dim))
+	expr, err := usageDimExpr(dim)
+	if err != nil {
+		return nil, err
 	}
-	q := `SELECT ` + expr + ` AS dim, COUNT(*) AS reqs,
+	// expr 只来自 usageDimExpr 的白名单常量，不拼接外部输入。
+	//nolint:gosec // expr 为白名单常量
+	q := fmt.Sprintf(`SELECT %s AS dim, COUNT(*) AS reqs,
 			COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
 			COALESCE(SUM(vision_tokens),0),
 			COALESCE(SUM(CASE WHEN provider='semantic-cache' THEN 1 ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN estimated=0 THEN cost_credits ELSE 0 END),0)
-		FROM usage_logs WHERE created_at >= ? AND created_at <= ?`
+		FROM usage_logs WHERE created_at >= ? AND created_at <= ?`, expr)
 	args := []any{from, to}
 	if tenantID != "" {
 		q += ` AND tenant_id = ?`
@@ -183,10 +177,27 @@ func UsageAggregate(db *sql.DB, dim UsageDim, from, to, tenantID, keyID string) 
 	var out []UsagePoint
 	for rows.Next() {
 		var p UsagePoint
-		if err := rows.Scan(&p.Dim, &p.Requests, &p.PromptTokens, &p.CompletionTokens, &p.VisionTokens, &p.CacheHits, &p.CostCredits); err != nil {
+		if err := rows.Scan(&p.Dim, &p.Requests, &p.PromptTokens, &p.CompletionTokens,
+			&p.VisionTokens, &p.CacheHits, &p.CostCredits); err != nil {
 			return nil, fmt.Errorf("store: 扫聚合行: %w", err)
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// usageDimExpr 维度到聚合列表达式的白名单映射；未知维度按业务错误返回。
+func usageDimExpr(dim UsageDim) (string, error) {
+	switch dim {
+	case DimDay:
+		return `substr(created_at,1,10)`, nil
+	case DimKey:
+		return `api_key_id`, nil
+	case DimModel:
+		return `model_alias`, nil
+	case DimProvider:
+		return `provider`, nil
+	default:
+		return "", MarkBusiness(fmt.Errorf("store: 未知聚合维度 %q", dim))
+	}
 }

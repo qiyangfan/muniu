@@ -30,31 +30,19 @@ func (p *Proxy) HandlerMessages() http.Handler {
 		}
 		res := protocol.TranslateMessagesRequestEx(body)
 		if res.Fatal != nil {
-			var ue *protocol.MessagesUnsupportedError
-			if errors.As(res.Fatal, &ue) {
-				writeMessagesError(w, http.StatusBadRequest, "invalid_request_error", messagesRejectMessage(ue.Code))
-				return
-			}
-			writeMessagesError(w, http.StatusBadRequest, "invalid_request_error", "请求不符合 Anthropic Messages 格式")
+			writeMessagesError(w, http.StatusBadRequest, "invalid_request_error", messagesFatalMessage(res.Fatal))
 			return
 		}
 		// 惰性拒绝别名级预判：无直通资格候选的别名即时 400，时序与形态保持一致
 		if res.Ineligible != nil && !p.aliasNative(protocol.InboundMessages, res.Model) {
-			var ue *protocol.MessagesUnsupportedError
-			code := ""
-			if errors.As(res.Ineligible, &ue) {
-				code = ue.Code
-			}
-			writeMessagesError(w, http.StatusBadRequest, "invalid_request_error", messagesRejectMessage(code))
+			writeMessagesError(w, http.StatusBadRequest, "invalid_request_error",
+				messagesRejectMessage(messagesCode(res.Ineligible)))
 			return
 		}
 		nat := &inboundNative{proto: protocol.InboundMessages, raw: body, model: res.Model, stream: res.Stream}
 		if res.Ineligible != nil {
-			var ue *protocol.MessagesUnsupportedError
-			if errors.As(res.Ineligible, &ue) {
-				nat.ineligCode = ue.Code
-				nat.ineligMsg = messagesRejectMessage(ue.Code)
-			}
+			nat.ineligCode = messagesCode(res.Ineligible)
+			nat.ineligMsg = messagesRejectMessage(nat.ineligCode)
 		}
 		// canonical chat 字节替换入站体，失格请求无 canonical、原始体直通：
 		// 治理 Raw 层、缓存指纹、适配器透传等下游与等价 chat 完全同构
@@ -78,6 +66,24 @@ func (p *Proxy) HandlerMessages() http.Handler {
 		defer nw.flush()
 		p.handleChat(nw, r2)
 	})
+}
+
+// messagesFatalMessage 翻译致命错误的对外文案：带码归类者给具体码对应提示，否则给通用格式提示。
+func messagesFatalMessage(fatal error) string {
+	var ue *protocol.MessagesUnsupportedError
+	if errors.As(fatal, &ue) {
+		return messagesRejectMessage(ue.Code)
+	}
+	return "请求不符合 Anthropic Messages 格式"
+}
+
+// messagesCode 从失格错误抽取错误码，非本协议错误给空码。
+func messagesCode(err error) string {
+	var ue *protocol.MessagesUnsupportedError
+	if errors.As(err, &ue) {
+		return ue.Code
+	}
+	return ""
 }
 
 // aliasNative 别名级直通资格预判，作为惰性拒绝的即时 400 判据。
@@ -210,14 +216,7 @@ func (w *messagesStreamWriter) feedFrame(line string) error {
 		return nil
 	}
 	if line == "[DONE]" {
-		if !w.created { // 空内容流：首帧不变式仍须成立
-			w.emit(appendSSE(w.enc.Init()))
-			w.created = true
-		}
-		for _, ev := range w.enc.Complete() {
-			w.emit(appendSSE(ev))
-		}
-		w.finished = true
+		w.complete() // 空内容流：首帧不变式仍须成立
 		return nil
 	}
 	// 流中错误帧：诚实失败，不伪造 message_stop
@@ -231,22 +230,34 @@ func (w *messagesStreamWriter) feedFrame(line string) error {
 		if msg == "" {
 			msg = "上游流中断,已生成部分可能不完整"
 		}
-		if !w.created { // 防御对称：错误帧先于任何内容帧时仍保证首帧
-			w.emit(appendSSE(w.enc.Init()))
-			w.created = true
-		}
+		w.ensureCreated() // 防御对称：错误帧先于任何内容帧时仍保证首帧
 		w.emit(appendSSE(w.enc.Failed(msg)))
 		w.finished = true
 		return nil
 	}
-	if !w.created {
-		w.emit(appendSSE(w.enc.Init()))
-		w.created = true
-	}
+	w.ensureCreated()
 	for _, ev := range w.enc.Feed([]byte(line)) {
 		w.emit(appendSSE(ev))
 	}
 	return nil
+}
+
+// ensureCreated 首帧不变式：任意内容或错误帧前必须已发 message_start。
+func (w *messagesStreamWriter) ensureCreated() {
+	if w.created {
+		return
+	}
+	w.emit(appendSSE(w.enc.Init()))
+	w.created = true
+}
+
+// complete 终态两连发：message_delta 加 message_stop，空内容流也保证首帧。
+func (w *messagesStreamWriter) complete() {
+	w.ensureCreated()
+	for _, ev := range w.enc.Complete() {
+		w.emit(appendSSE(ev))
+	}
+	w.finished = true
 }
 
 // finishClean 无终止标记协议的干净收尾：由 streamFinalizer 在上游 StreamCloseDone 关流时触发，
@@ -255,14 +266,7 @@ func (w *messagesStreamWriter) finishClean() {
 	if w.finished {
 		return
 	}
-	if !w.created { // 空内容流：首帧不变式仍须成立
-		w.emit(appendSSE(w.enc.Init()))
-		w.created = true
-	}
-	for _, ev := range w.enc.Complete() {
-		w.emit(appendSSE(ev))
-	}
-	w.finished = true
+	w.complete()
 }
 
 // finish 委托返回后兜底，直通模式零兜底：上游形态已原样转发，不合成任何事件。
@@ -274,42 +278,49 @@ func (w *messagesStreamWriter) finish() {
 		return
 	}
 	if !w.created {
-		if len(w.tail) > 0 {
-			var probe struct {
-				Error *struct {
-					Message string `json:"message"`
-					Type    string `json:"type"`
-				} `json:"error"`
-			}
-			if json.Unmarshal(bytes.TrimSpace(w.tail), &probe) == nil && probe.Error != nil {
-				msg := probe.Error.Message
-				if msg == "" {
-					msg = "上游处理失败"
-				}
-				// 管道错误类型映射为 Anthropic 原生类型，词汇表与翻译期 writeMessagesError 一致；
-				// 无对应物的类型维持 api_error 兜底，语义由 HTTP 状态码承载
-				typ := messagesPipelineErrorTypeOf(probe.Error.Type)
-				// 状态码已由管道 WriteHeader 写出，不可重复，此处仅改写 body 形态。
-				// 必须直写底层 ResponseWriter：经 wrapper 会再次进 tail 被丢弃，finish 是最后一步
-				w.Header().Set("Content-Type", "application/json")
-				b, _ := json.Marshal(map[string]any{
-					"type":  "error",
-					"error": map[string]any{"type": typ, "message": msg},
-				})
-				_, _ = w.ResponseWriter.Write(append(b, '\n'))
-			} else {
-				_, _ = w.ResponseWriter.Write(w.tail)
-			}
-			w.tail = nil
-		}
+		w.rewriteResidual()
 		return
 	}
 	w.emit(appendSSE(w.enc.Failed("上游流中断,已生成部分可能不完整")))
 	w.finished = true
 }
 
+// rewriteResidual 流未开始时的 tail 残留处理：管道错误信封改写为 Anthropic error JSON，
+// 解析失败宁原样透传。状态码已由管道 WriteHeader 写出，不可重复，此处仅改写 body 形态。
+func (w *messagesStreamWriter) rewriteResidual() {
+	if len(w.tail) == 0 {
+		return
+	}
+	var probe struct {
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(w.tail), &probe) != nil || probe.Error == nil {
+		_, _ = w.ResponseWriter.Write(w.tail)
+		w.tail = nil
+		return
+	}
+	msg := probe.Error.Message
+	if msg == "" {
+		msg = "上游处理失败"
+	}
+	// 管道错误类型映射为 Anthropic 原生类型，词汇表与翻译期 writeMessagesError 一致；
+	// 无对应物的类型维持 api_error 兜底，语义由 HTTP 状态码承载
+	typ := messagesPipelineErrorTypeOf(probe.Error.Type)
+	// 必须直写底层 ResponseWriter：经 wrapper 会再次进 tail 被丢弃，finish 是最后一步
+	w.Header().Set("Content-Type", "application/json")
+	b, _ := json.Marshal(map[string]any{
+		"type":  "error",
+		"error": map[string]any{"type": typ, "message": msg},
+	})
+	_, _ = w.ResponseWriter.Write(append(b, '\n'))
+	w.tail = nil
+}
+
 func (w *messagesStreamWriter) emit(frame []byte) {
-	_, _ = w.ResponseWriter.Write(frame)
+	_, _ = w.ResponseWriter.Write(frame) //nolint:gosec // 帧由适配器按协议编码后透传
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}

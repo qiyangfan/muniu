@@ -87,7 +87,9 @@ func syncAccountPools(db *sql.DB, px *proxy.Proxy, logger *slog.Logger) func() {
 // startOAuthRefresher 装配并启动刷新器,返回授权流(交管理面)与停止函数(oauth 段未
 // 完整声明时两者皆 nil 且零 goroutine——声明 oauth 渠道但段缺失在 config 校验已拒绝,
 // 此处是纵深防御)。
-func startOAuthRefresher(ctx context.Context, cfg *config.Config, db *sql.DB, px *proxy.Proxy, logger *slog.Logger) (*oauth.Flow, func()) {
+func startOAuthRefresher(
+	ctx context.Context, cfg *config.Config, db *sql.DB, px *proxy.Proxy, logger *slog.Logger,
+) (*oauth.Flow, func()) {
 	if !cfg.OAuth.Complete() {
 		return nil, nil
 	}

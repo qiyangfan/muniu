@@ -65,6 +65,16 @@ func (s *Service) Overview() []ProviderOverview {
 	}
 	sort.Strings(names)
 
+	rowsBy, statesBy := s.overviewRowsByProvider()
+	now := s.opts.Now()
+	for _, name := range names {
+		out = append(out, s.overviewOf(name, bindings[name], rowsBy, statesBy, now))
+	}
+	return out
+}
+
+// overviewRowsByProvider 一次读全量快照与告警态并按渠道分桶(逐渠道查询会放大读库次数)。
+func (s *Service) overviewRowsByProvider() (map[string][]store.BalanceSnapshot, map[string][]store.AlertState) {
 	rowsAll, rerr := store.ListBalanceSnapshots(s.opts.DB, "")
 	if rerr != nil {
 		s.log.Error("总览快照读取失败", "error_detail", rerr.Error())
@@ -81,69 +91,89 @@ func (s *Service) Overview() []ProviderOverview {
 	for _, st := range statesAll {
 		statesBy[st.Provider] = append(statesBy[st.Provider], st)
 	}
-	now := s.opts.Now()
-	for _, name := range names {
-		binding := bindings[name]
-		po := ProviderOverview{
-			Provider: name, Source: binding.Kind, ManualCurrency: binding.Currency,
-			WindowDays: s.opts.WindowDays,
-			Keys:       []KeyOverview{}, Alerts: []AlertOverview{},
-		}
-		if binding.BelowCredits != nil {
-			po.Below = FormatCredits(*binding.BelowCredits)
-		}
-		est, keys := s.observe(name, now)
-		po.Currency = est.PrimaryCurrency
-		po.BurnPerDayCredits = est.BurnPerDay
-		po.DaysWithUsage = est.DaysWithUsage
-		po.RemainingHours = est.RemainingHours
-		po.EstimateReason = est.Reason
-		if est.MinEffective != nil {
-			v := FormatCredits(*est.MinEffective)
-			po.MinEffective = &v
-		}
-		rowsByID := map[string]store.BalanceSnapshot{}
-		var lastChecked time.Time
-		for _, r := range rowsBy[name] {
-			rowsByID[r.KeyID] = r
-			if r.UpdatedAt.After(lastChecked) {
-				lastChecked = r.UpdatedAt
-			}
-		}
-		if !lastChecked.IsZero() {
-			po.LastCheckedAt = lastChecked.UTC().Format(time.RFC3339)
-		}
-		for _, k := range keys {
-			row := rowsByID[k.KeyID]
-			asOf := "" // 失败占位行 AsOfAt 为零值,透出会被误读为真实观测时刻
-			if !row.AsOfAt.IsZero() {
-				asOf = row.AsOfAt.UTC().Format(time.RFC3339)
-			}
-			kov := KeyOverview{
-				KeyID:               k.KeyID,
-				Currency:            k.Currency,
-				AsOfAt:              asOf,
-				ConsecutiveFailures: row.ConsecutiveFailures,
-				LastError:           row.LastError,
-			}
-			if k.Credits != nil {
-				snap := FormatCredits(*k.Credits)
-				kov.Snapshot = &snap
-				eff := *k.Credits - k.SpendCredits
-				v := FormatCredits(eff)
-				kov.Balance = &v
-			}
-			po.Keys = append(po.Keys, kov)
-		}
-		for _, st := range statesBy[name] {
-			ao := AlertOverview{RuleKey: st.RuleKey, Firing: st.Firing, Severity: st.Severity}
-			if st.LastFiredAt != nil {
-				v := st.LastFiredAt.UTC().Format(time.RFC3339)
-				ao.LastFiredAt = &v
-			}
-			po.Alerts = append(po.Alerts, ao)
-		}
-		out = append(out, po)
+	return rowsBy, statesBy
+}
+
+// overviewOf 单渠道总览行。
+func (s *Service) overviewOf(name string, binding ChannelBinding,
+	rowsBy map[string][]store.BalanceSnapshot, statesBy map[string][]store.AlertState,
+	now time.Time) ProviderOverview {
+	po := ProviderOverview{
+		Provider: name, Source: binding.Kind, ManualCurrency: binding.Currency,
+		WindowDays: s.opts.WindowDays,
+		Keys:       []KeyOverview{}, Alerts: []AlertOverview{},
 	}
-	return out
+	if binding.BelowCredits != nil {
+		po.Below = FormatCredits(*binding.BelowCredits)
+	}
+	est, keys := s.observe(name, now)
+	po.Currency = est.PrimaryCurrency
+	po.BurnPerDayCredits = est.BurnPerDay
+	po.DaysWithUsage = est.DaysWithUsage
+	po.RemainingHours = est.RemainingHours
+	po.EstimateReason = est.Reason
+	if est.MinEffective != nil {
+		v := FormatCredits(*est.MinEffective)
+		po.MinEffective = &v
+	}
+	rows := rowsBy[name]
+	po.LastCheckedAt = lastCheckedText(rows)
+	rowsByID := make(map[string]store.BalanceSnapshot, len(rows))
+	for _, r := range rows {
+		rowsByID[r.KeyID] = r
+	}
+	for _, k := range keys {
+		po.Keys = append(po.Keys, keyOverviewOf(k, rowsByID[k.KeyID]))
+	}
+	for _, st := range statesBy[name] {
+		po.Alerts = append(po.Alerts, alertOverviewOf(st))
+	}
+	return po
+}
+
+// lastCheckedText 渠道最近一次观测时刻(零值不出 RFC3339 伪时刻)。
+func lastCheckedText(rows []store.BalanceSnapshot) string {
+	var lastChecked time.Time
+	for _, r := range rows {
+		if r.UpdatedAt.After(lastChecked) {
+			lastChecked = r.UpdatedAt
+		}
+	}
+	if lastChecked.IsZero() {
+		return ""
+	}
+	return lastChecked.UTC().Format(time.RFC3339)
+}
+
+// keyOverviewOf 单 key 视图:有效余额 = 快照 − 快照后消耗(credits 不可知即两者皆空)。
+func keyOverviewOf(k KeyBalance, row store.BalanceSnapshot) KeyOverview {
+	asOf := "" // 失败占位行 AsOfAt 为零值,透出会被误读为真实观测时刻
+	if !row.AsOfAt.IsZero() {
+		asOf = row.AsOfAt.UTC().Format(time.RFC3339)
+	}
+	kov := KeyOverview{
+		KeyID:               k.KeyID,
+		Currency:            k.Currency,
+		AsOfAt:              asOf,
+		ConsecutiveFailures: row.ConsecutiveFailures,
+		LastError:           row.LastError,
+	}
+	if k.Credits != nil {
+		snap := FormatCredits(*k.Credits)
+		kov.Snapshot = &snap
+		eff := *k.Credits - k.SpendCredits
+		v := FormatCredits(eff)
+		kov.Balance = &v
+	}
+	return kov
+}
+
+// alertOverviewOf 单规则告警态视图。
+func alertOverviewOf(st store.AlertState) AlertOverview {
+	ao := AlertOverview{RuleKey: st.RuleKey, Firing: st.Firing, Severity: st.Severity}
+	if st.LastFiredAt != nil {
+		v := st.LastFiredAt.UTC().Format(time.RFC3339)
+		ao.LastFiredAt = &v
+	}
+	return ao
 }

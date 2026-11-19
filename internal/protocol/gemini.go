@@ -32,6 +32,17 @@ func geminiInvalid() *GeminiUnsupportedError {
 
 // ---- 入站请求侧 DTO ----
 
+// geminiPartFunctionCall / geminiPartFunctionResponse 独立命名以复用部件翻译辅助函数。
+type geminiPartFunctionCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+}
+
+type geminiPartFunctionResponse struct {
+	Name     string          `json:"name"`
+	Response json.RawMessage `json:"response"`
+}
+
 type geminiPart struct {
 	Text       string `json:"text"`
 	Thought    bool   `json:"thought"`
@@ -43,14 +54,8 @@ type geminiPart struct {
 		MimeType string `json:"mimeType"`
 		FileUri  string `json:"fileUri"`
 	} `json:"fileData"`
-	FunctionCall *struct {
-		Name string          `json:"name"`
-		Args json.RawMessage `json:"args"`
-	} `json:"functionCall"`
-	FunctionResponse *struct {
-		Name     string          `json:"name"`
-		Response json.RawMessage `json:"response"`
-	} `json:"functionResponse"`
+	FunctionCall     *geminiPartFunctionCall     `json:"functionCall"`
+	FunctionResponse *geminiPartFunctionResponse `json:"functionResponse"`
 }
 
 type geminiContent struct {
@@ -95,10 +100,71 @@ func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRe
 		return nil, geminiInvalid()
 	}
 
+	msgs, err := geminiMessagesToChat(gr)
+	if err != nil {
+		return nil, err
+	}
+	// 空串表示不写 tool_choice（无 toolConfig、或 mode 未声明不映射）
+	toolChoice, err := geminiToolChoiceToChat(gr.ToolConfig)
+	if err != nil {
+		return nil, err
+	}
+	tools, err := geminiToolsToChat(gr.Tools)
+	if err != nil {
+		return nil, err
+	}
+
 	var b strings.Builder
 	b.WriteString(`{"model":`)
 	b.Write(mustJSON(pathModel))
+	b.WriteString(`,"messages":[` + strings.Join(msgs, ",") + `]`)
+	if stream {
+		b.WriteString(`,"stream":true`)
+	}
+	writeGeminiSampling(&b, &gr.GenerationConfig)
+	if tools != "" {
+		b.WriteString(`,"tools":` + tools)
+	}
+	if toolChoice != "" {
+		b.WriteString(`,"tool_choice":` + toolChoice)
+	}
+	b.WriteString(`}`)
 
+	// canonical JSON 经既有解析器回填 typed 字段，避免两套解析。
+	return ParseChatRequest([]byte(b.String()))
+}
+
+// writeGeminiSampling generationConfig → chat 采样参数，字段序即 wire 契约。
+func writeGeminiSampling(b *strings.Builder, gc *geminiGenConfig) {
+	if gc.Temperature != nil {
+		b.WriteString(`,"temperature":` + fmt.Sprint(*gc.Temperature))
+	}
+	if gc.TopP != nil {
+		b.WriteString(`,"top_p":` + fmt.Sprint(*gc.TopP))
+	}
+	// topK → canonical top_k，qwen 系字段；与 top_p 同路透传，治理 Raw 层可裁决
+	if gc.TopK != nil {
+		b.WriteString(`,"top_k":` + fmt.Sprint(*gc.TopK))
+	}
+	if gc.MaxOutputTokens != nil && *gc.MaxOutputTokens > 0 {
+		b.WriteString(`,"max_tokens":` + fmt.Sprint(*gc.MaxOutputTokens))
+	}
+	if len(gc.StopSequences) > 0 {
+		tj, _ := json.Marshal(gc.StopSequences)
+		b.WriteString(`,"stop":` + string(tj))
+	}
+}
+
+// geminiToolChoiceToChat toolConfig → chat tool_choice 字面量；缺省或未声明 mode 时返回空串。
+func geminiToolChoiceToChat(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", nil
+	}
+	return translateGeminiToolConfig(raw)
+}
+
+// geminiMessagesToChat 展开为「system 消息 + 逐 content 翻译」的 chat 消息片段列表，元素为 JSON 字面量。
+func geminiMessagesToChat(gr geminiRequest) ([]string, error) {
 	var msgs []string
 	// systemInstruction：字符串快捷形态或 {parts:[...]} 块形态 → 单条 system 消息
 	if len(gr.SystemInstruction) > 0 && string(gr.SystemInstruction) != "null" {
@@ -130,63 +196,36 @@ func TranslateGeminiRequest(pathModel string, body []byte, stream bool) (*ChatRe
 		}
 		msgs = append(msgs, out...)
 	}
-	b.WriteString(`,"messages":[` + strings.Join(msgs, ",") + `]`)
-	if stream {
-		b.WriteString(`,"stream":true`)
-	}
-	if gr.GenerationConfig.Temperature != nil {
-		b.WriteString(`,"temperature":` + fmt.Sprint(*gr.GenerationConfig.Temperature))
-	}
-	if gr.GenerationConfig.TopP != nil {
-		b.WriteString(`,"top_p":` + fmt.Sprint(*gr.GenerationConfig.TopP))
-	}
-	// topK → canonical top_k，qwen 系字段；与 top_p 同路透传，治理 Raw 层可裁决
-	if gr.GenerationConfig.TopK != nil {
-		b.WriteString(`,"top_k":` + fmt.Sprint(*gr.GenerationConfig.TopK))
-	}
-	if gr.GenerationConfig.MaxOutputTokens != nil && *gr.GenerationConfig.MaxOutputTokens > 0 {
-		b.WriteString(`,"max_tokens":` + fmt.Sprint(*gr.GenerationConfig.MaxOutputTokens))
-	}
-	if len(gr.GenerationConfig.StopSequences) > 0 {
-		tj, _ := json.Marshal(gr.GenerationConfig.StopSequences)
-		b.WriteString(`,"stop":` + string(tj))
-	}
-	if len(gr.Tools) > 0 {
-		out := make([]map[string]any, 0, len(gr.Tools))
-		for _, tl := range gr.Tools {
-			for _, fd := range tl.FunctionDeclarations {
-				fn := map[string]any{"name": fd.Name}
-				if fd.Description != "" {
-					fn["description"] = fd.Description
-				}
-				if len(fd.Parameters) > 0 && string(fd.Parameters) != "null" {
-					var schema any
-					if json.Unmarshal(fd.Parameters, &schema) != nil {
-						return nil, geminiInvalid()
-					}
-					fn["parameters"] = schema
-				}
-				out = append(out, map[string]any{"type": "function", "function": fn})
-			}
-		}
-		if len(out) > 0 {
-			tj, _ := json.Marshal(out)
-			b.WriteString(`,"tools":` + string(tj))
-		}
-	}
-	if len(gr.ToolConfig) > 0 && string(gr.ToolConfig) != "null" {
-		tc, err := translateGeminiToolConfig(gr.ToolConfig)
-		if err != nil {
-			return nil, err
-		}
-		if tc != "" {
-			b.WriteString(`,"tool_choice":` + tc)
-		}
-	}
-	b.WriteString(`}`)
+	return msgs, nil
+}
 
-	// canonical JSON 经既有解析器回填 typed 字段，避免两套解析。
-	return ParseChatRequest([]byte(b.String()))
+// geminiToolsToChat 工具声明 → chat function 数组字面量；无有效声明时返回空串。
+func geminiToolsToChat(tools []geminiTool) (string, error) {
+	if len(tools) == 0 {
+		return "", nil
+	}
+	out := make([]map[string]any, 0, len(tools))
+	for _, tl := range tools {
+		for _, fd := range tl.FunctionDeclarations {
+			fn := map[string]any{"name": fd.Name}
+			if fd.Description != "" {
+				fn["description"] = fd.Description
+			}
+			if len(fd.Parameters) > 0 && string(fd.Parameters) != "null" {
+				var schema any
+				if json.Unmarshal(fd.Parameters, &schema) != nil {
+					return "", geminiInvalid()
+				}
+				fn["parameters"] = schema
+			}
+			out = append(out, map[string]any{"type": "function", "function": fn})
+		}
+	}
+	if len(out) == 0 {
+		return "", nil
+	}
+	tj, _ := json.Marshal(out)
+	return string(tj), nil
 }
 
 // geminiSystemToText systemInstruction → 文本，接受字符串快捷形态或 text 部件块。
@@ -218,87 +257,116 @@ func geminiSystemToText(raw json.RawMessage) (string, error) {
 //   - 纯 text 与 inlineData image → 同角色消息，多模态经 image_url data URL 承载；
 //   - assistant 的 functionCall → assistant(tool_calls) 消息，id 按名合成、同名按序去重；
 //   - user 的 functionResponse → role:tool 消息，tool_call_id 回指同名最近的 functionCall。
-func geminiPartsToChat(role string, parts []geminiPart, callSeq map[string]int, lastCallID map[string]string) ([]string, error) {
-	var textParts []string
-	var imageURLs []string
-	var toolCalls []string
-	var msgs []string
-	flushText := func() {
-		if len(textParts) == 0 && len(imageURLs) == 0 {
-			return
-		}
-		if len(imageURLs) == 0 {
-			msgs = append(msgs, `{"role":`+string(mustJSON(role))+`,"content":`+string(mustJSON(strings.Join(textParts, "\n")))+`}`)
-		} else {
-			// 多模态：canonical image_url 形态，data URL 由 inlineData 合成
-			content := `[`
-			for i, u := range imageURLs {
-				if i > 0 {
-					content += `,`
-				}
-				content += `{"type":"image_url","image_url":{"url":` + string(mustJSON(u)) + `}}`
-			}
-			if len(textParts) > 0 {
-				content += `,{"type":"text","text":` + string(mustJSON(strings.Join(textParts, "\n"))) + `}`
-			}
-			content += `]`
-			msgs = append(msgs, `{"role":`+string(mustJSON(role))+`,"content":`+content+`}`)
-		}
-		textParts, imageURLs = nil, nil
-	}
+func geminiPartsToChat(
+	role string, parts []geminiPart, callSeq map[string]int, lastCallID map[string]string,
+) ([]string, error) {
+	acc := &geminiPartsAcc{role: role}
 	for _, p := range parts {
 		// 按部件字段顺序处理：text 与 inlineData 可并存于同一部件，函数部件互斥
 		if p.Text != "" {
-			textParts = append(textParts, p.Text)
+			acc.textParts = append(acc.textParts, p.Text)
 		}
 		if p.InlineData != nil {
 			if !strings.HasPrefix(p.InlineData.MimeType, "image/") {
 				return nil, &GeminiUnsupportedError{Code: CodeGeminiContentPartUnsupported, Status: "INVALID_ARGUMENT"}
 			}
-			imageURLs = append(imageURLs, "data:"+p.InlineData.MimeType+";base64,"+p.InlineData.Data)
+			acc.imageURLs = append(acc.imageURLs, "data:"+p.InlineData.MimeType+";base64,"+p.InlineData.Data)
 		}
 		if p.FileData != nil {
 			return nil, &GeminiUnsupportedError{Code: CodeGeminiContentPartUnsupported, Status: "INVALID_ARGUMENT"}
 		}
 		if p.FunctionCall != nil {
-			flushText()
-			args := "{}"
-			if len(p.FunctionCall.Args) > 0 && string(p.FunctionCall.Args) != "null" {
-				args = string(p.FunctionCall.Args)
-			}
-			name := p.FunctionCall.Name
-			callSeq[name]++
-			id := "call_" + name
-			if callSeq[name] > 1 {
-				id = fmt.Sprintf("%s_%d", id, callSeq[name])
-			}
-			lastCallID[name] = id
-			toolCalls = append(toolCalls, `{"id":`+string(mustJSON(id))+`,"type":"function","function":{"name":`+string(mustJSON(name))+`,"arguments":`+string(mustJSON(args))+`}}`)
+			acc.flushText()
+			acc.toolCalls = append(acc.toolCalls, geminiFunctionCallToChat(p.FunctionCall, callSeq, lastCallID))
 		}
 		if p.FunctionResponse != nil {
-			flushText()
-			id, ok := lastCallID[p.FunctionResponse.Name]
-			if !ok {
-				return nil, geminiInvalid() // response 先于 call，非法序列
+			acc.flushText()
+			out, err := geminiFunctionResponseToChat(p.FunctionResponse, lastCallID)
+			if err != nil {
+				return nil, err
 			}
-			content := "{}"
-			if len(p.FunctionResponse.Response) > 0 && string(p.FunctionResponse.Response) != "null" {
-				content = string(p.FunctionResponse.Response)
-			}
-			msgs = append(msgs, `{"role":"tool","tool_call_id":`+string(mustJSON(id))+`,"content":`+string(mustJSON(content))+`}`)
+			acc.msgs = append(acc.msgs, out)
 		}
 		// thought 请求部件丢弃，签名回传语义不成立
 	}
-	if len(toolCalls) > 0 {
-		content := "null"
-		if len(textParts) > 0 {
-			content = string(mustJSON(strings.Join(textParts, "\n")))
-		}
-		msgs = append(msgs, `{"role":`+string(mustJSON(role))+`,"content":`+content+`,"tool_calls":[`+strings.Join(toolCalls, ",")+`]}`)
-		return msgs, nil
+	return acc.done(), nil
+}
+
+// geminiPartsAcc 单 content 的 parts 翻译累积态：文本与图片等待合并，工具调用成组输出。
+type geminiPartsAcc struct {
+	role      string
+	textParts []string
+	imageURLs []string
+	toolCalls []string
+	msgs      []string
+}
+
+func (a *geminiPartsAcc) flushText() {
+	if len(a.textParts) == 0 && len(a.imageURLs) == 0 {
+		return
 	}
-	flushText()
-	return msgs, nil
+	if len(a.imageURLs) == 0 {
+		a.msgs = append(a.msgs, chatUserTextJSON(a.role, strings.Join(a.textParts, "\n")))
+	} else {
+		// 多模态：canonical image_url 形态，data URL 由 inlineData 合成
+		content := `[`
+		for i, u := range a.imageURLs {
+			if i > 0 {
+				content += `,`
+			}
+			content += `{"type":"image_url","image_url":{"url":` + string(mustJSON(u)) + `}}`
+		}
+		if len(a.textParts) > 0 {
+			content += `,{"type":"text","text":` + string(mustJSON(strings.Join(a.textParts, "\n"))) + `}`
+		}
+		content += `]`
+		a.msgs = append(a.msgs, `{"role":`+string(mustJSON(a.role))+`,"content":`+content+`}`)
+	}
+	a.textParts, a.imageURLs = nil, nil
+}
+
+// done 收尾：有工具调用时文本并入 tool_calls 消息(content 为 null 或合并文本)，否则补发纯文本消息。
+func (a *geminiPartsAcc) done() []string {
+	if len(a.toolCalls) > 0 {
+		content := "null"
+		if len(a.textParts) > 0 {
+			content = string(mustJSON(strings.Join(a.textParts, "\n")))
+		}
+		a.msgs = append(a.msgs, `{"role":`+string(mustJSON(a.role))+`,"content":`+content+
+			`,"tool_calls":[`+strings.Join(a.toolCalls, ",")+`]}`)
+		return a.msgs
+	}
+	a.flushText()
+	return a.msgs
+}
+
+// geminiFunctionCallToChat functionCall → chat tool_calls 元素字面量，并按名登记 id 供 response 回指。
+func geminiFunctionCallToChat(fc *geminiPartFunctionCall, callSeq map[string]int, lastCallID map[string]string) string {
+	args := "{}"
+	if len(fc.Args) > 0 && string(fc.Args) != "null" {
+		args = string(fc.Args)
+	}
+	name := fc.Name
+	callSeq[name]++
+	id := "call_" + name
+	if callSeq[name] > 1 {
+		id = fmt.Sprintf("%s_%d", id, callSeq[name])
+	}
+	lastCallID[name] = id
+	return chatToolCallJSON(id, name, args)
+}
+
+// geminiFunctionResponseToChat functionResponse → role:tool 消息字面量；response 先于 call 属非法序列。
+func geminiFunctionResponseToChat(fr *geminiPartFunctionResponse, lastCallID map[string]string) (string, error) {
+	id, ok := lastCallID[fr.Name]
+	if !ok {
+		return "", geminiInvalid()
+	}
+	content := "{}"
+	if len(fr.Response) > 0 && string(fr.Response) != "null" {
+		content = string(fr.Response)
+	}
+	return chatToolMessageJSON(id, content), nil
 }
 
 // translateGeminiToolConfig functionCallingConfig.mode → chat tool_choice，完整映射含 NONE。
@@ -318,7 +386,8 @@ func translateGeminiToolConfig(raw json.RawMessage) (string, error) {
 		return `"auto"`, nil
 	case "ANY":
 		if len(cfg.FunctionCallingConfig.AllowedFunctionNames) == 1 {
-			return `{"type":"function","function":{"name":` + string(mustJSON(cfg.FunctionCallingConfig.AllowedFunctionNames[0])) + `}}`, nil
+			name := string(mustJSON(cfg.FunctionCallingConfig.AllowedFunctionNames[0]))
+			return `{"type":"function","function":{"name":` + name + `}}`, nil
 		}
 		return `"required"`, nil
 	case "NONE":
@@ -351,17 +420,8 @@ func geminiFinishReasonFromChat(finish string) string {
 func GenerateContentResponseFromChat(chatBody []byte, modelVersion string) ([]byte, error) {
 	var chat struct {
 		Choices []struct {
-			Message struct {
-				Content          *string `json:"content"`
-				ReasoningContent *string `json:"reasoning_content"`
-				ToolCalls        []struct {
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
+			Message      geminiChoiceMessage `json:"message"`
+			FinishReason string              `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *Usage `json:"usage"`
 	}
@@ -373,19 +433,7 @@ func GenerateContentResponseFromChat(chatBody []byte, modelVersion string) ([]by
 	if len(chat.Choices) > 0 {
 		ch := chat.Choices[0]
 		finish = ch.FinishReason
-		if ch.Message.ReasoningContent != nil && *ch.Message.ReasoningContent != "" {
-			parts = append(parts, map[string]any{"text": *ch.Message.ReasoningContent, "thought": true})
-		}
-		if ch.Message.Content != nil && *ch.Message.Content != "" {
-			parts = append(parts, map[string]any{"text": *ch.Message.Content})
-		}
-		for _, tc := range ch.Message.ToolCalls {
-			var args any
-			if json.Unmarshal([]byte(tc.Function.Arguments), &args) != nil || tc.Function.Arguments == "" {
-				args = map[string]any{}
-			}
-			parts = append(parts, map[string]any{"functionCall": map[string]any{"name": tc.Function.Name, "args": args}})
-		}
+		parts = chatMessageToGeminiParts(ch.Message)
 	}
 	candidate := map[string]any{
 		"content":      map[string]any{"parts": parts, "role": "model"},
@@ -403,6 +451,38 @@ func GenerateContentResponseFromChat(chatBody []byte, modelVersion string) ([]by
 		})
 	}
 	return json.Marshal(resp)
+}
+
+// geminiChoiceMessage 是 GenerateContentResponseFromChat 读取的上游 choice.message 子集。
+type geminiChoiceMessage struct {
+	Content          *string `json:"content"`
+	ReasoningContent *string `json:"reasoning_content"`
+	ToolCalls        []struct {
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
+}
+
+// chatMessageToGeminiParts chat 消息 → Gemini parts：thought、text 与 functionCall 按此序发射；
+// arguments 非对象 JSON 或空串时 args 退化为空对象。
+func chatMessageToGeminiParts(msg geminiChoiceMessage) []map[string]any {
+	var parts []map[string]any
+	if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
+		parts = append(parts, map[string]any{"text": *msg.ReasoningContent, "thought": true})
+	}
+	if msg.Content != nil && *msg.Content != "" {
+		parts = append(parts, map[string]any{"text": *msg.Content})
+	}
+	for _, tc := range msg.ToolCalls {
+		var args any
+		if json.Unmarshal([]byte(tc.Function.Arguments), &args) != nil || tc.Function.Arguments == "" {
+			args = map[string]any{}
+		}
+		parts = append(parts, map[string]any{"functionCall": map[string]any{"name": tc.Function.Name, "args": args}})
+	}
+	return parts
 }
 
 // geminiUsage 统一口径 → usageMetadata，total=prompt+completion，cached/thoughts 非零才带。
@@ -470,38 +550,10 @@ func (e *GeminiStreamEncoder) Feed(chunk []byte) [][]byte {
 		if ch.Index != nil && *ch.Index != 0 {
 			continue // 仅映射首 choice，防御多 choice 合流错乱
 		}
-		var deltaParts []map[string]any
-		if ch.Delta.ReasoningContent != nil && *ch.Delta.ReasoningContent != "" {
-			deltaParts = append(deltaParts, map[string]any{"text": *ch.Delta.ReasoningContent, "thought": true})
+		if parts := geminiDeltaParts(&ch.Delta); len(parts) > 0 {
+			out = append(out, e.geminiDeltaFrame(parts))
 		}
-		if ch.Delta.Content != nil && *ch.Delta.Content != "" {
-			deltaParts = append(deltaParts, map[string]any{"text": *ch.Delta.Content})
-		}
-		if len(deltaParts) > 0 {
-			out = append(out, e.geminiDeltaFrame(deltaParts))
-		}
-		for _, raw := range ch.Delta.ToolCalls {
-			var tc struct {
-				Index    *int `json:"index"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			}
-			_ = json.Unmarshal(raw, &tc)
-			idx := 0
-			if tc.Index != nil {
-				idx = *tc.Index
-			}
-			if _, ok := e.toolArgs[idx]; !ok {
-				e.toolArgs[idx] = &strings.Builder{}
-				e.toolOrder = append(e.toolOrder, idx)
-			}
-			if tc.Function.Name != "" {
-				e.toolNames[idx] = tc.Function.Name
-			}
-			e.toolArgs[idx].WriteString(tc.Function.Arguments)
-		}
+		e.accumulateToolCalls(ch.Delta.ToolCalls)
 		if ch.FinishReason != nil && *ch.FinishReason != "" {
 			e.finish = *ch.FinishReason
 		}
@@ -510,6 +562,49 @@ func (e *GeminiStreamEncoder) Feed(chunk []byte) [][]byte {
 		e.usage = c.Usage
 	}
 	return out
+}
+
+// accumulateToolCalls 累积单 choice 的全部工具调用增量。
+func (e *GeminiStreamEncoder) accumulateToolCalls(raws []json.RawMessage) {
+	for _, raw := range raws {
+		e.accumulateToolCall(raw)
+	}
+}
+
+// geminiDeltaParts 单 choice 增量 → Gemini 部件：reasoning 在前为 thought，正文在后。
+func geminiDeltaParts(d *Delta) []map[string]any {
+	var parts []map[string]any
+	if d.ReasoningContent != nil && *d.ReasoningContent != "" {
+		parts = append(parts, map[string]any{"text": *d.ReasoningContent, "thought": true})
+	}
+	if d.Content != nil && *d.Content != "" {
+		parts = append(parts, map[string]any{"text": *d.Content})
+	}
+	return parts
+}
+
+// accumulateToolCall 按内层 index 累积工具名与参数串；Gemini 无增量形态，收束时才成帧。
+func (e *GeminiStreamEncoder) accumulateToolCall(raw json.RawMessage) {
+	var tc struct {
+		Index    *int `json:"index"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}
+	_ = json.Unmarshal(raw, &tc)
+	idx := 0
+	if tc.Index != nil {
+		idx = *tc.Index
+	}
+	if _, ok := e.toolArgs[idx]; !ok {
+		e.toolArgs[idx] = &strings.Builder{}
+		e.toolOrder = append(e.toolOrder, idx)
+	}
+	if tc.Function.Name != "" {
+		e.toolNames[idx] = tc.Function.Name
+	}
+	_, _ = e.toolArgs[idx].WriteString(tc.Function.Arguments)
 }
 
 // flushToolCalls 收束的 functionCall → 独立帧，Gemini 以 STOP 收束工具调用。

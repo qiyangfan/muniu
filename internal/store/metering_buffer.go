@@ -8,26 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
-
-func toAnyPlaceholders(n int) string {
-	out := make([]string, n)
-	for i := range out {
-		out[i] = "?"
-	}
-	return strings.Join(out, ",")
-}
-
-// toAnySlice 把 []int64 转为 []any，作 SQL 变参。
-func toAnySlice(vs []int64) []any {
-	out := make([]any, len(vs))
-	for i, v := range vs {
-		out[i] = v
-	}
-	return out
-}
 
 // ErrBufferFull 缓冲已达容量上限的哨兵错误，调用方阻塞重试形成背压。
 var ErrBufferFull = errors.New("store: 计量缓冲已满")
@@ -97,12 +79,22 @@ func PendingBufferedRows(db *sql.DB, limit int) (out []BufferedRow, skipped []in
 	}
 	_ = rows.Close() // 显式释放游标，腾出唯一连接供删除使用。
 	if len(deadSeqs) > 0 {
-		if _, err := db.Exec(`DELETE FROM metering_buffer WHERE seq IN (`+toAnyPlaceholders(len(deadSeqs))+`)`,
-			toAnySlice(deadSeqs)...); err != nil {
-			return nil, nil, fmt.Errorf("store: 剔除毒丸行: %w", err)
+		if err := deletePoisonRows(db, deadSeqs); err != nil {
+			return nil, nil, err
 		}
 	}
 	return out, skipped, nil
+}
+
+// deletePoisonRows 逐序号删除无法解析的毒丸行。
+// 不用拼接 IN 列表：SQL 文本固定，只按占位符点删，错误文案与整批语义保持不变。
+func deletePoisonRows(db *sql.DB, seqs []int64) error {
+	for _, seq := range seqs {
+		if _, err := db.Exec(`DELETE FROM metering_buffer WHERE seq = ?`, seq); err != nil {
+			return fmt.Errorf("store: 剔除毒丸行: %w", err)
+		}
+	}
+	return nil
 }
 
 // DeleteBufferedRows 按序号删除已续传行。

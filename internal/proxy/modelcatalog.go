@@ -5,6 +5,7 @@ package proxy
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"sort"
 	"time"
 
@@ -46,13 +47,7 @@ func (p *Proxy) HandlerModels() http.Handler {
 		created := loadedAt.Unix()
 		key := auth.KeyFrom(r.Context())
 		if id := r.PathValue("model"); id != "" {
-			known := false
-			for _, a := range aliases {
-				if a == id {
-					known = true
-					break
-				}
-			}
+			known := slices.Contains(aliases, id)
 			if !known {
 				writeModelsJSON(w, http.StatusNotFound, protocol.NewErrorEnvelope(
 					protocol.TypeNotFound, "model_not_found", "模型 "+id+" 不存在", logging.RequestIDFrom(r.Context())))
@@ -66,27 +61,31 @@ func (p *Proxy) HandlerModels() http.Handler {
 			writeModelsJSON(w, http.StatusOK, modelEntry{ID: id, Object: "model", Created: created, OwnedBy: ownedBy})
 			return
 		}
-		// 白名单过滤视图：交集保持 id 升序，全局目录本就升序，过滤保序
-		view := aliases
-		if key != nil && len(key.AllowedModels) > 0 {
-			allowed := make(map[string]struct{}, len(key.AllowedModels))
-			for _, a := range key.AllowedModels {
-				allowed[a] = struct{}{}
-			}
-			out := make([]string, 0, len(aliases))
-			for _, a := range aliases {
-				if _, ok := allowed[a]; ok {
-					out = append(out, a)
-				}
-			}
-			view = out
-		}
+		view := filterAllowed(aliases, key)
 		data := make([]modelEntry, 0, len(view))
 		for _, a := range view {
 			data = append(data, modelEntry{ID: a, Object: "model", Created: created, OwnedBy: ownedBy})
 		}
 		writeModelsJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 	})
+}
+
+// filterAllowed 白名单过滤视图：交集保持 id 升序，全局目录本就升序，过滤保序。
+func filterAllowed(aliases []string, key *auth.KeyInfo) []string {
+	if key == nil || len(key.AllowedModels) == 0 {
+		return aliases
+	}
+	allowed := make(map[string]struct{}, len(key.AllowedModels))
+	for _, a := range key.AllowedModels {
+		allowed[a] = struct{}{}
+	}
+	out := make([]string, 0, len(aliases))
+	for _, a := range aliases {
+		if _, ok := allowed[a]; ok {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func writeModelsJSON(w http.ResponseWriter, status int, v any) {

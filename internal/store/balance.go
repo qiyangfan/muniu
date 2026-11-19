@@ -2,9 +2,9 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -125,52 +125,62 @@ func ListBalanceSnapshots(db *sql.DB, provider string) ([]BalanceSnapshot, error
 	defer func() { _ = rows.Close() }()
 	var out []BalanceSnapshot
 	for rows.Next() {
-		var s BalanceSnapshot
-		var credits, prevCredits sql.NullInt64
-		var asOf, updated, manual, lastErr, prevAsOf sql.NullString
-		if err := rows.Scan(&s.Provider, &s.KeyID, &s.Source, &credits, &s.Currency, &asOf,
-			&prevCredits, &s.PrevCurrency, &prevAsOf,
-			&manual, &lastErr, &s.ConsecutiveFailures, &updated); err != nil {
-			return nil, fmt.Errorf("store: 扫余额快照: %w", err)
-		}
-		if credits.Valid {
-			v := credits.Int64
-			s.BalanceCredits = &v
-		}
-		if prevCredits.Valid {
-			v := prevCredits.Int64
-			s.PrevBalanceCredits = &v
-		}
-		if prevAsOf.Valid && prevAsOf.String != "" {
-			t, perr := parseBalanceTime(prevAsOf.String)
-			if perr != nil {
-				return nil, fmt.Errorf("store: prev_as_of_at 非法 %q: %w", prevAsOf.String, perr)
-			}
-			s.PrevAsOfAt = t
-		}
-		if manual.Valid {
-			s.ManualAmount = manual.String
-		}
-		if lastErr.Valid {
-			s.LastError = lastErr.String
-		}
-		if asOf.Valid && asOf.String != "" {
-			t, perr := parseBalanceTime(asOf.String)
-			if perr != nil {
-				return nil, fmt.Errorf("store: as_of_at 非法 %q: %w", asOf.String, perr)
-			}
-			s.AsOfAt = t
-		}
-		if updated.Valid && updated.String != "" {
-			t, perr := parseBalanceTime(updated.String)
-			if perr != nil {
-				return nil, fmt.Errorf("store: updated_at 非法 %q: %w", updated.String, perr)
-			}
-			s.UpdatedAt = t
+		s, err := scanBalanceSnapshot(rows)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// scanBalanceSnapshot 扫描一行快照并解析可空时间列；非法时间列即整查询报错。
+func scanBalanceSnapshot(rows *sql.Rows) (BalanceSnapshot, error) {
+	var s BalanceSnapshot
+	var credits, prevCredits sql.NullInt64
+	var asOf, updated, manual, lastErr, prevAsOf sql.NullString
+	if err := rows.Scan(&s.Provider, &s.KeyID, &s.Source, &credits, &s.Currency, &asOf,
+		&prevCredits, &s.PrevCurrency, &prevAsOf,
+		&manual, &lastErr, &s.ConsecutiveFailures, &updated); err != nil {
+		return s, fmt.Errorf("store: 扫余额快照: %w", err)
+	}
+	if credits.Valid {
+		v := credits.Int64
+		s.BalanceCredits = &v
+	}
+	if prevCredits.Valid {
+		v := prevCredits.Int64
+		s.PrevBalanceCredits = &v
+	}
+	if err := parseIntoTime(prevAsOf, &s.PrevAsOfAt, "prev_as_of_at"); err != nil {
+		return s, err
+	}
+	if manual.Valid {
+		s.ManualAmount = manual.String
+	}
+	if lastErr.Valid {
+		s.LastError = lastErr.String
+	}
+	if err := parseIntoTime(asOf, &s.AsOfAt, "as_of_at"); err != nil {
+		return s, err
+	}
+	if err := parseIntoTime(updated, &s.UpdatedAt, "updated_at"); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+// parseIntoTime NULL 或空串保持零值,否则按 RFC3339 解析并落到 dst;错误文案带列名。
+func parseIntoTime(v sql.NullString, dst *time.Time, col string) error {
+	if !v.Valid || v.String == "" {
+		return nil
+	}
+	t, err := parseBalanceTime(v.String)
+	if err != nil {
+		return fmt.Errorf("store: %s 非法 %q: %w", col, v.String, err)
+	}
+	*dst = t
+	return nil
 }
 
 // SpendSince 渠道自某 UTC 时刻起的已结算消耗(credit):有效余额衰减的减项。
@@ -232,24 +242,42 @@ func PruneBalanceKeys(db *sql.DB, provider string, keep []string) error {
 	if len(keep) == 0 {
 		return nil
 	}
-	placeholders := strings.TrimRight(strings.Repeat("?,", len(keep)), ",")
-	args := make([]any, 0, len(keep)+2)
-	args = append(args, provider, AccountKeyID)
-	for _, k := range keep {
-		args = append(args, k)
+	if err := deleteStaleBalanceKeys(db, provider, keep); err != nil {
+		return err
+	}
+	return deleteStaleCliffStates(db, provider, keep)
+}
+
+// deleteStaleBalanceKeys 删掉渠道内不在 keep 中、且非账户哨兵的快照行。
+// keep 经 JSON 数组绑定进固定 SQL，避免拼接 IN 列表。
+func deleteStaleBalanceKeys(db *sql.DB, provider string, keep []string) error {
+	arr, err := json.Marshal(keep)
+	if err != nil {
+		return fmt.Errorf("store: 序列化保留 key: %w", err)
 	}
 	if _, err := db.Exec(`DELETE FROM provider_balances
-		WHERE provider = ? AND key_id != ? AND key_id NOT IN (`+placeholders+`)`, args...); err != nil {
+		WHERE provider = ? AND key_id != ?
+		AND key_id NOT IN (SELECT value FROM json_each(?))`,
+		provider, AccountKeyID, string(arr)); err != nil {
 		return fmt.Errorf("store: 清理余额残留 key: %w", err)
 	}
-	cliffPlaceholders := strings.TrimRight(strings.Repeat("?,", len(keep)), ",")
-	cliffArgs := make([]any, 0, len(keep)+1)
-	cliffArgs = append(cliffArgs, provider)
-	for _, k := range keep {
-		cliffArgs = append(cliffArgs, ruleKeyCliffPrefix+k)
+	return nil
+}
+
+// deleteStaleCliffStates 删掉渠道内不在 keep 中的逐 key 骤降规则状态行。
+func deleteStaleCliffStates(db *sql.DB, provider string, keep []string) error {
+	cliffKeys := make([]string, len(keep))
+	for i, k := range keep {
+		cliffKeys[i] = ruleKeyCliffPrefix + k
+	}
+	arr, err := json.Marshal(cliffKeys)
+	if err != nil {
+		return fmt.Errorf("store: 序列化保留规则: %w", err)
 	}
 	if _, err := db.Exec(`DELETE FROM balance_alert_states
-		WHERE provider = ? AND rule_key LIKE '`+ruleKeyCliffPrefix+`%' AND rule_key NOT IN (`+cliffPlaceholders+`)`, cliffArgs...); err != nil {
+		WHERE provider = ? AND rule_key LIKE 'cliff:%'
+		AND rule_key NOT IN (SELECT value FROM json_each(?))`,
+		provider, string(arr)); err != nil {
 		return fmt.Errorf("store: 清理骤降规则残留状态: %w", err)
 	}
 	return nil
@@ -292,33 +320,38 @@ func ListAlertStates(db *sql.DB, provider string) ([]AlertState, error) {
 	defer func() { _ = rows.Close() }()
 	var out []AlertState
 	for rows.Next() {
-		var st AlertState
-		var firing int64
-		var fired, context, updated sql.NullString
-		if err := rows.Scan(&st.Provider, &st.RuleKey, &firing, &st.Severity, &fired, &context, &updated); err != nil {
-			return nil, fmt.Errorf("store: 扫告警状态: %w", err)
-		}
-		st.Firing = firing == 1
-		if fired.Valid && fired.String != "" {
-			t, perr := parseBalanceTime(fired.String)
-			if perr != nil {
-				return nil, fmt.Errorf("store: last_fired_at 非法 %q: %w", fired.String, perr)
-			}
-			st.LastFiredAt = &t
-		}
-		if context.Valid {
-			st.ContextJSON = context.String
-		}
-		if updated.Valid && updated.String != "" {
-			t, perr := parseBalanceTime(updated.String)
-			if perr != nil {
-				return nil, fmt.Errorf("store: updated_at 非法 %q: %w", updated.String, perr)
-			}
-			st.UpdatedAt = t
+		st, err := scanAlertState(rows)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, st)
 	}
 	return out, rows.Err()
+}
+
+// scanAlertState 扫描一行告警状态；last_fired_at 非空时回填指针。
+func scanAlertState(rows *sql.Rows) (AlertState, error) {
+	var st AlertState
+	var firing int64
+	var fired, context, updated sql.NullString
+	if err := rows.Scan(&st.Provider, &st.RuleKey, &firing, &st.Severity, &fired, &context, &updated); err != nil {
+		return st, fmt.Errorf("store: 扫告警状态: %w", err)
+	}
+	st.Firing = firing == 1
+	if fired.Valid && fired.String != "" {
+		t, perr := parseBalanceTime(fired.String)
+		if perr != nil {
+			return st, fmt.Errorf("store: last_fired_at 非法 %q: %w", fired.String, perr)
+		}
+		st.LastFiredAt = &t
+	}
+	if context.Valid {
+		st.ContextJSON = context.String
+	}
+	if err := parseIntoTime(updated, &st.UpdatedAt, "updated_at"); err != nil {
+		return st, err
+	}
+	return st, nil
 }
 
 // ErrBalanceUnsupported balance 能力未装配时的哨兵,管理端点据此返回禁用态。

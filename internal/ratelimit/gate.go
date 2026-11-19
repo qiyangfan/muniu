@@ -33,28 +33,33 @@ func (g *Gate) Middleware(next http.Handler) http.Handler {
 		return g.sharedMiddleware(next)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		info := auth.KeyFrom(r.Context())
-		if info != nil {
-			// 1) 日配额（key 级 + 租户聚合）
-			if g.Quota != nil && g.Quota.exceeded(keyInfoFrom(r.Context()), timeNow()) {
-				g.denyQuota(w, r)
-				return
-			}
-			// 2) RPM 令牌桶
-			if g.RPM != nil {
-				if ok, retry := g.RPM.Allow(info.ID, info.RPMLimit); !ok {
-					g.deny429(w, r, retry)
-					return
-				}
-			}
-			// 3) TPM 滑动窗口
-			if g.TPM != nil && !g.TPM.Allow(info.ID, info.TPMLimit, timeNow()) {
-				g.deny429(w, r, time.Second) // TPM 无 Retry-After 依据，给 1s
-				return
-			}
+		if info := auth.KeyFrom(r.Context()); info != nil && g.denied(w, r, info) {
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// denied 依次过日配额、RPM、TPM 三闸，任一拒绝即写信封并返回 true。
+func (g *Gate) denied(w http.ResponseWriter, r *http.Request, info *auth.KeyInfo) bool {
+	// 1) 日配额（key 级 + 租户聚合）
+	if g.Quota != nil && g.Quota.exceeded(keyInfoFrom(r.Context()), timeNow()) {
+		g.denyQuota(w, r)
+		return true
+	}
+	// 2) RPM 令牌桶
+	if g.RPM != nil {
+		if ok, retry := g.RPM.Allow(info.ID, info.RPMLimit); !ok {
+			g.deny429(w, r, retry)
+			return true
+		}
+	}
+	// 3) TPM 滑动窗口
+	if g.TPM != nil && !g.TPM.Allow(info.ID, info.TPMLimit, timeNow()) {
+		g.deny429(w, r, time.Second) // TPM 无 Retry-After 依据，给 1s
+		return true
+	}
+	return false
 }
 
 // denyQuota 402 信封。

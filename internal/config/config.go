@@ -324,7 +324,7 @@ func Load(pathFlag string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // 路径来自 -c 参数或环境变量,属运维显式指定的启动入参
 	if err != nil {
 		return nil, fmt.Errorf("读取配置 %s: %w", path, err)
 	}
@@ -371,6 +371,9 @@ func expandEnv(raw []byte) ([]byte, error) {
 	return out, nil
 }
 
+// problemAdder 问题收集器:各校验段共用同一实例,追加顺序即报错顺序。
+type problemAdder func(format string, args ...any)
+
 // validate 结构校验；所有问题攒进同一错误一次性报全。
 func (c *Config) validate() error {
 	var problems []string
@@ -378,24 +381,62 @@ func (c *Config) validate() error {
 		problems = append(problems, fmt.Sprintf(format, args...))
 	}
 
+	// 分段只做书写拆分:调用顺序即问题聚合顺序(契约),各段共享同一收集器追加。
+	c.validateCore(add)
+	c.validateBalance(add)
+	c.validateHealth(add)
+	c.validatePlugins(add)
+	c.validateProviders(add)
+	c.validateModelRoutes(add)
+	c.validatePricing(add)
+	c.validateSemantic(add)
+	c.validateOutboundProxy(add)
+
+	if len(problems) > 0 {
+		return errors.New("配置校验失败(全部列出):\n  - " + strings.Join(problems, "\n  - "))
+	}
+	return nil
+}
+
+// validateCore 服务/日志/存储/计量/鉴权/告警段:缺省物化与值域校验。
+func (c *Config) validateCore(add problemAdder) {
+	c.validateServer(add)
+	c.validateLog(add)
+	if c.Storage.SQLite.Path == "" {
+		c.Storage.SQLite.Path = "data/muniu.db"
+	}
+	c.validateMetering(add)
+	c.validateAuth(add)
+	c.validateAlerts(add)
+}
+
+// validateServer 监听地址缺省与三层超时:0 为未配置取缺省,负数为配错拒绝启动。
+// 负值字段不物化(保持原值留给拒绝路径观测),非负字段各自按 0 取缺省。
+func (c *Config) validateServer(add problemAdder) {
 	if c.Server.Addr == "" {
 		c.Server.Addr = ":8787"
 	}
-	if c.Server.Timeouts.Dial <= 0 || c.Server.Timeouts.FirstToken <= 0 || c.Server.Timeouts.ChunkIdle <= 0 {
-		// 0 为未配置，取缺省；负数为配错，拒绝启动
-		if c.Server.Timeouts.Dial < 0 || c.Server.Timeouts.FirstToken < 0 || c.Server.Timeouts.ChunkIdle < 0 {
+	t := &c.Server.Timeouts
+	if t.Dial <= 0 || t.FirstToken <= 0 || t.ChunkIdle <= 0 {
+		if t.Dial < 0 || t.FirstToken < 0 || t.ChunkIdle < 0 {
 			add("server.timeouts 不可为负: %+v", c.Server.Timeouts)
 		}
 	}
-	if c.Server.Timeouts.Dial == 0 {
-		c.Server.Timeouts.Dial = 5
+	t.Dial = nonZeroInt64(t.Dial, 5)
+	t.FirstToken = nonZeroInt64(t.FirstToken, 60)
+	t.ChunkIdle = nonZeroInt64(t.ChunkIdle, 30)
+}
+
+// nonZeroInt64 0 取缺省;非零(含负值,由各自负值闸拒绝)原样保留。
+func nonZeroInt64(v, def int64) int64 {
+	if v != 0 {
+		return v
 	}
-	if c.Server.Timeouts.FirstToken == 0 {
-		c.Server.Timeouts.FirstToken = 60
-	}
-	if c.Server.Timeouts.ChunkIdle == 0 {
-		c.Server.Timeouts.ChunkIdle = 30
-	}
+	return def
+}
+
+// validateLog 日志级别与格式:空取缺省,非空须在枚举内。
+func (c *Config) validateLog(add problemAdder) {
 	if c.Log.Level == "" {
 		c.Log.Level = "info"
 	} else if !logLevels[c.Log.Level] {
@@ -406,34 +447,45 @@ func (c *Config) validate() error {
 	} else if !logForms[c.Log.Format] {
 		add("log.format 非法 %q(允许 json|text)", c.Log.Format)
 	}
-	if c.Storage.SQLite.Path == "" {
-		c.Storage.SQLite.Path = "data/muniu.db"
+}
+
+// validateMetering 计量落盘参数与 sink 取值。
+func (c *Config) validateMetering(add problemAdder) {
+	m := &c.Metering
+	if m.FlushIntervalMs == 0 {
+		m.FlushIntervalMs = 500
 	}
-	if c.Metering.FlushIntervalMs == 0 {
-		c.Metering.FlushIntervalMs = 500
+	if m.FlushBatch == 0 {
+		m.FlushBatch = 256
 	}
-	if c.Metering.FlushBatch == 0 {
-		c.Metering.FlushBatch = 256
-	}
-	if c.Metering.FlushIntervalMs < 0 || c.Metering.FlushBatch < 0 {
+	if m.FlushIntervalMs < 0 || m.FlushBatch < 0 {
 		add("metering 配置非法(flush_interval_ms/flush_batch 不可为负)")
 	}
-	switch c.Metering.Sink {
+	validateMeteringSink(m.Sink, m.IngestURL, m.BufferCapacity, m.FlushBatch, add)
+	if m.BufferCapacity < 0 {
+		add("metering.buffer_capacity 不可为负")
+	}
+}
+
+// validateMeteringSink sink 取值与 ingest 形态下的必填/容量约束。
+func validateMeteringSink(sink, ingestURL string, bufferCapacity, flushBatch int, add problemAdder) {
+	switch sink {
 	case "", "local":
 	case "ingest":
-		if c.Metering.IngestURL == "" {
+		if ingestURL == "" {
 			add("metering.sink=ingest 时 ingest_url 必填")
 		}
 		// 缓冲容量须 ≥ 攒批量，否则单批永远装不进缓冲，续传死锁
-		if c.Metering.BufferCapacity != 0 && c.Metering.BufferCapacity < c.Metering.FlushBatch {
-			add("metering.buffer_capacity(%d) 不可小于 flush_batch(%d)", c.Metering.BufferCapacity, c.Metering.FlushBatch)
+		if bufferCapacity != 0 && bufferCapacity < flushBatch {
+			add("metering.buffer_capacity(%d) 不可小于 flush_batch(%d)", bufferCapacity, flushBatch)
 		}
 	default:
-		add("metering.sink 非法 %q(允许 local|ingest)", c.Metering.Sink)
+		add("metering.sink 非法 %q(允许 local|ingest)", sink)
 	}
-	if c.Metering.BufferCapacity < 0 {
-		add("metering.buffer_capacity 不可为负")
-	}
+}
+
+// validateAuth 平台 key 密钥与吊销同步参数。
+func (c *Config) validateAuth(add problemAdder) {
 	for i, sec := range c.Auth.PlatformKeySecrets {
 		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sec))
 		if err != nil || len(raw) < 16 {
@@ -446,112 +498,106 @@ func (c *Config) validate() error {
 	if c.Auth.RevocationsIntervalSec < 0 {
 		add("auth.revocations_interval_sec 不可为负")
 	}
+}
+
+// validateAlerts 告警 webhook 与去重窗口。
+func (c *Config) validateAlerts(add problemAdder) {
 	if c.Alerts.WebhookURL != "" {
-		if u, err := url.Parse(c.Alerts.WebhookURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		if !isAbsoluteHTTPURL(c.Alerts.WebhookURL) {
 			add("alerts.webhook_url 非法: %q(须为 http(s) 端点)", c.Alerts.WebhookURL)
 		}
 	}
 	if c.Alerts.DedupWindowSec < 0 {
 		add("alerts.dedup_window_sec 不可为负")
 	}
+}
 
-	// ---- balance 余额观测:全局参数缺省与校验 ----
-	if c.Balance.Enabled == nil {
+// validateBalance 余额观测全局参数:缺省物化与值域校验。
+func (c *Config) validateBalance(add problemAdder) {
+	b := &c.Balance
+	if b.Enabled == nil {
 		v := true
-		c.Balance.Enabled = &v
+		b.Enabled = &v
 	}
-	if c.Balance.EvalIntervalSec < 0 || c.Balance.PollTimeoutSec < 0 ||
-		c.Balance.BurnWindowDays < 0 || c.Balance.BurnMinDays < 0 || c.Balance.FailureThreshold < 0 {
+	if b.EvalIntervalSec < 0 || b.PollTimeoutSec < 0 ||
+		b.BurnWindowDays < 0 || b.BurnMinDays < 0 || b.FailureThreshold < 0 {
 		add("balance 数值配置不可为负(eval_interval_sec/poll_timeout_sec/burn_window_days/burn_min_days/failure_threshold)")
 	}
-	if c.Balance.EvalIntervalSec == 0 {
-		c.Balance.EvalIntervalSec = 3600
+	b.EvalIntervalSec = zeroTo(b.EvalIntervalSec, 3600)
+	b.PollTimeoutSec = zeroTo(b.PollTimeoutSec, 10)
+	b.BurnWindowDays = zeroTo(b.BurnWindowDays, 7)
+	b.BurnMinDays = zeroTo(b.BurnMinDays, 2)
+	b.FailureThreshold = zeroTo(b.FailureThreshold, 3)
+	validateMilliKnob(b.BurnSpikeRatioMilli, &b.BurnSpikeRatioMilli, 5000, add,
+		"balance.burn_spike_ratio_milli(%d) 不可为负(非负毫单位,0=禁用)")
+	validateMilliKnob(b.DropRatioMilli, &b.DropRatioMilli, 500, add,
+		"balance.drop_ratio_milli(%d) 不可为负(非负毫单位,0=禁用)")
+	b.RearmRatioMilli = zeroTo(b.RearmRatioMilli, 1200)
+	if b.RearmRatioMilli < 1000 || b.RearmRatioMilli > 10000 {
+		add("balance.rearm_ratio_milli(%d) 须在 [1000,10000]:低于 1000 无迟滞回差,告警会在触发线附近抖动",
+			b.RearmRatioMilli)
 	}
-	if c.Balance.PollTimeoutSec == 0 {
-		c.Balance.PollTimeoutSec = 10
+	validateTierHours(&b.TierHours, add)
+}
+
+// validateTierHours 档位表:缺省物化 + 逐项正数与严格降序(索引 0 为剩余最多的最浅档)。
+func validateTierHours(tiers *[]int64, add problemAdder) {
+	if len(*tiers) == 0 {
+		*tiers = []int64{720, 336, 168, 72, 24} // 30 天/14 天/7 天/3 天/1 天
 	}
-	if c.Balance.BurnWindowDays == 0 {
-		c.Balance.BurnWindowDays = 7
-	}
-	if c.Balance.BurnMinDays == 0 {
-		c.Balance.BurnMinDays = 2
-	}
-	if c.Balance.FailureThreshold == 0 {
-		c.Balance.FailureThreshold = 3
-	}
-	// 异常消耗告警旋钮:nil=缺省,0=禁用是合法形态,负值拒绝(指针区分未配置与显式禁用)
-	if c.Balance.BurnSpikeRatioMilli == nil {
-		v := int64(5000)
-		c.Balance.BurnSpikeRatioMilli = &v
-	} else if *c.Balance.BurnSpikeRatioMilli < 0 {
-		add("balance.burn_spike_ratio_milli(%d) 不可为负(非负毫单位,0=禁用)", *c.Balance.BurnSpikeRatioMilli)
-	}
-	if c.Balance.DropRatioMilli == nil {
-		v := int64(500)
-		c.Balance.DropRatioMilli = &v
-	} else if *c.Balance.DropRatioMilli < 0 {
-		add("balance.drop_ratio_milli(%d) 不可为负(非负毫单位,0=禁用)", *c.Balance.DropRatioMilli)
-	}
-	if c.Balance.RearmRatioMilli == 0 {
-		c.Balance.RearmRatioMilli = 1200
-	}
-	if c.Balance.RearmRatioMilli < 1000 || c.Balance.RearmRatioMilli > 10000 {
-		add("balance.rearm_ratio_milli(%d) 须在 [1000,10000]:低于 1000 无迟滞回差,告警会在触发线附近抖动", c.Balance.RearmRatioMilli)
-	}
-	if len(c.Balance.TierHours) == 0 {
-		c.Balance.TierHours = []int64{720, 336, 168, 72, 24} // 30 天/14 天/7 天/3 天/1 天
-	}
-	for j, h := range c.Balance.TierHours {
+	for j, h := range *tiers {
 		if h <= 0 {
 			add("balance.tier_hours[%d] 须为正小时数,实际 %d", j, h)
 			continue
 		}
-		if j > 0 && h >= c.Balance.TierHours[j-1] {
+		if j > 0 && h >= (*tiers)[j-1] {
 			add("balance.tier_hours 须严格降序(索引 0 为剩余最多的最浅档),%d 处失序", j)
 		}
 	}
+}
 
-	// ---- health 上游健康观测:全局参数缺省与校验 ----
-	if c.Health.Enabled == nil {
+// zeroTo 0 = 未配置取缺省;其余值(含负值,由各段负值闸先行拒绝)原样保留。
+func zeroTo[T int | int64 | float32](v, def T) T {
+	if v == 0 {
+		return def
+	}
+	return v
+}
+
+// validateMilliKnob 异常消耗告警旋钮:nil=缺省,0=禁用是合法形态,负值拒绝
+// (指针区分未配置与显式禁用)。
+func validateMilliKnob(raw *int64, dst **int64, def int64, add problemAdder, negMsg string) {
+	if raw == nil {
+		v := def
+		*dst = &v
+		return
+	}
+	if *raw < 0 {
+		add(negMsg, *raw)
+	}
+}
+
+// validateHealth 健康观测全局参数与渠道级探针声明校验。
+func (c *Config) validateHealth(add problemAdder) {
+	h := &c.Health
+	if h.Enabled == nil {
 		v := true
-		c.Health.Enabled = &v
+		h.Enabled = &v
 	}
-	if c.Health.FreeProbeEnabled == nil {
+	if h.FreeProbeEnabled == nil {
 		v := true
-		c.Health.FreeProbeEnabled = &v
+		h.FreeProbeEnabled = &v
 	}
-	if c.Health.ProbeIntervalSec == 0 {
-		c.Health.ProbeIntervalSec = 300
-	}
-	if c.Health.ProbeTimeoutSec == 0 {
-		c.Health.ProbeTimeoutSec = 10
-	}
-	if c.Health.FailureThreshold == 0 {
-		c.Health.FailureThreshold = 2
-	}
-	if c.Health.OpenSeconds == 0 {
-		c.Health.OpenSeconds = 300
-	}
-	if c.Health.SwitchWindowSec == 0 {
-		c.Health.SwitchWindowSec = 300
-	}
-	if c.Health.SwitchMinSamples == 0 {
-		c.Health.SwitchMinSamples = 20
-	}
-	for name, v := range map[string]int{
-		"probe_interval_sec": c.Health.ProbeIntervalSec, "probe_timeout_sec": c.Health.ProbeTimeoutSec,
-		"failure_threshold": c.Health.FailureThreshold, "open_seconds": c.Health.OpenSeconds,
-		"switch_window_sec": c.Health.SwitchWindowSec, "switch_min_samples": c.Health.SwitchMinSamples,
-	} {
-		if v < 0 {
-			add("health.%s(%d) 不可为负(正整数秒/次)", name, v)
-		}
-	}
-	if c.Health.SwitchRateMilli == 0 {
-		c.Health.SwitchRateMilli = 300
-	}
-	if c.Health.SwitchRateMilli < 0 {
-		add("health.switch_rate_milli(%d) 不可为负(非负毫单位)", c.Health.SwitchRateMilli)
+	h.ProbeIntervalSec = zeroTo(h.ProbeIntervalSec, 300)
+	h.ProbeTimeoutSec = zeroTo(h.ProbeTimeoutSec, 10)
+	h.FailureThreshold = zeroTo(h.FailureThreshold, 2)
+	h.OpenSeconds = zeroTo(h.OpenSeconds, 300)
+	h.SwitchWindowSec = zeroTo(h.SwitchWindowSec, 300)
+	h.SwitchMinSamples = zeroTo(h.SwitchMinSamples, 20)
+	validateHealthNumeric(h, add)
+	h.SwitchRateMilli = zeroTo(h.SwitchRateMilli, 300)
+	if h.SwitchRateMilli < 0 {
+		add("health.switch_rate_milli(%d) 不可为负(非负毫单位)", h.SwitchRateMilli)
 	}
 	// 渠道级:声明 probe_model 的渠道必须持 key(无 key 渠道探针无从发起)
 	for i, p := range c.Providers {
@@ -559,20 +605,47 @@ func (c *Config) validate() error {
 			add("providers[%d](%s) 声明 health.probe_model 但 keys 为空(无 key 渠道探针无从发起)", i, p.Name)
 		}
 	}
-	if c.ControlPlane.PollIntervalSec < 0 {
+	validateControlPlane(c.ControlPlane.PollIntervalSec, c.ControlPlane.PricingURL,
+		c.ControlPlane.TopologyURL, add)
+}
+
+// validateHealthNumeric 健康观测正整数参数逐项负值闸(报错含字段名)。
+func validateHealthNumeric(h *HealthCfg, add problemAdder) {
+	for name, v := range map[string]int{
+		"probe_interval_sec": h.ProbeIntervalSec, "probe_timeout_sec": h.ProbeTimeoutSec,
+		"failure_threshold": h.FailureThreshold, "open_seconds": h.OpenSeconds,
+		"switch_window_sec": h.SwitchWindowSec, "switch_min_samples": h.SwitchMinSamples,
+	} {
+		if v < 0 {
+			add("health.%s(%d) 不可为负(正整数秒/次)", name, v)
+		}
+	}
+}
+
+// validateControlPlane 控制面轮询间隔与价目/拓扑端点形态。
+func validateControlPlane(pollSec int, pricingURL, topologyURL string, add problemAdder) {
+	if pollSec < 0 {
 		add("control_plane.poll_interval_sec 不可为负")
 	}
-	if c.ControlPlane.PricingURL != "" {
-		if u, err := url.Parse(c.ControlPlane.PricingURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			add("control_plane.pricing_url 非法: %q", c.ControlPlane.PricingURL)
-		}
+	if pricingURL != "" && !isAbsoluteHTTPURL(pricingURL) {
+		add("control_plane.pricing_url 非法: %q", pricingURL)
 	}
-	if c.ControlPlane.TopologyURL != "" {
-		if u, err := url.Parse(c.ControlPlane.TopologyURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			add("control_plane.topology_url 非法: %q", c.ControlPlane.TopologyURL)
-		}
+	if topologyURL != "" && !isAbsoluteHTTPURL(topologyURL) {
+		add("control_plane.topology_url 非法: %q", topologyURL)
 	}
+}
 
+// isAbsoluteHTTPURL http(s) 绝对 URL(有 host);解析失败同判非法。
+func isAbsoluteHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
+// validatePlugins 插件声明:缺省启用、重名、路径与资源上限。
+func (c *Config) validatePlugins(add problemAdder) {
 	pluginNames := map[string]bool{}
 	for i, pl := range c.Plugins {
 		if pl.Enabled == nil { // 缺省启用；nil 区分未配置与显式停用
@@ -587,23 +660,31 @@ func (c *Config) validate() error {
 			add("plugins[%d] name %q 重名", i, pl.Name)
 		}
 		pluginNames[pl.Name] = true
-		if pl.Path == "" {
-			add("plugins[%d](%s) 缺 path", i, pl.Name)
-		}
-		if pl.TimeoutMs < 0 {
-			add("plugins[%d](%s) timeout_ms 不可为负", i, pl.Name)
-		}
-		if pl.TimeoutMs > 10_000 {
-			add("plugins[%d](%s) timeout_ms(%d) 超过硬顶 10000(请求体钩子超 10s 属配错)", i, pl.Name, pl.TimeoutMs)
-		}
-		if pl.MemoryLimitMiB < 0 || pl.MemoryLimitMiB > 256 {
-			add("plugins[%d](%s) memory_limit_mib 须在 1..256,实际 %d", i, pl.Name, pl.MemoryLimitMiB)
-		}
-		if pl.PoolSize < 0 || pl.PoolSize > 64 {
-			add("plugins[%d](%s) pool_size 须在 1..64,实际 %d", i, pl.Name, pl.PoolSize)
-		}
+		validatePluginEntry(i, pl, add)
 	}
+}
 
+// validatePluginEntry 单插件值域:路径必填、超时硬顶与资源上限。
+func validatePluginEntry(i int, pl PluginCfg, add problemAdder) {
+	if pl.Path == "" {
+		add("plugins[%d](%s) 缺 path", i, pl.Name)
+	}
+	if pl.TimeoutMs < 0 {
+		add("plugins[%d](%s) timeout_ms 不可为负", i, pl.Name)
+	}
+	if pl.TimeoutMs > 10_000 {
+		add("plugins[%d](%s) timeout_ms(%d) 超过硬顶 10000(请求体钩子超 10s 属配错)", i, pl.Name, pl.TimeoutMs)
+	}
+	if pl.MemoryLimitMiB < 0 || pl.MemoryLimitMiB > 256 {
+		add("plugins[%d](%s) memory_limit_mib 须在 1..256,实际 %d", i, pl.Name, pl.MemoryLimitMiB)
+	}
+	if pl.PoolSize < 0 || pl.PoolSize > 64 {
+		add("plugins[%d](%s) pool_size 须在 1..64,实际 %d", i, pl.Name, pl.PoolSize)
+	}
+}
+
+// validateProviders 渠道声明:名称/适配器/URL/鉴权/限额与余额源(先做 auth 共享校验)。
+func (c *Config) validateProviders(add problemAdder) {
 	if len(c.Providers) == 0 {
 		add("providers 至少需要一个")
 	}
@@ -621,49 +702,70 @@ func (c *Config) validate() error {
 			add("providers[%d] name %q 重名", i, p.Name)
 		}
 		seen[p.Name] = true
-		if !adapterNames[p.Adapter] {
-			add("providers[%d](%s) adapter 非法 %q(允许 %s)", i, p.Name, p.Adapter, adapterDomain)
-		}
-		if u, err := url.Parse(p.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			add("providers[%d](%s) base_url 非法: %q", i, p.Name, p.BaseURL)
-		}
-		if p.ProxyURL != "" {
-			if err := validateOutboundProxyURL(p.ProxyURL); err != nil {
-				add("providers[%d](%s) proxy_url 非法: %v", i, p.Name, err)
-			}
-		}
-		if p.NativeMultimodalEmbeddingsURL != "" {
-			u, err := url.Parse(p.NativeMultimodalEmbeddingsURL)
-			if p.Adapter != "qwen" {
-				add("providers[%d](%s) native_multimodal_embeddings_url 仅 qwen 适配器支持", i, p.Name)
-			}
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Fragment != "" {
-				add("providers[%d](%s) native_multimodal_embeddings_url 非法: %q(须为 http(s) 绝对 URL)", i, p.Name, p.NativeMultimodalEmbeddingsURL)
-			}
-		}
-		if p.NativeResponses && (p.Adapter == "anthropic" || p.Adapter == "gemini") {
-			// 声明制直通：native_responses 是 openai 系 responses 端点的声明。
-			// 桥接族声明即配置错误：anthropic 走 messages 直通，适配器类型即声明；
-			// gemini 为桥接翻译型，无原生直通 lane；静默 no-op 会让误声明看起来已生效
-			add("providers[%d](%s) native_responses 仅 openai 系适配器可声明(anthropic/gemini 为桥接型)", i, p.Name)
-		}
-		validateProviderBalance(i, p, add)
-		if len(p.Keys) == 0 {
-			add("providers[%d](%s) keys 不能为空", i, p.Name)
-		}
-		for j, k := range p.Keys {
-			if int64(k.Weight) > MaxTopologyInt {
-				add("providers[%d](%s).keys[%d] weight 超出数值域(≤%d)", i, p.Name, j, MaxTopologyInt)
-			}
-		}
-		if p.Weight <= 0 || int64(p.Weight) > MaxTopologyInt {
-			add("providers[%d](%s) weight 必须 >0 且 ≤%d, 实际 %d", i, p.Name, MaxTopologyInt, p.Weight)
-		}
-		if p.Priority < 0 || int64(p.Priority) > MaxTopologyInt {
-			add("providers[%d](%s) priority 必须在 [0,%d], 实际 %d", i, p.Name, MaxTopologyInt, p.Priority)
+		validateProviderShape(i, p, add)
+	}
+}
+
+// validateProviderShape 单渠道值域:适配器/URL/声明一致性/限额/余额源/权重优先级。
+func validateProviderShape(i int, p Provider, add problemAdder) {
+	if !adapterNames[p.Adapter] {
+		add("providers[%d](%s) adapter 非法 %q(允许 %s)", i, p.Name, p.Adapter, adapterDomain)
+	}
+	if !isAbsoluteHTTPURL(p.BaseURL) {
+		add("providers[%d](%s) base_url 非法: %q", i, p.Name, p.BaseURL)
+	}
+	if p.ProxyURL != "" {
+		if err := validateOutboundProxyURL(p.ProxyURL); err != nil {
+			add("providers[%d](%s) proxy_url 非法: %v", i, p.Name, err)
 		}
 	}
+	validateNativeMultimodalURL(i, p, add)
+	if p.NativeResponses && (p.Adapter == "anthropic" || p.Adapter == "gemini") {
+		// 声明制直通：native_responses 是 openai 系 responses 端点的声明。
+		// 桥接族声明即配置错误：anthropic 走 messages 直通，适配器类型即声明；
+		// gemini 为桥接翻译型，无原生直通 lane；静默 no-op 会让误声明看起来已生效
+		add("providers[%d](%s) native_responses 仅 openai 系适配器可声明(anthropic/gemini 为桥接型)", i, p.Name)
+	}
+	validateProviderBalance(i, p, add)
+	validateProviderLimits(i, p, add)
+}
 
+// validateNativeMultimodalURL 多模态嵌入端点声明:仅 qwen 支持,且须 http(s) 绝对 URL 无 fragment。
+func validateNativeMultimodalURL(i int, p Provider, add problemAdder) {
+	raw := p.NativeMultimodalEmbeddingsURL
+	if raw == "" {
+		return
+	}
+	u, err := url.Parse(raw)
+	if p.Adapter != "qwen" {
+		add("providers[%d](%s) native_multimodal_embeddings_url 仅 qwen 适配器支持", i, p.Name)
+	}
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Fragment != "" {
+		add("providers[%d](%s) native_multimodal_embeddings_url 非法: %q(须为 http(s) 绝对 URL)",
+			i, p.Name, raw)
+	}
+}
+
+// validateProviderLimits key 列表、权重与优先级值域。
+func validateProviderLimits(i int, p Provider, add problemAdder) {
+	if len(p.Keys) == 0 {
+		add("providers[%d](%s) keys 不能为空", i, p.Name)
+	}
+	for j, k := range p.Keys {
+		if int64(k.Weight) > MaxTopologyInt {
+			add("providers[%d](%s).keys[%d] weight 超出数值域(≤%d)", i, p.Name, j, MaxTopologyInt)
+		}
+	}
+	if p.Weight <= 0 || int64(p.Weight) > MaxTopologyInt {
+		add("providers[%d](%s) weight 必须 >0 且 ≤%d, 实际 %d", i, p.Name, MaxTopologyInt, p.Weight)
+	}
+	if p.Priority < 0 || int64(p.Priority) > MaxTopologyInt {
+		add("providers[%d](%s) priority 必须在 [0,%d], 实际 %d", i, p.Name, MaxTopologyInt, p.Priority)
+	}
+}
+
+// validateModelRoutes 路由别名候选:引用完整性、缺省字段与值域。
+func (c *Config) validateModelRoutes(add problemAdder) {
 	for alias, cands := range c.ModelRoutes {
 		if len(cands) == 0 {
 			add("model_routes[%s] 候选列表为空", alias)
@@ -684,7 +786,10 @@ func (c *Config) validate() error {
 			}
 		}
 	}
+}
 
+// validatePricing 本位币与价目/图片价目:异币种必须配汇率,时间窗倍率走 metering 解析器。
+func (c *Config) validatePricing(add problemAdder) {
 	// 本位币 settlement 为 credit 锚定点；异币种价目必须配置汇率，禁止静默混币种
 	settlement := strings.ToUpper(c.Metering.Settlement)
 	if settlement == "" {
@@ -693,7 +798,13 @@ func (c *Config) validate() error {
 	if !metering.ValidSettlement(settlement) {
 		add("metering.settlement 非法 %q(允许 CNY|USD)", c.Metering.Settlement)
 	}
+	c.validateImagePricing(settlement, add)
+	c.validateModelPricing(settlement, add)
+	c.validateModelCapabilities(add)
+}
 
+// validateImagePricing 图片价目:先解析再换汇,两者各自报错。
+func (c *Config) validateImagePricing(settlement string, add problemAdder) {
 	for alias, pr := range c.ImagePricing {
 		price, err := metering.ParseImagePrice(pr.Currency, pr.Default, pr.Tiers)
 		if err != nil {
@@ -704,19 +815,12 @@ func (c *Config) validate() error {
 			add("image_pricing[%s]: %v", alias, err)
 		}
 	}
+}
 
+// validateModelPricing 模型价目:币种合法性、异币种汇率与分时段倍率窗。
+func (c *Config) validateModelPricing(settlement string, add problemAdder) {
 	for alias, pr := range c.Pricing {
-		if !legalCurrency[strings.ToUpper(pr.Currency)] {
-			add("pricing[%s] currency 非法 %q(允许 CNY|USD)", alias, pr.Currency)
-		}
-		// 异币种报价必须配置汇率；省略币种时按本位币处理。
-		quoteCur := strings.ToUpper(pr.Currency)
-		if quoteCur == "" {
-			quoteCur = settlement
-		}
-		if quoteCur != settlement && c.Metering.FXUSDCNYMilli <= 0 {
-			add("pricing[%s] 报价币种 %s ≠ 本位币 %s,须配置 metering.fx_usd_cny_milli(USD→CNY 毫单位)", alias, quoteCur, settlement)
-		}
+		validateQuoteCurrency(alias, pr.Currency, settlement, c.Metering.FXUSDCNYMilli, add)
 		// 分时段倍率窗：直接引用 metering 解析器做 fail-fast，错误并入整体一次报全
 		if pr.Timezone != "" {
 			if _, err := metering.ParseZoneOffset(pr.Timezone); err != nil {
@@ -728,12 +832,30 @@ func (c *Config) validate() error {
 				add("pricing[%s].time_windows[%d] %v", alias, j, err)
 			}
 			if _, err := metering.ParseMultiplier(tw.Multiplier); err != nil {
-				add("pricing[%s].time_windows[%d].multiplier %q 非法(须 (0,10] 内、≤4 位小数)", alias, j, tw.Multiplier)
+				add("pricing[%s].time_windows[%d].multiplier %q 非法(须 (0,10] 内、≤4 位小数)",
+					alias, j, tw.Multiplier)
 			}
 		}
 	}
+}
 
-	// 模型能力目录：声明制零内置；引用完整性、二元组唯一性、值域在此 fail-fast
+// validateQuoteCurrency 报价币种合法性;异币种必须配置汇率(省略币种按本位币)。
+func validateQuoteCurrency(alias, currency, settlement string, fxMilli int64, add problemAdder) {
+	if !legalCurrency[strings.ToUpper(currency)] {
+		add("pricing[%s] currency 非法 %q(允许 CNY|USD)", alias, currency)
+	}
+	quoteCur := strings.ToUpper(currency)
+	if quoteCur == "" {
+		quoteCur = settlement
+	}
+	if quoteCur != settlement && fxMilli <= 0 {
+		add("pricing[%s] 报价币种 %s ≠ 本位币 %s,须配置 metering.fx_usd_cny_milli(USD→CNY 毫单位)",
+			alias, quoteCur, settlement)
+	}
+}
+
+// validateModelCapabilities 模型能力目录:声明制零内置;引用完整性、二元组唯一性、值域在此 fail-fast
+func (c *Config) validateModelCapabilities(add problemAdder) {
 	seenCaps := map[string]bool{}
 	for i, mc := range c.Models {
 		where := fmt.Sprintf("models[%d](%s,%s)", i, mc.Provider, mc.Model)
@@ -755,51 +877,69 @@ func (c *Config) validate() error {
 		if mc.MaxOutputTokens < 0 {
 			add("%s max_output_tokens 不可为负: %d", where, mc.MaxOutputTokens)
 		}
-		for j, dp := range mc.DropParams {
-			// 空白值若放行，与运行时精确匹配永不命中，声明静默失效且零告警，必须 fail-fast
-			if strings.TrimSpace(dp) == "" {
-				add("%s drop_params[%d] 不可为空", where, j)
-				continue
-			}
-			if dp != strings.TrimSpace(dp) {
-				add("%s drop_params[%d] %q 含首尾空白(将导致声明静默失效)", where, j, dp)
-			}
-			// 协议结构字段是请求骨架而非采样参数，删除必然破坏出站请求，治理语义不覆盖
-			switch dp {
-			case "model", "messages", "stream":
-				add("%s drop_params[%d] %q 为协议结构字段,禁止声明治理", where, j, dp)
-			}
-		}
+		validateDropParams(where, mc.DropParams, add)
 	}
+}
 
-	if c.Semantic.Enabled {
-		if c.Semantic.Dim == 0 {
-			c.Semantic.Dim = 1536
+// validateDropParams 请求参数治理声明:空白值会静默失效,协议结构字段禁止治理。
+func validateDropParams(where string, dps []string, add problemAdder) {
+	for j, dp := range dps {
+		// 空白值若放行，与运行时精确匹配永不命中，声明静默失效且零告警，必须 fail-fast
+		if strings.TrimSpace(dp) == "" {
+			add("%s drop_params[%d] 不可为空", where, j)
+			continue
 		}
-		if c.Semantic.Threshold == 0 {
-			c.Semantic.Threshold = 0.97
+		if dp != strings.TrimSpace(dp) {
+			add("%s drop_params[%d] %q 含首尾空白(将导致声明静默失效)", where, j, dp)
 		}
-		if c.Semantic.TTLHours == 0 {
-			c.Semantic.TTLHours = 24
-		}
-		if c.Semantic.Capacity == 0 {
-			c.Semantic.Capacity = 10_000
+		// 协议结构字段是请求骨架而非采样参数，删除必然破坏出站请求，治理语义不覆盖
+		switch dp {
+		case "model", "messages", "stream":
+			add("%s drop_params[%d] %q 为协议结构字段,禁止声明治理", where, j, dp)
 		}
 	}
-	if c.Semantic.Enabled && strings.TrimSpace(c.Semantic.EmbeddingModel) == "" {
+}
+
+// validateSemantic 语义缓存:缺省物化、嵌入别名引用完整性与值域。
+func (c *Config) validateSemantic(add problemAdder) {
+	sc := &c.Semantic
+	if sc.Enabled {
+		materializeSemanticDefaults(sc)
+	}
+	validateEmbeddingModel(c, add)
+	if sc.Dim < 0 || sc.Threshold < 0 || sc.Threshold > 1 || sc.TTLHours < 0 || sc.Capacity < 0 {
+		add("semantic 数值配置非法(dim/threshold/ttl_hours/capacity 不可为负,threshold ∈ (0,1])")
+	}
+}
+
+// materializeSemanticDefaults 启用态的缺省参数物化(0 = 未配置)。
+func materializeSemanticDefaults(sc *SemanticCfg) {
+	sc.Dim = zeroTo(sc.Dim, 1536)
+	sc.Threshold = zeroTo(sc.Threshold, 0.97)
+	sc.TTLHours = zeroTo(sc.TTLHours, 24)
+	sc.Capacity = zeroTo(sc.Capacity, 10_000)
+}
+
+// validateEmbeddingModel 嵌入模型必填与引用完整性。
+func validateEmbeddingModel(c *Config, add problemAdder) {
+	sc := &c.Semantic
+	if !sc.Enabled {
+		return
+	}
+	model := strings.TrimSpace(sc.EmbeddingModel)
+	if model == "" {
 		add("semantic.embedding_model 必填(enabled=true 时)")
+		return
 	}
 	// 引用完整性：嵌入模型别名必须已在 model_routes 定义，否则语义缓存运行期每次嵌入
 	// 都被 model_not_found 拒绝，表现为缓存静默全空且启动无任何告警
-	if c.Semantic.Enabled && strings.TrimSpace(c.Semantic.EmbeddingModel) != "" {
-		if _, ok := c.ModelRoutes[c.Semantic.EmbeddingModel]; !ok {
-			add("semantic.embedding_model %q 未在 model_routes 中定义", c.Semantic.EmbeddingModel)
-		}
+	if _, ok := c.ModelRoutes[sc.EmbeddingModel]; !ok {
+		add("semantic.embedding_model %q 未在 model_routes 中定义", sc.EmbeddingModel)
 	}
-	if c.Semantic.Dim < 0 || c.Semantic.Threshold < 0 || c.Semantic.Threshold > 1 || c.Semantic.TTLHours < 0 || c.Semantic.Capacity < 0 {
-		add("semantic 数值配置非法(dim/threshold/ttl_hours/capacity 不可为负,threshold ∈ (0,1])")
-	}
+}
 
+// validateOutboundProxy 出站代理形态闸与渠道归一(须在校验末尾:仅合法声明参与归一)。
+func (c *Config) validateOutboundProxy(add problemAdder) {
 	if c.OutboundProxy != "" {
 		if err := validateOutboundProxyURL(c.OutboundProxy); err != nil {
 			add("outbound_proxy 非法: %v", err)
@@ -812,11 +952,6 @@ func (c *Config) validate() error {
 			c.Providers[i].ProxyURL = c.OutboundProxy
 		}
 	}
-
-	if len(problems) > 0 {
-		return errors.New("配置校验失败(全部列出):\n  - " + strings.Join(problems, "\n  - "))
-	}
-	return nil
 }
 
 // validateOutboundProxyURL 出站代理形态闸:scheme 仅 http/https(socks5 需 x/net 传递依赖,
@@ -843,75 +978,117 @@ func validateOutboundProxyURL(raw string) error {
 
 // validateProviderBalance 渠道级余额源声明校验:kind 合法性、按来源类的字段约束
 // 与阈值金额解析在此 fail-fast,问题并入整体校验一次报全。
-func validateProviderBalance(i int, p Provider, add func(format string, args ...any)) {
+func validateProviderBalance(i int, p Provider, add problemAdder) {
 	if p.Balance == nil {
 		return
 	}
-	b := p.Balance
-	src := b.Source
+	src := p.Balance.Source
 	if src == "" {
 		src = balance.SourceNone
 	}
-	legal := false
-	for _, k := range balance.Types() {
-		if k == src {
-			legal = true
-			break
-		}
-	}
-	if !legal {
-		add("providers[%d](%s) balance.source 非法 %q(允许 %s)", i, p.Name, b.Source, strings.Join(balance.Types(), "|"))
+	if !legalBalanceSource(src) {
+		add("providers[%d](%s) balance.source 非法 %q(允许 %s)",
+			i, p.Name, p.Balance.Source, strings.Join(balance.Types(), "|"))
 		return
 	}
 	if src == balance.SourceNone {
-		if b.Below != "" || b.Currency != "" || b.AccessKeyEnv != "" || b.SecretKeyEnv != "" {
-			add("providers[%d](%s) balance.source 为 none 时其余字段不得声明", i, p.Name)
-		}
+		rejectNoneSourceFields(i, p, add)
 		return
 	}
-	if b.Below != "" {
-		if _, err := metering.ParsePrice(b.Below); err != nil {
-			add("providers[%d](%s) balance.below 非法 %q(须为余额币种十进制串,≤9 位小数,不接受符号与空白)", i, p.Name, b.Below)
-		}
-	}
-	notCloud := b.AccessKeyEnv != "" || b.SecretKeyEnv != ""
+	validateBalanceBelow(i, p, add)
 	switch {
 	case balance.IsBearer(src):
-		// 币种声明纪律:其余 Bearer 源上游自述币种,声明即谎报,拒绝;
-		// billing-compat 的 *_usd 字段族不自带可信币种语义——new-api 随站点显示配置
-		// (QuotaDisplayType)可产出 CNY 数值,协议面无法自动判定,故允许显式声明(缺省 USD)。
-		if b.Currency != "" {
-			if src != balance.SourceBillingCompat {
-				add("providers[%d](%s) balance.currency 仅 manual/billing-compat 源声明(%s 币种由上游响应决定)", i, p.Name, src)
-			} else if !legalCurrency[strings.ToUpper(b.Currency)] {
-				add("providers[%d](%s) balance.currency 非法 %q(billing-compat 可选声明,允许 CNY|USD,缺省 USD)", i, p.Name, b.Currency)
-			}
-		}
-		if notCloud {
-			add("providers[%d](%s) balance 凭证字段仅云账务源(aliyun-bss/volc-bss)接受", i, p.Name)
-		}
+		validateBearerBalance(i, p, src, add)
 	case src == balance.SourceManual:
-		if !legalCurrency[strings.ToUpper(b.Currency)] {
-			add("providers[%d](%s) balance.currency 非法 %q(manual 源必填,允许 CNY|USD)", i, p.Name, b.Currency)
+		validateManualBalance(i, p, add)
+	default: // 云账务
+		validateCloudBalance(i, p, add)
+	}
+}
+
+// rejectNoneSourceFields source=none 时其余字段一律不得声明。
+func rejectNoneSourceFields(i int, p Provider, add problemAdder) {
+	b := p.Balance
+	if b.Below == "" && b.Currency == "" && b.AccessKeyEnv == "" && b.SecretKeyEnv == "" {
+		return
+	}
+	add("providers[%d](%s) balance.source 为 none 时其余字段不得声明", i, p.Name)
+}
+
+// validateBalanceBelow 阈值金额须为余额币种十进制串(≤9 位小数,不接受符号与空白)。
+func validateBalanceBelow(i int, p Provider, add problemAdder) {
+	if p.Balance.Below == "" {
+		return
+	}
+	if _, err := metering.ParsePrice(p.Balance.Below); err != nil {
+		add("providers[%d](%s) balance.below 非法 %q(须为余额币种十进制串,≤9 位小数,不接受符号与空白)",
+			i, p.Name, p.Balance.Below)
+	}
+}
+
+// legalBalanceSource 余额源须在 balance.Types() 值域内(单一事实点在 balance 包)。
+func legalBalanceSource(src string) bool {
+	for _, k := range balance.Types() {
+		if k == src {
+			return true
 		}
-		if notCloud {
-			add("providers[%d](%s) balance 凭证字段仅云账务源(aliyun-bss/volc-bss)接受", i, p.Name)
+	}
+	return false
+}
+
+// validateBearerBalance Bearer 族:仅 billing-compat 可声明币种,云账务凭证字段拒收。
+func validateBearerBalance(i int, p Provider, src string, add problemAdder) {
+	b := p.Balance
+	// 币种声明纪律:其余 Bearer 源上游自述币种,声明即谎报,拒绝;
+	// billing-compat 的 *_usd 字段族不自带可信币种语义——new-api 随站点显示配置
+	// (QuotaDisplayType)可产出 CNY 数值,协议面无法自动判定,故允许显式声明(缺省 USD)。
+	if b.Currency != "" {
+		if src != balance.SourceBillingCompat {
+			add("providers[%d](%s) balance.currency 仅 manual/billing-compat 源声明(%s 币种由上游响应决定)",
+				i, p.Name, src)
+		} else if !legalCurrency[strings.ToUpper(b.Currency)] {
+			add("providers[%d](%s) balance.currency 非法 %q(billing-compat 可选声明,允许 CNY|USD,缺省 USD)",
+				i, p.Name, b.Currency)
 		}
-	default: // 云账务:凭证环境变量引用成对必填
-		if b.Currency != "" {
-			add("providers[%d](%s) balance.currency 仅 manual/billing-compat 源声明(云账务币种由上游响应决定)", i, p.Name)
+	}
+	rejectCloudCreds(i, p, add)
+}
+
+// validateManualBalance manual 源:币种必填,云账务凭证字段拒收。
+func validateManualBalance(i int, p Provider, add problemAdder) {
+	b := p.Balance
+	if !legalCurrency[strings.ToUpper(b.Currency)] {
+		add("providers[%d](%s) balance.currency 非法 %q(manual 源必填,允许 CNY|USD)", i, p.Name, b.Currency)
+	}
+	rejectCloudCreds(i, p, add)
+}
+
+// rejectCloudCreds 非云账务源声明凭证字段即拒绝(凭证只归云账务)。
+func rejectCloudCreds(i int, p Provider, add problemAdder) {
+	if p.Balance.AccessKeyEnv == "" && p.Balance.SecretKeyEnv == "" {
+		return
+	}
+	add("providers[%d](%s) balance 凭证字段仅云账务源(aliyun-bss/volc-bss)接受", i, p.Name)
+}
+
+// validateCloudBalance 云账务源:币种不得声明,凭证环境变量引用成对必填且须为变量名。
+func validateCloudBalance(i int, p Provider, add problemAdder) {
+	b := p.Balance
+	if b.Currency != "" {
+		add("providers[%d](%s) balance.currency 仅 manual/billing-compat 源声明(云账务币种由上游响应决定)",
+			i, p.Name)
+	}
+	for _, pair := range [][2]string{
+		{"access_key_env", b.AccessKeyEnv},
+		{"secret_key_env", b.SecretKeyEnv},
+	} {
+		if pair[1] == "" {
+			add("providers[%d](%s) balance.%s 必填(云账务源)", i, p.Name, pair[0])
+			continue
 		}
-		for _, pair := range [][2]string{
-			{"access_key_env", b.AccessKeyEnv},
-			{"secret_key_env", b.SecretKeyEnv},
-		} {
-			if pair[1] == "" {
-				add("providers[%d](%s) balance.%s 必填(云账务源)", i, p.Name, pair[0])
-				continue
-			}
-			if !envNamePattern.MatchString(pair[1]) {
-				add("providers[%d](%s) balance.%s 非法 %q(须为环境变量名,存名不存值)", i, p.Name, pair[0], pair[1])
-			}
+		if !envNamePattern.MatchString(pair[1]) {
+			add("providers[%d](%s) balance.%s 非法 %q(须为环境变量名,存名不存值)",
+				i, p.Name, pair[0], pair[1])
 		}
 	}
 }

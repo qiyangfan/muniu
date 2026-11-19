@@ -25,7 +25,8 @@ const maxUpstreamErrBody = 1 << 20
 const maxNonStreamBody = 64 << 20
 
 // attemptNonStream 单候选非流式执行。返回 false 表示失败且未向客户端输出任何字节，可换道。
-func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, upstream *http.Client, ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
+func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, upstream *http.Client,
+	ad adapter.Adapter, out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
 	m.stream, m.normalize = false, ad.NormalizeUsage
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
@@ -92,7 +93,8 @@ func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, upstrea
 }
 
 // classifyTransportErr 区分客户端断连、首 token 超时和拨号失败。
-func (p *Proxy) classifyTransportErr(w http.ResponseWriter, r *http.Request, err error, firstTokFired *atomic.Bool, m *meterState) (bool, failover.ErrorClass) {
+func (p *Proxy) classifyTransportErr(w http.ResponseWriter, r *http.Request, err error,
+	firstTokFired *atomic.Bool, m *meterState) (bool, failover.ErrorClass) {
 	if r.Context().Err() != nil {
 		// 客户端断连：静默退出，不换道不计失败，判定表口径 context_canceled
 		m.status = "client_cancel"

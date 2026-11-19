@@ -165,100 +165,144 @@ func Evaluate(in EvaluateInput) (map[string]RuleState, []Firing) {
 	}
 	var firings []Firing
 	for _, r := range in.Rules {
-		st := out[r.Key]
-		switch r.Kind {
-		case RuleKindBurnSpike:
-			if in.SpikeRatioMilli == nil {
-				continue // 判据不可得:状态保持
-			}
-			ratio := *in.SpikeRatioMilli
-			if !st.Firing {
-				if ratio >= r.SpikeRatioMilli {
-					f := Firing{
-						RuleKey: r.Key, Severity: "warning", At: in.Now,
-						Summary: fmt.Sprintf("渠道 %s 日均消耗突增至约 %s 倍(上一窗口日均 %s credit/天 → 当前 %s)",
-							in.Provider, ratioText(ratio), FormatCredits(in.PrevBurnPerDay), FormatCredits(in.CurBurnPerDay)),
-						Context: map[string]any{
-							"provider": in.Provider, "rule": r.Key,
-							"prev_burn_per_day_credits": in.PrevBurnPerDay, "cur_burn_per_day_credits": in.CurBurnPerDay,
-							"ratio_milli": ratio,
-						},
-					}
-					firings = append(firings, f)
-					st.Firing, st.Severity, st.LastFiredAt, st.ContextJSON = true, f.Severity, &f.At, marshalContext(f)
-				}
-			} else if ratio < scaledLineDiv(r.SpikeRatioMilli, in.RearmMilli) {
-				st.Firing, st.ContextJSON = false, "" // 回落超迟滞线,重新武装
-			}
-		case RuleKindCliff:
-			tr, ok := in.CliffTransitions[r.CliffKeyID]
-			if !ok || !tr.SameCurrency || tr.PrevCredits <= 0 {
-				continue // 无转移/币种不一致/前值非正:判据不可得,状态保持
-			}
-			dropMilli := (tr.PrevCredits - tr.CurrCredits) * 1000 / tr.PrevCredits
-			stable := dropMilli < r.CliffRatioMilli // 平稳观测:跌幅低于阈值(含余额上升)
-			if !st.Firing {
-				if !stable {
-					f := Firing{
-						RuleKey: r.Key, Severity: "warning", At: in.Now,
-						Summary: fmt.Sprintf("渠道 %s 的 key %s 余额骤降约 %s%%(%s → %s %s)",
-							in.Provider, tr.KeyID, percentText(dropMilli),
-							FormatCredits(tr.PrevCredits), FormatCredits(tr.CurrCredits), tr.Currency),
-						Context: map[string]any{
-							"provider": in.Provider, "rule": r.Key, "key_id": tr.KeyID,
-							"prev_balance": FormatCredits(tr.PrevCredits), "curr_balance": FormatCredits(tr.CurrCredits),
-							"currency": tr.Currency, "drop_ratio_milli": dropMilli,
-						},
-					}
-					firings = append(firings, f)
-					st.Firing, st.Severity, st.LastFiredAt, st.ContextJSON = true, f.Severity, &f.At, marshalContext(f)
-				}
-			} else if stable {
-				st.Firing, st.ContextJSON = false, "" // 平稳观测:重新武装
-			}
-		default: // below 与 tier 判定不变
-			switch {
-			case r.IsTier():
-				if in.Est.RemainingHours == nil {
-					continue // 判据不可得:状态保持
-				}
-				hours := *in.Est.RemainingHours
-				if !st.Firing {
-					if hours <= r.TierHours {
-						summary := fmt.Sprintf("渠道 %s 余额已透支,已进入 %d 小时档告警",
-							in.Provider, r.TierHours)
-						if hours >= 0 {
-							summary = fmt.Sprintf("渠道 %s 余额约可支撑 %s,已进入 %d 小时档告警",
-								in.Provider, HumanRemaining(hours), r.TierHours)
-						}
-						f := newFiring(in, r.Key, SeverityForTier(r.TierHours), summary)
-						firings = append(firings, f)
-						st.Firing, st.Severity, st.LastFiredAt, st.ContextJSON = true, f.Severity, &f.At, marshalContext(f)
-					}
-				} else if hours > scaledLine(r.TierHours, in.RearmMilli) {
-					st.Firing, st.ContextJSON = false, "" // 迟滞解除,重新武装
-				}
-			default: // below
-				if in.BelowValue == nil || r.BelowCredits == nil {
-					continue
-				}
-				value, threshold := *in.BelowValue, *r.BelowCredits
-				if !st.Firing {
-					if value < threshold {
-						f := newFiring(in, r.Key, "critical",
-							fmt.Sprintf("渠道 %s 有效余额 %s %s 已低于告警阈值 %s",
-								in.Provider, FormatCredits(value), in.Est.PrimaryCurrency, FormatCredits(threshold)))
-						firings = append(firings, f)
-						st.Firing, st.Severity, st.LastFiredAt, st.ContextJSON = true, f.Severity, &f.At, marshalContext(f)
-					}
-				} else if value >= scaledLine(threshold, in.RearmMilli) {
-					st.Firing, st.ContextJSON = false, ""
-				}
-			}
-		}
+		st, f := evalRule(in, r, out[r.Key])
 		out[r.Key] = st
+		if f != nil {
+			firings = append(firings, *f)
+		}
 	}
 	return out, firings
+}
+
+// evalRule 单规则推进;nil = 本轮不发射(状态保持或静默解除)。
+func evalRule(in EvaluateInput, r Rule, st RuleState) (RuleState, *Firing) {
+	switch r.Kind {
+	case RuleKindBurnSpike:
+		return evalBurnSpike(in, r, st)
+	case RuleKindCliff:
+		return evalCliff(in, r, st)
+	default: // below 与 tier 判定不变
+		if r.IsTier() {
+			return evalTier(in, r, st)
+		}
+		return evalBelow(in, r, st)
+	}
+}
+
+// fire 置发射态(严重级/发射时刻/上下文随事件一并落状态)。
+func fire(st RuleState, f Firing) RuleState {
+	st.Firing, st.Severity, st.LastFiredAt, st.ContextJSON = true, f.Severity, &f.At, marshalContext(f)
+	return st
+}
+
+// rearm 静默解除:不发事件,历史上下文一并清空。
+func rearm(st RuleState) RuleState {
+	st.Firing, st.ContextJSON = false, ""
+	return st
+}
+
+// evalBurnSpike 燃速突变:比值≥触发线触发,回落到 触发线÷迟滞系数 以下解除。
+func evalBurnSpike(in EvaluateInput, r Rule, st RuleState) (RuleState, *Firing) {
+	if in.SpikeRatioMilli == nil {
+		return st, nil // 判据不可得:状态保持
+	}
+	ratio := *in.SpikeRatioMilli
+	if st.Firing {
+		if ratio < scaledLineDiv(r.SpikeRatioMilli, in.RearmMilli) {
+			return rearm(st), nil // 回落超迟滞线,重新武装
+		}
+		return st, nil
+	}
+	if ratio < r.SpikeRatioMilli {
+		return st, nil
+	}
+	f := Firing{
+		RuleKey: r.Key, Severity: "warning", At: in.Now,
+		Summary: fmt.Sprintf("渠道 %s 日均消耗突增至约 %s 倍(上一窗口日均 %s credit/天 → 当前 %s)",
+			in.Provider, ratioText(ratio), FormatCredits(in.PrevBurnPerDay), FormatCredits(in.CurBurnPerDay)),
+		Context: map[string]any{
+			"provider": in.Provider, "rule": r.Key,
+			"prev_burn_per_day_credits": in.PrevBurnPerDay, "cur_burn_per_day_credits": in.CurBurnPerDay,
+			"ratio_milli": ratio,
+		},
+	}
+	return fire(st, f), &f
+}
+
+// evalCliff 逐 key 骤降:跌幅≥触发线触发,任一次平稳观测(含余额上升)即解除。
+func evalCliff(in EvaluateInput, r Rule, st RuleState) (RuleState, *Firing) {
+	tr, ok := in.CliffTransitions[r.CliffKeyID]
+	if !ok || !tr.SameCurrency || tr.PrevCredits <= 0 {
+		return st, nil // 无转移/币种不一致/前值非正:判据不可得,状态保持
+	}
+	dropMilli := (tr.PrevCredits - tr.CurrCredits) * 1000 / tr.PrevCredits
+	stable := dropMilli < r.CliffRatioMilli
+	if st.Firing {
+		if stable {
+			return rearm(st), nil // 平稳观测:重新武装
+		}
+		return st, nil
+	}
+	if stable {
+		return st, nil
+	}
+	f := Firing{
+		RuleKey: r.Key, Severity: "warning", At: in.Now,
+		Summary: fmt.Sprintf("渠道 %s 的 key %s 余额骤降约 %s%%(%s → %s %s)",
+			in.Provider, tr.KeyID, percentText(dropMilli),
+			FormatCredits(tr.PrevCredits), FormatCredits(tr.CurrCredits), tr.Currency),
+		Context: map[string]any{
+			"provider": in.Provider, "rule": r.Key, "key_id": tr.KeyID,
+			"prev_balance": FormatCredits(tr.PrevCredits), "curr_balance": FormatCredits(tr.CurrCredits),
+			"currency": tr.Currency, "drop_ratio_milli": dropMilli,
+		},
+	}
+	return fire(st, f), &f
+}
+
+// evalTier 剩余小时档位:剩余≤档位触发,回升超 档位×迟滞系数 解除。
+func evalTier(in EvaluateInput, r Rule, st RuleState) (RuleState, *Firing) {
+	if in.Est.RemainingHours == nil {
+		return st, nil // 判据不可得:状态保持
+	}
+	hours := *in.Est.RemainingHours
+	if st.Firing {
+		if hours > scaledLine(r.TierHours, in.RearmMilli) {
+			return rearm(st), nil // 迟滞解除,重新武装
+		}
+		return st, nil
+	}
+	if hours > r.TierHours {
+		return st, nil
+	}
+	summary := fmt.Sprintf("渠道 %s 余额已透支,已进入 %d 小时档告警", in.Provider, r.TierHours)
+	if hours >= 0 {
+		summary = fmt.Sprintf("渠道 %s 余额约可支撑 %s,已进入 %d 小时档告警",
+			in.Provider, HumanRemaining(hours), r.TierHours)
+	}
+	f := newFiring(in, r.Key, SeverityForTier(r.TierHours), summary)
+	return fire(st, f), &f
+}
+
+// evalBelow 绝对阈值:余额<阈值触发,回升到 阈值×迟滞系数 解除。
+func evalBelow(in EvaluateInput, r Rule, st RuleState) (RuleState, *Firing) {
+	if in.BelowValue == nil || r.BelowCredits == nil {
+		return st, nil
+	}
+	value, threshold := *in.BelowValue, *r.BelowCredits
+	if st.Firing {
+		if value >= scaledLine(threshold, in.RearmMilli) {
+			return rearm(st), nil
+		}
+		return st, nil
+	}
+	if value >= threshold {
+		return st, nil
+	}
+	f := newFiring(in, r.Key, "critical",
+		fmt.Sprintf("渠道 %s 有效余额 %s %s 已低于告警阈值 %s",
+			in.Provider, FormatCredits(value), in.Est.PrimaryCurrency, FormatCredits(threshold)))
+	return fire(st, f), &f
 }
 
 // newFiring 组装发射指令与上下文(渠道名 + 余额/估算,余额观测事件载荷契约)。

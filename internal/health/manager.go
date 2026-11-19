@@ -79,36 +79,7 @@ type Manager struct {
 
 // NewManager 构造并兜底缺省;调用方随后 Start()。
 func NewManager(opts Options) *Manager {
-	if opts.Logger == nil {
-		opts.Logger = slog.Default()
-	}
-	if opts.Interval <= 0 {
-		opts.Interval = 5 * time.Minute
-	}
-	if opts.Timeout <= 0 {
-		opts.Timeout = 10 * time.Second
-	}
-	if opts.FailureThreshold <= 0 {
-		opts.FailureThreshold = 2
-	}
-	if opts.OpenFor <= 0 {
-		opts.OpenFor = 5 * time.Minute
-	}
-	if opts.SwitchWindow <= 0 {
-		opts.SwitchWindow = 5 * time.Minute
-	}
-	if opts.SwitchMinSamples <= 0 {
-		opts.SwitchMinSamples = 20
-	}
-	if opts.SwitchRateMilli <= 0 {
-		opts.SwitchRateMilli = 300
-	}
-	if opts.Now == nil {
-		opts.Now = time.Now
-	}
-	if opts.Client == nil {
-		opts.Client = &http.Client{Timeout: opts.Timeout}
-	}
+	opts = managerDefaults(opts)
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		opts: opts, log: opts.Logger, ctx: ctx, cancel: cancel,
@@ -119,6 +90,48 @@ func NewManager(opts Options) *Manager {
 		providerWins: map[string]*RingWindow{},
 		client:       opts.Client,
 	}
+}
+
+// managerDefaults 零值兜底:<=0 视为未配置;默认 client 超时对齐探针超时。
+func managerDefaults(opts Options) Options {
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	opts.Interval = positiveDur(opts.Interval, 5*time.Minute)
+	opts.Timeout = positiveDur(opts.Timeout, 10*time.Second)
+	opts.OpenFor = positiveDur(opts.OpenFor, 5*time.Minute)
+	opts.SwitchWindow = positiveDur(opts.SwitchWindow, 5*time.Minute)
+	opts.FailureThreshold = positiveInt(opts.FailureThreshold, 2)
+	opts.SwitchMinSamples = positiveInt(opts.SwitchMinSamples, 20)
+	opts.SwitchRateMilli = positiveInt64(opts.SwitchRateMilli, 300)
+	if opts.Now == nil {
+		opts.Now = time.Now
+	}
+	if opts.Client == nil {
+		opts.Client = &http.Client{Timeout: opts.Timeout}
+	}
+	return opts
+}
+
+func positiveDur(v, def time.Duration) time.Duration {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+func positiveInt(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+func positiveInt64(v, def int64) int64 {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // Start 启动探针循环(启动即首轮,不等首个间隔)。
@@ -349,36 +362,50 @@ func (m *Manager) Snapshot() ([]ProviderView, []AliasView) {
 	defer m.mu.Unlock()
 	providers := make([]ProviderView, 0, len(m.states))
 	for _, st := range m.states {
-		v := ProviderView{
-			Provider: st.Provider, Phase: st.Phase.String(), LastProbeClass: st.LastProbeClass,
-		}
-		if ch, ok := srcs[st.Provider]; ok {
-			v.FreeProbe = ch.FreeProbe
-			v.ProbeModel = ch.ProbeModel
-		}
-		if st.Phase != PhaseHealthy {
-			v.Reason = st.Reason.String()
-		}
-		if !st.DegradedAt.IsZero() {
-			v.DegradedAt = rfc3339(st.DegradedAt)
-		}
-		if st.Phase == PhaseDegraded && !st.OpenUntil.IsZero() {
-			v.OpenUntil = rfc3339(st.OpenUntil)
-		}
-		if !st.RecoveredAt.IsZero() {
-			v.RecoveredAt = rfc3339(st.RecoveredAt)
-		}
-		if st.HasProbe {
-			v.LastProbeAt = rfc3339(st.LastProbeAt)
-			ok := st.LastProbeOK
-			v.LastProbeOK = &ok
-		}
-		providers = append(providers, v)
+		providers = append(providers, providerViewOf(st, srcs))
 	}
 	aliases := make([]AliasView, 0, len(m.aliasWins))
 	for alias, win := range m.aliasWins {
-		ratio, samples, breached := win.Snapshot(now)
-		aliases = append(aliases, AliasView{Alias: alias, RatioMilli: ratio, Samples: samples, Breached: breached})
+		aliases = append(aliases, aliasViewOf(alias, win, now))
 	}
 	return providers, aliases
+}
+
+// providerViewOf 单渠道视图;健康态不报原因,时间字段仅非零才透出。
+func providerViewOf(st *ProviderState, srcs map[string]Channel) ProviderView {
+	v := ProviderView{
+		Provider: st.Provider, Phase: st.Phase.String(), LastProbeClass: st.LastProbeClass,
+	}
+	if ch, ok := srcs[st.Provider]; ok {
+		v.FreeProbe = ch.FreeProbe
+		v.ProbeModel = ch.ProbeModel
+	}
+	if st.Phase != PhaseHealthy {
+		v.Reason = st.Reason.String()
+	}
+	v.DegradedAt = optionalRFC3339(st.DegradedAt)
+	if st.Phase == PhaseDegraded {
+		v.OpenUntil = optionalRFC3339(st.OpenUntil)
+	}
+	v.RecoveredAt = optionalRFC3339(st.RecoveredAt)
+	if st.HasProbe {
+		v.LastProbeAt = rfc3339(st.LastProbeAt)
+		ok := st.LastProbeOK
+		v.LastProbeOK = &ok
+	}
+	return v
+}
+
+// aliasViewOf 单别名换道率视图。
+func aliasViewOf(alias string, win *RingWindow, now time.Time) AliasView {
+	ratio, samples, breached := win.Snapshot(now)
+	return AliasView{Alias: alias, RatioMilli: ratio, Samples: samples, Breached: breached}
+}
+
+// optionalRFC3339 零值时间不透出(空串 = 事件未发生)。
+func optionalRFC3339(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return rfc3339(t)
 }

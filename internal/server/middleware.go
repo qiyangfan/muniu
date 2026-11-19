@@ -141,23 +141,29 @@ func AdaptAnthropicKey(next http.Handler) http.Handler {
 func AdaptGeminiKey(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1beta/models/") {
-			if r.Header.Get("Authorization") == "" {
-				if k := r.Header.Get("X-Goog-Api-Key"); k != "" {
-					r.Header.Set("Authorization", "Bearer "+k)
-				} else if k := r.URL.Query().Get("key"); k != "" {
-					r.Header.Set("Authorization", "Bearer "+k)
-				}
-			}
-			// ?key= 读后剥离：鉴权已完成载体转换，防泄漏优先于参数透传
-			if r.URL.Query().Get("key") != "" {
-				q := r.URL.Query()
-				q.Del("key")
-				r2 := *r
-				r2.URL = r.URL.JoinPath() // 保留路径；查询串重建
-				r2.URL.RawQuery = q.Encode()
-				r = &r2
-			}
+			r = adaptGeminiRequest(r)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// adaptGeminiRequest 补写 Bearer（头优先、参数兜底）并从 URL 剥离 ?key=；
+// 鉴权已完成载体转换，防泄漏优先于参数透传。
+func adaptGeminiRequest(r *http.Request) *http.Request {
+	if r.Header.Get("Authorization") == "" {
+		if k := r.Header.Get("X-Goog-Api-Key"); k != "" {
+			r.Header.Set("Authorization", "Bearer "+k)
+		} else if k := r.URL.Query().Get("key"); k != "" {
+			r.Header.Set("Authorization", "Bearer "+k)
+		}
+	}
+	if r.URL.Query().Get("key") == "" {
+		return r
+	}
+	q := r.URL.Query()
+	q.Del("key")
+	r2 := *r
+	r2.URL = r.URL.JoinPath() // 保留路径；查询串重建
+	r2.URL.RawQuery = q.Encode()
+	return &r2
 }

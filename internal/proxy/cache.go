@@ -37,7 +37,8 @@ func (p *Proxy) lookupCache(r *http.Request, req *protocol.ChatRequest) (*semant
 }
 
 // lookupCacheFor 检索实现，租户显式传参，测试可直达 skip/hit/miss 分支。
-func (p *Proxy) lookupCacheFor(tenantID string, r *http.Request, req *protocol.ChatRequest) (*semantic.LookupResult, *cachePhase) {
+func (p *Proxy) lookupCacheFor(tenantID string, r *http.Request,
+	req *protocol.ChatRequest) (*semantic.LookupResult, *cachePhase) {
 	defer func() { _ = recover() }() // 缓存路径任何 panic 一律吞掉降级，宁缺勿错
 	skip := func() (*semantic.LookupResult, *cachePhase) {
 		SemanticCacheQueries.Inc(req.Model, "skip")
@@ -80,28 +81,49 @@ func (p *Proxy) lookupCacheFor(tenantID string, r *http.Request, req *protocol.C
 
 // storePhase 在成功响应满足准入条件时写入缓存。
 // 原生响应另存原始体；canonical 转换失败时仍可原生回放。
-func (p *Proxy) storePhase(r *http.Request, ph *cachePhase, req *protocol.ChatRequest, cand failover.Candidate, m *meterState, nat *inboundNative) {
+func (p *Proxy) storePhase(r *http.Request, ph *cachePhase, req *protocol.ChatRequest,
+	cand failover.Candidate, m *meterState, nat *inboundNative) {
 	if p.cache == nil || ph == nil || !ph.enabled {
 		return
 	}
 	defer func() { _ = recover() }()
-	canonical := m.outBody
-	if m.nativePath {
-		canonical = m.canonicalBody
-		if len(canonical) == 0 && len(m.outBody) == 0 {
-			return
-		}
-	}
-	if len(canonical) > 0 && !semantic.ResponseAdmissible(canonical, int(ph.inputTk)) {
+	canonical, ok := cacheCanonical(m)
+	if !ok {
 		return
 	}
-	if !m.nativePath || nat == nil || len(m.outBody) == 0 {
-		if len(canonical) == 0 {
-			return
-		}
-		_ = p.cache.Store(r.Context(), authTenant(r.Context()), ph.fp, req.Model, ph.vec, canonical)
+	if !cacheAdmissible(canonical, ph.inputTk) {
 		return
 	}
+	if m.nativePath && nat != nil && len(m.outBody) > 0 {
+		p.storeNativePhase(r, ph, req, m, nat, canonical)
+		return
+	}
+	if len(canonical) == 0 {
+		return
+	}
+	_ = p.cache.Store(r.Context(), authTenant(r.Context()), ph.fp, req.Model, ph.vec, canonical)
+}
+
+// cacheCanonical 取可用于缓存的 canonical 体；原生路径下两侧皆空视为无可存内容。
+func cacheCanonical(m *meterState) ([]byte, bool) {
+	if !m.nativePath {
+		return m.outBody, true
+	}
+	canonical := m.canonicalBody
+	if len(canonical) == 0 && len(m.outBody) == 0 {
+		return nil, false
+	}
+	return canonical, true
+}
+
+// cacheAdmissible 无 canonical 体时不写入；有则按响应可缓存性判定。
+func cacheAdmissible(canonical []byte, inputTk int64) bool {
+	return len(canonical) == 0 || semantic.ResponseAdmissible(canonical, int(inputTk))
+}
+
+// storeNativePhase 直通响应双存：原生侧原样体与 canonical 侧并列入库，canonical 缺失占位。
+func (p *Proxy) storeNativePhase(r *http.Request, ph *cachePhase, req *protocol.ChatRequest,
+	m *meterState, nat *inboundNative, canonical []byte) {
 	form := cacheFormNonStream
 	if m.stream {
 		form = cacheFormStream
@@ -131,7 +153,8 @@ const (
 
 // replayHit 命中回放：同协议命中且表单兼容时原生体恒等回放，零翻译，writer 直通模式恒等写；
 // 跨协议或表单不兼容时走既有 canonical 路径反向映射。
-func (p *Proxy) replayHit(w http.ResponseWriter, r *http.Request, res *semantic.LookupResult, nat *inboundNative, stream bool) {
+func (p *Proxy) replayHit(w http.ResponseWriter, r *http.Request, res *semantic.LookupResult,
+	nat *inboundNative, stream bool) {
 	if nat != nil && len(res.NativeResponse) > 0 &&
 		res.NativeProto == string(nat.proto) && nativeFormCompatible(res.NativeForm, stream) {
 		setWriterNativeMode(w, true)
@@ -144,7 +167,7 @@ func (p *Proxy) replayHit(w http.ResponseWriter, r *http.Request, res *semantic.
 			h.Set("Content-Type", "application/json")
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(res.NativeResponse)
+		_, _ = w.Write(res.NativeResponse) //nolint:gosec // 条目内容来自本网关上写入的缓存行
 		flush(w)
 		return
 	}
@@ -168,7 +191,7 @@ func nativeFormCompatible(form string, stream bool) bool {
 func (p *Proxy) replayNonStream(w http.ResponseWriter, r *http.Request, res *semantic.LookupResult) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(res.Response)
+	_, _ = w.Write(res.Response) //nolint:gosec // 条目内容来自本网关上写入的缓存行
 }
 
 // replayStream 流式命中回放：按 chunk 拼包回放，finish_reason=stop，补 [DONE] 干净收尾。
@@ -240,7 +263,8 @@ func splitForReplay(content string, size int) []string {
 
 // recordCacheHit 命中行计量：provider=semantic-cache，cost 0。
 // TotalMs 记请求入口到命中判定的真实耗时，含嵌入自调用，这是命中路径的主要延迟。
-func (p *Proxy) recordCacheHit(r *http.Request, req *protocol.ChatRequest, res *semantic.LookupResult, hitStart time.Time) {
+func (p *Proxy) recordCacheHit(r *http.Request, req *protocol.ChatRequest,
+	res *semantic.LookupResult, hitStart time.Time) {
 	if p.pipeline == nil {
 		return
 	}

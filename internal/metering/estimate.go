@@ -128,8 +128,10 @@ func NewRow(p RowParams) UsageRow {
 	}
 	if p.Pricing != nil {
 		currency = p.Pricing.Currency
-		cost = CostWithVision(p.Usage.PromptTokens, p.Usage.CachedTokens, p.Usage.VisionTokens, p.Usage.CompletionTokens,
-			p.Pricing.InputCreditsPerM, p.Pricing.CachedInputCreditsPerM, p.Pricing.VisionInputCreditsPerM, p.Pricing.OutputCreditsPerM)
+		cost = CostWithVision(
+			p.Usage.PromptTokens, p.Usage.CachedTokens, p.Usage.VisionTokens, p.Usage.CompletionTokens,
+			p.Pricing.InputCreditsPerM, p.Pricing.CachedInputCreditsPerM,
+			p.Pricing.VisionInputCreditsPerM, p.Pricing.OutputCreditsPerM)
 		if cost < 0 {
 			cost = 0
 			p.Status, p.ErrorClass, p.Estimated = "error", CostOverflowClass, true

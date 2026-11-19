@@ -57,22 +57,28 @@ type geminiWireContent struct {
 	Parts []map[string]any `json:"parts"`
 }
 
+// geminiEnvMsg 是 buildRequest 从 canonical Raw 读取的单条消息：Message 结构不携带
+// tool_calls/tool_call_id，与 anthropic 桥接一致。
+type geminiEnvMsg struct {
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	ToolCalls []struct {
+		ID       string `json:"id"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
+	ToolCallID string `json:"tool_call_id"`
+}
+
+type geminiEnv struct {
+	Messages []geminiEnvMsg `json:"messages"`
+}
+
 // buildRequest 将规范 chat 请求转为 Gemini 请求体，包括 system、functionCall 和 functionResponse。
 func (g *Gemini) buildRequest(in *protocol.ChatRequest) ([]byte, error) {
-	var env struct {
-		Messages []struct {
-			Role      string          `json:"role"`
-			Content   json.RawMessage `json:"content"`
-			ToolCalls []struct {
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			} `json:"tool_calls"`
-			ToolCallID string `json:"tool_call_id"`
-		} `json:"messages"`
-	}
+	var env geminiEnv
 	if err := json.Unmarshal(in.Raw, &env); err != nil {
 		return nil, fmt.Errorf("canonical 消息解析失败: %w", err)
 	}
@@ -84,61 +90,128 @@ func (g *Gemini) buildRequest(in *protocol.ChatRequest) ([]byte, error) {
 	// tool_call_id 到 name 的回查表，依赖 assistant.tool_calls 先于 role=tool 到达
 	callName := map[string]string{}
 
-	for i := range env.Messages {
-		m := &env.Messages[i]
-		switch m.Role {
-		case "system", "developer":
-			if text := plainText(m.Content); text != "" {
-				if out.SystemInstruction == nil {
-					out.SystemInstruction = &geminiWireContent{Parts: []map[string]any{}}
-				}
-				out.SystemInstruction.Parts = append(out.SystemInstruction.Parts, map[string]any{"text": text})
-			}
-		case "user":
-			c, err := g.userContent(m.Content)
-			if err != nil {
-				return nil, err
-			}
-			if c != nil {
-				out.Contents = append(out.Contents, *c)
-			}
-		case "assistant":
-			c := &geminiWireContent{Role: "model", Parts: []map[string]any{}}
-			if text := plainText(m.Content); text != "" {
-				c.Parts = append(c.Parts, map[string]any{"text": text})
-			}
-			for _, tc := range m.ToolCalls {
-				callName[tc.ID] = tc.Function.Name
-				args, err := jsonDecodeToAny(tc.Function.Arguments)
-				if err != nil {
-					return nil, fmt.Errorf("tool_calls[%s].arguments 非法 JSON: %w", tc.ID, err)
-				}
-				c.Parts = append(c.Parts, map[string]any{"functionCall": map[string]any{"name": tc.Function.Name, "args": args}})
-			}
-			if len(c.Parts) > 0 {
-				out.Contents = append(out.Contents, *c)
-			}
-		case "tool":
-			// Gemini functionResponse 归入 role=user 内容，name 由配对的 tool_calls 回查
-			name, ok := callName[m.ToolCallID]
-			if !ok {
-				return nil, fmt.Errorf("role=tool 消息找不到配对的 tool_calls(id=%s)", m.ToolCallID)
-			}
-			response, err := jsonDecodeToAny(toolContentJSON(m.Content))
-			if err != nil {
-				return nil, fmt.Errorf("role=tool 消息 content 非法 JSON: %w", err)
-			}
-			out.Contents = append(out.Contents, geminiWireContent{Role: "user", Parts: []map[string]any{
-				{"functionResponse": map[string]any{"name": name, "response": response}},
-			}})
-		default:
-			continue // 未知角色不在桥接范围，丢弃；anthropic 桥接同款纪律
-		}
+	if err := g.buildContents(out, env.Messages, callName); err != nil {
+		return nil, err
 	}
 	if len(out.Contents) == 0 {
 		return nil, fmt.Errorf("messages 为空或全部不可翻译")
 	}
 
+	g.buildSampling(out, in, fields)
+	if err := g.buildToolsAndChoice(out, in.Tools, fields); err != nil {
+		return nil, err
+	}
+	return json.Marshal(out)
+}
+
+// buildToolsAndChoice 追加 tools 与 toolConfig；两者分别来自 typed 字段与 Raw 层。
+func (g *Gemini) buildToolsAndChoice(out *geminiWire, tools json.RawMessage, fields map[string]json.RawMessage) error {
+	if tools != nil && string(tools) != "null" {
+		decls, err := g.buildTools(tools)
+		if err != nil {
+			return err
+		}
+		out.Tools = decls
+	}
+	if raw, ok := fields["tool_choice"]; ok && len(raw) > 0 && string(raw) != "null" {
+		if tc := g.toolChoiceOf(raw); tc != nil {
+			out.ToolConfig = map[string]any{"functionCallingConfig": tc}
+		}
+	}
+	return nil
+}
+
+// buildContents 逐条消息累积 contents 与 systemInstruction，同时维护 tool_call_id → name 回查表。
+func (g *Gemini) buildContents(
+	out *geminiWire, msgs []geminiEnvMsg, callName map[string]string,
+) error {
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Role == "system" || m.Role == "developer" {
+			appendSystemInstruction(out, m.Content)
+			continue
+		}
+		c, err := g.roleContent(m, callName)
+		if err != nil {
+			return err
+		}
+		if c != nil {
+			out.Contents = append(out.Contents, *c)
+		}
+	}
+	return nil
+}
+
+// roleContent 非 system 角色消息 → contents 条目；user/assistant 无可翻译内容时返回 nil。
+func (g *Gemini) roleContent(m *geminiEnvMsg, callName map[string]string) (*geminiWireContent, error) {
+	switch m.Role {
+	case "user":
+		return g.userContent(m.Content)
+	case "assistant":
+		c, err := assistantContent(m, callName)
+		if err != nil || len(c.Parts) == 0 {
+			return nil, err
+		}
+		return &c, nil
+	case "tool":
+		c, err := toolContent(m, callName)
+		if err != nil {
+			return nil, err
+		}
+		return &c, nil
+	default:
+		return nil, nil // 未知角色不在桥接范围，丢弃；anthropic 桥接同款纪律
+	}
+}
+
+// appendSystemInstruction system/developer 消息 → systemInstruction 的 text 部件，
+// 空文本不产出部件。
+func appendSystemInstruction(out *geminiWire, content json.RawMessage) {
+	text := plainText(content)
+	if text == "" {
+		return
+	}
+	if out.SystemInstruction == nil {
+		out.SystemInstruction = &geminiWireContent{Parts: []map[string]any{}}
+	}
+	out.SystemInstruction.Parts = append(out.SystemInstruction.Parts, map[string]any{"text": text})
+}
+
+// assistantContent assistant 消息 → role:model 内容：文本在前、functionCall 在后，
+// 并按 tool_call id 登记函数名供后续 role=tool 回查。
+func assistantContent(m *geminiEnvMsg, callName map[string]string) (geminiWireContent, error) {
+	c := geminiWireContent{Role: "model", Parts: []map[string]any{}}
+	if text := plainText(m.Content); text != "" {
+		c.Parts = append(c.Parts, map[string]any{"text": text})
+	}
+	for _, tc := range m.ToolCalls {
+		callName[tc.ID] = tc.Function.Name
+		args, err := jsonDecodeToAny(tc.Function.Arguments)
+		if err != nil {
+			return c, fmt.Errorf("tool_calls[%s].arguments 非法 JSON: %w", tc.ID, err)
+		}
+		c.Parts = append(c.Parts, map[string]any{"functionCall": map[string]any{"name": tc.Function.Name, "args": args}})
+	}
+	return c, nil
+}
+
+// toolContent role=tool 消息 → role:user 的 functionResponse 内容，name 由配对的 tool_calls 回查。
+func toolContent(m *geminiEnvMsg, callName map[string]string) (geminiWireContent, error) {
+	name, ok := callName[m.ToolCallID]
+	if !ok {
+		return geminiWireContent{}, fmt.Errorf("role=tool 消息找不到配对的 tool_calls(id=%s)", m.ToolCallID)
+	}
+	response, err := jsonDecodeToAny(toolContentJSON(m.Content))
+	if err != nil {
+		return geminiWireContent{}, fmt.Errorf("role=tool 消息 content 非法 JSON: %w", err)
+	}
+	return geminiWireContent{Role: "user", Parts: []map[string]any{
+		{"functionResponse": map[string]any{"name": name, "response": response}},
+	}}, nil
+}
+
+// buildSampling 采样参数：max_tokens 优先，top_p/top_k 从 Raw 层读取后透传。
+func (g *Gemini) buildSampling(out *geminiWire, in *protocol.ChatRequest, fields map[string]json.RawMessage) {
 	if in.MaxTokens != nil && *in.MaxTokens > 0 {
 		out.GenerationConfig = map[string]any{"maxOutputTokens": *in.MaxTokens}
 	}
@@ -158,47 +231,47 @@ func (g *Gemini) buildRequest(in *protocol.ChatRequest) ([]byte, error) {
 			gencNotNil(&out.GenerationConfig)["topK"] = topK
 		}
 	}
-	if in.Tools != nil && string(in.Tools) != "null" {
-		var oaiTools []struct {
-			Type     string `json:"type"`
-			Function struct {
-				Name        string          `json:"name"`
-				Description string          `json:"description"`
-				Parameters  json.RawMessage `json:"parameters"`
-			} `json:"function"`
-		}
-		// 解析失败必须报错归 bad_request；静默吞掉会让上游在无工具状态下作答且无痕迹
-		if err := json.Unmarshal(in.Tools, &oaiTools); err != nil {
-			return nil, fmt.Errorf("tools 形态非法(须为 function 数组): %w", err)
-		}
-		var decls []map[string]any
-		for _, tl := range oaiTools {
-			if tl.Type != "function" || tl.Function.Name == "" {
-				continue
-			}
-			decl := map[string]any{"name": tl.Function.Name}
-			if tl.Function.Description != "" {
-				decl["description"] = tl.Function.Description
-			}
-			if len(tl.Function.Parameters) > 0 && string(tl.Function.Parameters) != "null" {
-				params, err := jsonDecodeToAny(string(tl.Function.Parameters))
-				if err != nil {
-					return nil, fmt.Errorf("tools[%s].parameters 非法 JSON: %w", tl.Function.Name, err)
-				}
-				decl["parameters"] = params
-			}
-			decls = append(decls, decl)
-		}
-		if len(decls) > 0 {
-			out.Tools = []map[string]any{{"functionDeclarations": decls}}
-		}
+}
+
+// oaiFunctionTool 是 canonical tools 数组的元素形态。
+type oaiFunctionTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+	} `json:"function"`
+}
+
+// buildTools canonical tools → functionDeclarations 包裹；非 function 或缺名的条目静默跳过。
+func (g *Gemini) buildTools(raw json.RawMessage) ([]map[string]any, error) {
+	var oaiTools []oaiFunctionTool
+	// 解析失败必须报错归 bad_request；静默吞掉会让上游在无工具状态下作答且无痕迹
+	if err := json.Unmarshal(raw, &oaiTools); err != nil {
+		return nil, fmt.Errorf("tools 形态非法(须为 function 数组): %w", err)
 	}
-	if raw, ok := fields["tool_choice"]; ok && len(raw) > 0 && string(raw) != "null" {
-		if tc := g.toolChoiceOf(raw); tc != nil {
-			out.ToolConfig = map[string]any{"functionCallingConfig": tc}
+	var decls []map[string]any
+	for _, tl := range oaiTools {
+		if tl.Type != "function" || tl.Function.Name == "" {
+			continue
 		}
+		decl := map[string]any{"name": tl.Function.Name}
+		if tl.Function.Description != "" {
+			decl["description"] = tl.Function.Description
+		}
+		if len(tl.Function.Parameters) > 0 && string(tl.Function.Parameters) != "null" {
+			params, err := jsonDecodeToAny(string(tl.Function.Parameters))
+			if err != nil {
+				return nil, fmt.Errorf("tools[%s].parameters 非法 JSON: %w", tl.Function.Name, err)
+			}
+			decl["parameters"] = params
+		}
+		decls = append(decls, decl)
 	}
-	return json.Marshal(out)
+	if len(decls) == 0 {
+		return nil, nil
+	}
+	return []map[string]any{{"functionDeclarations": decls}}, nil
 }
 
 // gencNotNil 惰性初始化 generationConfig，仅存在非缺省参数时才出现在 wire。
@@ -234,6 +307,15 @@ func (g *Gemini) toolChoiceOf(raw json.RawMessage) map[string]any {
 	return nil
 }
 
+// userPart 是 user 消息 content 数组的元素形态。
+type userPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ImageURL struct {
+		URL string `json:"url"`
+	} `json:"image_url"`
+}
+
 // userContent 将 user 消息转为 content：文本与 data URL 图片映射 inlineData，http(s) URL 映射 fileData。
 func (g *Gemini) userContent(raw json.RawMessage) (*geminiWireContent, error) {
 	if len(raw) == 0 {
@@ -246,39 +328,51 @@ func (g *Gemini) userContent(raw json.RawMessage) (*geminiWireContent, error) {
 		}
 		return &geminiWireContent{Role: "user", Parts: []map[string]any{{"text": s}}}, nil
 	}
-	var parts []struct {
-		Type     string `json:"type"`
-		Text     string `json:"text"`
-		ImageURL struct {
-			URL string `json:"url"`
-		} `json:"image_url"`
-	}
+	var parts []userPart
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		return nil, fmt.Errorf("user content 形态非法: %w", err)
 	}
 	out := &geminiWireContent{Role: "user", Parts: []map[string]any{}}
 	for _, p := range parts {
-		switch {
-		case p.Text != "":
-			out.Parts = append(out.Parts, map[string]any{"text": p.Text})
-		case p.ImageURL.URL != "":
-			const dataPrefix = "data:"
-			if strings.HasPrefix(p.ImageURL.URL, dataPrefix) {
-				mime, b64, ok := parseDataURL(p.ImageURL.URL)
-				if !ok {
-					return nil, fmt.Errorf("image_url data URL 形态非法: %q", truncateURL(p.ImageURL.URL))
-				}
-				out.Parts = append(out.Parts, map[string]any{"inlineData": map[string]any{"mimeType": mime, "data": b64}})
-			} else {
-				// http(s) URL 映射 fileData{fileUri}，文件拉取由上游负责
-				out.Parts = append(out.Parts, map[string]any{"fileData": map[string]any{"fileUri": p.ImageURL.URL}})
-			}
+		part, err := userPartToGemini(p)
+		if err != nil {
+			return nil, err
+		}
+		if part != nil {
+			out.Parts = append(out.Parts, part)
 		}
 	}
 	if len(out.Parts) == 0 {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// userPartToGemini 单部件映射：文本优先，其后图片（data URL → inlineData，其余 → fileData）；
+// 两者皆空返回 nil。
+func userPartToGemini(p userPart) (map[string]any, error) {
+	switch {
+	case p.Text != "":
+		return map[string]any{"text": p.Text}, nil
+	case p.ImageURL.URL != "":
+		return imageURLToGeminiPart(p.ImageURL.URL)
+	default:
+		return nil, nil
+	}
+}
+
+// imageURLToGeminiPart data URL 解析为 inlineData，非 data URL 视为 http(s) 文件引用。
+func imageURLToGeminiPart(url string) (map[string]any, error) {
+	const dataPrefix = "data:"
+	if !strings.HasPrefix(url, dataPrefix) {
+		// http(s) URL 映射 fileData{fileUri}，文件拉取由上游负责
+		return map[string]any{"fileData": map[string]any{"fileUri": url}}, nil
+	}
+	mime, b64, ok := parseDataURL(url)
+	if !ok {
+		return nil, fmt.Errorf("image_url data URL 形态非法: %q", truncateURL(url))
+	}
+	return map[string]any{"inlineData": map[string]any{"mimeType": mime, "data": b64}}, nil
 }
 
 // parseDataURL 解析 data:mime;base64,payload，返回 mime、payload 和是否成功。
@@ -424,6 +518,34 @@ func (s *geminiStreamSeq) event(data []byte) ([]byte, EventMeta, error) {
 	return s.g.streamEvent(data, &s.toolIdx, s.callSeq)
 }
 
+// geminiStreamPart 是流帧 candidates[].content.parts[] 的元素形态。
+type geminiStreamPart struct {
+	Text         string                        `json:"text"`
+	Thought      bool                          `json:"thought"`
+	FunctionCall *geminiStreamPartFunctionCall `json:"functionCall"`
+}
+
+type geminiStreamPartFunctionCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+}
+
+// geminiStreamFrame 是流帧的最小解析形态。
+type geminiStreamFrame struct {
+	Candidates []struct {
+		Content struct {
+			Parts []geminiStreamPart `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	UsageMetadata *geminiUsageMetadata `json:"usageMetadata"`
+	Error         *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
+}
+
 // streamEvent 帧翻译核心：测序态跨帧连续计数并同名去重，无状态态按帧内计数。
 // 一帧聚合为一个 delta，文本、思考与工具调用可并存，finish_reason 可与内容同帧；
 // 逐对象裸拼接会产出非法 SSE data 行。
@@ -435,121 +557,128 @@ func (g *Gemini) streamEvent(data []byte, toolIdx *int, callSeq map[string]int) 
 	if trimmed == "[DONE]" {
 		return data, EventMeta{IsDone: true}, nil // 兼容性防御：真 [DONE] 到达按既有语义收尾
 	}
-	var frame struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string `json:"text"`
-					Thought      bool   `json:"thought"`
-					FunctionCall *struct {
-						Name string          `json:"name"`
-						Args json.RawMessage `json:"args"`
-					} `json:"functionCall"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
-		UsageMetadata *geminiUsageMetadata `json:"usageMetadata"`
-		Error         *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-			Status  string `json:"status"`
-		} `json:"error"`
-	}
+	var frame geminiStreamFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
 		return nil, EventMeta{}, fmt.Errorf("gemini: 解析流帧: %w", err)
 	}
 	if frame.Error != nil {
 		return nil, EventMeta{}, fmt.Errorf("gemini: 流内错误帧 status=%s", frame.Error.Status)
 	}
-	hasContent := false
-	frameCalls := 0 // 帧内 functionCall 序，无状态形态的局部计数
-	var reasoning, content strings.Builder
-	var toolDeltas []string
-	finish := ""
-	usagePart := ""
+	agg := &geminiFrameAgg{callSeq: callSeq, toolIdx: toolIdx}
 	for _, c := range frame.Candidates {
-		for _, p := range c.Content.Parts {
-			switch {
-			case p.Text != "" && p.Thought:
-				reasoning.WriteString(p.Text)
-				hasContent = true
-			case p.Text != "":
-				content.WriteString(p.Text)
-				hasContent = true
-			case p.FunctionCall != nil:
-				args := string(p.FunctionCall.Args)
-				if args == "" || args == "null" {
-					args = "{}"
-				}
-				// index/id 合成：每流测序按流计数并同名去重；无状态按帧内序，id 维持既有约定
-				idx, id := frameCalls, "call_"+p.FunctionCall.Name
-				if callSeq != nil {
-					callSeq[p.FunctionCall.Name]++
-					if n := callSeq[p.FunctionCall.Name]; n > 1 {
-						id = fmt.Sprintf("%s_%d", id, n)
-					}
-					idx = *toolIdx
-					*toolIdx++
-				}
-				frameCalls++
-				// id 整体经 JSON 编码：名字含引号或反斜杠时裸拼接会产出非法 JSON 帧
-				toolDeltas = append(toolDeltas, `{"index":`+itoa64(int64(idx))+`,"id":`+mustJSONStrGemini(id)+
-					`,"type":"function","function":{"name":`+mustJSONStrGemini(p.FunctionCall.Name)+
-					`,"arguments":`+mustJSONStrGemini(args)+`}}`)
-				hasContent = true
-			}
-		}
+		agg.addParts(c.Content.Parts)
 		if c.FinishReason != "" {
-			finish = c.FinishReason
-			if frame.UsageMetadata != nil {
-				// 统一形态键名；usageMetadata 是上游原生键，不进 chunk
-				u := frame.UsageMetadata
-				usagePart = `,"usage":{"prompt_tokens":` + itoa64(u.PromptTokenCount) +
-					`,"completion_tokens":` + itoa64(u.CandidatesTokenCount) +
-					`,"cached_tokens":` + itoa64(u.CachedContentTokenCount) +
-					`,"reasoning_tokens":` + itoa64(u.ThoughtsTokenCount) + `}`
-			}
+			agg.finish = c.FinishReason
+			// usageMetadata 是上游原生键，不进 chunk，仅在终帧转统一形态
+			agg.usagePart = geminiUsageFragment(&frame.UsageMetadata)
 		}
 	}
-	var payload strings.Builder
-	if reasoning.Len() > 0 || content.Len() > 0 || len(toolDeltas) > 0 {
-		var fields []string
-		if reasoning.Len() > 0 {
-			fields = append(fields, `"reasoning_content":`+mustJSONStrGemini(reasoning.String()))
-		}
-		if content.Len() > 0 {
-			fields = append(fields, `"content":`+mustJSONStrGemini(content.String()))
-		}
-		if len(toolDeltas) > 0 {
-			fields = append(fields, `"tool_calls":[`+strings.Join(toolDeltas, ",")+`]`)
-		}
-		if finish != "" {
-			payload.WriteString(`{"choices":[{"index":0,"delta":{` + strings.Join(fields, ",") +
-				`},"finish_reason":` + mustJSONStrGemini(g.finishToChat(finish)) + `}]` + usagePart + `}`)
-		} else {
-			payload.WriteString(`{"choices":[{"index":0,"delta":{` + strings.Join(fields, ",") + `}}]}`)
-		}
-	} else if finish != "" {
-		payload.WriteString(`{"choices":[{"index":0,"delta":{},"finish_reason":` +
-			mustJSONStrGemini(g.finishToChat(finish)) + `}]` + usagePart + `}`)
+	if payload := agg.payload(); payload != nil {
+		return payload, EventMeta{HasContent: agg.hasContent, IsUsage: frame.UsageMetadata != nil}, nil
 	}
-	if payload.Len() == 0 {
-		// 纯 usage 帧或空 candidates：usage 单独成帧供计量，统一形态键名
-		if frame.UsageMetadata != nil {
-			u := frame.UsageMetadata
-			return []byte(`{"choices":[],"usage":{"prompt_tokens":` + itoa64(u.PromptTokenCount) +
-				`,"completion_tokens":` + itoa64(u.CandidatesTokenCount) +
-				`,"cached_tokens":` + itoa64(u.CachedContentTokenCount) +
-				`,"reasoning_tokens":` + itoa64(u.ThoughtsTokenCount) + `}}`), EventMeta{IsUsage: true}, nil
-		}
-		return nil, EventMeta{}, nil
+	// 纯 usage 帧或空 candidates：usage 单独成帧供计量，统一形态键名
+	if usage := geminiUsageFragment(&frame.UsageMetadata); usage != "" {
+		return []byte(`{"choices":[]` + usage + `}`), EventMeta{IsUsage: true}, nil
 	}
-	return []byte(payload.String()), EventMeta{HasContent: hasContent, IsUsage: frame.UsageMetadata != nil}, nil
+	return nil, EventMeta{}, nil
+}
+
+// geminiFrameAgg 单帧聚合态：文本、思考、工具调用与终帧要素累积后一次性成帧。
+type geminiFrameAgg struct {
+	callSeq    map[string]int
+	toolIdx    *int
+	frameCalls int // 帧内 functionCall 序，无状态形态的局部计数
+	reasoning  strings.Builder
+	content    strings.Builder
+	toolDeltas []string
+	hasContent bool
+	finish     string
+	usagePart  string // 形如 ,"usage":{...}，空串表示不带 usage
+}
+
+func (a *geminiFrameAgg) addParts(parts []geminiStreamPart) {
+	for _, p := range parts {
+		switch {
+		case p.Text != "" && p.Thought:
+			a.reasoning.WriteString(p.Text)
+			a.hasContent = true
+		case p.Text != "":
+			a.content.WriteString(p.Text)
+			a.hasContent = true
+		case p.FunctionCall != nil:
+			a.toolDeltas = append(a.toolDeltas, a.toolCallDelta(p.FunctionCall))
+			a.hasContent = true
+		}
+	}
+}
+
+// toolCallDelta 单个 functionCall → tool_calls 增量字面量。
+// index/id 合成：每流测序按流计数并同名去重；无状态按帧内序，id 维持既有约定。
+func (a *geminiFrameAgg) toolCallDelta(fc *geminiStreamPartFunctionCall) string {
+	args := string(fc.Args)
+	if args == "" || args == "null" {
+		args = "{}"
+	}
+	idx, id := a.frameCalls, "call_"+fc.Name
+	if a.callSeq != nil {
+		a.callSeq[fc.Name]++
+		if n := a.callSeq[fc.Name]; n > 1 {
+			id = fmt.Sprintf("%s_%d", id, n)
+		}
+		idx = *a.toolIdx
+		*a.toolIdx++
+	}
+	a.frameCalls++
+	// id 整体经 JSON 编码：名字含引号或反斜杠时裸拼接会产出非法 JSON 帧
+	return `{"index":` + itoa64(int64(idx)) + `,"id":` + mustJSONStrGemini(id) +
+		`,"type":"function","function":{"name":` + mustJSONStrGemini(fc.Name) +
+		`,"arguments":` + mustJSONStrGemini(args) + `}}`
+}
+
+// payload 组装本帧 chunk；无内容也无 finish 时返回 nil，交由调用方判定 usage 帧。
+func (a *geminiFrameAgg) payload() []byte {
+	if a.reasoning.Len() == 0 && a.content.Len() == 0 && len(a.toolDeltas) == 0 {
+		if a.finish == "" {
+			return nil
+		}
+		return []byte(`{"choices":[{"index":0,"delta":{},"finish_reason":` +
+			mustJSONStrGemini(geminiFinishToChat(a.finish)) + `}]` + a.usagePart + `}`)
+	}
+	var fields []string
+	if a.reasoning.Len() > 0 {
+		fields = append(fields, `"reasoning_content":`+mustJSONStrGemini(a.reasoning.String()))
+	}
+	if a.content.Len() > 0 {
+		fields = append(fields, `"content":`+mustJSONStrGemini(a.content.String()))
+	}
+	if len(a.toolDeltas) > 0 {
+		fields = append(fields, `"tool_calls":[`+strings.Join(a.toolDeltas, ",")+`]`)
+	}
+	if a.finish == "" {
+		return []byte(`{"choices":[{"index":0,"delta":{` + strings.Join(fields, ",") + `}}]}`)
+	}
+	return []byte(`{"choices":[{"index":0,"delta":{` + strings.Join(fields, ",") +
+		`},"finish_reason":` + mustJSONStrGemini(geminiFinishToChat(a.finish)) + `}]` + a.usagePart + `}`)
+}
+
+// geminiUsageFragment usageMetadata → 统一形态键名的 usage 片段，前缀逗号以便直接拼接；
+// 空指针返回空串。
+func geminiUsageFragment(m **geminiUsageMetadata) string {
+	if m == nil || *m == nil {
+		return ""
+	}
+	u := *m
+	return `,"usage":{"prompt_tokens":` + itoa64(u.PromptTokenCount) +
+		`,"completion_tokens":` + itoa64(u.CandidatesTokenCount) +
+		`,"cached_tokens":` + itoa64(u.CachedContentTokenCount) +
+		`,"reasoning_tokens":` + itoa64(u.ThoughtsTokenCount) + `}`
 }
 
 // finishToChat 将 Gemini finishReason 映射为 chat finish_reason；未知值兜底 stop。
-func (g *Gemini) finishToChat(f string) string {
+func (g *Gemini) finishToChat(f string) string { return geminiFinishToChat(f) }
+
+// geminiFinishToChat 包级映射，供帧聚合与适配器方法共用。
+func geminiFinishToChat(f string) string {
 	switch f {
 	case "MAX_TOKENS":
 		return "length"
@@ -560,29 +689,71 @@ func (g *Gemini) finishToChat(f string) string {
 	}
 }
 
+// geminiResponse 是 GenerateContentResponse 的解析形态，流式与非流式共用。
+type geminiResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []geminiResponsePart `json:"parts"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
+	PromptFeedback *struct {
+		BlockReason string `json:"blockReason"`
+	} `json:"promptFeedback"`
+	UsageMetadata *geminiUsageMetadata `json:"usageMetadata"`
+	ModelVersion  string               `json:"modelVersion"`
+}
+
+// chatToolCall 是 chat 响应内 tool_calls 元素的固定形态（非流式完整对象）。
+type chatToolCall struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// newChatToolCall 构造 type=function 的完整工具调用对象。
+func newChatToolCall(index int, id, name, arguments string) chatToolCall {
+	tc := chatToolCall{Index: index, ID: id, Type: "function"}
+	tc.Function.Name = name
+	tc.Function.Arguments = arguments
+	return tc
+}
+
+// geminiResponsePart 是响应 candidates[].content.parts[] 的元素形态。
+type geminiResponsePart struct {
+	Text         string                          `json:"text"`
+	Thought      bool                            `json:"thought"`
+	FunctionCall *geminiResponsePartFunctionCall `json:"functionCall"`
+}
+
+type geminiResponsePartFunctionCall struct {
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args"`
+}
+
+// newGeminiToolCall functionCall → chat tool_calls 元素；同名并行调用按序编号，
+// arguments 空或 null 归为 {}。
+func newGeminiToolCall(index int, fc *geminiResponsePartFunctionCall, callSeq map[string]int) chatToolCall {
+	args := string(fc.Args)
+	if args == "" || args == "null" {
+		args = "{}"
+	}
+	callSeq[fc.Name]++
+	id := "call_" + fc.Name
+	if n := callSeq[fc.Name]; n > 1 {
+		id = fmt.Sprintf("%s_%d", id, n)
+	}
+	return newChatToolCall(index, id, fc.Name, args)
+}
+
 // RewriteResponse 将非流式 GenerateContentResponse 转为 OpenAI ChatResponse。
 // promptFeedback.blockReason 非空时报错归 content_filter，禁止以空内容伪造成功。
 func (g *Gemini) RewriteResponse(body []byte) ([]byte, json.RawMessage, error) {
-	var resp struct {
-		Candidates []struct {
-			Content struct {
-				Parts []struct {
-					Text         string `json:"text"`
-					Thought      bool   `json:"thought"`
-					FunctionCall *struct {
-						Name string          `json:"name"`
-						Args json.RawMessage `json:"args"`
-					} `json:"functionCall"`
-				} `json:"parts"`
-			} `json:"content"`
-			FinishReason string `json:"finishReason"`
-		} `json:"candidates"`
-		PromptFeedback *struct {
-			BlockReason string `json:"blockReason"`
-		} `json:"promptFeedback"`
-		UsageMetadata *geminiUsageMetadata `json:"usageMetadata"`
-		ModelVersion  string               `json:"modelVersion"`
-	}
+	var resp geminiResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
 		return nil, nil, fmt.Errorf("gemini: 解析响应: %w", err)
 	}
@@ -591,47 +762,14 @@ func (g *Gemini) RewriteResponse(body []byte) ([]byte, json.RawMessage, error) {
 	}
 	content := ""
 	var reasoning strings.Builder
-	type toolCall struct {
-		Index    int    `json:"index"`
-		ID       string `json:"id"`
-		Type     string `json:"type"`
-		Function struct {
-			Name      string `json:"name"`
-			Arguments string `json:"arguments"`
-		} `json:"function"`
-	}
-	var calls []toolCall
+	var calls []chatToolCall
 	callSeq := map[string]int{} // 同名并行调用 id 去重，与流式测序和入站翻译同规
 	finish := ""
 	for i, c := range resp.Candidates {
 		if i == 0 {
 			finish = g.finishToChat(c.FinishReason)
 		}
-		for _, p := range c.Content.Parts {
-			switch {
-			case p.Text != "" && p.Thought:
-				reasoning.WriteString(p.Text)
-			case p.Text != "":
-				content += p.Text
-			case p.FunctionCall != nil:
-				args := string(p.FunctionCall.Args)
-				if args == "" || args == "null" {
-					args = "{}"
-				}
-				callSeq[p.FunctionCall.Name]++
-				id := "call_" + p.FunctionCall.Name
-				if n := callSeq[p.FunctionCall.Name]; n > 1 {
-					id = fmt.Sprintf("%s_%d", id, n)
-				}
-				calls = append(calls, toolCall{
-					Index: len(calls), ID: id, Type: "function",
-					Function: struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					}{Name: p.FunctionCall.Name, Arguments: args},
-				})
-			}
-		}
+		g.collectParts(c.Content.Parts, &content, &reasoning, &calls, callSeq)
 	}
 	msg := map[string]any{"role": "assistant", "content": content}
 	if reasoning.Len() > 0 {
@@ -640,17 +778,7 @@ func (g *Gemini) RewriteResponse(body []byte) ([]byte, json.RawMessage, error) {
 	if len(calls) > 0 {
 		msg["tool_calls"] = calls
 	}
-	usage := map[string]any{}
-	if resp.UsageMetadata != nil {
-		m := resp.UsageMetadata
-		usage = map[string]any{
-			"prompt_tokens":             m.PromptTokenCount,
-			"completion_tokens":         m.CandidatesTokenCount,
-			"cached_tokens":             m.CachedContentTokenCount,
-			"prompt_tokens_details":     map[string]any{"cached_tokens": m.CachedContentTokenCount},
-			"completion_tokens_details": map[string]any{"reasoning_tokens": m.ThoughtsTokenCount},
-		}
-	}
+	usage := geminiChatUsage(resp.UsageMetadata)
 	model := resp.ModelVersion
 	out := map[string]any{
 		"id": model + "-resp", "model": model, "object": "chat.completion",
@@ -663,6 +791,37 @@ func (g *Gemini) RewriteResponse(body []byte) ([]byte, json.RawMessage, error) {
 	}
 	usageBytes, _ := json.Marshal(usage)
 	return outBytes, usageBytes, nil
+}
+
+// collectParts 累积候选部件：thought → reasoning，text → content，functionCall → tool_calls。
+func (g *Gemini) collectParts(
+	parts []geminiResponsePart, content *string, reasoning *strings.Builder,
+	calls *[]chatToolCall, callSeq map[string]int,
+) {
+	for _, p := range parts {
+		switch {
+		case p.Text != "" && p.Thought:
+			reasoning.WriteString(p.Text)
+		case p.Text != "":
+			*content += p.Text
+		case p.FunctionCall != nil:
+			*calls = append(*calls, newGeminiToolCall(len(*calls), p.FunctionCall, callSeq))
+		}
+	}
+}
+
+// geminiChatUsage usageMetadata → chat usage 对象；上游缺省时为空对象（保留既有 wire 形态）。
+func geminiChatUsage(m *geminiUsageMetadata) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	return map[string]any{
+		"prompt_tokens":             m.PromptTokenCount,
+		"completion_tokens":         m.CandidatesTokenCount,
+		"cached_tokens":             m.CachedContentTokenCount,
+		"prompt_tokens_details":     map[string]any{"cached_tokens": m.CachedContentTokenCount},
+		"completion_tokens_details": map[string]any{"reasoning_tokens": m.ThoughtsTokenCount},
+	}
 }
 
 // BridgeKind 标记 Gemini 为真异构协议桥接，翻译为 OpenAI 形态。

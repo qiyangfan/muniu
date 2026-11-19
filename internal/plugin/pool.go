@@ -104,50 +104,81 @@ func newPool(owner *Plugin, probe *instance, idleTTL time.Duration) *instancePoo
 // acquire 取实例：优先复用池内空闲，未满则即建，满则等待归还或补建。
 func (pl *instancePool) acquire(ctx context.Context) (*instance, error) {
 	for {
-		select {
-		case inst := <-pl.ch:
-			pl.mu.Lock()
-			pl.idle--
-			pl.mu.Unlock()
-			inst.lastUsed.Store(time.Now().UnixNano())
-			return inst, nil
-		default:
+		if inst, ok := pl.tryTake(); ok {
+			return pl.borrow(inst), nil
 		}
-		pl.mu.Lock()
-		if pl.closing {
-			pl.mu.Unlock()
-			return nil, errPoolClosed
+		inst, wait, err := pl.grow(ctx)
+		if err != nil {
+			return nil, err
 		}
-		if pl.live < pl.owner.opts.PoolSize {
-			pl.live++
-			pl.mu.Unlock()
-			inst, err := pl.owner.newInstance(ctx)
-			if err != nil {
-				pl.mu.Lock()
-				pl.live--
-				pl.mu.Unlock()
-				return nil, err
-			}
-			pl.createdTotal.Add(1)
-			inst.lastUsed.Store(time.Now().UnixNano())
+		if !wait {
 			return inst, nil
 		}
+		inst, err = pl.awaitPool(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if inst != nil {
+			return inst, nil
+		}
+	}
+}
+
+// tryTake 非阻塞取池内空闲实例。
+func (pl *instancePool) tryTake() (*instance, bool) {
+	select {
+	case inst := <-pl.ch:
+		return inst, true
+	default:
+		return nil, false
+	}
+}
+
+// borrow 从池内出借：扣空闲计数并刷新使用时刻，调用方已从通道取到实例。
+func (pl *instancePool) borrow(inst *instance) *instance {
+	pl.mu.Lock()
+	pl.idle--
+	pl.mu.Unlock()
+	inst.lastUsed.Store(time.Now().UnixNano())
+	return inst
+}
+
+// grow 池未满时占用 live 名额新建实例并交还调用方；池已满返回 wait=true 由调用方等待。
+func (pl *instancePool) grow(ctx context.Context) (inst *instance, wait bool, err error) {
+	pl.mu.Lock()
+	if pl.closing {
 		pl.mu.Unlock()
-		// 池满：等归还或补建；Close 关闭 kick 广播与补建失败单发 kick 也必须能唤醒。
-		select {
-		case inst := <-pl.ch:
-			pl.mu.Lock()
-			pl.idle--
-			pl.mu.Unlock()
-			inst.lastUsed.Store(time.Now().UnixNano())
-			return inst, nil
-		case <-pl.kick:
-			continue // 重入循环，重评 closing 与 live<PoolSize。
-		case <-pl.stop:
-			return nil, errPoolClosed
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+		return nil, false, errPoolClosed
+	}
+	if pl.live >= pl.owner.opts.PoolSize {
+		pl.mu.Unlock()
+		return nil, true, nil
+	}
+	pl.live++
+	pl.mu.Unlock()
+	inst, err = pl.owner.newInstance(ctx)
+	if err != nil {
+		pl.mu.Lock()
+		pl.live--
+		pl.mu.Unlock()
+		return nil, false, err
+	}
+	pl.createdTotal.Add(1)
+	inst.lastUsed.Store(time.Now().UnixNano())
+	return inst, false, nil
+}
+
+// awaitPool 池满时等归还、补建 kick、关停或 ctx 超时；nil 实例表示 kick，需重入循环。
+func (pl *instancePool) awaitPool(ctx context.Context) (*instance, error) {
+	select {
+	case inst := <-pl.ch:
+		return pl.borrow(inst), nil
+	case <-pl.kick:
+		return nil, nil // 重评 closing 与 live<PoolSize。
+	case <-pl.stop:
+		return nil, errPoolClosed
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
@@ -177,8 +208,11 @@ func (pl *instancePool) poison(ctx context.Context, inst *instance) {
 	if !canFill {
 		return
 	}
+	// 补建必须脱离请求 ctx：请求结束/取消时实例仍需建出来，否则池名额被占住，
+	// 后续等待者只能等 kick 或超时；实例生命周期由池与 closeAll 负责关闭。
+	refillCtx := context.WithoutCancel(ctx)
 	go func() {
-		newInst, err := pl.owner.newInstance(context.Background())
+		newInst, err := pl.owner.newInstance(refillCtx)
 		if err != nil {
 			pl.mu.Lock()
 			closing := pl.closing
@@ -198,7 +232,7 @@ func (pl *instancePool) poison(ctx context.Context, inst *instance) {
 		if pl.closing { // 与 closeAll 竞态，已关停则不留新实例。
 			pl.live--
 			pl.mu.Unlock()
-			_ = newInst.mod.Close(context.Background())
+			_ = newInst.mod.Close(refillCtx)
 			pl.closedTotal.Add(1)
 			return
 		}

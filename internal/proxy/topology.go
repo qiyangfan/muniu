@@ -56,62 +56,10 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		return TopologyStats{}, errors.New("拓扑替换被拒绝: 池构建回调缺失")
 	}
 	old := p.topo.Load()
-	// auth/账号声明共享校验(与 config.Load 同源 AuthDeclarationViolations):控制面拓扑
-	// 载荷不经 YAML 校验,缺此门则值域契约只在文件源生效,跨源行为劈叉(评审域一 P1);
-	// 含渠道内重复账号引用拒绝(凭据同步只达首个同 ID 成员,其余成员冻结)。
-	if vs := config.AuthDeclarationViolations(cfg.Providers, p.oauthCfg); len(vs) > 0 {
-		return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: auth 声明非法: %s", strings.Join(vs, "; "))
-	}
-	// 拓扑可能来自控制面，须限制在本机 int 可安全处理的数值范围内。
-	for _, prov := range cfg.Providers {
-		if prov.NativeMultimodalEmbeddingsURL != "" {
-			u, err := url.Parse(prov.NativeMultimodalEmbeddingsURL)
-			if prov.Adapter != "qwen" || err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.Fragment != "" {
-				return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q native_multimodal_embeddings_url 非法或适配器不支持", prov.Name)
-			}
-		}
-		if prov.ProxyURL != "" {
-			u, err := url.Parse(prov.ProxyURL)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-				redacted := prov.ProxyURL
-				if err == nil {
-					redacted = u.Redacted() // 允许内嵌凭证,拒绝文案不回显原文
-				}
-				return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法（须为 http/https 绝对 URL）: %q",
-					prov.Name, redacted)
-			}
-		}
-		if prov.Weight <= 0 || int64(prov.Weight) > config.MaxTopologyInt {
-			return TopologyStats{}, fmt.Errorf(
-				"拓扑替换被拒绝: provider %q weight 必须 >0 且 ≤%d, 实际 %d", prov.Name, config.MaxTopologyInt, prov.Weight)
-		}
-		if prov.Priority < 0 || int64(prov.Priority) > config.MaxTopologyInt {
-			return TopologyStats{}, fmt.Errorf(
-				"拓扑替换被拒绝: provider %q priority 必须在 [0,%d], 实际 %d", prov.Name, config.MaxTopologyInt, prov.Priority)
-		}
-	}
-	for alias, cands := range cfg.Routes {
-		for _, c := range cands {
-			if c.Priority < 0 || int64(c.Priority) > config.MaxTopologyInt {
-				return TopologyStats{}, fmt.Errorf(
-					"拓扑替换被拒绝: model_routes[%q] priority 必须在 [0,%d], 实际 %d", alias, config.MaxTopologyInt, c.Priority)
-			}
-			if int64(c.Weight) > config.MaxTopologyInt {
-				return TopologyStats{}, fmt.Errorf(
-					"拓扑替换被拒绝: model_routes[%q] weight 超出数值域(≤%d)", alias, config.MaxTopologyInt)
-			}
-		}
-	}
-	known := map[string]bool{}
-	for _, prov := range cfg.Providers {
-		known[prov.Name] = true
-	}
-	if missing := checkPoolCoverage(cfg.Routes, known); len(missing) > 0 {
-		return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: 候选引用了未定义 provider %v", missing)
+	if err := p.validateTopology(cfg); err != nil {
+		return TopologyStats{}, err
 	}
 
-	stats := TopologyStats{}
-	oldByName := providerByName(old)
 	// 旧声明代理 URL 表:控制面拓扑载荷不含 proxy_url 字段(表达力缺口),InheritProxy=true
 	// 时入站声明为空的渠道沿用旧值并物化进新快照——否则控制面首次同步即静默摘除代理,
 	// 且探针面与数据面各读各源(劈叉)。配置文件源(SIGHUP)不走沿用:用户从 yaml 删除
@@ -120,54 +68,20 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 	for _, prev := range old.providers {
 		oldProxyBy[prev.Name] = prev.ProxyURL
 	}
-	providersOut := make([]config.Provider, len(cfg.Providers))
-	copy(providersOut, cfg.Providers)
-	pools := make(map[string]*keypool.Pool, len(cfg.Providers))
-	adapters := make(map[string]adapter.Adapter, len(cfg.Providers))
-	clients := make(map[string]*http.Client, len(cfg.Providers))
-	for i := range cfg.Providers {
-		prov := cfg.Providers[i]
-		if cfg.InheritProxy && prov.ProxyURL == "" && oldProxyBy[prov.Name] != "" {
-			prov.ProxyURL = oldProxyBy[prov.Name]
-			providersOut[i] = prov
-		}
-		if prev, ok := oldByName[prov.Name]; ok {
-			delete(oldByName, prov.Name)
-			if providersEqual(prev, prov) {
-				pools[prov.Name] = old.pools[prov.Name] // 运行态无损保留
-				adapters[prov.Name] = old.adapters[prov.Name]
-				if oc := old.clients[prov.Name]; oc != nil {
-					clients[prov.Name] = oc // 代理 client 与池同语义复用，连接池不折腾
-				}
-				stats.Reused++
-				continue
-			}
-		}
-		pool, ad, err := buildPool(prov)
-		if err != nil {
-			return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q 构建失败: %w", prov.Name, err)
-		}
-		pools[prov.Name] = pool
-		adapters[prov.Name] = ad
-		// 代理 client 迁移:URL 未变且旧 client 在 → 复用(连接池无损);其余场景
-		// (新建代理/换代理/清空代理)关旧空闲连接,防换道后泄漏。
-		if oc := old.clients[prov.Name]; oc != nil {
-			if prov.ProxyURL != "" && oldProxyBy[prov.Name] == prov.ProxyURL {
-				clients[prov.Name] = oc
-			} else {
-				oc.CloseIdleConnections()
-			}
-		}
-		if prov.ProxyURL != "" && clients[prov.Name] == nil {
-			cl, cerr := ProxiedClient(prov.ProxyURL, p.timeouts.Dial)
-			if cerr != nil {
-				return TopologyStats{}, fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法: %v", prov.Name, cerr)
-			}
-			clients[prov.Name] = cl
-		}
-		stats.Created++
+	stats := TopologyStats{}
+	oldByName := providerByName(old)
+	prevByName := providerByName(old)
+	b := &topologyBuild{old: old, oldProxyBy: oldProxyBy, buildPool: buildPool, dialTimeout: p.timeouts.Dial,
+		reuse: map[string]reuseEntry{}, next: map[string]reuseEntry{}, prevByName: prevByName}
+	for _, prov := range cfg.Providers {
+		delete(oldByName, prov.Name) // 先出表：循环后剩余即旧有新无
 	}
-	stats.Removed = len(oldByName) // 旧有新无：池与适配器随旧快照释放，在途请求持旧池完成
+	providersOut, err := b.buildProviders(cfg, &stats)
+	if err != nil {
+		return TopologyStats{}, err
+	}
+	// 旧有新无：池与适配器随旧快照释放，在途请求持旧池完成
+	stats.Removed = len(oldByName)
 	for name, oc := range old.clients {
 		if _, gone := oldByName[name]; gone {
 			oc.CloseIdleConnections() // 拓扑中消失的渠道代理 client：关空闲连接防泄漏
@@ -177,15 +91,206 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 	p.topo.Store(&topologySnapshot{
 		providers:   providersOut,
 		routes:      sortRoutes(cfg.Routes),
-		pools:       pools,
-		adapters:    adapters,
-		clients:     clients,
+		pools:       b.pools(),
+		adapters:    b.adapters(),
+		clients:     b.clients(),
 		caps:        buildCaps(cfg.Capabilities),
 		nativeResps: buildNativeResps(cfg.Providers),
 		authModes:   buildAuthModes(cfg.Providers),
 		loadedAt:    time.Now(),
 	})
 	return stats, nil
+}
+
+// validateTopology 拓扑校验：auth 声明共享校验、渠道 URL/权重/优先级与路由数值域、池覆盖。
+func (p *Proxy) validateTopology(cfg Config) error {
+	// auth/账号声明共享校验(与 config.Load 同源 AuthDeclarationViolations):控制面拓扑
+	// 载荷不经 YAML 校验,缺此门则值域契约只在文件源生效,跨源行为劈叉(评审域一 P1);
+	// 含渠道内重复账号引用拒绝(凭据同步只达首个同 ID 成员,其余成员冻结)。
+	if vs := config.AuthDeclarationViolations(cfg.Providers, p.oauthCfg); len(vs) > 0 {
+		return fmt.Errorf("拓扑替换被拒绝: auth 声明非法: %s", strings.Join(vs, "; "))
+	}
+	// 拓扑可能来自控制面，须限制在本机 int 可安全处理的数值范围内。
+	for _, prov := range cfg.Providers {
+		if err := validateProviderNums(prov); err != nil {
+			return err
+		}
+	}
+	if err := validateRouteNums(cfg.Routes); err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	for _, prov := range cfg.Providers {
+		known[prov.Name] = true
+	}
+	if missing := checkPoolCoverage(cfg.Routes, known); len(missing) > 0 {
+		return fmt.Errorf("拓扑替换被拒绝: 候选引用了未定义 provider %v", missing)
+	}
+	return nil
+}
+
+// validateProviderNums 单渠道 URL、权重与优先级校验。
+func validateProviderNums(prov config.Provider) error {
+	if prov.NativeMultimodalEmbeddingsURL != "" && !validMultimodalURL(prov) {
+		return fmt.Errorf("拓扑替换被拒绝: provider %q native_multimodal_embeddings_url 非法或适配器不支持", prov.Name)
+	}
+	if prov.ProxyURL != "" {
+		if err := validateProxyURL(prov); err != nil {
+			return err
+		}
+	}
+	if prov.Weight <= 0 || int64(prov.Weight) > config.MaxTopologyInt {
+		return fmt.Errorf(
+			"拓扑替换被拒绝: provider %q weight 必须 >0 且 ≤%d, 实际 %d", prov.Name, config.MaxTopologyInt, prov.Weight)
+	}
+	if prov.Priority < 0 || int64(prov.Priority) > config.MaxTopologyInt {
+		return fmt.Errorf(
+			"拓扑替换被拒绝: provider %q priority 必须在 [0,%d], 实际 %d", prov.Name, config.MaxTopologyInt, prov.Priority)
+	}
+	return nil
+}
+
+// validMultimodalURL 原生多模态向量端点仅 qwen 适配器支持，须为无 fragment 的 http(s) 绝对 URL。
+func validMultimodalURL(prov config.Provider) bool {
+	u, err := url.Parse(prov.NativeMultimodalEmbeddingsURL)
+	return prov.Adapter == "qwen" && err == nil &&
+		(u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.Fragment == ""
+}
+
+// validateProxyURL 渠道出站代理声明校验；拒绝文案不回显内嵌凭证。
+func validateProxyURL(prov config.Provider) error {
+	u, err := url.Parse(prov.ProxyURL)
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return nil
+	}
+	redacted := prov.ProxyURL
+	if err == nil {
+		redacted = u.Redacted() // 允许内嵌凭证,拒绝文案不回显原文
+	}
+	return fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法（须为 http/https 绝对 URL）: %q",
+		prov.Name, redacted)
+}
+
+// validateRouteNums 路由候选优先级与权重数值域校验。
+func validateRouteNums(routes map[string][]config.Candidate) error {
+	for alias, cands := range routes {
+		for _, c := range cands {
+			if c.Priority < 0 || int64(c.Priority) > config.MaxTopologyInt {
+				return fmt.Errorf(
+					"拓扑替换被拒绝: model_routes[%q] priority 必须在 [0,%d], 实际 %d", alias, config.MaxTopologyInt, c.Priority)
+			}
+			if int64(c.Weight) > config.MaxTopologyInt {
+				return fmt.Errorf(
+					"拓扑替换被拒绝: model_routes[%q] weight 超出数值域(≤%d)", alias, config.MaxTopologyInt)
+			}
+		}
+	}
+	return nil
+}
+
+// reuseEntry 复用或新建渠道的三件套：池、适配器与声明代理 client。
+type reuseEntry struct {
+	pool   *keypool.Pool
+	ad     adapter.Adapter
+	client *http.Client
+}
+
+// topologyBuild 拓扑替换的构建期状态。
+type topologyBuild struct {
+	old         *topologySnapshot
+	oldProxyBy  map[string]string
+	buildPool   func(config.Provider) (*keypool.Pool, adapter.Adapter, error)
+	dialTimeout time.Duration
+	prevByName  map[string]config.Provider // 旧快照渠道定义，配置未变判定基准
+	reuse       map[string]reuseEntry      // 配置未变直接复用
+	next        map[string]reuseEntry      // 新建或配置变更后重建
+}
+
+func (b *topologyBuild) pools() map[string]*keypool.Pool {
+	out := make(map[string]*keypool.Pool, len(b.reuse)+len(b.next))
+	for k, v := range b.reuse {
+		out[k] = v.pool
+	}
+	for k, v := range b.next {
+		out[k] = v.pool
+	}
+	return out
+}
+
+func (b *topologyBuild) adapters() map[string]adapter.Adapter {
+	out := make(map[string]adapter.Adapter, len(b.reuse)+len(b.next))
+	for k, v := range b.reuse {
+		out[k] = v.ad
+	}
+	for k, v := range b.next {
+		out[k] = v.ad
+	}
+	return out
+}
+
+func (b *topologyBuild) clients() map[string]*http.Client {
+	out := make(map[string]*http.Client, len(b.reuse)+len(b.next))
+	for k, v := range b.reuse {
+		if v.client != nil {
+			out[k] = v.client
+		}
+	}
+	for k, v := range b.next {
+		if v.client != nil {
+			out[k] = v.client
+		}
+	}
+	return out
+}
+
+// buildProviders 逐渠道构建：配置未变复用运行态，变更则经 buildPool 重建并迁移代理 client。
+func (b *topologyBuild) buildProviders(cfg Config, stats *TopologyStats) ([]config.Provider, error) {
+	providersOut := make([]config.Provider, len(cfg.Providers))
+	for i := range cfg.Providers {
+		prov := cfg.Providers[i]
+		if cfg.InheritProxy && prov.ProxyURL == "" && b.oldProxyBy[prov.Name] != "" {
+			prov.ProxyURL = b.oldProxyBy[prov.Name]
+		}
+		providersOut[i] = prov
+		if prev, ok := b.prevByName[prov.Name]; ok && providersEqual(prev, prov) {
+			b.reuse[prov.Name] = reuseEntry{pool: b.old.pools[prov.Name], ad: b.old.adapters[prov.Name],
+				client: b.old.clients[prov.Name]}
+			stats.Reused++
+			continue
+		}
+		e, err := b.rebuild(prov)
+		if err != nil {
+			return nil, err
+		}
+		b.next[prov.Name] = e
+		stats.Created++
+	}
+	return providersOut, nil
+}
+
+// rebuild 新建或配置变更渠道：重建池与适配器，代理 URL 未变且旧 client 在则复用(连接池无损)，
+// 其余场景(新建代理/换代理/清空代理)关旧空闲连接,防换道后泄漏。
+func (b *topologyBuild) rebuild(prov config.Provider) (reuseEntry, error) {
+	pool, ad, err := b.buildPool(prov)
+	if err != nil {
+		return reuseEntry{}, fmt.Errorf("拓扑替换被拒绝: provider %q 构建失败: %w", prov.Name, err)
+	}
+	e := reuseEntry{pool: pool, ad: ad}
+	if oc := b.old.clients[prov.Name]; oc != nil {
+		if prov.ProxyURL != "" && b.oldProxyBy[prov.Name] == prov.ProxyURL {
+			e.client = oc
+		} else {
+			oc.CloseIdleConnections()
+		}
+	}
+	if prov.ProxyURL != "" && e.client == nil {
+		cl, cerr := ProxiedClient(prov.ProxyURL, b.dialTimeout)
+		if cerr != nil {
+			return reuseEntry{}, fmt.Errorf("拓扑替换被拒绝: provider %q proxy_url 非法: %v", prov.Name, cerr)
+		}
+		e.client = cl
+	}
+	return e, nil
 }
 
 // checkPoolCoverage 返回路由引用但未定义的 provider。
@@ -218,14 +323,19 @@ func providerByName(s *topologySnapshot) map[string]config.Provider {
 // proxy_url 必须入比较：SIGHUP 仅改代理声明时，复用分支会让变更静默失效、探针面与
 // 数据面各读各源劈叉（评审 A1）。auth 同理:声明变更(bearer↔oauth)不改适配器即静默吞掉。
 func providersEqual(a, b config.Provider) bool {
-	if a.Name != b.Name || a.Adapter != b.Adapter || a.BaseURL != b.BaseURL ||
-		a.NativeMultimodalEmbeddingsURL != b.NativeMultimodalEmbeddingsURL ||
-		a.ProxyURL != b.ProxyURL || a.Auth != b.Auth ||
-		a.Weight != b.Weight || a.Priority != b.Priority || len(a.Keys) != len(b.Keys) {
+	return a.Name == b.Name && a.Adapter == b.Adapter && a.BaseURL == b.BaseURL &&
+		a.NativeMultimodalEmbeddingsURL == b.NativeMultimodalEmbeddingsURL &&
+		a.ProxyURL == b.ProxyURL && a.Auth == b.Auth &&
+		a.Weight == b.Weight && a.Priority == b.Priority && equalKeys(a.Keys, b.Keys)
+}
+
+// equalKeys key 引用列表按序逐项相等。
+func equalKeys(a, b []config.KeyRef) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	for i := range a.Keys {
-		if a.Keys[i] != b.Keys[i] {
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}

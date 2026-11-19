@@ -59,7 +59,8 @@ func scanOAuthAccount(row interface{ Scan(...any) error }) (OAuthAccountRow, err
 	return r, nil
 }
 
-const oauthAccountCols = `id, provider_type, status, access_token, refresh_token, expires_at, status_reason, created_at, updated_at`
+const oauthAccountCols = `id, provider_type, status, access_token, refresh_token,
+	expires_at, status_reason, created_at, updated_at`
 
 // CreateOAuthAccount 新建账号;id 冲突显式报错(账号 ID 是配置引用主键,静默覆盖会让
 // 两份配置指向同一行而各自以为独占)。
@@ -112,7 +113,12 @@ func ListOAuthAccounts(db *sql.DB) ([]OAuthAccountRow, error) {
 
 // UpdateOAuthAccountTokens 刷新成功回写:换新凭据对与过期时刻,状态回 active 并清原因
 // (auth_failed 账号经重新授权恢复走同一入口)。账号运行中被删返回 ErrOAuthAccountNotFound。
-func UpdateOAuthAccountTokens(db *sql.DB, id, accessToken, refreshToken string, expiresAt time.Time, now time.Time) error {
+func UpdateOAuthAccountTokens(
+	db *sql.DB,
+	id, accessToken, refreshToken string,
+	expiresAt time.Time,
+	now time.Time,
+) error {
 	res, err := db.Exec(`UPDATE oauth_accounts SET
 		access_token=?, refresh_token=?, expires_at=?, status=?, status_reason='', updated_at=?
 		WHERE id=?`,

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/solvela/muniu/internal/adapter"
+	"github.com/solvela/muniu/internal/config"
 	"github.com/solvela/muniu/internal/failover"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/protocol"
@@ -46,31 +47,39 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if !p.enforceModelAllowlist(tw, r, req.Model) {
 		return
 	}
-	// 插件请求体钩子与 chat 同链序：限流后、候选循环前，单次执行；
-	// embeddings 输入同样承载业务载荷，脱敏必须在出站与计量之前
-	if p.plugins != nil {
-		res, done := p.applyPlugins(tw, r, body)
-		if done {
-			return
-		}
-		if len(res.ModifiedBy) > 0 {
-			nreq, err := protocol.ParseEmbeddingRequest(res.Body)
-			if err != nil {
-				p.writeError(tw, r, protocol.TypeBadRequest, "plugin_rejected", "插件改写后的请求体不是合法请求")
-				return
-			}
-			req = nreq
-			if cands, ok = topo.routes[req.Model]; !ok || len(cands) == 0 {
-				p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+req.Model)
-				return
-			}
-			// key 级模型白名单闸之二：插件改写 model 后以最终出站别名为准再校验
-			if !p.enforceModelAllowlist(tw, r, req.Model) {
-				return
-			}
-			p.markPluginModified(tw, r, res.ModifiedBy)
-		}
+	req, cands, done := p.embeddingPluginHook(tw, r, topo, body, req, cands)
+	if done {
+		return
 	}
+	p.runEmbeddingCandidates(tw, r, topo, req, cands)
+}
+
+// embeddingPluginHook 插件请求体钩子与 chat 同链序：限流后、候选循环前，单次执行；
+// embeddings 输入同样承载业务载荷，脱敏必须在出站与计量之前。
+func (p *Proxy) embeddingPluginHook(tw *trackWriter, r *http.Request, topo *topologySnapshot, body []byte,
+	req *protocol.EmbeddingRequest, cands []config.Candidate) (*protocol.EmbeddingRequest, []config.Candidate, bool) {
+	var nreq *protocol.EmbeddingRequest
+	failed := p.rewriteModelHook(tw, r, topo, body, "插件改写后的请求体不是合法请求",
+		func(body []byte) (string, error) {
+			parsed, err := protocol.ParseEmbeddingRequest(body)
+			if err == nil {
+				nreq = parsed
+			}
+			if err != nil {
+				return "", err
+			}
+			return parsed.Model, nil
+		},
+		func(model string) bool {
+			req, cands = nreq, topo.routes[model]
+			return true
+		})
+	return req, cands, failed
+}
+
+// runEmbeddingCandidates 候选循环：oauth 收窄、取 key、尝试、按 Decide 动作分支。
+func (p *Proxy) runEmbeddingCandidates(tw *trackWriter, r *http.Request, topo *topologySnapshot,
+	req *protocol.EmbeddingRequest, cands []config.Candidate) {
 	fcs := make([]failover.Candidate, len(cands))
 	for i, c := range cands {
 		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}
@@ -82,17 +91,7 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	for {
 		cand, ok := iter.Next()
 		if !ok {
-			if tw.committed {
-				return
-			}
-			if oauthSkipped && last == "" && !otherSkipped {
-				p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
-					"该别名的候选均为 OAuth 订阅渠道,不支持 embeddings lane,请为别名配置非 oauth 候选")
-				return
-			}
-			typ := classToType(last)
-			p.writeError(tw, r, typ, "all_candidates_failed",
-				"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
+			p.finishEmbeddingExhausted(tw, r, last, oauthSkipped, otherSkipped)
 			return
 		}
 		if topo.authModes[cand.Provider] == adapter.AuthOAuth {
@@ -117,28 +116,51 @@ func (p *Proxy) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		if pool != nil {
 			p.reportKeyOutcome(pool, key, class, handled, m)
 		}
-		if class == "" {
+		if stop, next := p.embeddingFailureExit(tw, r, class, m); stop {
 			return
-		}
-		// attempt 已对客户端产出早退信封：请求终结，绝不换道重写
-		if tw.committed {
-			return
-		}
-		switch failover.Decide(class, false, false) {
-		case failover.ActionNextCandidate:
+		} else if next {
 			last = class
-			continue
-		case failover.ActionReturn:
-			p.writeError(tw, r, classToType(class), string(class), m.upstreamMsg)
-			return
-		default:
-			return
 		}
 	}
 }
 
+// embeddingFailureExit 非成功出口：next=true 换道继续，否则请求终结。
+func (p *Proxy) embeddingFailureExit(tw *trackWriter, r *http.Request, class failover.ErrorClass,
+	m *meterState) (stop, next bool) {
+	if class == "" {
+		return true, false
+	}
+	// attempt 已对客户端产出早退信封：请求终结，绝不换道重写
+	if tw.committed {
+		return true, false
+	}
+	switch failover.Decide(class, false, false) {
+	case failover.ActionNextCandidate:
+		return false, true
+	case failover.ActionReturn:
+		p.writeError(tw, r, classToType(class), string(class), m.upstreamMsg)
+	}
+	return true, false
+}
+
+// finishEmbeddingExhausted 候选耗尽：oauth 唯一跳因时显式信封，否则统一 all_candidates_failed。
+func (p *Proxy) finishEmbeddingExhausted(tw *trackWriter, r *http.Request, last failover.ErrorClass,
+	oauthSkipped, otherSkipped bool) {
+	if tw.committed {
+		return
+	}
+	if oauthSkipped && last == "" && !otherSkipped {
+		p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
+			"该别名的候选均为 OAuth 订阅渠道,不支持 embeddings lane,请为别名配置非 oauth 候选")
+		return
+	}
+	p.writeError(tw, r, classToType(last), "all_candidates_failed",
+		"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(last)+")")
+}
+
 // attemptEmbeddings 单候选非流式透传：2xx 整包回写并计量 usage；非 2xx 只归类不写信封，交耗尽路径输出。
-func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand failover.Candidate, key *keypool.Key, req *protocol.EmbeddingRequest, m *meterState) (bool, failover.ErrorClass) {
+func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand failover.Candidate,
+	key *keypool.Key, req *protocol.EmbeddingRequest, m *meterState) (bool, failover.ErrorClass) {
 	m.stream = false
 	snap := p.topo.Load()
 	adI, ok := snap.adapters[cand.Provider]
@@ -160,6 +182,12 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 		p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "出站请求构造失败")
 		return true, failover.ClassBadRequest
 	}
+	return p.execEmbedding(w, r, upstream, adI, out, m)
+}
+
+// execEmbedding 出站执行：首 token 超时复用非流式 chat 档，上游僵死不可无限悬挂。
+func (p *Proxy) execEmbedding(w http.ResponseWriter, r *http.Request, upstream *http.Client, adI adapter.Adapter,
+	out *adapter.Outbound, m *meterState) (bool, failover.ErrorClass) {
 	// 首 token 超时复用非流式 chat 的 FirstToken 档：embeddings 为非流式单形态，僵死上游不可无限悬挂
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
@@ -181,19 +209,7 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
-		class := adI.Classify(resp.StatusCode, b)
-
-		m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
-		m.status, m.class = "error", class
-		if class == failover.ClassRateLimited {
-			m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
-		}
-		m.upstreamMsg = upstreamMessage(b, "上游供应商返回错误")
-		p.logger.Warn("embeddings 上游非 2xx",
-			"request_id", loggingRequestID(r.Context()), "status", resp.StatusCode,
-			"error_detail", truncateForLog(b))
-		return true, class
+		return p.embeddingNon2xx(w, r, adI, m, resp)
 	}
 
 	outBody, usageRaw, rerr := readAndRewrite(adI, resp)
@@ -214,6 +230,24 @@ func (p *Proxy) attemptEmbeddings(w http.ResponseWriter, r *http.Request, cand f
 		m.est = true
 	}
 	return true, ""
+}
+
+// embeddingNon2xx 上游非 2xx：归类并记录可读 message，信封由候选循环统一输出。
+func (p *Proxy) embeddingNon2xx(w http.ResponseWriter, r *http.Request, ad adapter.Adapter,
+	m *meterState, resp *http.Response) (bool, failover.ErrorClass) {
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, maxUpstreamErrBody))
+	class := ad.Classify(resp.StatusCode, b)
+
+	m.creditEvidence = isCreditExhausted(resp.StatusCode, b)
+	m.status, m.class = "error", class
+	if class == failover.ClassRateLimited {
+		m.retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
+	}
+	m.upstreamMsg = upstreamMessage(b, "上游供应商返回错误")
+	p.logger.Warn("embeddings 上游非 2xx",
+		"request_id", loggingRequestID(r.Context()), "status", resp.StatusCode,
+		"error_detail", truncateForLog(b))
+	return true, class
 }
 
 // readAndRewrite 读全量响应并经适配器改写/抽取 usage。

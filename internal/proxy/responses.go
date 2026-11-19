@@ -32,32 +32,15 @@ func (p *Proxy) HandlerResponses() http.Handler {
 		}
 		res := protocol.TranslateResponsesRequestEx(body)
 		if res.Fatal != nil {
-			var ue *protocol.ResponsesUnsupportedError
-			if errors.As(res.Fatal, &ue) {
-				p.writeError(w, r, protocol.TypeBadRequest, ue.Code, responsesRejectMessage(ue.Code))
-				return
-			}
-			p.writeError(w, r, protocol.TypeBadRequest, "input_invalid", "请求不符合 OpenAI Responses 格式")
+			p.rejectResponses(w, r, res.Fatal, "input_invalid", "请求不符合 OpenAI Responses 格式")
 			return
 		}
 		// 惰性拒绝别名级预判：无 native_responses 声明候选的别名即时 400
 		if res.Ineligible != nil && !p.aliasNative(protocol.InboundResponses, res.Model) {
-			var ue *protocol.ResponsesUnsupportedError
-			code := "input_invalid"
-			if errors.As(res.Ineligible, &ue) {
-				code = ue.Code
-			}
-			p.writeError(w, r, protocol.TypeBadRequest, code, responsesRejectMessage(code))
+			p.rejectResponses(w, r, res.Ineligible, "input_invalid", "")
 			return
 		}
-		nat := &inboundNative{proto: protocol.InboundResponses, raw: body, model: res.Model, stream: res.Stream, prevID: res.PrevID}
-		if res.Ineligible != nil {
-			var ue *protocol.ResponsesUnsupportedError
-			if errors.As(res.Ineligible, &ue) {
-				nat.ineligCode = ue.Code
-				nat.ineligMsg = responsesRejectMessage(ue.Code)
-			}
-		}
+		nat := responsesInboundNative(res, body)
 		// canonical chat 字节替换入站体，失格与状态请求无 canonical 或旁路缓存，原始体直通：
 		// 治理 Raw 层、缓存指纹、适配器透传等下游与等价 chat 完全同构
 		payload := body
@@ -82,6 +65,31 @@ func (p *Proxy) HandlerResponses() http.Handler {
 	})
 }
 
+// rejectResponses 按 ResponsesUnsupportedError 写 400；其他错误用给出的兜底语义。
+func (p *Proxy) rejectResponses(w http.ResponseWriter, r *http.Request, err error, fallbackCode, fallbackMsg string) {
+	var ue *protocol.ResponsesUnsupportedError
+	if errors.As(err, &ue) {
+		p.writeError(w, r, protocol.TypeBadRequest, ue.Code, responsesRejectMessage(ue.Code))
+		return
+	}
+	if fallbackMsg == "" {
+		fallbackMsg = responsesRejectMessage(fallbackCode)
+	}
+	p.writeError(w, r, protocol.TypeBadRequest, fallbackCode, fallbackMsg)
+}
+
+// responsesInboundNative 组装原生入站描述，并带上别名级不可用原因。
+func responsesInboundNative(res *protocol.TranslationResult, body []byte) *inboundNative {
+	nat := &inboundNative{proto: protocol.InboundResponses, raw: body,
+		model: res.Model, stream: res.Stream, prevID: res.PrevID}
+	var ue *protocol.ResponsesUnsupportedError
+	if res.Ineligible != nil && errors.As(res.Ineligible, &ue) {
+		nat.ineligCode = ue.Code
+		nat.ineligMsg = responsesRejectMessage(ue.Code)
+	}
+	return nat
+}
+
 // HandlerResponsesStateless GET /v1/responses/{id}，按亲和分域：
 // 亲和已知时代理转发亲和 provider 并原样返回，即对服务端状态的查询；
 // 亲和未知恒 404 自解释：代理过不代表之后可查。
@@ -94,67 +102,85 @@ func (p *Proxy) HandlerResponsesStateless() http.Handler {
 		}
 		provider, ok := p.affinity.Get(respID, apiKeyIDOf(r))
 		if !ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(protocol.StatusForType(protocol.TypeNotFound))
-			_ = json.NewEncoder(w).Encode(protocol.NewErrorEnvelope(
-				protocol.TypeNotFound, "response_not_found", "无状态网关不存储 response", logging.RequestIDFrom(r.Context())))
+			p.writeStatelessNotFound(w, r)
 			return
 		}
-		// 代理转发：取 key 确认域内可用性，经 NativeFetch GET 原样透传状态、头、体
-		snap := p.topo.Load()
-		// oauth 收窄防御检查:responses 状态 lane 不可达 oauth 渠道(创建侧已收窄,此处兜底
-		// 亲和条目指向已改声明的渠道),上游零调用
-		if snap.authModes[provider] == adapter.AuthOAuth {
-			p.writeError(w, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
-				"OAuth 订阅渠道不支持 responses 状态 lane")
-			return
-		}
-		ad, ok := snap.adapters[provider]
-		if !ok {
-			p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")
-			return
-		}
-		fetcher, ok := ad.(adapter.NativeFetcher)
-		if !ok {
-			p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器不支持状态查询")
-			return
-		}
-		pool := snap.pools[provider]
-		key := pool.Pick(time.Now())
-		if key == nil {
-			p.writeError(w, r, protocol.TypeRateLimited, "all_candidates_failed", "上游供应商暂时不可用(key 池不可用)")
-			return
-		}
-		upstream := p.clientFor(snap, provider)
-		out, err := fetcher.PrepareNativeFetch(r.Method, respID, key.Value)
-		if err != nil {
-			p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
-			return
-		}
-		opCtx, cancel := context.WithTimeout(r.Context(), p.timeouts.FirstToken)
-		defer cancel()
-		upReq, err := http.NewRequestWithContext(opCtx, r.Method, out.URL, nil)
-		if err != nil {
-			p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
-			return
-		}
-		for k, vs := range out.Header {
-			for _, v := range vs {
-				upReq.Header.Add(k, v)
-			}
-		}
-		resp, err := upstream.Do(upReq)
-		if err != nil {
-			p.writeError(w, r, protocol.TypeUpstreamError, "upstream_error", "上游查询失败")
-			return
-		}
-		defer func() { _ = resp.Body.Close() }()
-		if ct := resp.Header.Get("Content-Type"); ct != "" {
-			w.Header().Set("Content-Type", ct)
-		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		p.proxyStateless(w, r, respID, provider)
 	})
+}
+
+func (p *Proxy) writeStatelessNotFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(protocol.StatusForType(protocol.TypeNotFound))
+	_ = json.NewEncoder(w).Encode(protocol.NewErrorEnvelope(
+		protocol.TypeNotFound, "response_not_found", "无状态网关不存储 response", logging.RequestIDFrom(r.Context())))
+}
+
+// proxyStateless 代理转发：取 key 确认域内可用性，经 NativeFetch 原样透传状态、头、体。
+func (p *Proxy) proxyStateless(w http.ResponseWriter, r *http.Request, respID, provider string) {
+	snap := p.topo.Load()
+	opCtx, cancel := context.WithTimeout(r.Context(), p.timeouts.FirstToken)
+	defer cancel()
+	upstream, upReq, ok := p.statelessRequest(w, r, opCtx, snap, provider, respID)
+	if !ok {
+		return
+	}
+	resp, err := upstream.Do(upReq) //nolint:gosec // 目标为上一步构造的渠道出站请求
+	if err != nil {
+		p.writeError(w, r, protocol.TypeUpstreamError, "upstream_error", "上游查询失败")
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// statelessRequest 解析目标、取 key 并构造出站请求；不可用时已写错误响应。
+func (p *Proxy) statelessRequest(w http.ResponseWriter, r *http.Request, ctx context.Context,
+	snap *topologySnapshot, provider, respID string) (*http.Client, *http.Request, bool) {
+	// oauth 收窄防御检查:responses 状态 lane 不可达 oauth 渠道(创建侧已收窄,此处兜底
+	// 亲和条目指向已改声明的渠道),上游零调用
+	if snap.authModes[provider] == adapter.AuthOAuth {
+		p.writeError(w, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
+			"OAuth 订阅渠道不支持 responses 状态 lane")
+		return nil, nil, false
+	}
+	ad, ok := snap.adapters[provider]
+	if !ok {
+		p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器未注册")
+		return nil, nil, false
+	}
+	fetcher, ok := ad.(adapter.NativeFetcher)
+	if !ok {
+		p.writeError(w, r, protocol.TypeInternal, "adapter_missing", "内部配置错误: 适配器不支持状态查询")
+		return nil, nil, false
+	}
+	pool := snap.pools[provider]
+	key := pool.Pick(time.Now())
+	if key == nil {
+		p.writeError(w, r, protocol.TypeRateLimited, "all_candidates_failed", "上游供应商暂时不可用(key 池不可用)")
+		return nil, nil, false
+	}
+	out, err := fetcher.PrepareNativeFetch(r.Method, respID, key.Value)
+	if err != nil {
+		p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
+		return nil, nil, false
+	}
+	upReq, err := http.NewRequestWithContext(ctx, r.Method, out.URL, //nolint:gosec // 渠道 base_url + PathEscape(respID)
+		nil)
+	if err != nil {
+		p.writeError(w, r, protocol.TypeInternal, "internal", "出站请求构造失败")
+		return nil, nil, false
+	}
+	for k, vs := range out.Header {
+		for _, v := range vs {
+			upReq.Header.Add(k, v)
+		}
+	}
+	return p.clientFor(snap, provider), upReq, true
 }
 
 func responsesRejectMessage(code string) string {
@@ -321,7 +347,7 @@ func (w *responsesStreamWriter) finish() {
 }
 
 func (w *responsesStreamWriter) emit(frame []byte) {
-	_, _ = w.ResponseWriter.Write(frame)
+	_, _ = w.ResponseWriter.Write(frame) //nolint:gosec // 帧由适配器按协议编码后透传
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}

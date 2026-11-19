@@ -72,11 +72,15 @@ func Types() []string {
 // For 根据适配器类型构造实例。Anthropic 使用桥接工厂，Gemini 使用原生适配器；
 // opts 仅用于 Anthropic 鉴权配置。
 func For(adapterType, baseURL, apiKey string, opts ...Options) (Adapter, error) {
-	base := NewOpenAI(baseURL, apiKey)
 	var opt Options
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
+	// 桥接工厂由 bridge 包 init 注册，以避免 adapter 与 bridge 循环依赖
+	if adapterType == "anthropic" {
+		return anthropicAdapter(baseURL, opt)
+	}
+	base := NewOpenAI(baseURL, apiKey)
 	switch adapterType {
 	case "openai", "doubao":
 		return base, nil
@@ -91,18 +95,20 @@ func For(adapterType, baseURL, apiKey string, opts ...Options) (Adapter, error) 
 		return newGLM(base), nil
 	case "gemini":
 		return NewGemini(baseURL), nil
-	case "anthropic":
-		if opt.Auth != AuthDefault && opt.Auth != AuthBearer && opt.Auth != AuthOAuth {
-			return nil, fmt.Errorf("adapter: 不支持的鉴权形态 %q(允许 %s)", opt.Auth, AuthDecl())
-		}
-		// 桥接工厂由 bridge 包 init 注册，以避免 adapter 与 bridge 循环依赖
-		if anthropicFactory != nil {
-			return anthropicFactory(baseURL, opt), nil
-		}
-		return nil, fmt.Errorf("adapter: anthropic 桥接未接线(需导入 adapter/bridge)")
 	default:
 		return nil, fmt.Errorf("adapter: 适配器类型 %q 未实现或未知", adapterType)
 	}
+}
+
+// anthropicAdapter 构造 anthropic 桥接适配器，鉴权形态先校验再取已注册工厂。
+func anthropicAdapter(baseURL string, opt Options) (Adapter, error) {
+	if opt.Auth != AuthDefault && opt.Auth != AuthBearer && opt.Auth != AuthOAuth {
+		return nil, fmt.Errorf("adapter: 不支持的鉴权形态 %q(允许 %s)", opt.Auth, AuthDecl())
+	}
+	if anthropicFactory != nil {
+		return anthropicFactory(baseURL, opt), nil
+	}
+	return nil, fmt.Errorf("adapter: anthropic 桥接未接线(需导入 adapter/bridge)")
 }
 
 // anthropicFactory 桥接构造工厂，由 bridge 包经 SetAnthropicFactory 注册。

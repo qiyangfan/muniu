@@ -174,58 +174,17 @@ func itoa(i int) string {
 // 「除 model 字段外逐字节一致」不变式）。真实上游对重复键均拒绝（dashscope 报缺参、
 // deepseek 报 duplicate field），只改末键会恰好产出该形态，故必须收敛。
 func RewriteModelInPlace(body []byte, upstreamModel string) ([]byte, error) {
-	dec := json.NewDecoder(bytes.NewReader(body))
-	tok, err := dec.Token()
-	if err != nil || (func() bool { d, ok := tok.(json.Delim); return !ok || d != '{' })() {
-		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 顶层须为 JSON 对象"))
-	}
-	type modelSpan struct{ valStart, valEnd, dropFrom int }
-	var spans []modelSpan
-	prevEnd := -1 // 前一个顶层值的结束偏移；重复键摘除区间从这里开始，恰含其前导逗号
-	for dec.More() {
-		keyTok, err := dec.Token()
-		if err != nil {
-			return nil, errors.Join(ErrInvalidRequest, err)
-		}
-		key, _ := keyTok.(string)
-		offBefore := dec.InputOffset()
-		valTok, err := dec.Token()
-		if err != nil {
-			return nil, errors.Join(ErrInvalidRequest, err)
-		}
-		if delim, isDelim := valTok.(json.Delim); isDelim && (delim == '{' || delim == '[') {
-			// 值为嵌套容器：整段消费到配对闭括号。Token 流是平坦的，
-			// 不跳过会把容器内部的键值当顶层键处理（误拒/误改/重复键漏收敛）。
-			if err := skipContainer(dec); err != nil {
-				return nil, errors.Join(ErrInvalidRequest, err)
-			}
-		}
-		offAfter := dec.InputOffset()
-		if key == "model" {
-			if _, isStr := valTok.(string); !isStr {
-				return nil, errors.Join(ErrInvalidRequest, errors.New("model: 须为字符串"))
-			}
-			spans = append(spans, modelSpan{valStart: int(offBefore), valEnd: int(offAfter), dropFrom: prevEnd})
-		}
-		prevEnd = int(offAfter)
-	}
-	if _, err := dec.Token(); err != nil { // 收尾 '}'
-		return nil, errors.Join(ErrInvalidRequest, err)
-	}
-	if len(spans) == 0 {
-		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 原始体缺 model 字段"))
+	spans, err := scanTopLevelModelSpans(body)
+	if err != nil {
+		return nil, err
 	}
 	// 值起点为跳过 key 后的空白、冒号与空白，终点为 Token 读毕位置，即值最后一字节之后
 	vs, ve := spans[0].valStart, spans[0].valEnd
-	for vs < ve && (body[vs] == ' ' || body[vs] == '\t' || body[vs] == '\n' || body[vs] == '\r') {
-		vs++
-	}
+	vs = skipJSONSpace(body, vs, ve)
 	if vs < ve && body[vs] == ':' {
 		vs++
 	}
-	for vs < ve && (body[vs] == ' ' || body[vs] == '\t' || body[vs] == '\n' || body[vs] == '\r') {
-		vs++
-	}
+	vs = skipJSONSpace(body, vs, ve)
 	newVal, _ := json.Marshal(upstreamModel)
 	out := make([]byte, 0, len(body)-(ve-vs)+len(newVal))
 	out = append(out, body[:vs]...)
@@ -239,6 +198,75 @@ func RewriteModelInPlace(body []byte, upstreamModel string) ([]byte, error) {
 	}
 	out = append(out, body[last:]...)
 	return out, nil
+}
+
+// modelSpan 顶层 model 键值的字节区间：值字节 [valStart, valEnd)，摘除起点 dropFrom。
+type modelSpan struct{ valStart, valEnd, dropFrom int }
+
+// scanTopLevelModelSpans 顺序扫描顶层键值，记录每个 model 键的值区间；顶层非对象或值非字符串报错。
+func scanTopLevelModelSpans(body []byte) ([]modelSpan, error) {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, errors.Join(ErrInvalidRequest, err)
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 顶层须为 JSON 对象"))
+	}
+	var spans []modelSpan
+	prevEnd := -1 // 前一个顶层值的结束偏移；重复键摘除区间从这里开始，恰含其前导逗号
+	for dec.More() {
+		span, key, valTok, err := scanTopLevelEntry(dec)
+		if err != nil {
+			return nil, err
+		}
+		if key == "model" {
+			if _, isStr := valTok.(string); !isStr {
+				return nil, errors.Join(ErrInvalidRequest, errors.New("model: 须为字符串"))
+			}
+			span.dropFrom = prevEnd
+			spans = append(spans, span)
+		}
+		prevEnd = span.valEnd
+	}
+	if _, err := dec.Token(); err != nil { // 收尾 '}'
+		return nil, errors.Join(ErrInvalidRequest, err)
+	}
+	if len(spans) == 0 {
+		return nil, errors.Join(ErrInvalidRequest, errors.New("model: 原始体缺 model 字段"))
+	}
+	return spans, nil
+}
+
+// scanTopLevelEntry 消费一个顶层键值，返回值区间、键名与值 token；
+// 值为嵌套容器时整段消费到配对闭括号，区间与 token 均对应整个值。
+func scanTopLevelEntry(dec *json.Decoder) (span modelSpan, key string, valTok json.Token, err error) {
+	keyTok, err := dec.Token()
+	if err != nil {
+		return span, "", nil, errors.Join(ErrInvalidRequest, err)
+	}
+	key, _ = keyTok.(string)
+	offBefore := dec.InputOffset()
+	valTok, err = dec.Token()
+	if err != nil {
+		return span, "", nil, errors.Join(ErrInvalidRequest, err)
+	}
+	if delim, isDelim := valTok.(json.Delim); isDelim && (delim == '{' || delim == '[') {
+		// 值为嵌套容器：整段消费到配对闭括号。Token 流是平坦的，
+		// 不跳过会把容器内部的键值当顶层键处理（误拒/误改/重复键漏收敛）。
+		if err := skipContainer(dec); err != nil {
+			return span, "", nil, errors.Join(ErrInvalidRequest, err)
+		}
+	}
+	return modelSpan{valStart: int(offBefore), valEnd: int(dec.InputOffset())}, key, valTok, nil
+}
+
+// skipJSONSpace 在 [from, to) 内跳过 JSON 空白字符，返回首个非空白偏移。
+func skipJSONSpace(body []byte, from, to int) int {
+	for from < to && (body[from] == ' ' || body[from] == '\t' || body[from] == '\n' || body[from] == '\r') {
+		from++
+	}
+	return from
 }
 
 // skipContainer 从已读入的开括号起成对消费嵌套容器直至配对闭括号，

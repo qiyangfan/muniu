@@ -46,7 +46,11 @@ func UpsertImagePricing(db *sql.DB, r ImagePricingRecord) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.Exec(`INSERT INTO image_pricing VALUES(?,?,?,?,?) ON CONFLICT(alias) DO UPDATE SET currency=excluded.currency,default_credits=excluded.default_credits,tiers=excluded.tiers,updated_at=excluded.updated_at`, r.Alias, r.Currency, r.DefaultCredits, string(b), r.UpdatedAt)
+	_, err = db.Exec(`INSERT INTO image_pricing VALUES(?,?,?,?,?)
+		ON CONFLICT(alias) DO UPDATE SET
+		currency=excluded.currency, default_credits=excluded.default_credits,
+		tiers=excluded.tiers, updated_at=excluded.updated_at`,
+		r.Alias, r.Currency, r.DefaultCredits, string(b), r.UpdatedAt)
 	return err
 }
 

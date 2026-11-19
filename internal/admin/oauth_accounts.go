@@ -94,26 +94,45 @@ func oauthAccountsList(d Deps) http.HandlerFunc {
 	}
 }
 
+// oauthCreateRequest POST /admin/v1/oauth/accounts 请求体。
+type oauthCreateRequest struct {
+	ID           string `json:"id"`
+	ProviderType string `json:"provider_type"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    string `json:"expires_at"` // RFC3339;空 = 视为已过期,刷新器下一轮自愈
+}
+
+// oauthAccountID 取账号 ID：缺省生成 UUIDv7，形态不合法返回错误文案。
+func oauthAccountID(raw string) (string, string) {
+	id := strings.TrimSpace(raw)
+	if id == "" {
+		id = uuid.NewV7().String()
+	}
+	if !oauthAccountIDRe.MatchString(id) {
+		return "", "账号 id 须为 [a-zA-Z0-9][a-zA-Z0-9_-]{0,63}"
+	}
+	return id, ""
+}
+
+// oauthAccountExpiry 解析可选过期时刻；空串得零时刻（视为已过期）。
+func oauthAccountExpiry(s string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339, s)
+}
+
 func oauthAccountsCreate(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID           string `json:"id"`
-			ProviderType string `json:"provider_type"`
-			AccessToken  string `json:"access_token"`
-			RefreshToken string `json:"refresh_token"`
-			ExpiresAt    string `json:"expires_at"` // RFC3339;空 = 视为已过期,刷新器下一轮自愈
-		}
+		var req oauthCreateRequest
 		if err := decode(r, &req); err != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体须为 JSON")
 			return
 		}
-		id := strings.TrimSpace(req.ID)
-		if id == "" {
-			id = uuid.NewV7().String()
-		}
-		if !oauthAccountIDRe.MatchString(id) {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
-				"账号 id 须为 [a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
+		id, msg := oauthAccountID(req.ID)
+		if msg != "" {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", msg)
 			return
 		}
 		pt := strings.TrimSpace(req.ProviderType)
@@ -121,14 +140,10 @@ func oauthAccountsCreate(d Deps) http.HandlerFunc {
 			pt = "claude"
 		}
 		now := time.Now()
-		exp := time.Time{}
-		if req.ExpiresAt != "" {
-			t, perr := time.Parse(time.RFC3339, req.ExpiresAt)
-			if perr != nil {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339")
-				return
-			}
-			exp = t
+		exp, perr := oauthAccountExpiry(req.ExpiresAt)
+		if perr != nil {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339")
+			return
 		}
 		row := store.OAuthAccountRow{
 			ID: id, ProviderType: pt, Status: store.OAuthStatusActive,
@@ -220,6 +235,37 @@ func oauthAuthorize(d Deps) http.HandlerFunc {
 	}
 }
 
+// oauthCallbackRow 回调换得的凭据落库行；重授权与新建共用同一形态。
+func oauthCallbackRow(id string, pair oauth.TokenPair, exp, now time.Time) store.OAuthAccountRow {
+	return store.OAuthAccountRow{
+		ID: id, ProviderType: "claude", Status: store.OAuthStatusActive,
+		AccessToken: pair.AccessToken, RefreshToken: pair.RefreshToken,
+		ExpiresAt: exp, CreatedAt: now, UpdatedAt: now,
+	}
+}
+
+// reauthorizeAccount 重授权既有账号：凭据回写 + 状态恢复 active(刷新器终态的唯一恢复路径);
+// 目标账号不存在 → 以声明 ID 落库创建(对配置预引用账号发起授权是合法路径)。
+func reauthorizeAccount(
+	d Deps, w http.ResponseWriter, r *http.Request,
+	accountID string, pair oauth.TokenPair,
+	exp, now time.Time,
+) {
+	uerr := store.UpdateOAuthAccountTokens(d.DB, accountID, pair.AccessToken, pair.RefreshToken, exp, now)
+	switch {
+	case uerr == nil:
+		writeJSON(w, 200, map[string]any{"ok": true, "id": accountID, "mode": "reauthorize"})
+	case errors.Is(uerr, store.ErrOAuthAccountNotFound):
+		if cerr := store.CreateOAuthAccount(d.DB, oauthCallbackRow(accountID, pair, exp, now)); cerr != nil {
+			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "账号创建失败: "+accountID)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true, "id": accountID, "mode": "created"})
+	default:
+		writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "账号凭据回写失败: "+accountID)
+	}
+}
+
 func oauthCallback(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if d.OAuthFlow == nil {
@@ -251,33 +297,11 @@ func oauthCallback(d Deps) http.HandlerFunc {
 		now := time.Now()
 		exp := now.Add(pair.ExpiresIn)
 		if accountID != "" {
-			// 重授权既有账号:凭据回写 + 状态恢复 active(刷新器终态的唯一恢复路径);
-			// 目标账号不存在 → 以声明 ID 落库创建(对配置预引用账号发起授权是合法路径)
-			uerr := store.UpdateOAuthAccountTokens(d.DB, accountID, pair.AccessToken, pair.RefreshToken, exp, now)
-			switch {
-			case uerr == nil:
-				writeJSON(w, 200, map[string]any{"ok": true, "id": accountID, "mode": "reauthorize"})
-			case errors.Is(uerr, store.ErrOAuthAccountNotFound):
-				if cerr := store.CreateOAuthAccount(d.DB, store.OAuthAccountRow{
-					ID: accountID, ProviderType: "claude", Status: store.OAuthStatusActive,
-					AccessToken: pair.AccessToken, RefreshToken: pair.RefreshToken,
-					ExpiresAt: exp, CreatedAt: now, UpdatedAt: now,
-				}); cerr != nil {
-					writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "账号创建失败: "+accountID)
-					return
-				}
-				writeJSON(w, 200, map[string]any{"ok": true, "id": accountID, "mode": "created"})
-			default:
-				writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "账号凭据回写失败: "+accountID)
-			}
+			reauthorizeAccount(d, w, r, accountID, pair, exp, now)
 			return
 		}
 		id := uuid.NewV7().String()
-		if cerr := store.CreateOAuthAccount(d.DB, store.OAuthAccountRow{
-			ID: id, ProviderType: "claude", Status: store.OAuthStatusActive,
-			AccessToken: pair.AccessToken, RefreshToken: pair.RefreshToken,
-			ExpiresAt: exp, CreatedAt: now, UpdatedAt: now,
-		}); cerr != nil {
+		if cerr := store.CreateOAuthAccount(d.DB, oauthCallbackRow(id, pair, exp, now)); cerr != nil {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "账号创建失败")
 			return
 		}

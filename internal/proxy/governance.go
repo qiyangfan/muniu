@@ -26,7 +26,8 @@ type governKey struct{ provider, model string }
 
 // governChat 按目标模型的能力约束处理请求；strict 模式下命中约束即拒绝。
 // 返回处理后的请求、干预记录和拒绝原因；未改写时返回原请求。
-func governChat(req *protocol.ChatRequest, capability config.ModelCapability, strict bool) (*protocol.ChatRequest, []governChange, string) {
+func governChat(req *protocol.ChatRequest, capability config.ModelCapability,
+	strict bool) (*protocol.ChatRequest, []governChange, string) {
 	if len(capability.DropParams) == 0 && !capability.ThinkingLock && capability.MaxOutputTokens <= 0 {
 		return req, nil, "" // 未声明任何约束：零干预快速路径
 	}
@@ -37,53 +38,16 @@ func governChat(req *protocol.ChatRequest, capability config.ModelCapability, st
 		return req, nil, ""
 	}
 
-	var changes []governChange
-	var rejected []string
+	g := &governRun{capability: capability, strict: strict, fields: fields}
+	g.dropDeclared()
+	g.clampMaxTokens()
+	g.lockThinking()
 
-	dropped := map[string]bool{}
-	for _, name := range capability.DropParams {
-		raw, ok := fields[name]
-		if !ok {
-			continue
-		}
-		delete(fields, name)
-		dropped[name] = true
-		changes = append(changes, governChange{Param: name, Action: "drop", From: summarize(raw)})
-		if strict {
-			rejected = append(rejected, fmt.Sprintf("%s(drop: 模型声明不支持该参数)", name))
-		}
-	}
-
-	if capability.MaxOutputTokens > 0 {
-		if raw, ok := fields["max_tokens"]; ok {
-			var v int64
-			if err := json.Unmarshal(raw, &v); err == nil && v > capability.MaxOutputTokens {
-				fields["max_tokens"], _ = json.Marshal(capability.MaxOutputTokens)
-				changes = append(changes, governChange{Param: "max_tokens", Action: "clamp",
-					From: strconv.FormatInt(v, 10), To: strconv.FormatInt(capability.MaxOutputTokens, 10)})
-				if strict {
-					rejected = append(rejected, fmt.Sprintf("max_tokens(clamp: 模型输出上限 %d)", capability.MaxOutputTokens))
-				}
-			}
-		}
-	}
-
-	if capability.ThinkingLock {
-		for _, name := range thinkingOffDialects(fields) {
-			raw := fields[name]
-			delete(fields, name)
-			changes = append(changes, governChange{Param: name, Action: "thinking_lock", From: summarize(raw)})
-			if strict {
-				rejected = append(rejected, fmt.Sprintf("%s(thinking_lock: 模型思考不可关闭)", name))
-			}
-		}
-	}
-
-	if strict && len(rejected) > 0 {
+	if g.strict && len(g.rejected) > 0 {
 		return nil, nil, fmt.Sprintf("请求参数与模型能力约束冲突[%s/%s](strict_governance): %s",
-			capability.Provider, capability.Model, strings.Join(rejected, "; "))
+			capability.Provider, capability.Model, strings.Join(g.rejected, "; "))
 	}
-	if len(changes) == 0 {
+	if len(g.changes) == 0 {
 		return req, nil, ""
 	}
 
@@ -93,17 +57,87 @@ func governChat(req *protocol.ChatRequest, capability config.ModelCapability, st
 	}
 	governed := *req // 浅副本：Messages/Tools 只读共享，治理不触碰
 	governed.Raw = out
-	if dropped["temperature"] {
+	g.applyTo(&governed)
+	return &governed, g.changes, ""
+}
+
+// governRun 单次治理的累积状态：干预记录、strict 拒绝清单与已丢弃参数集合。
+type governRun struct {
+	capability config.ModelCapability
+	strict     bool
+	fields     map[string]json.RawMessage
+	changes    []governChange
+	rejected   []string
+	dropped    map[string]bool
+}
+
+// dropDeclared 丢弃模型声明不支持的参数。
+func (g *governRun) dropDeclared() {
+	g.dropped = map[string]bool{}
+	for _, name := range g.capability.DropParams {
+		raw, ok := g.fields[name]
+		if !ok {
+			continue
+		}
+		delete(g.fields, name)
+		g.dropped[name] = true
+		g.changes = append(g.changes, governChange{Param: name, Action: "drop", From: summarize(raw)})
+		if g.strict {
+			g.rejected = append(g.rejected, fmt.Sprintf("%s(drop: 模型声明不支持该参数)", name))
+		}
+	}
+}
+
+// clampMaxTokens 输出上限钳制：仅 max_tokens 超声明值时改写。
+func (g *governRun) clampMaxTokens() {
+	limit := g.capability.MaxOutputTokens
+	if limit <= 0 {
+		return
+	}
+	raw, ok := g.fields["max_tokens"]
+	if !ok {
+		return
+	}
+	var v int64
+	if err := json.Unmarshal(raw, &v); err != nil || v <= limit {
+		return
+	}
+	g.fields["max_tokens"], _ = json.Marshal(limit)
+	g.changes = append(g.changes, governChange{Param: "max_tokens", Action: "clamp",
+		From: strconv.FormatInt(v, 10), To: strconv.FormatInt(limit, 10)})
+	if g.strict {
+		g.rejected = append(g.rejected, fmt.Sprintf("max_tokens(clamp: 模型输出上限 %d)", limit))
+	}
+}
+
+// lockThinking 思考锁：模型思考不可关闭，删除方言关闭参数。
+func (g *governRun) lockThinking() {
+	if !g.capability.ThinkingLock {
+		return
+	}
+	for _, name := range thinkingOffDialects(g.fields) {
+		raw := g.fields[name]
+		delete(g.fields, name)
+		g.changes = append(g.changes, governChange{Param: name, Action: "thinking_lock", From: summarize(raw)})
+		if g.strict {
+			g.rejected = append(g.rejected, fmt.Sprintf("%s(thinking_lock: 模型思考不可关闭)", name))
+		}
+	}
+}
+
+// applyTo 把字段级改写同步到 canonical 结构体字段。
+func (g *governRun) applyTo(governed *protocol.ChatRequest) {
+	if g.dropped["temperature"] {
 		governed.Temperature = nil
 	}
-	if dropped["max_tokens"] {
+	if g.dropped["max_tokens"] {
 		governed.MaxTokens = nil
 	}
-	if capability.MaxOutputTokens > 0 && governed.MaxTokens != nil && *governed.MaxTokens > capability.MaxOutputTokens {
+	limit := g.capability.MaxOutputTokens
+	if limit > 0 && governed.MaxTokens != nil && *governed.MaxTokens > limit {
 		governed.MaxTokens = new(int64)
-		*governed.MaxTokens = capability.MaxOutputTokens
+		*governed.MaxTokens = limit
 	}
-	return &governed, changes, ""
 }
 
 // thinkingOffDialects 识别客户端关闭思考时使用的参数形式；是否禁用由能力目录决定。

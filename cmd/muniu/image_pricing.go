@@ -9,10 +9,13 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
-func imagePrices(rows map[string]store.ImagePricingRecord, settlement string, fx int64) (map[string]metering.ImagePrice, error) {
+func imagePrices(
+	rows map[string]store.ImagePricingRecord, settlement string, fx int64,
+) (map[string]metering.ImagePrice, error) {
 	out := map[string]metering.ImagePrice{}
 	for alias, r := range rows {
-		p, err := metering.SettleImagePrice(metering.ImagePrice{Currency: r.Currency, DefaultCredits: r.DefaultCredits, Tiers: r.Tiers}, settlement, fx)
+		price := metering.ImagePrice{Currency: r.Currency, DefaultCredits: r.DefaultCredits, Tiers: r.Tiers}
+		p, err := metering.SettleImagePrice(price, settlement, fx)
 		if err != nil {
 			return nil, err
 		}
@@ -21,43 +24,15 @@ func imagePrices(rows map[string]store.ImagePricingRecord, settlement string, fx
 	return out, nil
 }
 
-func assembleImagePricing(db *sql.DB, cfg *config.Config, settlement string, fx int64) (*metering.ImagePriceDirectory, map[string]metering.ImagePrice, func(string, *store.ImagePricingRecord) error, error) {
-	static := map[string]metering.ImagePrice{}
-	for alias, v := range cfg.ImagePricing {
-		p, err := metering.ParseImagePrice(v.Currency, v.Default, v.Tiers)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		static[alias] = p
+func assembleImagePricing(db *sql.DB, cfg *config.Config, settlement string, fx int64) (
+	*metering.ImagePriceDirectory, map[string]metering.ImagePrice,
+	func(string, *store.ImagePricingRecord) error, error,
+) {
+	static, err := staticImagePrices(cfg)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	merge := func(alias string, change *store.ImagePricingRecord, apply bool) (map[string]store.ImagePricingRecord, error) {
-		all := map[string]store.ImagePricingRecord{}
-		for a, p := range static {
-			all[a] = store.ImagePricingRecord{Alias: a, Currency: p.Currency, DefaultCredits: p.DefaultCredits, Tiers: p.Tiers}
-		}
-		rows, err := store.ListImagePricing(db)
-		if err != nil {
-			return nil, err
-		}
-		found := false
-		for _, r := range rows {
-			if apply && r.Alias == alias {
-				found = true
-				continue
-			}
-			all[r.Alias] = r
-		}
-		if apply {
-			if change == nil && !found {
-				return nil, store.ErrNotFound
-			}
-			if change != nil {
-				all[alias] = *change
-			}
-		}
-		return all, nil
-	}
-	all, err := merge("", nil, false)
+	all, err := mergeImagePricing(db, static, "", nil, false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -71,24 +46,76 @@ func assembleImagePricing(db *sql.DB, cfg *config.Config, settlement string, fx 
 	update := func(alias string, rec *store.ImagePricingRecord) error {
 		mu.Lock()
 		defer mu.Unlock()
-		all, err := merge(alias, rec, true)
-		if err != nil {
-			return err
-		}
-		prices, err := imagePrices(all, settlement, fx)
-		if err != nil {
-			return store.MarkBusiness(err)
-		}
-		if rec != nil {
-			err = store.UpsertImagePricing(db, *rec)
-		} else {
-			_, err = store.DeleteImagePricing(db, alias)
-		}
-		if err != nil {
-			return err
-		}
-		dir.Replace(prices)
-		return nil
+		return updateImagePricing(db, dir, static, settlement, fx, alias, rec)
 	}
 	return dir, static, update, nil
+}
+
+// staticImagePrices 解析 YAML 静态图价。
+func staticImagePrices(cfg *config.Config) (map[string]metering.ImagePrice, error) {
+	static := map[string]metering.ImagePrice{}
+	for alias, v := range cfg.ImagePricing {
+		p, err := metering.ParseImagePrice(v.Currency, v.Default, v.Tiers)
+		if err != nil {
+			return nil, err
+		}
+		static[alias] = p
+	}
+	return static, nil
+}
+
+// mergeImagePricing 合并静态价与运行态覆盖；apply=true 时按 alias 应用变更（删除请求 rec=nil）。
+func mergeImagePricing(
+	db *sql.DB, static map[string]metering.ImagePrice, alias string,
+	change *store.ImagePricingRecord, apply bool,
+) (map[string]store.ImagePricingRecord, error) {
+	all := map[string]store.ImagePricingRecord{}
+	for a, p := range static {
+		all[a] = store.ImagePricingRecord{Alias: a, Currency: p.Currency, DefaultCredits: p.DefaultCredits, Tiers: p.Tiers}
+	}
+	rows, err := store.ListImagePricing(db)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, r := range rows {
+		if apply && r.Alias == alias {
+			found = true
+			continue
+		}
+		all[r.Alias] = r
+	}
+	if !apply {
+		return all, nil
+	}
+	if change == nil && !found {
+		return nil, store.ErrNotFound
+	}
+	if change != nil {
+		all[alias] = *change
+	}
+	return all, nil
+}
+
+// updateImagePricing 应用单条图价变更：先算候选目录再落库，最后发布。
+func updateImagePricing(db *sql.DB, dir *metering.ImagePriceDirectory, static map[string]metering.ImagePrice,
+	settlement string, fx int64, alias string, rec *store.ImagePricingRecord) error {
+	all, err := mergeImagePricing(db, static, alias, rec, true)
+	if err != nil {
+		return err
+	}
+	prices, err := imagePrices(all, settlement, fx)
+	if err != nil {
+		return store.MarkBusiness(err)
+	}
+	if rec != nil {
+		err = store.UpsertImagePricing(db, *rec)
+	} else {
+		_, err = store.DeleteImagePricing(db, alias)
+	}
+	if err != nil {
+		return err
+	}
+	dir.Replace(prices)
+	return nil
 }

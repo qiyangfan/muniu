@@ -167,29 +167,20 @@ func (p *Pool) RecordCreditExhausted(keyID string, exhausted bool, now time.Time
 	}
 	var ev *cooldownEvent
 	if exhausted {
+		// 幂等：冷却中重复回写零作用
 		if k.cooldownBucket == bucketCredit && now.Before(k.cooldownUntil) {
 			p.mu.Unlock()
-			return // 幂等：冷却中重复回写零作用
+			return
 		}
 		k.consecCredit++
-		delay := creditBase
-		for i := 1; i < k.consecCredit && delay < creditMax; i++ {
-			delay *= creditLadder
-		}
-		if delay > creditMax {
-			delay = creditMax
-		}
-		k.cooldownBucket = bucketCredit
-		if until := now.Add(delay); until.After(k.cooldownUntil) {
-			k.cooldownUntil = until
-		}
+		enterCreditCooldown(k, now)
 		ev = p.persistEventLocked(k, now)
+	} else if k.cooldownBucket == bucketCredit { // 充值恢复只解除 credit 桶，rate 桶不受影响
+		k.consecCredit = 0
+		k.cooldownBucket, k.cooldownUntil = bucketNone, time.Time{}
+		ev = p.persistEventLocked(k, now) // 清除语义：bucket 空 → store 删行
 	} else {
 		k.consecCredit = 0
-		if k.cooldownBucket == bucketCredit {
-			k.cooldownBucket, k.cooldownUntil = bucketNone, time.Time{}
-			ev = p.persistEventLocked(k, now) // 清除语义：bucket 空 → store 删行
-		}
 	}
 	p.mu.Unlock()
 	p.persist(ev)
@@ -294,54 +285,19 @@ func (p *Pool) Report(k *Key, outcome Outcome, now time.Time, retryAfter time.Du
 	var ev *cooldownEvent
 	switch outcome {
 	case OutcomeSuccess:
-		st.consec429, st.consec5xx, st.consecCredit = 0, 0, 0
-		if now.After(st.cooldownUntil) {
-			st.cooldownBucket = bucketNone
-		}
-		st.record(true)
+		reportSuccess(st, now)
 	case OutcomeRateLimited:
 		st.consec429++
 		st.record(false)
-		delay := retryAfter
-		if delay <= 0 {
-			// 指数退避：60s × 2^(连续次数-1)，封顶 30min
-			delay = base429
-			for i := 1; i < st.consec429 && delay < max429; i++ {
-				delay *= 2
-			}
-			if delay > max429 {
-				delay = max429
-			}
-		}
-		st.cooldownBucket = bucketRate
-		if until := now.Add(delay); until.After(st.cooldownUntil) {
-			st.cooldownUntil = until
-		}
+		enterRateCooldown(st, now, retryAfter)
 		ev = p.persistEventLocked(st, now)
 	case OutcomeCreditExhausted:
 		st.consecCredit++
 		st.record(false)
-		delay := creditBase
-		for i := 1; i < st.consecCredit && delay < creditMax; i++ {
-			delay *= creditLadder
-		}
-		if delay > creditMax {
-			delay = creditMax
-		}
-		st.cooldownBucket = bucketCredit
-		if until := now.Add(delay); until.After(st.cooldownUntil) {
-			st.cooldownUntil = until
-		}
+		enterCreditCooldown(st, now)
 		ev = p.persistEventLocked(st, now)
 	case OutcomeServerError:
-		st.consec5xx++
-		st.record(false)
-		if st.consec5xx >= consec5xxLimit {
-			st.consec5xx = 0
-			if until := now.Add(cooldown5xx); until.After(st.cooldownUntil) {
-				st.cooldownUntil = until
-			}
-		}
+		reportServerError(st, now)
 	case OutcomeAuthFailed:
 		st.disabled = true
 		st.record(false)
@@ -350,6 +306,61 @@ func (p *Pool) Report(k *Key, outcome Outcome, now time.Time, retryAfter time.Du
 	}
 	p.mu.Unlock()
 	p.persist(ev)
+}
+
+// reportSuccess 成功即清零全部连续计数；已过期的冷却桶同步清空。
+func reportSuccess(st *keyState, now time.Time) {
+	st.consec429, st.consec5xx, st.consecCredit = 0, 0, 0
+	if now.After(st.cooldownUntil) {
+		st.cooldownBucket = bucketNone
+	}
+	st.record(true)
+}
+
+// reportServerError 5xx 连续计数，达阈值冷却 30s 并清零连续计数。
+func reportServerError(st *keyState, now time.Time) {
+	st.consec5xx++
+	st.record(false)
+	if st.consec5xx < consec5xxLimit {
+		return
+	}
+	st.consec5xx = 0
+	if until := now.Add(cooldown5xx); until.After(st.cooldownUntil) {
+		st.cooldownUntil = until
+	}
+}
+
+// enterRateCooldown 进入 rate 桶：Retry-After 优先，否则 60s × 2^(连续次数-1) 封顶 30min。
+func enterRateCooldown(st *keyState, now time.Time, retryAfter time.Duration) {
+	delay := retryAfter
+	if delay <= 0 {
+		delay = ladderDelay(base429, st.consec429, 2, max429)
+	}
+	st.cooldownBucket = bucketRate
+	if until := now.Add(delay); until.After(st.cooldownUntil) {
+		st.cooldownUntil = until
+	}
+}
+
+// enterCreditCooldown 进入 credit 桶：30m × 2^(连续次数-1) 封顶 2h；至时刻只增不退。
+func enterCreditCooldown(st *keyState, now time.Time) {
+	delay := ladderDelay(creditBase, st.consecCredit, creditLadder, creditMax)
+	st.cooldownBucket = bucketCredit
+	if until := now.Add(delay); until.After(st.cooldownUntil) {
+		st.cooldownUntil = until
+	}
+}
+
+// ladderDelay 指数阶梯：base × factor^(consec-1)，封顶 max；倍推到顶即停，防溢出。
+func ladderDelay(base time.Duration, consec, factor int, max time.Duration) time.Duration {
+	delay := base
+	for i := 1; i < consec && delay < max; i++ {
+		delay *= time.Duration(factor)
+	}
+	if delay > max {
+		delay = max
+	}
+	return delay
 }
 
 // persist 持久化事件在锁外同步执行（调用方已 Unlock；provider/sink 装配期定型后只读）。
@@ -379,7 +390,10 @@ func (p *Pool) persistEventLocked(st *keyState, now time.Time) *cooldownEvent {
 		if st.cooldownBucket == bucketRate {
 			consec = st.consec429
 		}
-		return &cooldownEvent{keyID: st.id, bucket: st.cooldownBucket, until: st.cooldownUntil, consec: consec, seq: st.persistSeq}
+		return &cooldownEvent{
+			keyID: st.id, bucket: st.cooldownBucket,
+			until: st.cooldownUntil, consec: consec, seq: st.persistSeq,
+		}
 	}
 	return nil
 }

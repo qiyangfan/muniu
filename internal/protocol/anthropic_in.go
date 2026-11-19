@@ -65,11 +65,67 @@ func translateMessagesRequest(body []byte) (*ChatRequest, error) {
 	if mr.Model == "" || len(mr.Messages) == 0 {
 		return nil, &MessagesUnsupportedError{Code: CodeInputInvalid}
 	}
-
 	var b strings.Builder
 	b.WriteString(`{"model":`)
 	b.Write(mustJSON(mr.Model))
+	if err := writeMessagesBody(&b, mr); err != nil {
+		return nil, err
+	}
+	b.WriteString(`}`)
 
+	// canonical JSON 经既有解析器回填 typed 字段，避免两套解析。
+	return ParseChatRequest([]byte(b.String()))
+}
+
+// writeMessagesBody 追加 messages 及采样/工具相关字段，字段序即 wire 契约。
+func writeMessagesBody(b *strings.Builder, mr messagesRequest) error {
+	msgs, err := messagesToChat(mr)
+	if err != nil {
+		return err
+	}
+	b.WriteString(`,"messages":[` + strings.Join(msgs, ",") + `]`)
+	writeAnthropicSampling(b, mr)
+	tools, err := toolsToChat(mr.Tools)
+	if err != nil {
+		return err
+	}
+	if tools != "" {
+		b.WriteString(`,"tools":` + tools)
+	}
+	// tool_choice 缺省或 null 时不写该字段
+	if len(mr.ToolChoice) == 0 || string(mr.ToolChoice) == "null" {
+		return nil
+	}
+	tc, err := translateToolChoice(mr.ToolChoice)
+	if err != nil {
+		return err
+	}
+	b.WriteString(`,"tool_choice":` + tc)
+	return nil
+}
+
+// writeAnthropicSampling 追加 stream 与采样/停止参数，字段序即 wire 契约。
+func writeAnthropicSampling(b *strings.Builder, mr messagesRequest) {
+	if mr.Stream {
+		b.WriteString(`,"stream":true`)
+	}
+	if mr.MaxTokens != nil && *mr.MaxTokens > 0 {
+		b.WriteString(`,"max_tokens":` + fmt.Sprint(*mr.MaxTokens))
+	}
+	if mr.Temperature != nil {
+		b.WriteString(`,"temperature":` + fmt.Sprint(*mr.Temperature))
+	}
+	if mr.TopP != nil {
+		b.WriteString(`,"top_p":` + fmt.Sprint(*mr.TopP))
+	}
+	if len(mr.StopSequences) > 0 {
+		tj, _ := json.Marshal(mr.StopSequences)
+		b.WriteString(`,"stop":` + string(tj))
+	}
+}
+
+// messagesToChat 展开为「system 消息 + 逐条消息翻译」的 chat 消息片段列表，元素为 JSON 字面量。
+func messagesToChat(mr messagesRequest) ([]string, error) {
 	var msgs []string
 	// system：字符串或 text 块数组 → 单条 system 消息，多块以换行合并。
 	if len(mr.System) > 0 && string(mr.System) != "null" {
@@ -88,53 +144,31 @@ func translateMessagesRequest(body []byte) (*ChatRequest, error) {
 		}
 		msgs = append(msgs, out...)
 	}
-	b.WriteString(`,"messages":[` + strings.Join(msgs, ",") + `]`)
-	if mr.Stream {
-		b.WriteString(`,"stream":true`)
-	}
-	if mr.MaxTokens != nil && *mr.MaxTokens > 0 {
-		b.WriteString(`,"max_tokens":` + fmt.Sprint(*mr.MaxTokens))
-	}
-	if mr.Temperature != nil {
-		b.WriteString(`,"temperature":` + fmt.Sprint(*mr.Temperature))
-	}
-	if mr.TopP != nil {
-		b.WriteString(`,"top_p":` + fmt.Sprint(*mr.TopP))
-	}
-	if len(mr.StopSequences) > 0 {
-		tj, _ := json.Marshal(mr.StopSequences)
-		b.WriteString(`,"stop":` + string(tj))
-	}
-	if len(mr.Tools) > 0 {
-		out := make([]map[string]any, 0, len(mr.Tools))
-		for _, tl := range mr.Tools {
-			fn := map[string]any{"name": tl.Name}
-			if tl.Description != "" {
-				fn["description"] = tl.Description
-			}
-			if len(tl.InputSchema) > 0 {
-				var schema any
-				if json.Unmarshal(tl.InputSchema, &schema) != nil {
-					return nil, &MessagesUnsupportedError{Code: CodeInputInvalid}
-				}
-				fn["parameters"] = schema
-			}
-			out = append(out, map[string]any{"type": "function", "function": fn})
-		}
-		tj, _ := json.Marshal(out)
-		b.WriteString(`,"tools":` + string(tj))
-	}
-	if len(mr.ToolChoice) > 0 && string(mr.ToolChoice) != "null" {
-		tc, err := translateToolChoice(mr.ToolChoice)
-		if err != nil {
-			return nil, err
-		}
-		b.WriteString(`,"tool_choice":` + tc)
-	}
-	b.WriteString(`}`)
+	return msgs, nil
+}
 
-	// canonical JSON 经既有解析器回填 typed 字段，避免两套解析。
-	return ParseChatRequest([]byte(b.String()))
+// toolsToChat Anthropic 工具定义 → chat function 数组字面量；无工具时返回空串。
+func toolsToChat(tools []msgTool) (string, error) {
+	if len(tools) == 0 {
+		return "", nil
+	}
+	out := make([]map[string]any, 0, len(tools))
+	for _, tl := range tools {
+		fn := map[string]any{"name": tl.Name}
+		if tl.Description != "" {
+			fn["description"] = tl.Description
+		}
+		if len(tl.InputSchema) > 0 {
+			var schema any
+			if json.Unmarshal(tl.InputSchema, &schema) != nil {
+				return "", &MessagesUnsupportedError{Code: CodeInputInvalid}
+			}
+			fn["parameters"] = schema
+		}
+		out = append(out, map[string]any{"type": "function", "function": fn})
+	}
+	tj, _ := json.Marshal(out)
+	return string(tj), nil
 }
 
 // systemToText 将 system 字段中的字符串或 text 块数组转换为文本。
@@ -179,50 +213,87 @@ func messageToChat(m *msgMessage) ([]string, error) {
 		return nil, &MessagesUnsupportedError{Code: CodeInputInvalid}
 	}
 
-	var msgs []string
-	var textParts []string
-	var toolCalls []string
-	flushText := func() {
-		if len(textParts) == 0 {
-			return
-		}
-		msgs = append(msgs, `{"role":`+string(mustJSON(m.Role))+`,"content":`+string(mustJSON(strings.Join(textParts, "\n")))+`}`)
-		textParts = nil
-	}
+	acc := &msgBlocksAcc{role: m.Role}
 	for _, bl := range blocks {
-		switch bl.Type {
-		case "text":
-			textParts = append(textParts, bl.Text)
-		case "thinking":
-			// 丢弃：v1 不回传签名 thinking 块。
-		case "tool_use":
-			flushText()
-			args := "{}"
-			if len(bl.Input) > 0 && string(bl.Input) != "null" {
-				args = string(bl.Input)
-			}
-			toolCalls = append(toolCalls, `{"id":`+string(mustJSON(bl.ID))+`,"type":"function","function":{"name":`+string(mustJSON(bl.Name))+`,"arguments":`+string(mustJSON(args))+`}}`)
-		case "tool_result":
-			flushText()
-			txt, err := toolResultToText(bl.Content)
-			if err != nil {
-				return nil, err
-			}
-			msgs = append(msgs, `{"role":"tool","tool_call_id":`+string(mustJSON(bl.ToolUseID))+`,"content":`+string(mustJSON(txt))+`}`)
-		default:
-			return nil, &MessagesUnsupportedError{Code: CodeContentBlockUnsupported}
+		if err := acc.add(bl); err != nil {
+			return nil, err
 		}
 	}
-	if len(toolCalls) > 0 {
+	return acc.done(), nil
+}
+
+// msgBlocksAcc 单条 Anthropic 消息翻译中的累积态：文本块等待合并，工具调用成组输出。
+type msgBlocksAcc struct {
+	role      string
+	msgs      []string
+	textParts []string
+	toolCalls []string
+}
+
+// add 按块类型累积：text 合并、thinking 丢弃、tool_use/tool_result 各自开启新消息。
+func (a *msgBlocksAcc) add(bl msgBlock) error {
+	switch bl.Type {
+	case "text":
+		a.textParts = append(a.textParts, bl.Text)
+	case "thinking":
+		// 丢弃：v1 不回传签名 thinking 块。
+	case "tool_use":
+		a.flushText()
+		args := "{}"
+		if len(bl.Input) > 0 && string(bl.Input) != "null" {
+			args = string(bl.Input)
+		}
+		a.toolCalls = append(a.toolCalls, chatToolCallJSON(bl.ID, bl.Name, args))
+	case "tool_result":
+		a.flushText()
+		txt, err := toolResultToText(bl.Content)
+		if err != nil {
+			return err
+		}
+		a.msgs = append(a.msgs, chatToolMessageJSON(bl.ToolUseID, txt))
+	default:
+		return &MessagesUnsupportedError{Code: CodeContentBlockUnsupported}
+	}
+	return nil
+}
+
+func (a *msgBlocksAcc) flushText() {
+	if len(a.textParts) == 0 {
+		return
+	}
+	a.msgs = append(a.msgs, chatUserTextJSON(a.role, strings.Join(a.textParts, "\n")))
+	a.textParts = nil
+}
+
+// done 收尾：有工具调用时文本并入 tool_calls 消息(content 为 null 或合并文本)，否则补发纯文本消息。
+func (a *msgBlocksAcc) done() []string {
+	if len(a.toolCalls) > 0 {
 		content := "null"
-		if len(textParts) > 0 {
-			content = string(mustJSON(strings.Join(textParts, "\n")))
+		if len(a.textParts) > 0 {
+			content = string(mustJSON(strings.Join(a.textParts, "\n")))
 		}
-		msgs = append(msgs, `{"role":`+string(mustJSON(m.Role))+`,"content":`+content+`,"tool_calls":[`+strings.Join(toolCalls, ",")+`]}`)
-		return msgs, nil
+		a.msgs = append(a.msgs, `{"role":`+string(mustJSON(a.role))+`,"content":`+content+
+			`,"tool_calls":[`+strings.Join(a.toolCalls, ",")+`]}`)
+		return a.msgs
 	}
-	flushText()
-	return msgs, nil
+	a.flushText()
+	return a.msgs
+}
+
+// chatUserTextJSON chat 单条纯文本消息字面量。
+func chatUserTextJSON(role, text string) string {
+	return `{"role":` + string(mustJSON(role)) + `,"content":` + string(mustJSON(text)) + `}`
+}
+
+// chatToolCallJSON chat tool_calls 数组元素字面量。
+func chatToolCallJSON(id, name, args string) string {
+	return `{"id":` + string(mustJSON(id)) + `,"type":"function","function":{"name":` +
+		string(mustJSON(name)) + `,"arguments":` + string(mustJSON(args)) + `}}`
+}
+
+// chatToolMessageJSON role=tool 消息字面量。
+func chatToolMessageJSON(callID, content string) string {
+	return `{"role":"tool","tool_call_id":` + string(mustJSON(callID)) + `,"content":` + string(mustJSON(content)) + `}`
 }
 
 // toolResultToText tool_result.content → 文本，接受字符串或块数组，image 等拒绝。
@@ -286,18 +357,8 @@ func MessageFromChat(chatBody []byte, msgID, fallbackModel string) ([]byte, erro
 	var chat struct {
 		Model   string `json:"model"`
 		Choices []struct {
-			Message struct {
-				Content          *string `json:"content"`
-				ReasoningContent *string `json:"reasoning_content"`
-				ToolCalls        []struct {
-					ID       string `json:"id"`
-					Function struct {
-						Name      string `json:"name"`
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				} `json:"tool_calls"`
-			} `json:"message"`
-			FinishReason string `json:"finish_reason"`
+			Message      msgChoiceMessage `json:"message"`
+			FinishReason string           `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *Usage `json:"usage"`
 	}
@@ -309,21 +370,7 @@ func MessageFromChat(chatBody []byte, msgID, fallbackModel string) ([]byte, erro
 	if len(chat.Choices) > 0 {
 		ch := chat.Choices[0]
 		finish = ch.FinishReason
-		if ch.Message.ReasoningContent != nil && *ch.Message.ReasoningContent != "" {
-			content = append(content, map[string]any{"type": "thinking", "thinking": *ch.Message.ReasoningContent})
-		}
-		if ch.Message.Content != nil && *ch.Message.Content != "" {
-			content = append(content, map[string]any{"type": "text", "text": *ch.Message.Content})
-		}
-		for _, tc := range ch.Message.ToolCalls {
-			var input any
-			if json.Unmarshal([]byte(tc.Function.Arguments), &input) != nil || tc.Function.Arguments == "" {
-				input = map[string]any{}
-			}
-			content = append(content, map[string]any{
-				"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": input,
-			})
-		}
+		content = messageContentToBlocks(ch.Message)
 	}
 	model := chat.Model
 	if model == "" {
@@ -337,6 +384,41 @@ func MessageFromChat(chatBody []byte, msgID, fallbackModel string) ([]byte, erro
 		"usage":         messagesUsage(chat.Usage),
 	}
 	return json.Marshal(resp)
+}
+
+// msgChoiceMessage 是 MessageFromChat 读取的上游 choice.message 子集。
+type msgChoiceMessage struct {
+	Content          *string `json:"content"`
+	ReasoningContent *string `json:"reasoning_content"`
+	ToolCalls        []struct {
+		ID       string `json:"id"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls"`
+}
+
+// messageContentToBlocks chat 消息 → Anthropic content 块：thinking、text、tool_use 按此序发射；
+// tool_use 的 arguments 非对象 JSON 或空串时 input 退化为空对象。
+func messageContentToBlocks(msg msgChoiceMessage) []map[string]any {
+	content := []map[string]any{}
+	if msg.ReasoningContent != nil && *msg.ReasoningContent != "" {
+		content = append(content, map[string]any{"type": "thinking", "thinking": *msg.ReasoningContent})
+	}
+	if msg.Content != nil && *msg.Content != "" {
+		content = append(content, map[string]any{"type": "text", "text": *msg.Content})
+	}
+	for _, tc := range msg.ToolCalls {
+		var input any
+		if json.Unmarshal([]byte(tc.Function.Arguments), &input) != nil || tc.Function.Arguments == "" {
+			input = map[string]any{}
+		}
+		content = append(content, map[string]any{
+			"type": "tool_use", "id": tc.ID, "name": tc.Function.Name, "input": input,
+		})
+	}
+	return content
 }
 
 // stopReasonFromChat chat finish_reason → Anthropic stop_reason。
@@ -456,80 +538,103 @@ func (e *MessagesStreamEncoder) Feed(chunk []byte) [][]byte {
 		if ch.Index != nil && *ch.Index != 0 {
 			continue // 仅映射首 choice，多 choice 映射未定义，防御性忽略
 		}
-		if ch.Delta.ReasoningContent != nil && *ch.Delta.ReasoningContent != "" {
-			e.closeBlock(&out) // 思考与文本互斥，与 Anthropic 上游一致，切换前收束
-			if e.thinkOpen < 0 {
-				e.thinkOpen = e.nextIndex
-				e.nextIndex++
-				out = append(out, e.event(map[string]any{"type": "content_block_start",
-					"index": e.thinkOpen, "content_block": map[string]any{"type": "thinking", "thinking": ""}}))
-			}
-			out = append(out, e.event(map[string]any{"type": "content_block_delta",
-				"index": e.thinkOpen, "delta": map[string]any{"type": "thinking_delta", "thinking": *ch.Delta.ReasoningContent}}))
-		}
-		if ch.Delta.Content != nil && *ch.Delta.Content != "" {
-			e.closeBlock(&out)
-			if e.textOpen < 0 {
-				e.textOpen = e.nextIndex
-				e.nextIndex++
-				out = append(out, e.event(map[string]any{"type": "content_block_start",
-					"index": e.textOpen, "content_block": map[string]any{"type": "text", "text": ""}}))
-			}
-			out = append(out, e.event(map[string]any{"type": "content_block_delta",
-				"index": e.textOpen, "delta": map[string]any{"type": "text_delta", "text": *ch.Delta.Content}}))
-		}
-		for _, raw := range ch.Delta.ToolCalls {
-			var tc struct {
-				Index    *int   `json:"index"`
-				ID       string `json:"id"`
-				Function struct {
-					Name      string `json:"name"`
-					Arguments string `json:"arguments"`
-				} `json:"function"`
-			}
-			_ = json.Unmarshal(raw, &tc)
-			idx := 0
-			if tc.Index != nil {
-				idx = *tc.Index
-			}
-			tb, ok := e.tools[idx]
-			if !ok {
-				tb = &msgToolBlock{blockIndex: -1}
-				e.tools[idx] = tb
-				e.toolOrder = append(e.toolOrder, idx)
-			}
-			if tc.ID != "" {
-				tb.callID = tc.ID
-			}
-			if tc.Function.Name != "" {
-				tb.name = tc.Function.Name
-			}
-			if !tb.started {
-				// call_id/name 允许后续帧补齐，args 先到不丢
-				e.closeBlock(&out)
-				tb.blockIndex = e.nextIndex
-				e.nextIndex++
-				tb.started = true
-				out = append(out, e.event(map[string]any{"type": "content_block_start",
-					"index": tb.blockIndex, "content_block": map[string]any{
-						"type": "tool_use", "id": tb.callID, "name": tb.name, "input": map[string]any{}}}))
-			}
-			if tc.Function.Arguments != "" {
-				tb.args.WriteString(tc.Function.Arguments)
-				out = append(out, e.event(map[string]any{"type": "content_block_delta",
-					"index": tb.blockIndex, "delta": map[string]any{"type": "input_json_delta", "partial_json": tc.Function.Arguments}}))
-			}
-		}
-		if ch.FinishReason != nil && *ch.FinishReason != "" && !e.done {
-			if sr := stopReasonFromChat(*ch.FinishReason); sr != nil {
-				e.stopReason = sr.(string)
-			}
-		}
+		e.feedChoice(&out, &ch)
 	}
 	if c.Usage != nil {
 		e.usage = c.Usage
 	}
 	return out
+}
+
+// feedChoice 单 choice 的增量映射：思考、文本、工具调用按固定顺序处理，最后吸收 finish_reason。
+func (e *MessagesStreamEncoder) feedChoice(out *[][]byte, ch *StreamChoice) {
+	e.feedReasoning(out, ch.Delta.ReasoningContent)
+	e.feedText(out, ch.Delta.Content)
+	for _, raw := range ch.Delta.ToolCalls {
+		e.feedToolCall(out, raw)
+	}
+	if ch.FinishReason != nil && *ch.FinishReason != "" && !e.done {
+		if sr := stopReasonFromChat(*ch.FinishReason); sr != nil {
+			e.stopReason = sr.(string)
+		}
+	}
+}
+
+// feedReasoning 思考增量：与文本互斥，开口前先收束其它块，块未打开则先发 content_block_start。
+func (e *MessagesStreamEncoder) feedReasoning(out *[][]byte, text *string) {
+	if text == nil || *text == "" {
+		return
+	}
+	e.closeBlock(out) // 思考与文本互斥，与 Anthropic 上游一致，切换前收束
+	if e.thinkOpen < 0 {
+		e.thinkOpen = e.nextIndex
+		e.nextIndex++
+		*out = append(*out, e.event(map[string]any{"type": "content_block_start",
+			"index": e.thinkOpen, "content_block": map[string]any{"type": "thinking", "thinking": ""}}))
+	}
+	*out = append(*out, e.event(map[string]any{"type": "content_block_delta",
+		"index": e.thinkOpen, "delta": map[string]any{"type": "thinking_delta", "thinking": *text}}))
+}
+
+// feedText 文本增量，块管理规则同 feedReasoning。
+func (e *MessagesStreamEncoder) feedText(out *[][]byte, text *string) {
+	if text == nil || *text == "" {
+		return
+	}
+	e.closeBlock(out)
+	if e.textOpen < 0 {
+		e.textOpen = e.nextIndex
+		e.nextIndex++
+		*out = append(*out, e.event(map[string]any{"type": "content_block_start",
+			"index": e.textOpen, "content_block": map[string]any{"type": "text", "text": ""}}))
+	}
+	*out = append(*out, e.event(map[string]any{"type": "content_block_delta",
+		"index": e.textOpen, "delta": map[string]any{"type": "text_delta", "text": *text}}))
+}
+
+// feedToolCall 单个 tool_calls 增量：按内层 index 累积，首次出现才登记并从下一个块索引起块。
+func (e *MessagesStreamEncoder) feedToolCall(out *[][]byte, raw json.RawMessage) {
+	var tc struct {
+		Index    *int   `json:"index"`
+		ID       string `json:"id"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}
+	_ = json.Unmarshal(raw, &tc)
+	idx := 0
+	if tc.Index != nil {
+		idx = *tc.Index
+	}
+	tb, ok := e.tools[idx]
+	if !ok {
+		tb = &msgToolBlock{blockIndex: -1}
+		e.tools[idx] = tb
+		e.toolOrder = append(e.toolOrder, idx)
+	}
+	if tc.ID != "" {
+		tb.callID = tc.ID
+	}
+	if tc.Function.Name != "" {
+		tb.name = tc.Function.Name
+	}
+	if !tb.started {
+		// call_id/name 允许后续帧补齐，args 先到不丢
+		e.closeBlock(out)
+		tb.blockIndex = e.nextIndex
+		e.nextIndex++
+		tb.started = true
+		*out = append(*out, e.event(map[string]any{"type": "content_block_start",
+			"index": tb.blockIndex, "content_block": map[string]any{
+				"type": "tool_use", "id": tb.callID, "name": tb.name, "input": map[string]any{}}}))
+	}
+	if tc.Function.Arguments != "" {
+		tb.args.WriteString(tc.Function.Arguments)
+		*out = append(*out, e.event(map[string]any{"type": "content_block_delta",
+			"index": tb.blockIndex,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": tc.Function.Arguments}}))
+	}
 }
 
 // Complete 终态两连发：message_delta(stop_reason+usage) 与 message_stop，仅应调用一次。

@@ -27,10 +27,13 @@ type PricingRecord struct {
 	UpdatedAt          string
 }
 
+// pricingCols 价目行读取列清单，列表与单行查询共用。
+const pricingCols = `alias, currency, input_credits, cached_input_credits, vision_input_credits,
+	output_credits, timezone, time_windows, updated_at`
+
 // ListPricing 全部运行态价目，按别名升序。
 func ListPricing(db *sql.DB) ([]PricingRecord, error) {
-	rows, err := db.Query(`SELECT alias, currency, input_credits, cached_input_credits, vision_input_credits, output_credits,
-		timezone, time_windows, updated_at FROM model_pricing ORDER BY alias`)
+	rows, err := db.Query(`SELECT ` + pricingCols + ` FROM model_pricing ORDER BY alias`)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列出价目: %w", err)
 	}
@@ -53,8 +56,7 @@ func ListPricing(db *sql.DB) ([]PricingRecord, error) {
 
 // GetPricing 按别名取运行态价目；未配置返回 ErrNotFound。
 func GetPricing(db *sql.DB, alias string) (*PricingRecord, error) {
-	row := db.QueryRow(`SELECT alias, currency, input_credits, cached_input_credits, vision_input_credits, output_credits,
-		timezone, time_windows, updated_at FROM model_pricing WHERE alias = ?`, alias)
+	row := db.QueryRow(`SELECT `+pricingCols+` FROM model_pricing WHERE alias = ?`, alias)
 	var r PricingRecord
 	var windowsJSON string
 	err := row.Scan(&r.Alias, &r.Currency, &r.InputCredits, &r.CachedInputCredits, &r.VisionInputCredits,
@@ -81,7 +83,8 @@ func UpsertPricing(db *sql.DB, r PricingRecord) error {
 		r.Timezone = "UTC"
 	}
 	_, err = db.Exec(`INSERT INTO model_pricing
-		(alias, currency, input_credits, cached_input_credits, vision_input_credits, output_credits, timezone, time_windows, updated_at)
+		(alias, currency, input_credits, cached_input_credits, vision_input_credits,
+		 output_credits, timezone, time_windows, updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(alias) DO UPDATE SET
 		  currency=excluded.currency, input_credits=excluded.input_credits,

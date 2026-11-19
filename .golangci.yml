@@ -7,12 +7,66 @@ linters:
     - misspell
     - revive
     - unconvert
+    # 结构体积与复杂度:PMD GodClass/GodMethod/CyclomaticComplexity 在 Go 侧的等价覆盖。
+    # 全部取 linter 默认阈值(funlen 60/40、cyclop 10、gocognit 30、nestif 5、
+    # maintidx 20、lll 120、dupl 150),不按仓库调参。
+    - funlen
+    - cyclop
+    - gocognit
+    - nestif
+    - maintidx
+    - lll
+    - dupl
+    # 安全:handoff P1 Go 口径。
+    - gosec
+    # import 卫生:把 AGENTS 的分层方向固化成可执行规则。
+    - depguard
   settings:
     revive:
       severity: warning
       rules:
-        # 导出符号必须有简体中文注释；使用默认参数以兼容内置规则。
+        # 导出符号必须有简体中文注释;使用默认参数以兼容内置规则。
         - name: exported
+    depguard:
+      rules:
+        protocol-dto-source:
+          files: ["**/internal/protocol/**"]
+          deny:
+            - pkg: "github.com/solvela/muniu/internal/adapter"
+              desc: "protocol 是 DTO 单源,不得反向依赖 adapter"
+            - pkg: "github.com/solvela/muniu/internal/proxy"
+              desc: "protocol 是 DTO 单源,不得反向依赖 proxy"
+            - pkg: "github.com/solvela/muniu/internal/store"
+              desc: "protocol 是纯 DTO 层,不得依赖存储"
+        config-no-store:
+          files: ["**/internal/config/**"]
+          deny:
+            - pkg: "github.com/solvela/muniu/internal/store"
+              desc: "config 不 import store;账号凭据解析经装配层注入"
+        adapter-no-proxy:
+          files: ["**/internal/adapter/**"]
+          deny:
+            - pkg: "github.com/solvela/muniu/internal/proxy"
+              desc: "adapter 不得反向依赖编排层 proxy"
+        store-leaf:
+          files: ["**/internal/store/**"]
+          deny:
+            - pkg: "github.com/solvela/muniu/internal/adapter"
+              desc: "store 是存储叶层,不得依赖协议适配"
+            - pkg: "github.com/solvela/muniu/internal/proxy"
+              desc: "store 是存储叶层,不得依赖编排层"
+            - pkg: "github.com/solvela/muniu/internal/config"
+              desc: "store 是存储叶层,不得依赖配置层"
+            - pkg: "github.com/solvela/muniu/internal/keypool"
+              desc: "store 是存储叶层,不得依赖调度层"
+  exclusions:
+    rules:
+      # 结构类指标只约束生产代码,对齐 PMD 默认 includeTests=false;
+      # 测试表格与夹具天然超长/高分支,gosec 在测试里也只命中假凭据与文件路径参数。
+      - path: _test\.go
+        linters: [funlen, cyclop, gocognit, nestif, maintidx, lll, dupl, gosec, depguard]
+      - path: (^|/)internal/testkit/
+        linters: [funlen, cyclop, gocognit, nestif, maintidx, lll, dupl, gosec, depguard]
 
 formatters:
   enable:

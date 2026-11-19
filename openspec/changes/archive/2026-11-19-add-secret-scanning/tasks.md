@@ -14,7 +14,7 @@
 ## 3. 负向验收
 
 - [x] 3.1 干净树跑等价 CI 命令 `gitleaks detect --source . --redact --exit-code 1`,退出 0(本仓 61 commits 与临时 clone 各一次;存活证据 /tmp/gitleaks-clean.log、/tmp/gl-probe-clean.log)
-- [x] 3.2 在临时 clone 提交探针,同一命令非 0(exit 1,`RuleID: aws-access-token`)。handoff 原探针 `AKIAIOSFODNN7EXAMPLE` 被默认规则 allowlist `.+EXAMPLE$` 拦截且字符集须匹配 `[A-Z2-7]`,改用非示例值 `AKIABQ3C4D5E6F7G2H2J` 后命中;GitHub PAT 形态探针另测亦命中
+- [x] 3.2 在临时 clone 提交探针,同一命令非 0(exit 1,`RuleID: aws-access-token`)。handoff 原探针 `AKIAIOSFODNN7EXAMPLE` 被默认规则 allowlist `.+EXAMPLE$` 拦截且字符集须匹配 `[A-Z2-7]`,改用非示例值(前缀 `AKIA` + 16 位 `[A-Z2-7]`,实测值不落库)后命中;GitHub PAT 形态探针另测亦命中
 - [x] 3.3 临时 clone reset 回探针前 HEAD 后,同一命令恢复退出 0(/tmp/gl-final-revert.log)
 - [x] 3.4 既有门禁 `make check` 全绿(vet + lint + race test + 覆盖率 + web 五件套):EXIT=0,coverage 72.5%;首次全量中 `TestLoop_逐key余额回写回调` 负载超时,单测复跑与二次全量均绿
 

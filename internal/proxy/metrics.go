@@ -16,7 +16,8 @@ var (
 	// TokensTotal token 流向计数 {direction,provider,model}，计量落账点累加，
 	// 口径与 usage_logs 落账行一致，含估算行；direction ∈ prompt|cached_prompt|completion，
 	// reasoning 按计价口径计入 output 段；标签基数受配置界，provider × 别名 × 3 向。
-	TokensTotal = metrics.NewCounterVec("muniu_tokens_total", "token 计数(与 usage_logs 落账行同口径)", "direction", "provider", "model")
+	TokensTotal = metrics.NewCounterVec("muniu_tokens_total",
+		"token 计数(与 usage_logs 落账行同口径)", "direction", "provider", "model")
 	// SemanticCacheQueries 语义缓存判定计数 {model,result}，result ∈ hit|miss|skip：
 	// 实际检索命中为 hit，未命中为 miss，缓存未参与如租户开关关、tools 请求、温度不合规等记 skip。
 	SemanticCacheQueries = metrics.NewCounterVec("muniu_semantic_cache_queries_total", "语义缓存判定数", "model", "result")
@@ -25,7 +26,8 @@ var (
 	StickyRequestsTotal = metrics.NewCounterVec("muniu_sticky_requests_total", "有状态粘性请求数", "result")
 	// FirstTokenDuration 流式首 token 延迟直方图(ms)；桶 1ms 起步，压测实测流式首字节
 	// p50≈1.13ms，DefBuckets 5ms 起会把最感兴趣区间吞进第一个桶。仅流式请求观测。
-	FirstTokenDuration = metrics.NewHistogram("muniu_first_token_duration_ms", "流式首 token 延迟(ms)", []float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000})
+	FirstTokenDuration = metrics.NewHistogram("muniu_first_token_duration_ms", "流式首 token 延迟(ms)",
+		[]float64{1, 2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000})
 )
 
 // observeTokens token 三向累加，record 与 recordCacheHit 两个落账点共用；

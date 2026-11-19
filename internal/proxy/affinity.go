@@ -103,7 +103,8 @@ func apiKeyIDOf(r *http.Request) string {
 type stickyError struct{ code, msg string }
 
 // stickyRoute 将有状态请求限制在亲和 provider 的候选内；亲和未知或失效时返回错误。
-func (p *Proxy) stickyRoute(r *http.Request, nat *inboundNative, topo *topologySnapshot, cands []config.Candidate) ([]config.Candidate, *stickyError) {
+func (p *Proxy) stickyRoute(r *http.Request, nat *inboundNative, topo *topologySnapshot,
+	cands []config.Candidate) ([]config.Candidate, *stickyError) {
 	if !aliasHasNative(topo, protocol.InboundResponses, cands) {
 		StickyRequestsTotal.Inc("unsupported")
 		return nil, &stickyError{

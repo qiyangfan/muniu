@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/failover"
 	"github.com/solvela/muniu/internal/keypool"
@@ -105,69 +106,33 @@ func (m *meterState) budgetExceeded() bool {
 	if out <= 0 {
 		out = m.budgetOutEst
 	}
-	outTotal := uint64(out)
+	outTotal := toU64(out)
 	if m.budgetOut > 0 {
-		outTotal += uint64(m.budgetOutEst - m.budgetOutEstAtUsage)
+		outTotal += toU64(m.budgetOutEst - m.budgetOutEstAtUsage)
 	}
-	cost, valid := budgetCost(uint64(in), outTotal, m.budgetPrices)
+	cost, valid := budgetCost(toU64(in), outTotal, m.budgetPrices)
 	return !valid || cost > m.budget
+}
+
+// toU64 负数按 0 处理：预算路径不接受回绕出的巨大值。
+func toU64(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
 }
 
 // record 落账：构造行并投递计量管道，异步批量落库。
 // modelAlias/upstream 为对外别名与上游模型名；inputFallback 为估算路径的输入文本，chat 取 messages 序列化，embeddings 取 input。
-func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failover.Candidate, inputFallback string, m *meterState) {
+func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failover.Candidate,
+	inputFallback string, m *meterState) {
 	if p.pipeline == nil {
 		return
 	}
 	total := time.Since(m.start).Milliseconds()
-
-	// usage 来源：上游 usage 帧多帧字段合并，优先于本地估算
-	usage, estimated := protocol.Usage{}, m.est
-	if len(m.usageFrames) > 0 && m.normalize != nil {
-		for _, raw := range m.usageFrames {
-			u, err := m.normalize(raw)
-			usage = mergeUsage(usage, u)
-			if err != nil {
-				p.logger.Warn("usage 归一失败,保留可确认字段并标记估算",
-					"request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
-				estimated = true
-				continue
-			}
-		}
-	}
-	if (estimated || m.class == failover.ClassCostBudget) && m.budgetOut > 0 && m.output.Len() > m.outputAtUsage {
-		after := metering.EstimateOutputTokens(m.output.String()[m.outputAtUsage:], upstream)
-		if after > math.MaxInt64-m.budgetOut {
-			p.logger.Warn("计量累计输出超出整数范围，转为全文估算", "request_id", logging.RequestIDFrom(r.Context()))
-			usage.CompletionTokens = metering.EstimateOutputTokens(m.output.String(), upstream)
-		} else {
-			usage.CompletionTokens = m.budgetOut + after
-		}
-		estimated = true
-	}
-	// 中断前的 usage 可能只有输入；按字段补齐，不能把“有任意帧”当成完整计量。
-	if estimated || m.class == failover.ClassCostBudget {
-		if usage.PromptTokens == 0 {
-			usage.PromptTokens = estimateInputTokens(inputFallback, upstream)
-			estimated = true
-		}
-		if usage.CompletionTokens == 0 && m.output.Len() > 0 {
-			usage.CompletionTokens = metering.EstimateOutputTokens(m.output.String(), upstream)
-			estimated = true
-		}
-	}
-
-	tenantID, apiKeyID := "", ""
-	if info := auth.KeyFrom(r.Context()); info != nil {
-		tenantID, apiKeyID = info.TenantID, info.ID
-	}
-	pricing := m.priceSnapshot
-	if !m.priceSnapshotTaken {
-		if pt := p.pricing.Get(modelAlias); pt != nil {
-			pr := pt.At(time.Now())
-			pricing = &pr
-		}
-	}
+	usage, estimated := p.mergeUsageFrames(r, m, upstream, inputFallback)
+	tenantID, apiKeyID := meterIdentity(r)
+	pricing := m.pricingSnapshot(p.pricing, modelAlias)
 
 	UpstreamTotal.Inc(cand.Provider, errorClassOf(m))
 
@@ -177,13 +142,7 @@ func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failov
 	if m.firstMs != nil {
 		FirstTokenDuration.Observe(float64(*m.firstMs))
 	}
-
-	// TPM 记账：请求完成后按实际 token 计入滑动窗口
-	if p.tpm != nil {
-		if info := auth.KeyFrom(r.Context()); info != nil {
-			p.tpm.Record(info.ID, usage.PromptTokens+usage.CompletionTokens, time.Now())
-		}
-	}
+	p.recordTPM(r, usage)
 
 	RequestsTotal.Inc(modelAlias, m.status)
 	RequestDuration.Observe(float64(total))
@@ -215,8 +174,91 @@ func (p *Proxy) record(r *http.Request, modelAlias, upstream string, cand failov
 	p.pipeline.Submit(row)
 }
 
+// mergeUsageFrames usage 来源：上游 usage 帧多帧字段合并，优先于本地估算；
+// 估算或预算中断时按字段补齐，不能把“有任意帧”当成完整计量。
+func (p *Proxy) mergeUsageFrames(r *http.Request, m *meterState,
+	upstream, inputFallback string) (protocol.Usage, bool) {
+	usage, estimated := protocol.Usage{}, m.est
+	if len(m.usageFrames) > 0 && m.normalize != nil {
+		for _, raw := range m.usageFrames {
+			u, err := m.normalize(raw)
+			usage = mergeUsage(usage, u)
+			if err != nil {
+				p.logger.Warn("usage 归一失败,保留可确认字段并标记估算",
+					"request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
+				estimated = true
+				continue
+			}
+		}
+	}
+	usage, estimated = m.estimateAfterUsage(usage, estimated, upstream)
+	if estimated || m.class == failover.ClassCostBudget {
+		usage, estimated = fillMissingUsage(usage, estimated, inputFallback, upstream, m.output.String())
+	}
+	return usage, estimated
+}
+
+// estimateAfterUsage 累计真值到达后以当时的估算为检查点继续累计后续增量，不能冻结流中成本。
+func (m *meterState) estimateAfterUsage(usage protocol.Usage, estimated bool, upstream string) (protocol.Usage, bool) {
+	if (!estimated && m.class != failover.ClassCostBudget) || m.budgetOut <= 0 || m.output.Len() <= m.outputAtUsage {
+		return usage, estimated
+	}
+	after := metering.EstimateOutputTokens(m.output.String()[m.outputAtUsage:], upstream)
+	if after > math.MaxInt64-m.budgetOut {
+		usage.CompletionTokens = metering.EstimateOutputTokens(m.output.String(), upstream)
+	} else {
+		usage.CompletionTokens = m.budgetOut + after
+	}
+	return usage, true
+}
+
+// fillMissingUsage 中断前的 usage 可能只有输入；按字段补齐缺失侧。
+func fillMissingUsage(usage protocol.Usage, estimated bool, inputFallback, upstream,
+	outText string) (protocol.Usage, bool) {
+	if usage.PromptTokens == 0 {
+		usage.PromptTokens = estimateInputTokens(inputFallback, upstream)
+		estimated = true
+	}
+	if usage.CompletionTokens == 0 && len(outText) > 0 {
+		usage.CompletionTokens = metering.EstimateOutputTokens(outText, upstream)
+		estimated = true
+	}
+	return usage, estimated
+}
+
+// meterIdentity 从 ctx 取租户与 key 归属，缺失按空串。
+func meterIdentity(r *http.Request) (tenantID, apiKeyID string) {
+	if info := auth.KeyFrom(r.Context()); info != nil {
+		return info.TenantID, info.ID
+	}
+	return "", ""
+}
+
+// pricingSnapshot 价目快照：chat 入口固定，其他端点沿原完成时刻计价路径。
+func (m *meterState) pricingSnapshot(dir *metering.PricingDirectory, modelAlias string) *metering.Pricing {
+	if m.priceSnapshotTaken {
+		return m.priceSnapshot
+	}
+	if pt := dir.Get(modelAlias); pt != nil {
+		pr := pt.At(time.Now())
+		return &pr
+	}
+	return nil
+}
+
+// recordTPM TPM 记账：请求完成后按实际 token 计入滑动窗口。
+func (p *Proxy) recordTPM(r *http.Request, usage protocol.Usage) {
+	if p.tpm == nil {
+		return
+	}
+	if info := auth.KeyFrom(r.Context()); info != nil {
+		p.tpm.Record(info.ID, usage.PromptTokens+usage.CompletionTokens, time.Now())
+	}
+}
+
 // reportKeyOutcome 收尾：按错误分类把结果回写 key 池，触发冷却、禁用或 EMA 更新。
-func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key, class failover.ErrorClass, handled bool, m *meterState) {
+func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key,
+	class failover.ErrorClass, handled bool, m *meterState) {
 	now := time.Now()
 	// 成功：状态 ok 且无错误类
 	if handled && class == "" && m.status == "ok" {
@@ -229,10 +271,7 @@ func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key, class fai
 		return
 	}
 	if m.creditEvidence {
-		// 欠费证据（封闭白名单）→ 欠费桶：只改池的跨请求记忆，换道语义不变
-		//（判定表已按原错误类走完）。计入欠费桶事件指标供余额回写面对照。
-		CreditEvents.Inc("upstream", "enter")
-		pool.Report(key, keypool.OutcomeCreditExhausted, now, 0)
+		reportCreditExhausted(pool, key, now)
 		return
 	}
 	switch class {
@@ -246,6 +285,13 @@ func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key, class fai
 		// dial/timeout/mid_stream/unknown/内部类只记 EMA 失败，不触发冷却计数
 		pool.Report(key, keypool.OutcomeFailure, now, 0)
 	}
+}
+
+// reportCreditExhausted 欠费证据（封闭白名单）→ 欠费桶：只改池的跨请求记忆，换道语义不变
+// （判定表已按原错误类走完）。计入欠费桶事件指标供余额回写面对照。
+func reportCreditExhausted(pool *keypool.Pool, key *keypool.Key, now time.Time) {
+	CreditEvents.Inc("upstream", "enter")
+	pool.Report(key, keypool.OutcomeCreditExhausted, now, 0)
 }
 
 // isCreditExhausted 欠费证据封闭白名单：HTTP 402，或错误体错误码/type 属 insufficient_quota
@@ -323,7 +369,7 @@ func preflightBudgetExceeded(req *protocol.ChatRequest, budget int64, prices *me
 	}
 	inputText, _ := json.Marshal(req.Messages)
 	in := estimateInputTokens(string(inputText), req.Model)
-	cost, valid := budgetCost(uint64(in), uint64(*req.MaxTokens), prices)
+	cost, valid := budgetCost(toU64(in), toU64(*req.MaxTokens), prices)
 	if !valid {
 		return "单请求预估成本超出整数范围，已超过预算", true
 	}
@@ -345,40 +391,77 @@ func (m *meterState) accumulateDelta(payload []byte) {
 	counting := m.budget > 0 && m.budgetPrices != nil
 	var budgeted strings.Builder
 	for _, ch := range chunk.Choices {
-		if ch.Delta.Content != nil {
-			m.output.WriteString(*ch.Delta.Content)
-			m.contentOut.WriteString(*ch.Delta.Content)
-			if counting {
-				budgeted.WriteString(*ch.Delta.Content)
-			}
-		}
-		if ch.Delta.ReasoningContent != nil {
-			m.output.WriteString(*ch.Delta.ReasoningContent)
-			if counting {
-				budgeted.WriteString(*ch.Delta.ReasoningContent)
-			}
-		}
-		for _, raws := range [][]json.RawMessage{ch.Delta.ToolCalls, ch.ToolCalls} {
-			for _, rc := range raws {
-				var tc struct {
-					Function struct {
-						Arguments string `json:"arguments"`
-					} `json:"function"`
-				}
-				if json.Unmarshal(rc, &tc) == nil {
-					m.output.WriteString(tc.Function.Arguments)
-					if counting {
-						budgeted.WriteString(tc.Function.Arguments)
-					}
-				}
-			}
-		}
+		m.absorbChoiceDelta(ch, counting, &budgeted)
 		if ch.FinishReason != nil && *ch.FinishReason != "" {
 			m.finishReason = *ch.FinishReason
 		}
 	}
 	if counting && budgeted.Len() > 0 {
 		m.budgetOutEst += metering.EstimateOutputTokens(budgeted.String(), m.budgetModel)
+	}
+}
+
+// absorbChoiceDelta 单条 choice 的增量累计：content/reasoning 与工具参数分别入文本与预算缓冲。
+func (m *meterState) absorbChoiceDelta(ch protocol.StreamChoice, counting bool, budgeted *strings.Builder) {
+	if ch.Delta.Content != nil {
+		m.output.WriteString(*ch.Delta.Content)
+		m.contentOut.WriteString(*ch.Delta.Content)
+		if counting {
+			budgeted.WriteString(*ch.Delta.Content)
+		}
+	}
+	if ch.Delta.ReasoningContent != nil {
+		m.output.WriteString(*ch.Delta.ReasoningContent)
+		if counting {
+			budgeted.WriteString(*ch.Delta.ReasoningContent)
+		}
+	}
+	for _, raws := range [][]json.RawMessage{ch.Delta.ToolCalls, ch.ToolCalls} {
+		m.absorbToolArgs(raws, counting, budgeted)
+	}
+}
+
+// absorbToolArgs 工具调用参数计入输出文本与预算估算：纯工具流无正文时估算不归零。
+func (m *meterState) absorbToolArgs(raws []json.RawMessage, counting bool, budgeted *strings.Builder) {
+	for _, rc := range raws {
+		var tc struct {
+			Function struct {
+				Arguments string `json:"arguments"`
+			} `json:"function"`
+		}
+		if json.Unmarshal(rc, &tc) == nil {
+			m.output.WriteString(tc.Function.Arguments)
+			if counting {
+				budgeted.WriteString(tc.Function.Arguments)
+			}
+		}
+	}
+}
+
+// absorbStreamUsage usage 帧：抽内层 usage 对象供归一，多帧合并适配桥接 start/delta 分离。
+func (m *meterState) absorbStreamUsage(src []byte, meta adapter.EventMeta) {
+	if !meta.IsUsage {
+		return
+	}
+	var frame struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(src, &frame); err != nil || len(frame.Usage) == 0 || string(frame.Usage) == "null" {
+		return
+	}
+	m.usageFrames = append(m.usageFrames, frame.Usage)
+	// 预算真值并入，真值覆盖估算，归一失败不影响计量主路径
+	if m.budget > 0 && m.normalize != nil {
+		if u, uerr := m.normalize(frame.Usage); uerr == nil {
+			m.budgetObserveUsage(u)
+		}
+	}
+}
+
+// noteUsageMissing usage 缺失即置估算位，落账走本地估算路径。
+func (m *meterState) noteUsageMissing() {
+	if len(m.usageFrames) == 0 {
+		m.est = true
 	}
 }
 

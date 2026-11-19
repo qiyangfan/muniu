@@ -77,7 +77,12 @@ type RedisBackend struct {
 // NewRedisBackend 构造，addr 形态 host:port；连通性惰性验证，首操作失败即降级。
 func NewRedisBackend(addr string, logger *slog.Logger) *RedisBackend {
 	return &RedisBackend{
-		rdb:          redis.NewClient(&redis.Options{Addr: addr, DialTimeout: probeTimeout, ReadTimeout: probeTimeout, WriteTimeout: probeTimeout}),
+		rdb: redis.NewClient(&redis.Options{
+			Addr:         addr,
+			DialTimeout:  probeTimeout,
+			ReadTimeout:  probeTimeout,
+			WriteTimeout: probeTimeout,
+		}),
 		fallbackRPM:  New(),
 		fallbackTPM:  NewTPM(),
 		logger:       logger,

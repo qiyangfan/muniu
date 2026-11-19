@@ -42,13 +42,7 @@ func ProbeSupported(adapter string) bool {
 // probeSend 单次探针请求:2xx → OK,429 → Limited(存活但受限),其余 → Fail(带归类)。
 // 探针零触碰 key 池:取值来自装配期快照,绝不调用 Pick/Report(EMA/冷却/禁用零写入)。
 func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (ProbeOutcome, string) {
-	key := ""
-	for _, k := range ch.Keys {
-		if k.Value != "" {
-			key = k.Value
-			break
-		}
-	}
+	key := firstKeyValue(ch.Keys)
 	if key == "" {
 		return ProbeFail, "no_key"
 	}
@@ -56,39 +50,13 @@ func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (Probe
 	if !ok {
 		return ProbeFail, "adapter_probe_unsupported"
 	}
-	cl := m.client
-	if ch.Outbound != nil {
-		cl = ch.Outbound // 渠道声明出站代理 client(装配期按 proxy_url 解析),优先于默认
-	}
-	// 尾斜杠归一化与 adapter 层同口径:数据面容忍的 base_url 写法不得在探针面拼出 //path 404
-	url := strings.TrimRight(ch.BaseURL, "/") + path
-	ctx, cancel := context.WithTimeout(m.ctx, m.opts.Timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+	req, cancel, err := m.newProbeRequest(ch, spec, method, path, body, key)
 	if err != nil {
 		return ProbeFail, "network"
 	}
-	if spec.anthropic {
-		// 三态与数据面 bridge.applyAuth 同语义(oauth-subscription-lane):oauth 渠道若缺
-		// 此分支,缺省全开的免费探针会以 x-api-key 发订阅 access token → 连续 401 → 健康面
-		// 误熔断可用渠道,且畸形凭据外呼构成保号风险(评审域三 P1)。
-		switch ch.Auth {
-		case adapter.AuthOAuth:
-			req.Header.Set("Authorization", "Bearer "+key)
-			req.Header.Set("anthropic-beta", adapter.AuthOAuthBetaHeader)
-		case adapter.AuthBearer:
-			req.Header.Set("Authorization", "Bearer "+key)
-		default:
-			req.Header.Set("x-api-key", key)
-		}
-		req.Header.Set("anthropic-version", "2023-06-01")
-	} else {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := cl.Do(req)
+	// 取消随本函数退出:提前在构造处 cancel 会把在途请求掐成 context canceled
+	defer cancel()
+	resp, err := probeClient(m.client, ch).Do(req)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return ProbeFail, "timeout"
@@ -96,13 +64,76 @@ func (m *Manager) probeSend(ch Channel, method, path string, body []byte) (Probe
 		return ProbeFail, "network"
 	}
 	defer func() { _ = resp.Body.Close() }()
+	return probeOutcomeOf(resp.StatusCode)
+}
+
+// firstKeyValue 取首个非空 key(装配期快照,零触碰 key 池)。
+func firstKeyValue(keys []ChannelKey) string {
+	for _, k := range keys {
+		if k.Value != "" {
+			return k.Value
+		}
+	}
+	return ""
+}
+
+// probeClient 渠道声明出站代理 client(装配期按 proxy_url 解析),优先于默认。
+func probeClient(def *http.Client, ch Channel) *http.Client {
+	if ch.Outbound != nil {
+		return ch.Outbound
+	}
+	return def
+}
+
+// newProbeRequest 组装探针请求(超时经 ctx 注入,与评估循环同口径);
+// 返回的 cancel 由调用方在请求结束后调用。
+func (m *Manager) newProbeRequest(ch Channel, spec probeSpec, method, path string,
+	body []byte, key string) (*http.Request, context.CancelFunc, error) {
+	// 尾斜杠归一化与 adapter 层同口径:数据面容忍的 base_url 写法不得在探针面拼出 //path 404
+	url := strings.TrimRight(ch.BaseURL, "/") + path
+	ctx, cancel := context.WithTimeout(m.ctx, m.opts.Timeout)
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(body))
+	if err != nil {
+		cancel()
+		return nil, nil, err
+	}
+	setProbeAuth(req.Header, spec, ch.Auth, key)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return req, cancel, nil
+}
+
+// setProbeAuth 鉴权头形态:anthropic 三态,其余族一律 Bearer。
+func setProbeAuth(h http.Header, spec probeSpec, auth, key string) {
+	if !spec.anthropic {
+		h.Set("Authorization", "Bearer "+key)
+		return
+	}
+	// 三态与数据面 bridge.applyAuth 同语义(oauth-subscription-lane):oauth 渠道若缺
+	// 此分支,缺省全开的免费探针会以 x-api-key 发订阅 access token → 连续 401 → 健康面
+	// 误熔断可用渠道,且畸形凭据外呼构成保号风险(评审域三 P1)。
+	switch auth {
+	case adapter.AuthOAuth:
+		h.Set("Authorization", "Bearer "+key)
+		h.Set("anthropic-beta", adapter.AuthOAuthBetaHeader)
+	case adapter.AuthBearer:
+		h.Set("Authorization", "Bearer "+key)
+	default:
+		h.Set("x-api-key", key)
+	}
+	h.Set("anthropic-version", "2023-06-01")
+}
+
+// probeOutcomeOf 状态码 → 探针结论:2xx OK,429 受限,其余失败(带归类)。
+func probeOutcomeOf(status int) (ProbeOutcome, string) {
 	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+	case status >= 200 && status < 300:
 		return ProbeOK, ""
-	case resp.StatusCode == http.StatusTooManyRequests:
+	case status == http.StatusTooManyRequests:
 		return ProbeLimited, "http_status_429"
 	default:
-		return ProbeFail, fmt.Sprintf("http_status_%d", resp.StatusCode)
+		return ProbeFail, fmt.Sprintf("http_status_%d", status)
 	}
 }
 

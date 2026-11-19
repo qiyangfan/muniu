@@ -35,39 +35,30 @@ type Options struct {
 // fill 补缺省并钳制硬顶，是 config 层与管理面校验之外的最后防线；
 // 超限直达 wazero 会 panic，见 WithMemoryLimitPages 对超页数的处置。
 func (o *Options) fill() {
-	if o.TimeoutMs <= 0 {
-		o.TimeoutMs = DefaultTimeoutMs
+	o.TimeoutMs = clampResource(o.TimeoutMs, DefaultTimeoutMs, MaxTimeoutMs)
+	o.MemoryLimitPages = clampResource(o.MemoryLimitPages, DefaultMemoryLimitPages, MaxMemoryLimitPages)
+	o.PoolSize = clampResource(o.PoolSize, DefaultPoolSize, MaxPoolSize)
+	// IdleTTLMs 极端值经 Duration 换算会溢出为负，回收循环静默不启动。
+	o.IdleTTLMs = clampResource(o.IdleTTLMs, DefaultIdleTTLMs, MaxIdleTTLMs)
+
+	// 探测超时缺省取 2s 与 4×TimeoutMs 的较大值，再钳硬顶。
+	probeDefault := int64(DefaultProbeTimeoutMs)
+	if o.TimeoutMs*4 > probeDefault {
+		probeDefault = o.TimeoutMs * 4
 	}
-	if o.TimeoutMs > MaxTimeoutMs {
-		o.TimeoutMs = MaxTimeoutMs
+	o.ProbeTimeoutMs = clampResource(o.ProbeTimeoutMs, probeDefault, MaxProbeTimeoutMs)
+}
+
+// clampResource 统一「≤0 取缺省、超硬顶钳制」语义；调用方保证不同类型各自专有，
+// 经实例化推断 T，调用点不显式写类型参数。
+func clampResource[T int | int64 | uint32](v, def, max T) T {
+	if v <= 0 {
+		return def
 	}
-	if o.MemoryLimitPages == 0 {
-		o.MemoryLimitPages = DefaultMemoryLimitPages
+	if v > max {
+		return max
 	}
-	if o.MemoryLimitPages > MaxMemoryLimitPages {
-		o.MemoryLimitPages = MaxMemoryLimitPages
-	}
-	if o.PoolSize <= 0 {
-		o.PoolSize = DefaultPoolSize
-	}
-	if o.PoolSize > MaxPoolSize {
-		o.PoolSize = MaxPoolSize
-	}
-	if o.IdleTTLMs <= 0 {
-		o.IdleTTLMs = DefaultIdleTTLMs
-	}
-	if o.IdleTTLMs > MaxIdleTTLMs { // 极端值经 Duration 换算会溢出为负，回收循环静默不启动。
-		o.IdleTTLMs = MaxIdleTTLMs
-	}
-	if o.ProbeTimeoutMs <= 0 {
-		o.ProbeTimeoutMs = DefaultProbeTimeoutMs
-		if o.TimeoutMs*4 > o.ProbeTimeoutMs {
-			o.ProbeTimeoutMs = o.TimeoutMs * 4
-		}
-	}
-	if o.ProbeTimeoutMs > MaxProbeTimeoutMs {
-		o.ProbeTimeoutMs = MaxProbeTimeoutMs
-	}
+	return v
 }
 
 // Plugin 单个已注册插件：专属 runtime、编译产物与实例池。
@@ -114,73 +105,101 @@ func Compile(opts Options) (*Plugin, error) {
 		return nil, err
 	}
 	opts.fill()
-	logger := opts.Logger
-	if logger == nil {
-		logger = slog.Default()
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
 	}
-	opts.Logger = logger
 
 	// 探测链必须有界：插件可在实例化、版本、start 任一环节死循环，Background ctx
 	// 下 WithCloseOnContextDone 永不中断，Register 会永久挂死。
-	probeCtx, cancelProbe := context.WithTimeout(context.Background(),
+	ctx, cancelProbe := context.WithTimeout(context.Background(),
 		time.Duration(opts.ProbeTimeoutMs)*time.Millisecond)
 	defer cancelProbe()
-	ctx := probeCtx
+
 	p := &Plugin{opts: opts}
 	p.snapCond = sync.NewCond(&p.snapMu)
 	p.rt = newRuntime(opts.MemoryLimitPages)
+	if err := p.setupRuntime(ctx); err != nil {
+		return nil, err
+	}
+	// 探测实例：版本探测与 start 校验，通过后直接入池零浪费。
+	probe, err := p.probeInstance(ctx)
+	if err != nil {
+		_ = p.rt.Close(ctx)
+		return nil, err
+	}
+	p.pool = newPool(p, probe, time.Duration(opts.IdleTTLMs)*time.Millisecond)
+	return p, nil
+}
+
+// setupRuntime 挂 WASI、建宿主导入并编译二进制；失败即关 runtime，错误文案逐阶段固定。
+func (p *Plugin) setupRuntime(ctx context.Context) error {
 	if err := wasiInstantiate(ctx, p.rt); err != nil {
 		_ = p.rt.Close(ctx)
-		return nil, fmt.Errorf("WASI 挂载失败: %w", err)
+		return fmt.Errorf("WASI 挂载失败: %w", err)
 	}
-	host, err := buildHostModule(ctx, p.rt, opts.Name, opts.Config, logger)
+	host, err := buildHostModule(ctx, p.rt, p.opts.Name, p.opts.Config, p.opts.Logger)
 	if err != nil {
 		_ = p.rt.Close(ctx)
-		return nil, fmt.Errorf("宿主导入构建失败: %w", err)
+		return fmt.Errorf("宿主导入构建失败: %w", err)
 	}
 	p.hostMod = host
-	compiled, err := p.rt.CompileModule(ctx, opts.Binary)
+	compiled, err := p.rt.CompileModule(ctx, p.opts.Binary)
 	if err != nil {
 		_ = p.rt.Close(ctx)
-		return nil, fmt.Errorf("非 wasm 或编译失败: %w", err)
+		return fmt.Errorf("非 wasm 或编译失败: %w", err)
 	}
 	p.compiled = compiled
+	return nil
+}
 
-	// 探测实例：版本探测与 start 校验，通过后直接入池零浪费。
+// probeInstance 建探测实例并校验 ABI 版本与 plugin_start；失败时实例与 runtime 均关闭，
+// 调用方不得再复用 p.rt。
+func (p *Plugin) probeInstance(ctx context.Context) (*instance, error) {
 	probe, err := p.newInstance(ctx)
 	if err != nil {
 		_ = p.rt.Close(ctx)
 		return nil, fmt.Errorf("实例化失败: %w", err)
 	}
+	if err := checkProbeVersion(ctx, probe); err != nil {
+		_ = probe.mod.Close(ctx)
+		_ = p.rt.Close(ctx)
+		return nil, err
+	}
+	if err := checkProbeStart(ctx, probe); err != nil {
+		_ = probe.mod.Close(ctx)
+		_ = p.rt.Close(ctx)
+		return nil, err
+	}
+	return probe, nil
+}
+
+// checkProbeVersion 校验 ABI 版本导出：无返回值或调用失败报「探测失败」，
+// 有返回值但不等 ABIVersion 报「不匹配」并带双侧版本号。
+func checkProbeVersion(ctx context.Context, probe *instance) error {
 	ret, err := probe.version.Call(ctx)
 	if err != nil || len(ret) != 1 {
-		_ = probe.mod.Close(ctx)
-		_ = p.rt.Close(ctx)
-		return nil, fmt.Errorf("ABI 版本探测失败: %w", err)
+		return fmt.Errorf("ABI 版本探测失败: %w", err)
 	}
-	if int32(ret[0]) != ABIVersion {
-		_ = probe.mod.Close(ctx)
-		_ = p.rt.Close(ctx)
-		return nil, fmt.Errorf("ABI 版本不匹配: 插件 %d,宿主 %d", int32(ret[0]), ABIVersion)
+	if got := signed32(ret[0]); got != ABIVersion {
+		return fmt.Errorf("ABI 版本不匹配: 插件 %d,宿主 %d", got, ABIVersion)
 	}
-	ret, err = probe.start.Call(ctx)
+	return nil
+}
+
+// checkProbeStart 校验 plugin_start 退出码；无返回值时按退出码 -1 上报。
+func checkProbeStart(ctx context.Context, probe *instance) error {
+	ret, err := probe.start.Call(ctx)
 	if err != nil {
-		_ = probe.mod.Close(ctx)
-		_ = p.rt.Close(ctx)
-		return nil, fmt.Errorf("plugin_start 调用失败: %w", err)
+		return fmt.Errorf("plugin_start 调用失败: %w", err)
 	}
-	if len(ret) != 1 || int32(ret[0]) != 0 {
+	if len(ret) != 1 || signed32(ret[0]) != 0 {
 		code := int64(-1)
 		if len(ret) == 1 {
-			code = int64(int32(ret[0]))
+			code = int64(signed32(ret[0]))
 		}
-		_ = probe.mod.Close(ctx)
-		_ = p.rt.Close(ctx)
-		return nil, fmt.Errorf("plugin_start 失败(退出码 %d)", code)
+		return fmt.Errorf("plugin_start 失败(退出码 %d)", code)
 	}
-
-	p.pool = newPool(p, probe, time.Duration(opts.IdleTTLMs)*time.Millisecond)
-	return p, nil
+	return nil
 }
 
 // checkWasmMagic 二进制合法性前置检查，校验 wasm magic 与版本字段，编译器兜底报错。
@@ -225,12 +244,9 @@ func (p *Plugin) HookRequestBody(parent context.Context, body []byte) Verdict {
 	v, kind, detail := p.call(parent, inst, body)
 	if kind != "" {
 		p.pool.poison(parent, inst)
-	} else {
-		p.pool.release(inst)
-	}
-	if kind != "" {
 		return p.settle(v, kind, detail)
 	}
+	p.pool.release(inst)
 	callsTotal.Inc(p.opts.Name, verdictLabel(v.Kind))
 	callDuration.Observe(float64(time.Since(v.started).Milliseconds()))
 	return v
@@ -266,75 +282,102 @@ func (p *Plugin) call(parent context.Context, inst *instance, body []byte) (Verd
 	defer cancel()
 	v := Verdict{Plugin: p.opts.Name, started: started}
 
-	mem := inst.mod.Memory()
 	// 入参 buffer 由宿主 malloc 后由宿主写入
-	off, err := call1(ctx, inst.malloc, uint64(len(body)))
-	if err != nil {
-		k, d := classifyCallError(ctx, err)
-		return v, k, d
-	}
-	if off == 0 {
-		return v, ContainMalloc, "插件 malloc 返回 0(内存不足)"
+	off, kind, detail := p.writeInput(ctx, inst, body)
+	if kind != "" {
+		return v, kind, detail
 	}
 	freeTimeout := time.Duration(p.opts.TimeoutMs) * time.Millisecond
-	if !mem.Write(uint32(off), body) {
-		_ = freeOff(ctx, inst, off, freeTimeout) // 写已越界，free 失败不再改写结论。
-		return v, ContainBadResult, fmt.Sprintf("入参写入越界(offset=%d len=%d)", off, len(body))
-	}
 	// 无论后续成败，入参与结果 buffer 都按同一分配器 free。
-	hookRet, err := call1(ctx, inst.hook, uint64(off), uint64(len(body)))
+	hookRet, err := call1(ctx, inst.hook, offToU64(off), lenToU64(len(body)))
 	if err != nil {
 		_ = freeOff(ctx, inst, off, freeTimeout)
 		k, d := classifyCallError(ctx, err)
 		return v, k, d
 	}
-	verdict := int32(hookRet)
+	verdict := signed32(uint64(hookRet))                           //nolint:gosec // wasm i32 返回值的位型回绕。
 	if ferr := freeOff(ctx, inst, off, freeTimeout); ferr != nil { // 入参 buffer 用毕即还。
 		// free 被 wazero 中断即模块已关闭，实例不可复用，按 containment 处置。
 		k, d := classifyCallError(ctx, ferr)
 		return v, k, d
 	}
-	switch verdict {
-	case VerdictPass:
+	if verdict == VerdictPass {
 		v.Kind = VerdictKindPass
 		return v, "", ""
-	case VerdictModified, VerdictReject:
-	default:
+	}
+	if verdict != VerdictModified && verdict != VerdictReject {
 		return v, ContainBadResult, fmt.Sprintf("verdict 非法: %d", verdict)
 	}
+	out, kind, detail := p.readResult(ctx, inst, off, freeTimeout)
+	if kind != "" {
+		return v, kind, detail
+	}
+	setVerdictBody(&v, verdict, out)
+	return v, "", ""
+}
+
+// writeInput malloc 入参 buffer 并写入请求体，返回 offset；失败返回 containment 分类。
+func (p *Plugin) writeInput(ctx context.Context, inst *instance, body []byte) (int64, ContainKind, string) {
+	off, err := call1(ctx, inst.malloc, uint64(len(body)))
+	if err != nil {
+		k, d := classifyCallError(ctx, err)
+		return 0, k, d
+	}
+	if off == 0 {
+		return 0, ContainMalloc, "插件 malloc 返回 0(内存不足)"
+	}
+	if !inst.mod.Memory().Write(offToU32(off), body) {
+		// 写已越界，free 失败不再改写结论。
+		_ = freeOff(ctx, inst, off, time.Duration(p.opts.TimeoutMs)*time.Millisecond)
+		return 0, ContainBadResult, fmt.Sprintf("入参写入越界(offset=%d len=%d)", off, len(body))
+	}
+	return off, "", ""
+}
+
+// readResult 读取 plugin_result 结果通道并释放其 buffer；inOff 为入参 buffer 起点，
+// 结果原地复用时不再二次 free。
+func (p *Plugin) readResult(
+	ctx context.Context, inst *instance, inOff int64, freeTimeout time.Duration,
+) ([]byte, ContainKind, string) {
+	mem := inst.mod.Memory()
 	res, err := call1(ctx, inst.resultFn)
 	if err != nil {
 		k, d := classifyCallError(ctx, err)
-		return v, k, d
+		return nil, k, d
 	}
 	resOff, resLen := unpackResult(res)
 	if resLen < 0 || resLen > maxResultLen || resOff == 0 {
-		return v, ContainBadResult, fmt.Sprintf("结果通道非法(offset=%d len=%d)", resOff, resLen)
+		return nil, ContainBadResult, fmt.Sprintf("结果通道非法(offset=%d len=%d)", resOff, resLen)
 	}
 	// 结果 buffer 复用入参 buffer 原地改写时只 free 一次。
-	resOwnsBuffer := int64(resOff) != off
-	buf, ok := mem.Read(uint32(resOff), uint32(resLen))
+	resOwnsBuffer := int64(resOff) != inOff
+	buf, ok := mem.Read(offToU32(int64(resOff)), offToU32(int64(resLen)))
 	if !ok {
 		if resOwnsBuffer {
 			_ = freeOff(ctx, inst, int64(resOff), freeTimeout)
 		}
-		return v, ContainBadResult, fmt.Sprintf("结果读取越界(offset=%d len=%d)", resOff, resLen)
+		return nil, ContainBadResult, fmt.Sprintf("结果读取越界(offset=%d len=%d)", resOff, resLen)
 	}
 	out := append([]byte(nil), buf...) // 拷出后立即释放插件内存。
-	if resOwnsBuffer {
-		if ferr := freeOff(ctx, inst, int64(resOff), freeTimeout); ferr != nil {
-			k, d := classifyCallError(ctx, ferr)
-			return v, k, d
-		}
+	if !resOwnsBuffer {
+		return out, "", ""
 	}
+	if ferr := freeOff(ctx, inst, int64(resOff), freeTimeout); ferr != nil {
+		k, d := classifyCallError(ctx, ferr)
+		return nil, k, d
+	}
+	return out, "", ""
+}
+
+// setVerdictBody 把结果通道内容写入结论：modified 携带新请求体，reject 携带截断理由。
+func setVerdictBody(v *Verdict, verdict int32, out []byte) {
 	if verdict == VerdictModified {
 		v.Kind = VerdictKindModified
 		v.Body = out
-	} else {
-		v.Kind = VerdictKindRejected
-		v.Reason = truncateReason(out)
+		return
 	}
-	return v, "", ""
+	v.Kind = VerdictKindRejected
+	v.Reason = truncateReason(out)
 }
 
 // maxResultLen 结果通道单次上限 16 MiB，取请求体 32MB 上限的一半覆盖改写放大，
@@ -350,8 +393,23 @@ func call1(ctx context.Context, fn api.Function, args ...uint64) (int64, error) 
 	if len(ret) == 0 {
 		return 0, nil
 	}
-	return int64(ret[0]), nil
+	return signed64(ret[0]), nil
 }
+
+// wasm 线性偏移与 i32 返回值都以 uint64 承载 wasm 位型，下列辅助统一做位截断/回绕
+// 换算，与直接类型转换的位语义一致，避免 gosec G115 在每处调用点报截断。
+func signed32(v uint64) int32 { return int32(v) } //nolint:gosec // wasm i32 返回值的位型回绕，语义即要求截断。
+
+func signed64(v uint64) int64 { return int64(v) } //nolint:gosec // wasm i64 返回值的位型回绕，语义即要求截断。
+
+// offToU32 线性内存偏移按 wasm i32 位型回绕，越界由 Memory.Read/Write 返回 false 兜底。
+func offToU32(off int64) uint32 { return uint32(off) } //nolint:gosec // 见上：位型回绕即契约。
+
+// offToU64 同 offToU32，用于 wasm 参数传递。
+func offToU64(off int64) uint64 { return uint64(off) } //nolint:gosec // 见 offToU32。
+
+// lenToU64 长度转 wasm 参数；越界由插件侧 malloc 拒绝，宿主不做二次长度裁定。
+func lenToU64(n int) uint64 { return uint64(n) } //nolint:gosec // 见上。
 
 // freeOff 释放 buffer，独立短超时：free 与钩子同样运行不可信代码，WithoutCancel
 // 只保证请求取消后清理仍执行，必须保留上界，否则恶意插件在 free 中死循环会让调用
@@ -363,7 +421,7 @@ func freeOff(ctx context.Context, inst *instance, off int64, timeout time.Durati
 	}
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	_, err := inst.freeFn.Call(fctx, uint64(off))
+	_, err := inst.freeFn.Call(fctx, offToU64(off))
 	return err
 }
 

@@ -102,5 +102,5 @@ type Verdict struct {
 
 // unpackResult 解码 i64 结果通道，高 32 位 offset、低 32 位 len。
 func unpackResult(v int64) (offset, length int32) {
-	return int32(v >> 32), int32(v & 0xffffffff)
+	return signed32(uint64(v) >> 32), signed32(uint64(v) & 0xffffffff) //nolint:gosec // i64 位切分到两个 i32，位型回绕即契约。
 }

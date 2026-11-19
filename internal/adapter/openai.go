@@ -111,7 +111,9 @@ func (o *OpenAI) SupportsMultimodalEmbeddings(upstreamModel string) bool {
 }
 
 // PrepareMultimodalEmbeddings 构造原生多模态向量请求，只原位替换顶层 model。
-func (o *OpenAI) PrepareMultimodalEmbeddings(in *protocol.MultimodalEmbeddingRequest, upstreamModel, apiKey string) (*Outbound, error) {
+func (o *OpenAI) PrepareMultimodalEmbeddings(
+	in *protocol.MultimodalEmbeddingRequest, upstreamModel, apiKey string,
+) (*Outbound, error) {
 	if !o.SupportsMultimodalEmbeddings(upstreamModel) {
 		return nil, fmt.Errorf("adapter: 未配置原生多模态向量 endpoint")
 	}
@@ -202,36 +204,57 @@ func (o *OpenAI) NativeStreamEvent(data []byte) ([]byte, EventMeta, error) {
 	if err := json.Unmarshal(data, &ev); err != nil {
 		return nil, EventMeta{}, fmt.Errorf("adapter: 解析 responses 事件: %w", err)
 	}
+	return nativeStreamEventOf(ev)
+}
+
+// nativeStreamEventOf 按事件类型分派内部 chunk 构造，未知类型前向兼容。
+func nativeStreamEventOf(ev responsesStreamEvent) ([]byte, EventMeta, error) {
 	switch ev.Type {
 	case "response.output_text.delta":
 		if ev.Delta == "" {
 			return nil, EventMeta{}, nil
 		}
-		return chunkBytes2(`{"choices":[{"index":0,"delta":{"content":` + mustJSON2(ev.Delta) + `}}]}`), EventMeta{HasContent: true}, nil
+		return chunkBytes2(responsesContentChunk(ev.Delta)), EventMeta{HasContent: true}, nil
 	case "response.function_call_arguments.delta":
 		if ev.Delta == "" {
 			return nil, EventMeta{}, nil
 		}
 		// 参数增量按 item_id 透传进内部 chunk，计量仅累计字节数，不消费 index
-		return chunkBytes2(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":` + mustJSON2(ev.Delta) + `}}]}}]}`), EventMeta{HasContent: true}, nil
+		return chunkBytes2(responsesArgumentsChunk(ev.Delta)), EventMeta{HasContent: true}, nil
 	case "response.completed":
-		b := `{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]`
-		if len(ev.Response.Usage) > 0 && string(ev.Response.Usage) != "null" {
-			b += `,"usage":` + string(ev.Response.Usage)
-		}
-		return chunkBytes2(b + `}`), EventMeta{IsUsage: len(ev.Response.Usage) > 0 && string(ev.Response.Usage) != "null", IsDone: true}, nil
+		payload, meta := responsesTerminalChunk(ev, "stop")
+		return payload, meta, nil
 	case "response.incomplete":
-		b := `{"choices":[{"index":0,"delta":{},"finish_reason":"length"}]`
-		if len(ev.Response.Usage) > 0 && string(ev.Response.Usage) != "null" {
-			b += `,"usage":` + string(ev.Response.Usage)
-		}
-		return chunkBytes2(b + `}`), EventMeta{IsUsage: len(ev.Response.Usage) > 0 && string(ev.Response.Usage) != "null", IsDone: true}, nil
+		payload, meta := responsesTerminalChunk(ev, "length")
+		return payload, meta, nil
 	case "response.failed", "error":
 		return nil, EventMeta{}, fmt.Errorf("adapter: responses 流内失败事件 %q", ev.Type)
 	default:
 		// created/in_progress/output_item.*/content_part.* 等事件对计量不可见，前向兼容
 		return nil, EventMeta{}, nil
 	}
+}
+
+// responsesContentChunk 文本增量 → 内部 chunk 字面量。
+func responsesContentChunk(delta string) string {
+	return `{"choices":[{"index":0,"delta":{"content":` + mustJSON2(delta) + `}}]}`
+}
+
+// responsesArgumentsChunk 工具参数增量 → 内部 chunk 字面量。
+func responsesArgumentsChunk(delta string) string {
+	return `{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":` +
+		mustJSON2(delta) + `}}]}}]}`
+}
+
+// responsesTerminalChunk completed/incomplete 终帧 → 带 finish_reason 的内部 chunk，
+// 上游 usage 存在（含 null 判定）时附带并以 IsUsage 标记。
+func responsesTerminalChunk(ev responsesStreamEvent, finishReason string) ([]byte, EventMeta) {
+	hasUsage := len(ev.Response.Usage) > 0 && string(ev.Response.Usage) != "null"
+	b := `{"choices":[{"index":0,"delta":{},"finish_reason":"` + finishReason + `"}]`
+	if hasUsage {
+		b += `,"usage":` + string(ev.Response.Usage)
+	}
+	return chunkBytes2(b + `}`), EventMeta{IsUsage: hasUsage, IsDone: true}
 }
 
 // responsesUsageForm 是 Responses usage 的原生形态。

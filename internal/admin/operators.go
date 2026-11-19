@@ -35,33 +35,49 @@ type Actor struct {
 // ActorFrom 返回当前运维身份，数据面 API key 不进入本上下文。
 func ActorFrom(ctx context.Context) Actor { a, _ := ctx.Value(actorKey{}).(Actor); return a }
 
+// exemptPaths 豁免管理面鉴权的请求：登录接口与 OAuth 回调（浏览器重定向不带管理凭据）。
+func exemptPaths(r *http.Request) bool {
+	if r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login" {
+		return true
+	}
+	// OAuth 回调豁免:state(不可预测、单次、TTL 内)即回调的持有者凭据,
+	// 重放/伪造在 Flow.Exchange 被拒——标准 OAuth 回调姿势。
+	return r.Method == http.MethodGet && r.URL.Path == "/admin/v1/oauth/callback"
+}
+
+// resolveActor 认证管理面身份：优先管理员会话 cookie，其次共享令牌；失败已写出响应时 ok=false。
+func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) {
+	actor := Actor{}
+	if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
+		u, err := d.AdminAuth.Session(cookie.Value)
+		if err == nil {
+			actor = Actor{Kind: "session", Name: u.Username}
+		} else if !errors.Is(err, auth.ErrAdminCredentials) {
+			respondErr(d, w, r, err, "auth_failed")
+			return actor, false
+		}
+	}
+	if actor.Kind == "" && d.Token != "" &&
+		secureEqual(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), d.Token) {
+		actor = Actor{Kind: "token", Name: "management-token"}
+	}
+	if actor.Kind == "" {
+		d.Logger.Warn("管理面鉴权失败", "request_id", logging.RequestIDFrom(r.Context()))
+		writeAdminError(w, r, 401, protocol.TypeAuthFailed, "auth_failed", "管理 token 无效")
+		return actor, false
+	}
+	return actor, true
+}
+
 func authOperators(d Deps, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		login := r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login"
-		// OAuth 回调豁免:浏览器重定向不带管理凭据;state(不可预测、单次、TTL 内)即回调
-		// 的持有者凭据,重放/伪造在 Flow.Exchange 被拒——标准 OAuth 回调姿势。
-		oauthCallback := r.Method == http.MethodGet && r.URL.Path == "/admin/v1/oauth/callback"
 		actor := Actor{}
-		if !login && !oauthCallback {
-			if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
-				u, err := d.AdminAuth.Session(cookie.Value)
-				if err == nil {
-					actor = Actor{Kind: "session", Name: u.Username}
-				} else if !errors.Is(err, auth.ErrAdminCredentials) {
-					respondErr(d, w, r, err, "auth_failed")
-					return
-				}
-			}
-			if actor.Kind == "" && d.Token != "" && secureEqual(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), d.Token) {
-				actor = Actor{Kind: "token", Name: "management-token"}
-			}
-			if actor.Kind == "" {
-				d.Logger.Warn("管理面鉴权失败", "request_id", logging.RequestIDFrom(r.Context()))
-				writeAdminError(w, r, 401, protocol.TypeAuthFailed, "auth_failed", "管理 token 无效")
+		if !exemptPaths(r) {
+			var ok bool
+			if actor, ok = resolveActor(d, w, r); !ok {
 				return
 			}
 		}
-
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorKey{}, actor)))
 	})
 }
@@ -92,7 +108,8 @@ func adminLogin(d Deps) http.HandlerFunc {
 			respondErr(d, w, r, err, "auth_failed")
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 12 * 60 * 60})
+		http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: token, Path: "/", //nolint:gosec // Secure 随 TLS 动态
+			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 12 * 60 * 60})
 		writeJSON(w, 200, Actor{Kind: "session", Name: u.Username})
 	}
 }
@@ -105,7 +122,8 @@ func adminLogout(d Deps) http.HandlerFunc {
 				return
 			}
 		}
-		http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+		http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: "", Path: "/", //nolint:gosec // 同上
+			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: -1})
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}
 }
@@ -214,15 +232,50 @@ func (w *auditWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-func auditSummary(body []byte) (string, string) {
+// auditAllowedKeys 允许原样进审计摘要的字段（小写比对）；其余一律记为已省略。
+var auditAllowedKeys = map[string]bool{
+	"username": true, "name": true, "alias": true, "tenant": true,
+	"disabled": true, "enabled": true, "status": true, "currency": true,
+	"default": true, "input": true, "output": true, "cached_input": true,
+	"timezone": true, "rpm_limit": true, "tpm_limit": true,
+	"daily_quota_credits": true, "max_request_cost_credits": true, "expires_at": true,
+}
+
+// auditSummaryValue 单字段的审计摘要值：敏感键脱敏，白名单标量原样，其余省略。
+func auditSummaryValue(key string, v any) any {
+	lower := strings.ToLower(key)
+	if strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "secret") {
+		return "<redacted>"
+	}
+	if !auditAllowedKeys[lower] {
+		return "<omitted>"
+	}
+	switch v.(type) {
+	case string, json.Number, bool, nil:
+		return v
+	default:
+		return "<omitted>"
+	}
+}
+
+// decodeAuditBody 严格解码请求体为字段表，多余值或非法 JSON 返回 false。
+func decodeAuditBody(body []byte) (map[string]any, bool) {
 	var fields map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	if err := decoder.Decode(&fields); err != nil {
-		return "{}", ""
+		return nil, false
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
+		return nil, false
+	}
+	return fields, true
+}
+
+func auditSummary(body []byte) (string, string) {
+	fields, ok := decodeAuditBody(body)
+	if !ok {
 		return "{}", ""
 	}
 	username := ""
@@ -231,23 +284,9 @@ func auditSummary(body []byte) (string, string) {
 			username, _ = v.(string)
 		}
 	}
-	allowed := map[string]bool{"username": true, "name": true, "alias": true, "tenant": true, "disabled": true, "enabled": true, "status": true, "currency": true, "default": true, "input": true, "output": true, "cached_input": true, "timezone": true, "rpm_limit": true, "tpm_limit": true, "daily_quota_credits": true, "max_request_cost_credits": true, "expires_at": true}
 	summary := map[string]any{}
 	for k, v := range fields {
-		lower := strings.ToLower(k)
-		switch {
-		case strings.Contains(lower, "password") || strings.Contains(lower, "token") || strings.Contains(lower, "secret"):
-			summary[k] = "<redacted>"
-		case allowed[lower]:
-			switch v.(type) {
-			case string, json.Number, bool, nil:
-				summary[k] = v
-			default:
-				summary[k] = "<omitted>"
-			}
-		default:
-			summary[k] = "<omitted>"
-		}
+		summary[k] = auditSummaryValue(k, v)
 	}
 	b, err := json.Marshal(summary)
 	if err != nil {
@@ -256,6 +295,78 @@ func auditSummary(body []byte) (string, string) {
 	return string(b), username
 }
 
+// fillPathValues 按匹配到的路由模式回填路径参数，使拒绝出口也能取到 id/prefix 等目标值。
+func fillPathValues(r *http.Request, pattern string) {
+	parts := strings.Fields(pattern)
+	if len(parts) != 2 {
+		return
+	}
+	expected := strings.Split(parts[1], "/")
+	actual := strings.Split(r.URL.EscapedPath(), "/")
+	if len(expected) != len(actual) {
+		return
+	}
+	for i, segment := range expected {
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
+			value, err := url.PathUnescape(actual[i])
+			if err == nil {
+				r.SetPathValue(strings.TrimSuffix(strings.TrimPrefix(segment, "{"), "}"), value)
+			}
+		}
+	}
+}
+
+// auditAction 由路由模式与请求方法推导动作名，如 keys.patch、auth.login。
+func auditAction(pattern, method string) string {
+	parts := strings.Fields(pattern)
+	action := strings.ToLower(method)
+	if len(parts) != 2 {
+		return action
+	}
+	path := strings.Split(strings.TrimPrefix(parts[1], "/admin/v1/"), "/")
+	action = path[0] + "." + strings.ToLower(parts[0])
+	if path[0] == "auth" && len(path) > 1 {
+		action = "auth." + path[1]
+	}
+	return action
+}
+
+// auditTarget 审计目标：优先 id，其次 prefix/alias/name 路径参数。
+func auditTarget(r *http.Request) string {
+	if target := r.PathValue("id"); target != "" {
+		return target
+	}
+	for _, name := range []string{"prefix", "alias", "name"} {
+		if v := r.PathValue(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// auditOutcome 按响应状态定结论；登录失败单独记为 denied。
+func auditOutcome(status int, login bool) string {
+	if status < 400 {
+		return "ok"
+	}
+	if login {
+		return "denied"
+	}
+	return fmt.Sprintf("error:%d", status)
+}
+
+// runAudited 执行可 panic 的变更请求：panic 原样上抛，但先把响应状态记为 500 供审计。
+func runAudited(aw *auditWriter, r *http.Request, next http.Handler) {
+	defer func() {
+		if panicValue := recover(); panicValue != nil {
+			aw.status = http.StatusInternalServerError
+			panic(panicValue)
+		}
+	}()
+	next.ServeHTTP(aw, r)
+}
+
+// auditOperators 非 GET 变更请求的审计中间件：读体会留下安全摘要，收尾按实际路由与状态落审计行。
 func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 	csrf := http.NewCrossOriginProtection()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -263,24 +374,9 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// 提前匹配路由，拒绝出口也按实际路由归因，而非原始 path 猜动作。
 		_, pattern := next.Handler(r)
 		r.Pattern = pattern
-		parts := strings.Fields(pattern)
-		if len(parts) == 2 {
-			expected := strings.Split(parts[1], "/")
-			actual := strings.Split(r.URL.EscapedPath(), "/")
-			if len(expected) == len(actual) {
-				for i, segment := range expected {
-					if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
-						value, err := url.PathUnescape(actual[i])
-						if err == nil {
-							r.SetPathValue(strings.TrimSuffix(strings.TrimPrefix(segment, "{"), "}"), value)
-						}
-					}
-				}
-			}
-		}
+		fillPathValues(r, pattern)
 		actor := ActorFrom(r.Context())
 		login := r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login"
 		identity := &loginIdentity{}
@@ -289,53 +385,7 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 		aw := &auditWriter{ResponseWriter: w}
 		// 所有已认证变更与登录拒绝共用收尾，读取失败也留下安全摘要。
 		defer func() {
-			panicValue := recover()
-			if panicValue != nil {
-				defer func() { panic(panicValue) }()
-			}
-			if login {
-				actor = Actor{Kind: "login", Name: identity.name}
-			}
-			status := aw.status
-			if panicValue != nil {
-				status = http.StatusInternalServerError
-			}
-			if status == 0 {
-				status = 200
-			}
-			outcome := "ok"
-			if status >= 400 {
-				outcome = fmt.Sprintf("error:%d", status)
-				if login {
-					outcome = "denied"
-				}
-			}
-			pattern := r.Pattern
-			parts := strings.Fields(pattern)
-			action := strings.ToLower(r.Method)
-			if len(parts) == 2 {
-				path := strings.Split(strings.TrimPrefix(parts[1], "/admin/v1/"), "/")
-				action = path[0] + "." + strings.ToLower(parts[0])
-				if path[0] == "auth" && len(path) > 1 {
-					action = "auth." + path[1]
-				}
-			}
-			if login {
-				action = "auth.login"
-			}
-			target := r.PathValue("id")
-			if target == "" {
-				for _, name := range []string{"prefix", "alias", "name"} {
-					if v := r.PathValue(name); v != "" {
-						target = v
-						break
-					}
-				}
-			}
-			a := store.AdminAudit{ID: uuid.NewV7().String(), RequestID: logging.RequestIDFrom(r.Context()), ActorKind: actor.Kind, ActorName: actor.Name, Action: action, TargetID: target, Outcome: outcome, Detail: detail, CreatedAt: time.Now().UTC().Format(time.RFC3339)}
-			if err := store.AppendAdminAudit(d.DB, a); err != nil {
-				d.Logger.Error("管理动作审计写入失败", "request_id", a.RequestID, "action", action, "error_detail", err.Error())
-			}
+			aw.finishAudit(d, r, actor, identity, login, detail)
 		}()
 		body, err := io.ReadAll(http.MaxBytesReader(aw, r.Body, 1<<20))
 		if err != nil {
@@ -351,6 +401,46 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 				return
 			}
 		}
-		next.ServeHTTP(aw, r)
+		runAudited(aw, r, next)
 	})
+}
+
+// finishAudit 收尾落审计行；panic 场景由调用方置 500 由本函数如实记录。
+func (aw *auditWriter) finishAudit(
+	d Deps, r *http.Request,
+	actor Actor, identity *loginIdentity,
+	login bool, detail string,
+) {
+	panicValue := recover()
+	if panicValue != nil {
+		defer func() { panic(panicValue) }()
+	}
+	if login {
+		actor = Actor{Kind: "login", Name: identity.name}
+	}
+	status := aw.status
+	if panicValue != nil {
+		status = http.StatusInternalServerError
+	}
+	if status == 0 {
+		status = 200
+	}
+	action := auditAction(r.Pattern, r.Method)
+	if login {
+		action = "auth.login"
+	}
+	a := store.AdminAudit{
+		ID:        uuid.NewV7().String(),
+		RequestID: logging.RequestIDFrom(r.Context()),
+		ActorKind: actor.Kind,
+		ActorName: actor.Name,
+		Action:    action,
+		TargetID:  auditTarget(r),
+		Outcome:   auditOutcome(status, login),
+		Detail:    detail,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	if err := store.AppendAdminAudit(d.DB, a); err != nil {
+		d.Logger.Error("管理动作审计写入失败", "request_id", a.RequestID, "action", action, "error_detail", err.Error())
+	}
 }

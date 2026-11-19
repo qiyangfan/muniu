@@ -112,14 +112,7 @@ func (n *Notifier) EmitContext(eventKey, severity, summary string, context map[s
 
 // deliver 退避重试投递；全部失败则放弃并留日志，告警丢失不能拖垮网关。
 func (n *Notifier) deliver(eventKey, severity, summary string, context map[string]any, at time.Time) {
-	payload := map[string]any{
-		"event": eventKey, "severity": severity, "summary": summary,
-		"occurred_at": at.UTC().Format(time.RFC3339),
-	}
-	if context != nil {
-		payload["context"] = context
-	}
-	encoded, err := json.Marshal(payload)
+	encoded, err := n.encode(eventKey, severity, summary, context, at)
 	if err != nil {
 		return
 	}
@@ -128,30 +121,57 @@ func (n *Notifier) deliver(eventKey, severity, summary string, context map[strin
 		if wait > 0 {
 			time.Sleep(wait)
 		}
-		resp, err := client.Post(n.url, "application/json", bytes.NewReader(encoded))
+		err = n.post(client, encoded)
 		if err == nil {
-			_ = resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				if n.onSuccess != nil {
-					safeCall(func() { n.onSuccess(eventKey, n.now()) })
-				}
-				return
-			}
-			err = &statusCodeError{code: resp.StatusCode}
-		}
-		if i == len(n.backoff) { // 追加首零后，末次尝试下标为 len(backoff)
-			n.logger.Warn("告警通知最终失败(已放弃)", "event", eventKey, "error_detail", err.Error())
-			if n.onFail != nil {
-				safeCall(func() {
-					n.onFail(DeliveryFailure{
-						EventKey: eventKey, Severity: severity, Summary: summary,
-						ErrorClass: errorClass(err), At: at,
-					})
-				})
+			if n.onSuccess != nil {
+				safeCall(func() { n.onSuccess(eventKey, n.now()) })
 			}
 			return
 		}
+		if i < len(n.backoff) { // 追加首零后，末次尝试下标为 len(backoff)
+			continue
+		}
+		n.reportFailure(eventKey, severity, summary, at, err)
 	}
+}
+
+// encode 组装并序列化载荷；context 非 nil 时增补可选 context 对象。
+func (n *Notifier) encode(eventKey, severity, summary string, context map[string]any, at time.Time) ([]byte, error) {
+	payload := map[string]any{
+		"event": eventKey, "severity": severity, "summary": summary,
+		"occurred_at": at.UTC().Format(time.RFC3339),
+	}
+	if context != nil {
+		payload["context"] = context
+	}
+	return json.Marshal(payload)
+}
+
+// post 单次投递；非 2xx 归一为 statusCodeError 供归类与自监控。
+func (n *Notifier) post(client *http.Client, encoded []byte) error {
+	resp, err := client.Post(n.url, "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	return &statusCodeError{code: resp.StatusCode}
+}
+
+// reportFailure 投递终局失败：留日志并回调自监控。
+func (n *Notifier) reportFailure(eventKey, severity, summary string, at time.Time, err error) {
+	n.logger.Warn("告警通知最终失败(已放弃)", "event", eventKey, "error_detail", err.Error())
+	if n.onFail == nil {
+		return
+	}
+	safeCall(func() {
+		n.onFail(DeliveryFailure{
+			EventKey: eventKey, Severity: severity, Summary: summary,
+			ErrorClass: errorClass(err), At: at,
+		})
+	})
 }
 
 // errorClass 投递失败归类:状态码类与网络类二分,自监控落库与告警载荷共用同一口径。

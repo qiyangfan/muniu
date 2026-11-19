@@ -19,7 +19,8 @@ type AdminUser struct {
 
 // CreateAdminUser 用户名冲突以业务错误返回。
 func CreateAdminUser(db *sql.DB, u AdminUser) error {
-	_, err := db.Exec(`INSERT INTO admin_users(id,username,password_hash,created_at) VALUES(?,?,?,?)`, u.ID, u.Username, u.PasswordHash, u.CreatedAt)
+	_, err := db.Exec(`INSERT INTO admin_users(id,username,password_hash,created_at) VALUES(?,?,?,?)`,
+		u.ID, u.Username, u.PasswordHash, u.CreatedAt)
 	if err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed") {
 		return MarkBusiness(fmt.Errorf("管理员用户名已存在"))
 	}
@@ -29,7 +30,9 @@ func CreateAdminUser(db *sql.DB, u AdminUser) error {
 // GetAdminUser 按用户名读取，仅认证域消费哈希。
 func GetAdminUser(db *sql.DB, username string) (AdminUser, error) {
 	var u AdminUser
-	err := db.QueryRow(`SELECT id,username,password_hash,status,created_at,last_login_at FROM admin_users WHERE username=?`, username).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Status, &u.CreatedAt, &u.LastLoginAt)
+	err := db.QueryRow(`SELECT id,username,password_hash,status,created_at,last_login_at
+		FROM admin_users WHERE username=?`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Status, &u.CreatedAt, &u.LastLoginAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -68,6 +71,14 @@ func PatchAdminUser(db *sql.DB, id string, disabled *bool, hash string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := applyAdminUserPatch(tx, id, disabled, hash); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// applyAdminUserPatch 在事务内改状态/改密并按需删存量会话；账号不存在返回 ErrNotFound。
+func applyAdminUserPatch(tx *sql.Tx, id string, disabled *bool, hash string) error {
 	var old string
 	if err := tx.QueryRow(`SELECT status FROM admin_users WHERE id=?`, id).Scan(&old); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -75,12 +86,22 @@ func PatchAdminUser(db *sql.DB, id string, disabled *bool, hash string) error {
 		}
 		return err
 	}
-	if disabled != nil {
-		status := "active"
-		if *disabled {
-			status = "disabled"
+	if err := updateAdminUserColumns(tx, id, disabled, hash); err != nil {
+		return err
+	}
+	// 改密与停用都必须让存量会话立即失效，防止旧凭据在改密窗口内继续可用。
+	if hash != "" || disabled != nil && *disabled {
+		if _, err := tx.Exec(`DELETE FROM admin_sessions WHERE user_id=?`, id); err != nil {
+			return err
 		}
-		if _, err := tx.Exec(`UPDATE admin_users SET status=? WHERE id=?`, status, id); err != nil {
+	}
+	return nil
+}
+
+// updateAdminUserColumns 按补丁更新状态列/密码哈希列，nil 或空串表示该列不动。
+func updateAdminUserColumns(tx *sql.Tx, id string, disabled *bool, hash string) error {
+	if disabled != nil {
+		if _, err := tx.Exec(`UPDATE admin_users SET status=? WHERE id=?`, adminUserStatus(*disabled), id); err != nil {
 			return err
 		}
 	}
@@ -89,12 +110,15 @@ func PatchAdminUser(db *sql.DB, id string, disabled *bool, hash string) error {
 			return err
 		}
 	}
-	if hash != "" || disabled != nil && *disabled {
-		if _, err := tx.Exec(`DELETE FROM admin_sessions WHERE user_id=?`, id); err != nil {
-			return err
-		}
+	return nil
+}
+
+// adminUserStatus 停用标志到行状态值的映射；停用账号的存量会话随后即被清空。
+func adminUserStatus(disabled bool) string {
+	if disabled {
+		return "disabled"
 	}
-	return tx.Commit()
+	return "active"
 }
 
 // CreateAdminSession 登录校验与签发之间若停用或改密，条件插入拒绝过时的凭据。
@@ -104,7 +128,9 @@ func CreateAdminSession(db *sql.DB, u AdminUser, hash, created, expires string) 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.Exec(`INSERT INTO admin_sessions(token_hash,user_id,created_at,expires_at) SELECT ?,id,?,? FROM admin_users WHERE id=? AND status='active' AND password_hash=?`, hash, created, expires, u.ID, u.PasswordHash)
+	res, err := tx.Exec(`INSERT INTO admin_sessions(token_hash,user_id,created_at,expires_at)
+		SELECT ?,id,?,? FROM admin_users WHERE id=? AND status='active' AND password_hash=?`,
+		hash, created, expires, u.ID, u.PasswordHash)
 	if err != nil {
 		return err
 	}
@@ -125,7 +151,10 @@ func CreateAdminSession(db *sql.DB, u AdminUser, hash, created, expires string) 
 func AdminSession(db *sql.DB, hash, now string) (AdminUser, error) {
 	var u AdminUser
 	var expires string
-	err := db.QueryRow(`SELECT u.id,u.username,u.status,u.created_at,u.last_login_at,s.expires_at FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id WHERE s.token_hash=? AND u.status='active'`, hash).Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.LastLoginAt, &expires)
+	err := db.QueryRow(`SELECT u.id,u.username,u.status,u.created_at,u.last_login_at,s.expires_at
+		FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id
+		WHERE s.token_hash=? AND u.status='active'`, hash).
+		Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.LastLoginAt, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}

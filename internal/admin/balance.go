@@ -44,7 +44,8 @@ func balanceManual(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 404, protocol.TypeNotFound, "provider_not_found", "渠道未声明余额源")
 			return
 		}
-		if err := d.Balance.RecordManual(provider, strings.TrimSpace(req.Amount), strings.TrimSpace(req.Currency)); err != nil {
+		err := d.Balance.RecordManual(provider, strings.TrimSpace(req.Amount), strings.TrimSpace(req.Currency))
+		if err != nil {
 			// 金额/币种/来源不匹配均为用户可修正的录入错误,透出原始 message
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "balance_manual_failed", err.Error())
 			return

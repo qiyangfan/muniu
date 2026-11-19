@@ -111,28 +111,10 @@ func runBackupCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) i
 }
 
 func runRestoreCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
-	// flag 包在首个位置参数后停止解析，而目录与 --force/--target 混排是自然用法，
-	// 故先手工分区再解析；-target 须显式带走一个值，否则其值会被误当位置参数，
-	// -- 之后全视为位置参数。
-	var flags, pos []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "--":
-			pos = append(pos, args[i+1:]...)
-			i = len(args)
-		case a == "-target" || a == "--target":
-			if i+1 >= len(args) {
-				_, _ = fmt.Fprintf(stderr, "muniu restore: %s 缺值\n", a)
-				return 2
-			}
-			flags = append(flags, a, args[i+1])
-			i++
-		case strings.HasPrefix(a, "-"):
-			flags = append(flags, a)
-		default:
-			pos = append(pos, a)
-		}
+	flags, pos, err := splitRestoreArgs(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "muniu restore: %v\n", err)
+		return 2
 	}
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -155,4 +137,31 @@ func runRestoreCmd(cfg *config.Config, args []string, stdout, stderr io.Writer) 
 	}
 	_, _ = fmt.Fprintf(stdout, "恢复完成: %s → %s\n", pos[0], dest)
 	return 0
+}
+
+// splitRestoreArgs 手工分区 flags/位置参数。
+//
+// flag 包在首个位置参数后停止解析，而目录与 --force/--target 混排是自然用法，
+// 故先手工分区再解析；-target 须显式带走一个值，否则其值会被误当位置参数，
+// -- 之后全视为位置参数。
+func splitRestoreArgs(args []string) ([]string, []string, error) {
+	var flags, pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return flags, append(pos, args[i+1:]...), nil
+		case a == "-target" || a == "--target":
+			if i+1 >= len(args) {
+				return nil, nil, fmt.Errorf("%s 缺值", a)
+			}
+			flags = append(flags, a, args[i+1])
+			i++
+		case strings.HasPrefix(a, "-"):
+			flags = append(flags, a)
+		default:
+			pos = append(pos, a)
+		}
+	}
+	return flags, pos, nil
 }

@@ -37,7 +37,9 @@ const (
 )
 
 // NewRefresher 构造;logger/sync 可为 nil(nil sync = 每轮空操作)。
-func NewRefresher(cfg Config, store AccountStore, flow *Flow, logger *slog.Logger, tuning RefreshTuning, sync func()) *Refresher {
+func NewRefresher(
+	cfg Config, store AccountStore, flow *Flow, logger *slog.Logger, tuning RefreshTuning, sync func(),
+) *Refresher {
 	if tuning.Interval <= 0 {
 		tuning.Interval = defaultInterval
 	}
@@ -82,49 +84,70 @@ func (r *Refresher) tick(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		// 终态账号不刷新:重新授权(管理面回写凭据)后状态回 active 才恢复
-		if acc.Status != StatusActive {
+		if !r.due(acc, now) {
 			continue
 		}
-		if acc.ExpiresAt.Sub(now) > r.window {
-			continue
-		}
-		pair, err := r.flow.Refresh(ctx, acc.RefreshToken)
-		switch {
-		case err == nil:
-			if pair.ExpiresIn <= 0 {
-				// 缺 expires_in = 响应形态非法(与缺 access_token 同判):按 0 回写会令
-				// 过期时刻=now,每 tick 重入刷新窗形成刷新风暴(评审域二 P3)。
-				r.logger.Warn("oauth 刷新响应缺 expires_in,按暂失败重探", "account", acc.ID)
-				break
-			}
-			// RFC 6749 §6:响应未携带 refresh_token 时旧 RT 仍然有效,必须保留
-			// (覆写为空 → 下一轮空凭据重探或误判终态,评审域二 P1)。
-			newRT := pair.RefreshToken
-			if newRT == "" {
-				newRT = acc.RefreshToken
-			}
-			exp := now.Add(pair.ExpiresIn)
-			if uerr := r.store.UpdateTokens(acc.ID, pair.AccessToken, newRT, exp); uerr != nil {
-				r.logger.Warn("oauth 刷新凭据回写失败", "account", acc.ID, "error_detail", uerr.Error())
-				continue
-			}
-			r.logger.Info("oauth 凭据已刷新", "account", acc.ID)
-		case isAuthReject(err):
-			reason := err.Error()
-			if serr := r.store.SetStatus(acc.ID, StatusAuthFailed, reason); serr != nil && !errors.Is(serr, ErrAccountNotFound) {
-				r.logger.Warn("oauth 终态迁移失败", "account", acc.ID, "error_detail", serr.Error())
-				continue
-			}
-			r.logger.Warn("oauth 刷新被拒,账号进入终态(需重新授权)", "account", acc.ID, "reason", reason)
-		default:
-			// 网络/5xx/其余 4xx:下一 tick 重探(节奏即退避),账号保持可调度
-			r.logger.Warn("oauth 刷新暂失败,下轮重探", "account", acc.ID, "error_detail", err.Error())
-		}
+		r.refreshOne(ctx, acc, now)
 	}
 	if r.sync != nil {
 		r.sync()
 	}
+}
+
+// due 账号是否进入本轮刷新:终态账号不刷新(重新授权后状态回 active 才恢复),
+// 仅在过期前窗口内刷新。
+func (r *Refresher) due(acc Account, now time.Time) bool {
+	if acc.Status != StatusActive {
+		return false
+	}
+	return acc.ExpiresAt.Sub(now) <= r.window
+}
+
+// refreshOne 执行单账号刷新判定表:成功回写凭据,401/403 与 invalid_grant 进终态,
+// 其余暂失败留待下一 tick 重探。
+func (r *Refresher) refreshOne(ctx context.Context, acc Account, now time.Time) {
+	pair, err := r.flow.Refresh(ctx, acc.RefreshToken)
+	switch {
+	case err == nil:
+		r.applyTokens(acc, pair, now)
+	case isAuthReject(err):
+		r.markAuthFailed(acc, err)
+	default:
+		// 网络/5xx/其余 4xx:下一 tick 重探(节奏即退避),账号保持可调度
+		r.logger.Warn("oauth 刷新暂失败,下轮重探", "account", acc.ID, "error_detail", err.Error())
+	}
+}
+
+// applyTokens 刷新成功回写:缺 expires_in 按暂失败处置,缺 refresh_token 保留旧 RT。
+func (r *Refresher) applyTokens(acc Account, pair TokenPair, now time.Time) {
+	if pair.ExpiresIn <= 0 {
+		// 缺 expires_in = 响应形态非法(与缺 access_token 同判):按 0 回写会令
+		// 过期时刻=now,每 tick 重入刷新窗形成刷新风暴(评审域二 P3)。
+		r.logger.Warn("oauth 刷新响应缺 expires_in,按暂失败重探", "account", acc.ID)
+		return
+	}
+	// RFC 6749 §6:响应未携带 refresh_token 时旧 RT 仍然有效,必须保留
+	// (覆写为空 → 下一轮空凭据重探或误判终态,评审域二 P1)。
+	newRT := pair.RefreshToken
+	if newRT == "" {
+		newRT = acc.RefreshToken
+	}
+	exp := now.Add(pair.ExpiresIn)
+	if uerr := r.store.UpdateTokens(acc.ID, pair.AccessToken, newRT, exp); uerr != nil {
+		r.logger.Warn("oauth 刷新凭据回写失败", "account", acc.ID, "error_detail", uerr.Error())
+		return
+	}
+	r.logger.Info("oauth 凭据已刷新", "account", acc.ID)
+}
+
+// markAuthFailed 刷新被拒进终态;账号已被删除(ErrAccountNotFound)视为已达终局,不告警。
+func (r *Refresher) markAuthFailed(acc Account, err error) {
+	reason := err.Error()
+	if serr := r.store.SetStatus(acc.ID, StatusAuthFailed, reason); serr != nil && !errors.Is(serr, ErrAccountNotFound) {
+		r.logger.Warn("oauth 终态迁移失败", "account", acc.ID, "error_detail", serr.Error())
+		return
+	}
+	r.logger.Warn("oauth 刷新被拒,账号进入终态(需重新授权)", "account", acc.ID, "reason", reason)
 }
 
 // isAuthReject 终态判定:401/403(spec MUST)+ 400 invalid_grant(RFC 6749:凭据已撤销,

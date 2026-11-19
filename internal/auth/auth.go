@@ -115,24 +115,17 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 	if tenant == "" {
 		tenant = "default"
 	}
-	if rpm < 0 || opts.TPMLimit < 0 || opts.DailyQuotaCredits < 0 || opts.MaxRequestCostCredits < 0 {
+	if hasNegativeLimit(limitsOfKey(rpm, opts)) {
 		return "", nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额/请求预算 不可为负"))
 	}
-	if rpm <= 0 {
-		rpm = 60
-	}
+	rpm = defaultRPM(rpm)
 	allowed, err := normalizeAllowlist(opts.AllowedModels)
 	if err != nil {
 		return "", nil, err
 	}
-	// CLI 传租户名，FK 指向 tenants(id)，此处先解析，租户不存在即拒绝签发。
-	// 仅真不存在才标记业务错；DB I/O 故障不得标记，否则会被 admin 出口当 400 外泄
-	tenantID, err := store.TenantIDByName(db, tenant)
+	tenantID, err := resolveTenantID(db, tenant)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return "", nil, store.MarkBusiness(fmt.Errorf("auth: 租户 %q 不存在", tenant))
-		}
-		return "", nil, fmt.Errorf("auth: 解析租户: %w", err)
+		return "", nil, err
 	}
 	plaintext := Generate()
 	id := uuid.NewV7().String()
@@ -141,12 +134,10 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 	if opts.ExpiresAt != nil {
 		expires = opts.ExpiresAt.UTC().Format(time.RFC3339)
 	}
-	if _, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
-		rpm_limit, tpm_limit, daily_quota_credits, expires_at, max_request_cost_credits, allowed_models, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		id, tenantID, name, Hash(plaintext), plaintext[:12], "active",
-		rpm, opts.TPMLimit, opts.DailyQuotaCredits, expires, opts.MaxRequestCostCredits,
-		store.MarshalAllowlist(allowed), now); err != nil {
+	if err := insertAPIKey(db, apiKeyRow{
+		id: id, tenantID: tenantID, name: name, hash: Hash(plaintext), prefix: plaintext[:12],
+		rpm: rpm, opts: opts, expires: expires, allowed: store.MarshalAllowlist(allowed), now: now,
+	}); err != nil {
 		return "", nil, fmt.Errorf("auth: 落库 api_key: %w", err)
 	}
 	return plaintext, &KeyRecord{
@@ -155,6 +146,62 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
 		Status: "active", Disabled: false, MaxRequestCostCredits: opts.MaxRequestCostCredits,
 		AllowedModels: allowed,
 	}, nil
+}
+
+// defaultRPM 0 = 未声明取缺省;负值已在入口拒绝。
+func defaultRPM(rpm int64) int64 {
+	if rpm <= 0 {
+		return 60
+	}
+	return rpm
+}
+
+// limitsOfKey 把签发入参折成与 PATCH 同形的限额视图,供负值闸共用单源。
+func limitsOfKey(rpm int64, opts KeyOpts) LimitsPatch {
+	return LimitsPatch{
+		RPMLimit:              &rpm,
+		TPMLimit:              &opts.TPMLimit,
+		DailyQuotaCredits:     &opts.DailyQuotaCredits,
+		MaxRequestCostCredits: &opts.MaxRequestCostCredits,
+	}
+}
+
+// resolveTenantID 解析租户名到 id；仅真不存在才标记业务错，DB I/O 故障不得标记，
+// 否则会被 admin 出口当 400 外泄。
+func resolveTenantID(db *sql.DB, tenant string) (string, error) {
+	tenantID, err := store.TenantIDByName(db, tenant)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return "", store.MarkBusiness(fmt.Errorf("auth: 租户 %q 不存在", tenant))
+		}
+		return "", fmt.Errorf("auth: 解析租户: %w", err)
+	}
+	return tenantID, nil
+}
+
+// apiKeyRow 签发落库所需行值(装配与 SQL 分处两函数,仅为拆分可读)。
+type apiKeyRow struct {
+	id       string
+	tenantID string
+	name     string
+	hash     string
+	prefix   string
+	rpm      int64
+	opts     KeyOpts
+	expires  any
+	allowed  any
+	now      string
+}
+
+// insertAPIKey 写入签发行。
+func insertAPIKey(db *sql.DB, r apiKeyRow) error {
+	_, err := db.Exec(`INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, status,
+		rpm_limit, tpm_limit, daily_quota_credits, expires_at, max_request_cost_credits, allowed_models, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.id, r.tenantID, r.name, r.hash, r.prefix, "active",
+		r.rpm, r.opts.TPMLimit, r.opts.DailyQuotaCredits, r.expires, r.opts.MaxRequestCostCredits,
+		r.allowed, r.now)
+	return err
 }
 
 // LimitsPatch key 运行态限额的局部更新，PATCH 语义为省略字段不动。
@@ -177,64 +224,103 @@ type LimitsPatch struct {
 // UpdateKeyLimits 局部更新 key 限额、过期与启停；管理面 PATCH 入口，写后调用方须 Verifier.Invalidate。
 // key id 不存在返回 store.ErrNotFound；负值限额拒绝并标记业务错，管理面出口 400。
 func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error) {
-	if (p.RPMLimit != nil && *p.RPMLimit < 0) ||
-		(p.TPMLimit != nil && *p.TPMLimit < 0) ||
-		(p.DailyQuotaCredits != nil && *p.DailyQuotaCredits < 0) ||
-		(p.MaxRequestCostCredits != nil && *p.MaxRequestCostCredits < 0) {
+	if hasNegativeLimit(p) {
 		return nil, store.MarkBusiness(errors.New("auth: rpm/tpm/日配额/请求预算 不可为负"))
 	}
-	sets, args := []string{}, []any{}
-	add := func(col string, v any) { sets = append(sets, col+" = ?"); args = append(args, v) }
-	if p.RPMLimit != nil {
-		add("rpm_limit", *p.RPMLimit)
-	}
-	if p.TPMLimit != nil {
-		add("tpm_limit", *p.TPMLimit)
-	}
-	if p.DailyQuotaCredits != nil {
-		add("daily_quota_credits", *p.DailyQuotaCredits)
-	}
-	if p.MaxRequestCostCredits != nil {
-		add("max_request_cost_credits", *p.MaxRequestCostCredits)
-	}
-	if p.ClearExpires {
-		add("expires_at", nil)
-	} else if p.ExpiresAt != nil {
-		add("expires_at", p.ExpiresAt.UTC().Format(time.RFC3339))
-	}
-	if p.Disabled != nil {
-		if *p.Disabled {
-			add("disabled_at", time.Now().UTC().Format(time.RFC3339))
-		} else {
-			add("disabled_at", nil)
-		}
-	}
-	var allowed []string
-	if p.AllowedModels != nil {
-		normalized, nerr := normalizeAllowlist(p.AllowedModels)
-		if nerr != nil {
-			return nil, nerr
-		}
-		allowed = normalized
-	}
-	if p.ClearAllowModels {
-		add("allowed_models", nil)
-	} else if p.AllowedModels != nil {
-		add("allowed_models", store.MarshalAllowlist(allowed))
+	sets, args, err := limitsAssignments(p)
+	if err != nil {
+		return nil, err
 	}
 	if len(sets) == 0 {
 		// 无字段可更新时仍回读校验 key 存在性，幂等 no-op 也要保持 404 语义
 		sets = append(sets, "rpm_limit = rpm_limit")
 	}
 	args = append(args, keyID)
-	res, err := db.Exec(`UPDATE api_keys SET `+strings.Join(sets, ", ")+` WHERE id = ?`, args...)
+	res, err := execKeyUpdate(db, sets, args)
 	if err != nil {
-		return nil, fmt.Errorf("auth: 更新 api_key 限额: %w", err)
+		return nil, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return nil, store.ErrNotFound
 	}
 	return keyRecordByID(db, keyID)
+}
+
+// hasNegativeLimit 负值限额在入口拒绝，否则会被执行链解释为不限，与收紧意图相反。
+func hasNegativeLimit(p LimitsPatch) bool {
+	for _, v := range []*int64{p.RPMLimit, p.TPMLimit, p.DailyQuotaCredits, p.MaxRequestCostCredits} {
+		if v != nil && *v < 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// limitsAssignments 按固定列序(限额 → 过期 → 启停 → 白名单)生成 SET 片段与参数。
+func limitsAssignments(p LimitsPatch) ([]string, []any, error) {
+	sets, args := []string{}, []any{}
+	if p.RPMLimit != nil {
+		sets, args = appendSet(sets, args, "rpm_limit", *p.RPMLimit)
+	}
+	if p.TPMLimit != nil {
+		sets, args = appendSet(sets, args, "tpm_limit", *p.TPMLimit)
+	}
+	if p.DailyQuotaCredits != nil {
+		sets, args = appendSet(sets, args, "daily_quota_credits", *p.DailyQuotaCredits)
+	}
+	if p.MaxRequestCostCredits != nil {
+		sets, args = appendSet(sets, args, "max_request_cost_credits", *p.MaxRequestCostCredits)
+	}
+	if p.ClearExpires {
+		sets, args = appendSet(sets, args, "expires_at", nil)
+	} else if p.ExpiresAt != nil {
+		sets, args = appendSet(sets, args, "expires_at", p.ExpiresAt.UTC().Format(time.RFC3339))
+	}
+	if p.Disabled != nil {
+		sets, args = appendSet(sets, args, "disabled_at", disabledAtValue(*p.Disabled))
+	}
+	// ClearAllowModels 优先于 AllowedModels(JSON 层三态互斥，此为内部 API 的防御性约定)
+	if p.ClearAllowModels {
+		sets, args = appendSet(sets, args, "allowed_models", nil)
+		return sets, args, nil
+	}
+	return appendAllowModels(sets, args, p.AllowedModels)
+}
+
+// disabledAtValue 停用记时刻、恢复清列(nil);时间不冻结测试口径,取墙钟。
+func disabledAtValue(disabled bool) any {
+	if disabled {
+		return time.Now().UTC().Format(time.RFC3339)
+	}
+	return nil
+}
+
+// appendAllowModels 白名单三态:未给出不动;空集合序列化为 nil 即不限。
+func appendAllowModels(sets []string, args []any, models []string) ([]string, []any, error) {
+	if models == nil {
+		return sets, args, nil
+	}
+	normalized, err := normalizeAllowlist(models)
+	if err != nil {
+		return nil, nil, err
+	}
+	sets, args = appendSet(sets, args, "allowed_models", store.MarshalAllowlist(normalized))
+	return sets, args, nil
+}
+
+func appendSet(sets []string, args []any, col string, v any) ([]string, []any) {
+	return append(sets, col+" = ?"), append(args, v)
+}
+
+// execKeyUpdate 执行 SET 片段；片段全部由固定列名与占位符拼成，无外部输入入串。
+func execKeyUpdate(db *sql.DB, sets []string, args []any) (sql.Result, error) {
+	sqlText := fmt.Sprintf(`UPDATE api_keys SET %s WHERE id = ?`, //nolint:gosec // 列名仅内部常量,值走占位符
+		strings.Join(sets, ", "))
+	res, err := db.Exec(sqlText, args...)
+	if err != nil {
+		return nil, fmt.Errorf("auth: 更新 api_key 限额: %w", err)
+	}
+	return res, nil
 }
 
 // keyRecordByID 按 id 读回执，供 Update 后回传最新行；不存在返回 ErrNotFound。
@@ -426,47 +512,7 @@ func (v *Verifier) revocationLoop() {
 		<-v.revStop
 		cancel()
 	}()
-	fetch := func() {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.opts.RevocationsURL, nil)
-		if err != nil {
-			v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
-			return
-		}
-		resp, err := v.revClient.Do(req)
-		if err != nil {
-			select {
-			case <-v.revStop:
-				return
-			default:
-			}
-			v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
-			return
-		}
-		var body struct {
-			Version int64    `json:"version"`
-			Revoked []string `json:"revoked"`
-		}
-		decodeErr := json.NewDecoder(resp.Body).Decode(&body)
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			v.logger.Warn("吊销名单拉取失败", "status", resp.StatusCode)
-			return
-		}
-		if decodeErr != nil {
-			v.logger.Warn("吊销名单响应非法", "error_detail", decodeErr.Error())
-			return
-		}
-		set := make(map[string]struct{}, len(body.Revoked))
-		for _, id := range body.Revoked {
-			set[id] = struct{}{}
-		}
-		v.revMu.Lock()
-		if body.Version >= v.revVersion { // 单调防回退：乱序或滞后的旧快照不得洗白已吊销 key
-			v.revoked = set
-			v.revVersion = body.Version
-		}
-		v.revMu.Unlock()
-	}
+	fetch := func() { v.fetchRevocations(ctx) }
 	fetch()
 	ticker := time.NewTicker(v.opts.RevocationsInterval)
 	defer ticker.Stop()
@@ -478,6 +524,68 @@ func (v *Verifier) revocationLoop() {
 			fetch()
 		}
 	}
+}
+
+// revocationSnapshot 吊销名单快照形态(控制面下发)。
+type revocationSnapshot struct {
+	Version int64    `json:"version"`
+	Revoked []string `json:"revoked"`
+}
+
+// fetchRevocations 单轮拉取；任何失败只告警并保留旧快照。
+func (v *Verifier) fetchRevocations(ctx context.Context) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.opts.RevocationsURL, nil)
+	if err != nil {
+		v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
+		return
+	}
+	resp, err := v.revClient.Do(req)
+	if err != nil {
+		// Close 触发的中断不是故障,不告警(其余失败照常留痕)
+		select {
+		case <-v.revStop:
+			return
+		default:
+		}
+		v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
+		return
+	}
+	body, ok := decodeRevocations(v, resp)
+	if !ok {
+		return
+	}
+	v.applyRevocations(body)
+}
+
+// decodeRevocations 读取状态码与响应体;非 200 或解析失败告警并返回 false。
+func decodeRevocations(v *Verifier, resp *http.Response) (revocationSnapshot, bool) {
+	var body revocationSnapshot
+	// 先解码再关体:状态码判定与解析结论互不掩盖,两者各自独立告警
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		v.logger.Warn("吊销名单拉取失败", "status", resp.StatusCode)
+		return body, false
+	}
+	if decodeErr != nil {
+		v.logger.Warn("吊销名单响应非法", "error_detail", decodeErr.Error())
+		return body, false
+	}
+	return body, true
+}
+
+// applyRevocations 版本单调落快照：乱序或滞后的旧快照不得洗白已吊销 key。
+func (v *Verifier) applyRevocations(body revocationSnapshot) {
+	set := make(map[string]struct{}, len(body.Revoked))
+	for _, id := range body.Revoked {
+		set[id] = struct{}{}
+	}
+	v.revMu.Lock()
+	if body.Version >= v.revVersion {
+		v.revoked = set
+		v.revVersion = body.Version
+	}
+	v.revMu.Unlock()
 }
 
 // revokedContains 平台 key 吊销判定；无快照表示未启用同步，视作不吊销。
@@ -584,16 +692,8 @@ func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
 		}
 		return nil, fmt.Errorf("查库失败: %w", err)
 	}
-	if row.Status != "active" {
-		return nil, errors.New("key 已吊销或禁用")
-	}
-	// 可逆停用：吊销优先已判，此处补停用判定；哨兵供 Middleware 区分文案
-	if row.DisabledAt != nil {
-		return nil, errKeyDisabled
-	}
-	// 租户级冻结：管理面 disable 租户必须对数据面即时生效，租户状态随本查询 JOIN 返回
-	if row.TenantStatus != "" && row.TenantStatus != "active" {
-		return nil, errors.New("租户已禁用")
+	if rerr := keyUsable(row); rerr != nil {
+		return nil, rerr
 	}
 	info := &KeyInfo{
 		ID:                    row.ID,
@@ -614,6 +714,22 @@ func (v *Verifier) verifyLookup(raw string) (*KeyInfo, error) {
 	v.cacheInsertLocked(hash, info, now)
 	v.mu.Unlock()
 	return info, nil
+}
+
+// keyUsable key 行可服务判定(吊销 → 停用 → 租户冻结):三项各有对外区分语义,顺序即优先级。
+func keyUsable(row *store.APIKey) error {
+	if row.Status != "active" {
+		return errors.New("key 已吊销或禁用")
+	}
+	// 可逆停用：吊销优先已判，此处补停用判定；哨兵供 Middleware 区分文案
+	if row.DisabledAt != nil {
+		return errKeyDisabled
+	}
+	// 租户级冻结：管理面 disable 租户必须对数据面即时生效，租户状态随本查询 JOIN 返回
+	if row.TenantStatus != "" && row.TenantStatus != "active" {
+		return errors.New("租户已禁用")
+	}
+	return nil
 }
 
 // cacheInsertLocked 插入缓存，满容量时随机淘汰一条以防 hash 探测侧信道，无需 LRU 精确性。

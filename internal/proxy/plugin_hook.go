@@ -35,6 +35,55 @@ func (p *Proxy) applyPlugins(tw http.ResponseWriter, r *http.Request, body []byt
 	return res, false
 }
 
+// pluginBodyHook 插件请求体钩子的公共骨架：无插件空短路、执行、被拒/失败即终结。
+// outcomes 提供协议专属的成功收尾：重解析、重路由与留痕；返回 done=true 表示请求已终结。
+func (p *Proxy) pluginBodyHook(tw http.ResponseWriter, r *http.Request, body []byte,
+	onModified func(res plugin.ApplyResult) bool) bool {
+	if p.plugins == nil {
+		return false // 禁用态零开销短路，无快照无分配
+	}
+	res, done := p.applyPlugins(tw, r, body)
+	if done {
+		return true
+	}
+	if len(res.ModifiedBy) == 0 {
+		return false
+	}
+	return onModified(res)
+}
+
+// rerouteAfterBodyRewrite 插件改写产物重解析后按新别名重路由并复核 key 级白名单。
+// parse 为协议专属解析器；applied 仅在全部复核通过后回调，用于回写调用方的请求与候选。
+func (p *Proxy) rerouteAfterBodyRewrite(tw http.ResponseWriter, r *http.Request, topo *topologySnapshot,
+	res plugin.ApplyResult, parseErrMsg string, parse func([]byte) (model string, err error),
+	applied func(model string) bool) bool {
+	model, err := parse(res.Body)
+	if err != nil {
+		p.writeError(tw, r, protocol.TypeBadRequest, "plugin_rejected", parseErrMsg)
+		return true
+	}
+	if _, ok := topo.routes[model]; !ok {
+		p.writeError(tw, r, protocol.TypeBadRequest, "model_not_found", "模型别名不存在: "+model)
+		return true
+	}
+	// key 级模型白名单闸之二：插件改写 model 后以最终出站别名为准再校验
+	if !p.enforceModelAllowlist(tw, r, model) {
+		return true
+	}
+	p.markPluginModified(tw, r, res.ModifiedBy)
+	applied(model)
+	return false
+}
+
+// rewriteModelHook 请求体插件钩子的整链：执行、重解析取 model、重路由复核，成功时 applied 回写。
+// 返回 failed=true 表示请求已终结。
+func (p *Proxy) rewriteModelHook(tw http.ResponseWriter, r *http.Request, topo *topologySnapshot,
+	body []byte, parseErrMsg string, parse func([]byte) (string, error), applied func(model string) bool) bool {
+	return p.pluginBodyHook(tw, r, body, func(res plugin.ApplyResult) bool {
+		return p.rerouteAfterBodyRewrite(tw, r, topo, res, parseErrMsg, parse, applied)
+	})
+}
+
 // markPluginModified 留痕头与审计日志：必须在改写产物重解析与重路由通过之后调用，
 // 产物被拒的 400 响应不得携带留痕头，避免改写已生效的歧义，不利排障。
 func (p *Proxy) markPluginModified(tw http.ResponseWriter, r *http.Request, modified []string) {

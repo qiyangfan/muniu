@@ -170,61 +170,110 @@ func windowsView(windows []store.PricingWindowRecord) []PricingWindowView {
 	return out
 }
 
-// ParsePricingRecord 人类可读价目视图转运行态记录，含完整校验；控制面拉取与管理面 PUT 共用。
-func ParsePricingRecord(alias string, v PricingView, now time.Time) (store.PricingRecord, error) {
+// validatePricingAlias 别名去空白后校验非空且不超 128 字符。
+func validatePricingAlias(alias string) (string, error) {
 	alias = strings.TrimSpace(alias)
 	if alias == "" {
-		return store.PricingRecord{}, fmt.Errorf("alias 必填")
+		return "", fmt.Errorf("alias 必填")
 	}
 	if len(alias) > 128 {
-		return store.PricingRecord{}, fmt.Errorf("alias 过长(≤128)")
+		return "", fmt.Errorf("alias 过长(≤128)")
 	}
-	cur := strings.ToUpper(v.Currency)
+	return alias, nil
+}
+
+// parseOptionalPrice 可选价目段：空串得 0，非法报字段名错误。
+func parseOptionalPrice(human, field string) (int64, error) {
+	if human == "" {
+		return 0, nil
+	}
+	v, err := metering.ParsePrice(human)
+	if err != nil {
+		return 0, fmt.Errorf("%s 非法(十进制 ≤9 位小数)", field)
+	}
+	return v, nil
+}
+
+// parsePricingWindows 人类可读时段窗转持久化形态，逐条校验窗口与倍率。
+func parsePricingWindows(views []PricingWindowView) ([]store.PricingWindowRecord, error) {
+	windows := make([]store.PricingWindowRecord, 0, len(views))
+	for _, tw := range views {
+		if _, _, err := metering.ParseWindowMinutes(tw.Window); err != nil {
+			return nil, fmt.Errorf("time_windows.window 非法(HH:MM-HH:MM)")
+		}
+		bp, err := metering.ParseMultiplier(tw.Multiplier)
+		if err != nil {
+			return nil, fmt.Errorf("time_windows.multiplier 非法((0,10],≤4 位小数)")
+		}
+		windows = append(windows, store.PricingWindowRecord{Window: tw.Window, BasisPoints: bp})
+	}
+	return windows, nil
+}
+
+// parsePricingCredits 解析四段价目：input/output 必填，cached_input/vision_input 缺省为 0。
+func parsePricingCredits(v PricingView) ([4]int64, error) {
+	var out [4]int64
+	for i, f := range [4]struct{ human, field string }{
+		{v.Input, "input"},
+		{v.Output, "output"},
+		{v.CachedInput, "cached_input"},
+		{v.VisionInput, "vision_input"},
+	} {
+		credits, err := parseOptionalPrice(f.human, f.field)
+		if err != nil {
+			return out, err
+		}
+		out[i] = credits
+	}
+	return out, nil
+}
+
+// normalizePricingCurrency 归一报价币种并校验取值域。
+func normalizePricingCurrency(s string) (string, error) {
+	cur := strings.ToUpper(s)
 	if cur != "CNY" && cur != "USD" {
-		return store.PricingRecord{}, fmt.Errorf("currency 须为 CNY|USD")
+		return "", fmt.Errorf("currency 须为 CNY|USD")
 	}
-	outCredits, err := metering.ParsePrice(v.Input)
-	if err != nil {
-		return store.PricingRecord{}, fmt.Errorf("input 非法(十进制 ≤9 位小数)")
-	}
-	outputCredits, err := metering.ParsePrice(v.Output)
-	if err != nil {
-		return store.PricingRecord{}, fmt.Errorf("output 非法(十进制 ≤9 位小数)")
-	}
-	cachedCredits := int64(0)
-	if v.CachedInput != "" {
-		if cachedCredits, err = metering.ParsePrice(v.CachedInput); err != nil {
-			return store.PricingRecord{}, fmt.Errorf("cached_input 非法(十进制 ≤9 位小数)")
-		}
-	}
-	visionCredits := int64(0)
-	if v.VisionInput != "" {
-		if visionCredits, err = metering.ParsePrice(v.VisionInput); err != nil {
-			return store.PricingRecord{}, fmt.Errorf("vision_input 非法(十进制 ≤9 位小数)")
-		}
-	}
-	tz := v.Timezone
+	return cur, nil
+}
+
+// normalizePricingTimezone 缺省 UTC，并按固定偏移格式校验。
+func normalizePricingTimezone(tz string) (string, error) {
 	if tz == "" {
 		tz = "UTC"
 	}
 	if _, err := metering.ParseZoneOffset(tz); err != nil {
-		return store.PricingRecord{}, fmt.Errorf("timezone 须为 UTC 或 ±HH:MM")
+		return "", fmt.Errorf("timezone 须为 UTC 或 ±HH:MM")
 	}
-	windows := make([]store.PricingWindowRecord, 0, len(v.TimeWindows))
-	for _, tw := range v.TimeWindows {
-		if _, _, err := metering.ParseWindowMinutes(tw.Window); err != nil {
-			return store.PricingRecord{}, fmt.Errorf("time_windows.window 非法(HH:MM-HH:MM)")
-		}
-		bp, err := metering.ParseMultiplier(tw.Multiplier)
-		if err != nil {
-			return store.PricingRecord{}, fmt.Errorf("time_windows.multiplier 非法((0,10],≤4 位小数)")
-		}
-		windows = append(windows, store.PricingWindowRecord{Window: tw.Window, BasisPoints: bp})
+	return tz, nil
+}
+
+// ParsePricingRecord 人类可读价目视图转运行态记录，含完整校验；控制面拉取与管理面 PUT 共用。
+func ParsePricingRecord(alias string, v PricingView, now time.Time) (store.PricingRecord, error) {
+	alias, err := validatePricingAlias(alias)
+	if err != nil {
+		return store.PricingRecord{}, err
+	}
+	cur, err := normalizePricingCurrency(v.Currency)
+	if err != nil {
+		return store.PricingRecord{}, err
+	}
+	credits, err := parsePricingCredits(v)
+	if err != nil {
+		return store.PricingRecord{}, err
+	}
+	tz, err := normalizePricingTimezone(v.Timezone)
+	if err != nil {
+		return store.PricingRecord{}, err
+	}
+	windows, err := parsePricingWindows(v.TimeWindows)
+	if err != nil {
+		return store.PricingRecord{}, err
 	}
 	return store.PricingRecord{
-		Alias: alias, Currency: cur, InputCredits: outCredits, CachedInputCredits: cachedCredits,
-		VisionInputCredits: visionCredits,
-		OutputCredits:      outputCredits, Timezone: tz, Windows: windows,
+		Alias: alias, Currency: cur, InputCredits: credits[0], CachedInputCredits: credits[2],
+		VisionInputCredits: credits[3],
+		OutputCredits:      credits[1], Timezone: tz, Windows: windows,
 		UpdatedAt: now.UTC().Format(time.RFC3339),
 	}, nil
 }

@@ -62,7 +62,10 @@ func (s *AdminService) Create(username, password string) (store.AdminUser, error
 	if err != nil {
 		return store.AdminUser{}, store.MarkBusiness(err)
 	}
-	u := store.AdminUser{ID: uuid.NewV7().String(), Username: username, PasswordHash: hash, Status: "active", CreatedAt: s.now().UTC().Format(time.RFC3339)}
+	u := store.AdminUser{
+		ID: uuid.NewV7().String(), Username: username, PasswordHash: hash,
+		Status: "active", CreatedAt: s.now().UTC().Format(time.RFC3339),
+	}
 	if err := store.CreateAdminUser(s.db, u); err != nil {
 		return store.AdminUser{}, err
 	}
@@ -103,24 +106,42 @@ func (s *AdminService) Login(username, password string) (string, store.AdminUser
 		hash = s.dummyHash
 	}
 	valid := VerifyAdminPassword(hash, password)
+	// 不存在的账号不计失败:否则随机用户名会把锁定表撑成无界状态
 	if errors.Is(err, store.ErrNotFound) {
 		return "", store.AdminUser{}, ErrAdminCredentials
 	}
 	if !valid || u.Status != "active" {
-		f.count++
-		if f.count >= 5 {
-			f.until = now.Add(15 * time.Minute)
-		}
-		s.failures[username] = f
-		return "", store.AdminUser{}, ErrAdminCredentials
+		return "", store.AdminUser{}, s.recordFailure(username, f, now)
 	}
 	delete(s.failures, username)
+	return s.openSession(u, now)
+}
+
+// loginMaxFailures 同一用户名连续失败达此数即锁定;锁定窗口固定 15 分钟。
+const (
+	loginMaxFailures = 5
+	loginLockWindow  = 15 * time.Minute
+)
+
+// recordFailure 累计失败并返回对外统一错误;阈值处顺带设定锁定截止。
+func (s *AdminService) recordFailure(username string, f adminFailures, now time.Time) error {
+	f.count++
+	if f.count >= loginMaxFailures {
+		f.until = now.Add(loginLockWindow)
+	}
+	s.failures[username] = f
+	return ErrAdminCredentials
+}
+
+// openSession 签发会话令牌；会话落库时用户已消失仍归凭据无效。
+func (s *AdminService) openSession(u store.AdminUser, now time.Time) (string, store.AdminUser, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", u, err
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)
-	if err := store.CreateAdminSession(s.db, u, adminTokenHash(token), now.Format(time.RFC3339), now.Add(12*time.Hour).Format(time.RFC3339)); err != nil {
+	expires := now.Add(12 * time.Hour).Format(time.RFC3339)
+	if err := store.CreateAdminSession(s.db, u, adminTokenHash(token), now.Format(time.RFC3339), expires); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return "", u, ErrAdminCredentials
 		}

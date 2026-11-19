@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -180,7 +181,8 @@ type LookupResult struct {
 
 // Store 写入缓存条目：vec 为调用方在检索阶段已计算的查询向量，一次嵌入两用，免重复调用。
 // 写入 = DB upsert + 索引 + LRU；容量满时淘汰最久未使用。
-func (c *Cache) Store(_ context.Context, tenantID, fingerprint, modelAlias string, vec []float32, response []byte) error {
+func (c *Cache) Store(_ context.Context, tenantID, fingerprint, modelAlias string,
+	vec []float32, response []byte) error {
 	return c.put(tenantID, fingerprint, modelAlias, vec, response, nil, "", "")
 }
 
@@ -191,7 +193,8 @@ func (c *Cache) StoreNative(_ context.Context, tenantID, fingerprint, modelAlias
 }
 
 // put 落库、索引、LRU；容量满时淘汰最久未使用。
-func (c *Cache) put(tenantID, fingerprint, modelAlias string, vec []float32, response, native []byte, proto, form string) error {
+func (c *Cache) put(tenantID, fingerprint, modelAlias string, vec []float32,
+	response, native []byte, proto, form string) error {
 	if len(vec) != c.opts.Dim {
 		return fmt.Errorf("semantic: 嵌入维度不符: %d ≠ %d", len(vec), c.opts.Dim)
 	}
@@ -260,11 +263,7 @@ func (c *Cache) Stats() map[string]any {
 func encodeVec(vec []float32) []byte {
 	out := make([]byte, 4*len(vec))
 	for i, f := range vec {
-		bits := math.Float32bits(f)
-		out[4*i] = byte(bits)
-		out[4*i+1] = byte(bits >> 8)
-		out[4*i+2] = byte(bits >> 16)
-		out[4*i+3] = byte(bits >> 24)
+		binary.LittleEndian.PutUint32(out[4*i:], math.Float32bits(f))
 	}
 	return out
 }

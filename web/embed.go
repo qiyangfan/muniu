@@ -42,6 +42,6 @@ func Handler() http.Handler {
 		case strings.HasSuffix(p, ".svg"):
 			w.Header().Set("Content-Type", "image/svg+xml")
 		}
-		_, _ = w.Write(b)
+		_, _ = w.Write(b) //nolint:gosec // 内容取自 embed.FS 构建产物,URL 仅用于选文件
 	})
 }

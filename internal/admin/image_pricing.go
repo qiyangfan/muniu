@@ -27,7 +27,10 @@ func imagePricingView(r store.ImagePricingRecord, source string) ImagePricingVie
 	for k, v := range r.Tiers {
 		tiers[k] = metering.FormatPrice(v)
 	}
-	return ImagePricingView{Alias: r.Alias, Source: source, Currency: r.Currency, Default: metering.FormatPrice(r.DefaultCredits), Tiers: tiers, UpdatedAt: r.UpdatedAt}
+	return ImagePricingView{
+		Alias: r.Alias, Source: source, Currency: r.Currency,
+		Default: metering.FormatPrice(r.DefaultCredits), Tiers: tiers, UpdatedAt: r.UpdatedAt,
+	}
 }
 
 func imagePricingList(d Deps) http.HandlerFunc {
@@ -39,7 +42,10 @@ func imagePricingList(d Deps) http.HandlerFunc {
 		}
 		items := map[string]ImagePricingView{}
 		for alias, p := range d.StaticImagePricing {
-			items[alias] = imagePricingView(store.ImagePricingRecord{Alias: alias, Currency: p.Currency, DefaultCredits: p.DefaultCredits, Tiers: p.Tiers}, "yaml")
+			rec := store.ImagePricingRecord{
+				Alias: alias, Currency: p.Currency, DefaultCredits: p.DefaultCredits, Tiers: p.Tiers,
+			}
+			items[alias] = imagePricingView(rec, "yaml")
 		}
 		for _, rec := range rows {
 			items[rec.Alias] = imagePricingView(rec, "db")
@@ -66,7 +72,10 @@ func imagePricingPut(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "别名、币种、兜底价或档位非法")
 			return
 		}
-		rec := store.ImagePricingRecord{Alias: alias, Currency: price.Currency, DefaultCredits: price.DefaultCredits, Tiers: price.Tiers, UpdatedAt: time.Now().UTC().Format(time.RFC3339)}
+		rec := store.ImagePricingRecord{
+			Alias: alias, Currency: price.Currency, DefaultCredits: price.DefaultCredits,
+			Tiers: price.Tiers, UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+		}
 		if d.UpdateImagePricing == nil {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "价目目录未装配")
 			return
