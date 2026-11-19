@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -255,8 +256,19 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	if err != nil || info.ID != "k-1" || info.TenantID != "t-1" || info.RPMLimit != 60 || info.DailyQuotaCredits != 5_000_000 {
 		t.Fatalf("合法平台 key 应通过并携带限额: %+v %v", info, err)
 	}
-	// 篡改
-	if _, err := req(key[:len(key)-2] + "xx"); err == nil {
+	// 篡改:翻转 tag 首字节后重新编码。不能改写末尾字符——16 字节 tag 的 base64url
+	// 末字符只有高 2 位有效,非严格解码忽略填充位,偶发改不出一字节之差。
+	payloadB64, tagB64, ok := strings.Cut(strings.TrimPrefix(key, PlatformKeyPrefix), ".")
+	if !ok {
+		t.Fatalf("key 形态不符: %s", key)
+	}
+	tag, err := base64.RawURLEncoding.DecodeString(tagB64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag[0] ^= 0x01
+	tampered := PlatformKeyPrefix + payloadB64 + "." + base64.RawURLEncoding.EncodeToString(tag)
+	if _, err := req(tampered); err == nil {
 		t.Fatal("篡改必须拒绝")
 	}
 	// 过期
