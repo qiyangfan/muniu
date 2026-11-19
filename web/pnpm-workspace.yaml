@@ -1,2 +1,11 @@
 allowBuilds:
   esbuild: true
+
+# 传递依赖安全补丁:父包允许范围内的最小钉版,仅为消除 Dependabot 开发链告警。
+# minimatch 10.x 无补丁版,由 eslint/typescript-eslint 自身升级到 ^11 解决,不在此覆盖。
+overrides:
+  js-yaml: 4.3.2
+  fast-uri: 3.1.9
+  source-map-js: 1.2.2
+  brace-expansion@^2: 2.1.8
+  brace-expansion@^5: 5.0.13
