@@ -5,11 +5,6 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-/** 读取设计 token 的计算值，canvas 和图表取色使用；统一走本函数，不要在各文件复制。 */
-export function cssVar(name: string): string {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
-
 /**
  * credit 大数的可读缩写（万/亿；credit 模式下配额与成本常为亿级整数）。
  * ≥1亿 显示「x.x亿」，≥1万 显示「x.x万」，其余值、负数与 0 原样。

@@ -2,7 +2,7 @@
    与 index.html 的首帧初始化共用 key 和优先级，修改时同步更新。 */
 import { useCallback, useEffect, useState } from "react";
 
-export const THEME_STORAGE_KEY = "muniu-theme";
+const THEME_STORAGE_KEY = "muniu-theme";
 
 export type Theme = "light" | "dark";
 
@@ -20,7 +20,7 @@ function systemTheme(): Theme {
 }
 
 /** 按 localStorage 和系统偏好解析当前主题。 */
-export function resolveTheme(): Theme {
+function resolveTheme(): Theme {
   return readStored() ?? systemTheme();
 }
 

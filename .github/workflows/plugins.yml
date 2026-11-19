@@ -39,11 +39,24 @@ jobs:
       - name: Rust tests (host)
         working-directory: plugins
         run: cargo test
-      # 依赖漏洞走 RustSec 公告库:版本钉死保证可复现,有漏洞时非零退出
-      - name: Rust audit
+      # 依赖策略:漏洞(RustSec)/许可证/来源/禁用项,配置单源 plugins/deny.toml;
+      # 预编译二进制免去 CI 编译,版本钉死保证可复现
+      - name: Rust deny
         run: |
-          cargo install cargo-audit --locked --version 0.23.0
-          cd plugins && cargo audit
+          VERSION=0.21.0
+          curl -sSfL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${VERSION}/cargo-deny-${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz -C /tmp
+          sudo mv "/tmp/cargo-deny-${VERSION}-x86_64-unknown-linux-musl/cargo-deny" /usr/local/bin/
+          cd plugins && cargo deny check
+      # 覆盖率走宿主单测(wasm ABI 垫片计 0%,已在本地 make plugin-check 注明);
+      # 下限 68 取 2026-11-19 实测基线向下取整
+      - name: Rust coverage
+        run: |
+          VERSION=0.9.1
+          curl -sSfL "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${VERSION}/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin cargo-llvm-cov
+          rustup component add llvm-tools-preview
+          cd plugins && cargo llvm-cov --workspace --summary-only --fail-under-lines 68
       # 工件仅存档用(无人消费):账号存储配额受限期间上传被拒,不应拖红整个
       # workflow;retention 缩短到 3 天,别让 90 天默认保留占账号 500MB 配额。
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

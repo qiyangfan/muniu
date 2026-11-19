@@ -1,4 +1,5 @@
-/** 时间与数字格式化单源(与 kongming/jinguan 两仓 lib/datetime.ts 同构)。
+/** 时间与数字格式化单源(与 kongming/jinguan 两仓 lib/datetime.ts 同族,本仓只留在用函数;
+ *  未用到的日期/耗时格式化随 knip 门禁删除,需要时从两仓同构函数回补)。
  *  用户可见时间一律走本文件:禁页面内直接渲染 ISO 串、禁裸 toLocaleString()。 */
 
 const pad = (n: number): string => String(n).padStart(2, "0");
@@ -18,27 +19,6 @@ export function formatDateTime(
   if (!d) return "—";
   const base = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   return opts?.seconds ? `${base}:${pad(d.getSeconds())}` : base;
-}
-
-/** 按本地时区格式化为 YYYY-MM-DD；空值或非法值返回 "—"。 */
-export function formatDate(v: string | Date | null | undefined): string {
-  const d = toDate(v);
-  return d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : "—";
-}
-
-/** 耗时:<1s 显 "840ms";<60s 显 "8.3s"(整秒去小数);更长显 "3m25s";空值 "—" */
-export function formatDuration(ms: number | null | undefined): string {
-  if (ms == null || Number.isNaN(ms)) return "—";
-  if (ms < 1000) return `${Math.min(Math.round(ms), 999)}ms`;
-  const s = ms / 1000;
-  if (s < 60) {
-    // 舍入进位钳到 59s:59.95s 显 "60s" 会与下一档 "1m0s" 口径相撞
-    const v = Math.min(s < 10 ? Number(s.toFixed(1)) : Math.round(s), 59);
-    return `${v}s`;
-  }
-  const m = Math.floor(s / 60);
-  const sec = Math.round(s % 60);
-  return sec === 60 ? `${m + 1}m0s` : `${m}m${sec}s`;
 }
 
 /** 整数千分位:1234567 → "1,234,567";空值 "—" */

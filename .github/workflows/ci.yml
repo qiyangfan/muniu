@@ -141,6 +141,7 @@ jobs:
           pnpm typecheck
           pnpm lint
           pnpm lint:css
+          pnpm knip
           pnpm test
           pnpm format:check
       # 只拦生产依赖:开发链(vitest→jsdom)的告警不影响发布产物,dev 侧由 dependabot 跟进;
@@ -160,11 +161,13 @@ jobs:
         run: pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
 
   infra-lint:
-    # 不做路径裁剪:workflow/容器/脚本检查是秒级成本,全跑才能拦住语法与 shell 缺陷
+    # 不做路径裁剪:workflow/容器/脚本/提交信息检查是秒级成本,全跑才能拦住语法与 shell 缺陷
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # 提交信息检查需要 PR 基线;pre-commit 全文件扫描亦依赖完整工作树
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
         with:
           go-version-file: go.mod
@@ -183,3 +186,34 @@ jobs:
           curl -sSfL "https://github.com/hadolint/hadolint/releases/download/v${VERSION}/hadolint-linux-x86_64" -o /tmp/hadolint
           chmod +x /tmp/hadolint
           /tmp/hadolint Containerfile
+      # 部署清单 schema 校验:-strict 对未知字段也报错;版本钉死保证可复现
+      - name: kubeconform (deploy manifests)
+        run: |
+          VERSION=0.8.0
+          curl -sSfL "https://github.com/yannh/kubeconform/releases/download/v${VERSION}/kubeconform-linux-amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin kubeconform
+          kubeconform -strict -summary deploy/cluster/k8s.yaml
+      # 发布配置自校验:goreleaser 官方 check 子命令
+      - name: goreleaser check
+        run: |
+          VERSION=2.20.2
+          curl -sSfL "https://github.com/goreleaser/goreleaser/releases/download/v${VERSION}/goreleaser_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin goreleaser
+          goreleaser check
+      # 文件卫生 + YAML/JSON 语法:与本地提交钩子同一份 .pre-commit-config.yaml;
+      # gitleaks 由 secrets 作业做全历史扫描,这里跳过避免重复
+      - name: file hygiene (pre-commit)
+        run: SKIP=gitleaks pipx run --spec pre-commit==4.7.0 pre-commit run --all-files --show-diff-on-failure
+      # 提交信息规范:PR 校验 base...HEAD,推送校验 before..HEAD(新分支/强推回退到 HEAD~1)
+      - name: commit messages
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "${GITHUB_BASE_REF:-}" ]; then
+            BASE="origin/${GITHUB_BASE_REF}"
+          elif [ -n "${BEFORE:-}" ] && [ "${BEFORE}" != "0000000000000000000000000000000000000000" ]; then
+            BASE="${BEFORE}"
+          else
+            BASE="HEAD~1"
+          fi
+          ./scripts/commitcheck.sh "${BASE}..HEAD"

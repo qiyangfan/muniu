@@ -1,5 +1,5 @@
 // API 类型由 openapi-typescript 从 OpenAPI 契约生成。
-import type { components, paths } from "./api-types";
+import type { components } from "./api-types";
 
 export type AdminActor = components["schemas"]["AdminActor"];
 export type AdminAudit = components["schemas"]["AdminAudit"];
@@ -14,7 +14,6 @@ export type ProviderInfo = components["schemas"]["ProviderInfo"];
 export type ProviderPreset = components["schemas"]["ProviderPreset"];
 export type CacheStats = components["schemas"]["CacheStats"];
 export type PricingEntry = components["schemas"]["PricingView"];
-export type PricingWindow = components["schemas"]["PricingWindow"];
 export type BalancesResponse = components["schemas"]["BalancesResponse"];
 export type BalanceOverview = components["schemas"]["BalanceOverview"];
 export type BalanceManualRequest = components["schemas"]["BalanceManualRequest"];
@@ -29,7 +28,7 @@ export type OAuthAuthorizeResponse = components["schemas"]["OAuthAuthorizeRespon
 const TOKEN_KEY = "muniu-admin-token";
 let authRevision = 0;
 
-export function getToken(): string {
+function getToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? "";
 }
 export function setToken(t: string): void {
@@ -200,5 +199,3 @@ export const api = {
   deletePricing: (alias: string) =>
     call<{ ok: boolean }>("DELETE", `/admin/v1/pricing/${encodeURIComponent(alias)}`),
 };
-
-export type _Paths = paths; // 保留生成契约引用

@@ -566,4 +566,3 @@ Ignored nodes: comments, script, style
       Tests  3 failed (3)
    Start at  14:56:11
    Duration  1.00s (environment 65%, import 16%, tests 12%, transform 7%, worker 1%)
-

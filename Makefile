@@ -2,7 +2,7 @@ GO ?= go
 BIN := bin
 PKG := github.com/solvela/muniu
 
-## check: 全量门禁(vet、lint、基础设施 lint、依赖整洁、web 检查、race test/覆盖率、插件)
+## check: 全量门禁(vet、lint、基础设施 lint(含文件卫生)、依赖整洁、web 检查、race test/覆盖率、插件)
 .PHONY: check
 check: vet lint infra-lint tidy-check web-check test plugin-check
 
@@ -10,7 +10,7 @@ check: vet lint infra-lint tidy-check web-check test plugin-check
 .PHONY: web-check
 web-check:
 	@command -v pnpm >/dev/null 2>&1 || { echo "[web-check] pnpm 未安装,跳过控制台门禁"; exit 0; }
-	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm test && pnpm format:check && pnpm generate:api && git diff --exit-code -- src/lib/api-types.d.ts && pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
+	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm knip && pnpm test && pnpm format:check && pnpm generate:api && git diff --exit-code -- src/lib/api-types.d.ts && pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
 
 ## web-build: 构建控制台产物到 web/dist(嵌入二进制)
 .PHONY: web-build
@@ -27,22 +27,25 @@ vet:
 lint:
 	@if command -v golangci-lint >/dev/null 2>&1; then golangci-lint run; else echo "[lint] golangci-lint 未安装,跳过"; fi
 
-## infra-lint: workflow / 容器 / shell 脚本静态检查(工具缺失时跳过并提示,CI 全量执行)
+## infra-lint: workflow/容器/shell/部署清单/发布配置/文件卫生静态检查(工具缺失时跳过并提示,CI 全量执行)
 .PHONY: infra-lint
 infra-lint:
 	@if command -v actionlint >/dev/null 2>&1; then actionlint; else echo "[infra-lint] actionlint 未安装,跳过"; fi
 	@if command -v shellcheck >/dev/null 2>&1; then git ls-files '*.sh' | while IFS= read -r f; do shellcheck "$$f" || exit 1; done; else echo "[infra-lint] shellcheck 未安装,跳过"; fi
 	@if command -v hadolint >/dev/null 2>&1; then hadolint Containerfile; else echo "[infra-lint] hadolint 未安装,跳过"; fi
+	@if command -v kubeconform >/dev/null 2>&1; then kubeconform -strict -summary deploy/cluster/k8s.yaml; else echo "[infra-lint] kubeconform 未安装,跳过"; fi
+	@if command -v goreleaser >/dev/null 2>&1; then goreleaser check; else echo "[infra-lint] goreleaser 未安装,跳过"; fi
+	@if command -v pre-commit >/dev/null 2>&1; then SKIP=gitleaks pre-commit run --all-files; else echo "[infra-lint] pre-commit 未安装,跳过文件卫生检查"; fi
 
 ## tidy-check: go.mod/go.sum 与源码一致(防脏依赖文件过闸)
 .PHONY: tidy-check
 tidy-check:
 	$(GO) mod tidy -diff
 
-## hooks: 安装提交期钩子(gitleaks 在提交前拦截凭据;需 pre-commit)
+## hooks: 安装提交期钩子(凭据/文件卫生走 pre-commit 阶段,提交信息走 commit-msg 阶段)
 .PHONY: hooks
 hooks:
-	@if command -v pre-commit >/dev/null 2>&1; then pre-commit install; else echo "[hooks] pre-commit 未安装,见 .pre-commit-config.yaml"; fi
+	@if command -v pre-commit >/dev/null 2>&1; then pre-commit install && pre-commit install --hook-type commit-msg; else echo "[hooks] pre-commit 未安装,见 .pre-commit-config.yaml"; fi
 
 ## test: race 全量测试 + 覆盖率门禁(聚合 65% + 逐包下限,见 scripts/covercheck.sh)
 .PHONY: test
@@ -119,12 +122,14 @@ FUZZTIME ?= 30s
 fuzz:
 	$(GO) test ./internal/protocol/ -run='^$$' -fuzz='^$(FUZZ)$$' -fuzztime=$(FUZZTIME)
 
-## plugin-check: 插件侧门禁(fmt/clippy/test/依赖审计;工具缺失时跳过并提示,CI 全量执行)
+## plugin-check: 插件侧门禁(fmt/clippy/test/依赖策略/覆盖率;工具缺失时跳过并提示,CI 全量执行)
+## 覆盖率下限 68 取 2026-11-19 实测 68.59% 向下取整(含 sdk 的 wasm ABI 垫片——宿主测试打不到,计 0%)
 .PHONY: plugin-check
 plugin-check:
 	@command -v cargo >/dev/null 2>&1 || { echo "[plugin-check] cargo 未安装,跳过"; exit 0; }
 	cd plugins && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test
-	@if command -v cargo-audit >/dev/null 2>&1; then cd plugins && cargo audit; else echo "[plugin-check] cargo-audit 未安装,跳过依赖审计"; fi
+	@if command -v cargo-deny >/dev/null 2>&1; then cd plugins && cargo deny check; else echo "[plugin-check] cargo-deny 未安装,跳过依赖策略检查"; fi
+	@if command -v cargo-llvm-cov >/dev/null 2>&1; then cd plugins && cargo llvm-cov --workspace --summary-only --fail-under-lines 68; else echo "[plugin-check] cargo-llvm-cov 未安装,跳过覆盖率门禁"; fi
 
 ## bench: 全量基准测试(eval tag:选型评估含 1 万×1536 维构建,-race 下插桩放大 10 倍+,不进常规门禁)
 .PHONY: bench

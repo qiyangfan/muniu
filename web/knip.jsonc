@@ -1,0 +1,8 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  // 本地标准件库:props API/变体名按 AGENTS 前端宪法与 kongming/jinguan 对齐,
+  // 当前页面未消费的导出属于保留的库 API,不按死代码删除;业务代码不在豁免范围。
+  "ignoreIssues": {
+    "src/components/ui/*.tsx": ["exports", "types"],
+  },
+}

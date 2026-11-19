@@ -5,7 +5,7 @@ import { Check, Copy } from "lucide-react";
 
 import { Button } from "./ui/button";
 
-export async function copyText(text: string): Promise<boolean> {
+async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
     return true;

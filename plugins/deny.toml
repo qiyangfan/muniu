@@ -1,0 +1,22 @@
+# 依赖策略单源:漏洞(advisories)/禁用项(bans)/许可证(licenses)/来源(sources)。
+# advisories 与 cargo-audit 同用 RustSec 公告库,统一由本文件承载,不再单独安装 cargo-audit。
+# 许可证允许清单只列当前依赖树实际出现且可接受的许可证;新增依赖引入新许可证时在此显式裁决。
+
+[advisories]
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+]
+
+[bans]
+wildcards = "deny"
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

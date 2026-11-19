@@ -11,7 +11,7 @@ license = "MIT"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-muniu-plugin-sdk = { path = "sdk" }
+muniu-plugin-sdk = { path = "sdk", version = "0.1.0" }
 
 [profile.release]
 panic = "abort"   # wasm 无 unwind;abort 兑现「错误即 trap 即 containment」

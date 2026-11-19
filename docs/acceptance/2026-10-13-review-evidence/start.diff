@@ -3,9 +3,9 @@ index e831982..4938d33 100644
 --- a/HANDOFF.md
 +++ b/HANDOFF.md
 @@ -2,6 +2,19 @@
- 
+
  > 维护纪律:只写「当前状态 / 下一步 / 开放决策项 / 验收记录」四块,不写变更明细(归 git log),单次更新 ≤30 行。
- 
+
 +## 当前状态(2026-10-13,冻结任务执行已结束)
 +
 +- images 8/8 与管理员审计 10/10 已实施、验证、归档并同步主规格；历史结算恢复 2.3 漏勾补齐，拓扑管理页/gauge 读侧漂移已修复。本轮与上一批改动均未提交。
@@ -20,12 +20,12 @@ index e831982..4938d33 100644
 +- **门禁**:`make check` exit=0(coverage gate PASS 71.2%);`openspec validate --all` 21/21;web 四件套 + vite build(/tmp)绿。两 change 已归档(archive/2026-10-13-*,主 specs +4 Requirement:api-key-lifecycle +1、新建 request-cost-budget +3)。独立子代理代码审查 1 P0(admin 签发链路漏接预算字段静默丢弃)+6 P2 全部修复,回归钉子已补。**改动未提交(等 owner 指令)**。
 +
  ## 当前状态(2026-10-12,需求方框架重判批:DELETE 代理/SIGHUP 热加载/告警 webhook 三件落地)
- 
+
  - **裁决框架修正(owner 点破「零消费方」自证拖延;completeness IS the product 重申)**:按作品集完整度重判 backlog——落地三件(状态 lane 删动词/SIGHUP 运维手势/告警主动通知,均完整 openspec 周期+归档,validate 20/20);拒绝三件各附真实理由:gRPC 入站(瓦解「零重依赖 stdlib 单二进制」主打论点,关键词留 skills 行)、SSO(ADR-0005 边界,OIDC 学习主场在锦官)、images 端点(多模态输入已四路全链,生成端点拖价目 schema 迁移不值对价);key 级模型白名单=值得做,下一批(配 kongming 灰度治理故事单独成批)。
 @@ -86,12 +99,19 @@
- 
+
  ## 下一步(严格按序)
- 
+
 +【2026-10-13 实施后状态】：
 +
 +1. 【待 owner 指令】本批提交与 push(改动全部未提交,含上批 30 文件 + 本批立项工件;推送前按纪律先 fetch 调和)。
@@ -34,7 +34,7 @@ index e831982..4938d33 100644
 +4. 【外部条件】GEMINI_API_KEY 到位后 gemini 真实 wire 复核;MiniMax 域名真 key 归一(承前);images 国内同步兼容端点家数(硅基流动确定,智谱待核)随 3 实施冒烟实证。
 +
  【2026-10-02 实施后状态】：
- 
+
  1. 【已完成·已归档】fix-api-key-binding-identifiers 7/7(make check 全绿+跨仓验收,验收记录 33)。
  2. 【已完成·已归档】recover-pending-usage-settlement 5/5——木牛侧实现/测试/联调全过;锦官收口后本仓 `openspec archive` 已执行(主规格 sync +1 Requirement),归档位 `archive/2026-10-02-recover-pending-usage-settlement`。
  3. 【已销案 2026-10-12】原引用的聚合单源 `../HANDOFF.md` 在 longzhong/ 下不存在(指针失联);所辖四项经核查均已完成(CardTitle as 已落地、kongming input 日期族已合流销案)或无 muniu 侧动作(ingest 读数归锦官、push 后 CI 实跑归下条)。**裁决:不重建聚合状态文件**——跨仓状态聚合无维护归属,重建即再腐化;若未来需要,由 owner 立维护规则后另立。跨仓事项一律以各仓 HANDOFF + change 文件为单源。
@@ -42,7 +42,7 @@ index e831982..4938d33 100644
 +4. 【历史阻塞已关闭】workflow scope 授权与前批 push 已完成（2026-10-12 记录）；本轮只读复核 main 本地/远端同为 93ec4fb。当前改动仍需本批逐次 Git 指令。
  5. 【owner 裁决】T5.3/T5.6 基座中断处置:重启 dev 常驻并重新起算观察期,或按个人项目低流量前提调整发版判据基线(验收记录 22 先例);kongming 侧 ADR-007 转「已接受」与专用 key 限额回填为跨仓运营动作,随处置一并。
  6. 【外部条件】GEMINI_API_KEY 到位后按 docs/gemini-e2e-runbook.md 复核真实多工具调用 wire 形态(开放项 2026-10-12);MiniMax 域名双源待真 key 归一。
- 
+
 @@ -124,7 +144,7 @@
  | 2026-09-11 | reconcile.sql 口径修正(每尝试一行→DISTINCT) | 旧口径 ≤1% 判据不可达 | 已按「每尝试一行」实现修正 SQL | 已解决(口径随上项一并写入 metering.md) |
  | 2026-09-11 | 模型个性约束(参数黑名单/思考锁/输出上限)无治理层,跨家换道后 400 或行为漂移 | 换道正确性缺口——参数兼容是 model_routes 换道正确性的组成部分 | 声明制能力目录 + 逐 attempt 治理(业界对标:one-api 纯透传甩锅客户端 / LiteLLM 全量注册表漂移,均否决) | **ADR-0010 已立**(零内置声明制、换道重治理、留痕放行+strict 可选);宪法 upstream-adapters.md 增「请求参数治理」节;openspec change `model-capability-governance` 已立(proposal/specs/design/tasks 齐全,validate 通过),**已实施并通过门禁(2026-09-11,见验收记录 18)** |
@@ -58,9 +58,9 @@ index e831982..4938d33 100644
  | 2026-09-26 | 三仓 AGENTS.md 均指向聚合目录 `../FRONTEND-CONSTITUTION.md`(Article 0–10),该文件在 longzhong/ 下不存在(sunmao 仓的 ADR-0015 是其独立规范,非同物) | 宪法全文缺失,各仓只剩执行摘要;「冲突时以宪法为准」无从执行 | owner 确认文件下落后恢复聚合单源;muniu 侧移动端口径已按 owner 插话先行升格,以 AGENTS.md 执行摘要为准(验收记录 30) | **关闭(2026-10-02)**:`longzhong/FRONTEND-CONSTITUTION.md`(Article 0–10)已落盘,三仓引用恢复有效;本条登记的事实已消失,关闭 |
 +| 2026-10-13 | gRPC 入站二次裁决(原理由「瓦解 stdlib 旗舰论点」只计成本未答收益) | 补收益侧后结论更硬:LLM 行业无标准 gRPC API,自造 `muniu.proto` = 语义真空,协议保真转译核心卖点零锻炼;REST-only 与 LiteLLM/one-api/Kong 同赛道对照无缺口 | 维持不引入;关键词留简历 skills 行,学习主场在微服务语境项目 | **已终裁(2026-10-13 owner 确认重裁)**:维持拒绝;翻旧账以本行与 ROADMAP 注记为准 |
 +| 2026-10-13 | SSO/OIDC 二次裁决(原理由「ADR-0005 边界」经不起追问:网关为何不能有自己的身份面) | 拆分后重裁:SSO 本体维持拒绝(锦官 OIDC 学习主场组合冗余 + standalone 零外联先验假设 + 自研 JOSE 密码学危险);被捆绑的多管理员+审计独立价值成立 | SSO 不引入;多管理员+操作审计拆出立项(ADR-0017 + openspec `admin-operators-audit`) | **已终裁(2026-10-13)**:一拒一立,论证沉淀 ADR-0017 备选节 |
- 
+
  ## 验收记录(阶段闸门时追加:判据 → 证据 → 日期)
- 
+
 +**43. 冻结任务执行（2026-10-13）**
 +```text
 +PATH=/Users/solvela/.local/share/mise/installs/aqua-golangci-golangci-lint/2.14.0/golangci-lint-2.14.0-darwin-arm64:$PATH make check
@@ -109,7 +109,7 @@ index cc72464..0ca509f 100644
 +  muniu keys disable <prefix>
 +  muniu keys enable <prefix>
  `
- 
+
  // keysCreate 签发:明文只打印一次,stderr 同时给出警示。
 @@ -63,6 +69,7 @@ func keysCreate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
  	rpm := fs.Int64("rpm", 60, "RPM 限额")
@@ -138,7 +138,7 @@ index cc72464..0ca509f 100644
 +		plaintext, rec.Prefix, rec.Name, *tenant, rec.RPMLimit, rec.TPMLimit, rec.DailyQuotaCredits, rec.MaxRequestCostCredits, exp)
  	return 0
  }
- 
+
 @@ -106,9 +113,13 @@ func keysList(db *sql.DB, stdout, stderr io.Writer) int {
  		_, _ = fmt.Fprintln(stdout, "(无 key)")
  		return 0
@@ -158,7 +158,7 @@ index cc72464..0ca509f 100644
 @@ -134,6 +145,52 @@ func keysRevoke(db *sql.DB, args []string, stdout, stderr io.Writer) int {
  	return 0
  }
- 
+
 +// keysToggle 启停 key(可逆禁用):按 prefix 定位后 PATCH disabled_at 列。
 +// CLI 与网关是两个进程,无法直清网关的鉴权缓存:如实说明收敛时长(revoke 同款文案纪律)。
 +func keysToggle(db *sql.DB, args []string, disable bool, stdout, stderr io.Writer) int {
@@ -214,7 +214,7 @@ index 939c877..f97a40e 100644
 +++ b/cmd/muniu/main.go
 @@ -40,6 +40,9 @@ import (
  )
- 
+
  func main() {
 +	if aa, ok := adminsSubArgs(os.Args); ok {
 +		os.Exit(runAdmins(flagConfOf(os.Args), aa))
@@ -235,7 +235,7 @@ index 939c877..f97a40e 100644
  	staticHuman := make(map[string]admin.StaticEntry, len(staticDefs))
 @@ -345,10 +352,11 @@ func assemble(cfg *config.Config, cfgPath string, logger *slog.Logger) (http.Han
  	}
- 
+
  	chatProxy := proxy.New(proxy.Config{
 -		Registry:  registry,
 -		Providers: cfg.Providers,
@@ -327,7 +327,7 @@ index 8cf64eb..2a6254f 100644
 +	t.Setenv("MUNIU_ADMIN_TOKEN", "reload-admin")
  	t.Setenv("SIGHUP_TEST_KEY_1", "k1")
  	t.Setenv("SIGHUP_TEST_KEY_2", "k2")
- 
+
 +	providerName := "p1"
  	writeCfg := func(baseURL, keyEnv string) {
  		body := fmt.Sprintf(`server:
@@ -356,7 +356,7 @@ index 8cf64eb..2a6254f 100644
  		}
 @@ -99,6 +103,7 @@ model_routes:
  	}
- 
+
  	// 合法新配置:provider 指向 up2 → SIGHUP → 新请求走 up2(轮询等待热替换落地)
 +	providerName = "p2"
  	writeCfg(up2.URL(), "SIGHUP_TEST_KEY_2")
@@ -365,7 +365,7 @@ index 8cf64eb..2a6254f 100644
 @@ -117,6 +122,37 @@ model_routes:
  		t.Fatal("SIGHUP 后新请求应走新 provider(up2)")
  	}
- 
+
 +	// 管理页与 gauge 必须与数据面的同一快照收敛，不能继续呈现启动 provider。
 +	for _, path := range []string{"/admin/v1/providers", "/metrics"} {
 +		req, err := http.NewRequest("GET", ts.URL+path, nil)
@@ -672,13 +672,13 @@ index 6f837a8..d8ca188 100644
 --- a/docs/ROADMAP.md
 +++ b/docs/ROADMAP.md
 @@ -27,7 +27,7 @@
- 
+
  ## Backlog(明确不进当前阶段,防 scope creep)
- 
+
 -SIGHUP/文件监听热加载 · ~~OpenAI Responses API 入站桥接~~(已升格:ADR-0012,openspec change `responses-api-inbound`) · ~~Redis 后端分布式限流~~(已落地:openspec change `cluster-ratelimit-shared-view`,ADR-0008 修订,GCRA+TPM 槽双实现与降级纪律) · ~~Anthropic Messages 入站形态~~(已落地:ADR-0013,`POST /v1/messages` 边缘翻译) · gRPC 入站 · MCP/A2A 协议(观察 agentgateway 动向) · 告警通知(webhook) · 控制台多用户/SSO · ~~插件机制(WASM)~~(已升格:ADR-0011,openspec change `wasm-plugin-runtime`) · 请求级 cost 预算中断 · Anthropic 桥接请求侧工具往返翻译(范围收窄至「chat 入站 × anthropic 出站」——messages 入站经同构直通已原生支持工具多轮;出现真实 agent 流量消费即立项) · OpenAI images/audio/files 端点(有具体消费场景才立项——按张/按秒计价是新计量维度) · key 级模型白名单 · key 启停 · ~~Gemini 原生桥接~~(已落地:ADR-0015 `gemini-native-protocol`,`adapter: gemini` 整家实现回归值域;此前的「裁撤+值域移除」裁决(ADR-0003 更正/`retire-gemini-adapter-token`)被本 ADR 取代)。
 +~~SIGHUP/文件监听热加载~~(已落地:openspec change `sighup-config-reload`) · ~~OpenAI Responses API 入站桥接~~(已升格:ADR-0012,openspec change `responses-api-inbound`) · ~~Redis 后端分布式限流~~(已落地:openspec change `cluster-ratelimit-shared-view`,ADR-0008 修订,GCRA+TPM 槽双实现与降级纪律) · ~~Anthropic Messages 入站形态~~(已落地:ADR-0013,`POST /v1/messages` 边缘翻译) · gRPC 入站(2026-10-13 二次裁决维持拒绝:无标准协议可转译=语义真空,REST-only 与同赛道对照无缺口;论证入 HANDOFF 开放决策项) · MCP/A2A 协议(观察 agentgateway 动向) · ~~告警通知(webhook)~~(已落地:openspec change `webhook-alerting`) · ~~控制台多管理员+操作审计~~(已升格:ADR-0017,openspec change `admin-operators-audit`,从 SSO 捆绑中拆出) · SSO/OIDC(2026-10-13 二次裁决维持拒绝:锦官主场组合冗余 + standalone 零外联纪律) · ~~插件机制(WASM)~~(已升格:ADR-0011,openspec change `wasm-plugin-runtime`) · ~~请求级 cost 预算中断~~(已落地:openspec change `per-request-cost-budget`,预检+流中两道闸) · ~~Anthropic 桥接请求侧工具往返翻译~~(已落地:openspec change `anthropic-bridge-tool-roundtrip`,真异构两家整家实现) · ~~OpenAI images 生成端点~~(已升格:ADR-0016,openspec change `image-generation-endpoint`,同步形态全链 + per-image 计价维度) · audio/edits/variations 端点(二期:另一套计量维度与管道——TTS 二进制流/STT multipart,按同法裁决) · key 级模型白名单 · ~~key 启停~~(已落地:openspec change `key-disable-toggle`,可逆禁用) · ~~Gemini 原生桥接~~(已落地:ADR-0015 `gemini-native-protocol`,`adapter: gemini` 整家实现回归值域;此前的「裁撤+值域移除」裁决(ADR-0003 更正/`retire-gemini-adapter-token`)被本 ADR 取代)。
  Backlog 升格规则:用户点名 + 影响当前架构设计时,先补 ADR 再排期。
- 
+
  ## 配套:人类 Go 学习路径(与执行并行,写给仓库所有者)
 diff --git a/docs/design/data-and-config.md b/docs/design/data-and-config.md
 index 2a98f6a..1b5474d 100644
@@ -722,7 +722,7 @@ index 1af5ca9..45ee4ff 100644
 @@ -49,6 +49,15 @@
  - **控制面纳管期间撤销覆盖非粘性**:已配置 `control_plane.pricing_url` 的实例,每轮按控制面全量期望同步(内容不变跳过);
    本地 DELETE 撤销会在下一轮被控制面期望重新覆盖——纳管实例的撤销必须在控制面侧执行。
- 
+
 +## 请求级成本预算(事中成本闸,2026-10-13 开放)
 +
 +日配额是「事后」闸(按已落账成本拦截);请求级成本预算把治理前移到「单请求」粒度:
@@ -733,11 +733,11 @@ index 1af5ca9..45ee4ff 100644
 +- **保守原则**:估算取「缓存折扣不计、逐帧累计轻微高估」方向,预算场景宁紧勿松;真值(usage 帧)到达即覆盖估算。
 +
  ## 异步落库(背压优先于丢单)
- 
+
  ```
 @@ -69,3 +78,11 @@
  ## 测试要求(测试先行域)
- 
+
  计价整数运算表驱动(含边界:0 token、恰 1e6、向上取整临界)· 估算路径(usage 缺失→estimated 置位)· 断言中断只计已转发部分 · channel 满背压行为 · 批量落库与优雅排干。
 +
 +## per-image 计价（ADR-0016）
@@ -757,9 +757,9 @@ index 515db55..bd6f143 100644
  | context_canceled | 客户端断连 | 静默退出,不换道不计失败 | 静默退出,计量已发生部分 |
 +| cost_budget_exceeded | 网关策略:单请求成本预算超限(request-cost-budget) | 静默终结,不换道不计失败(同别名跨候选价目相同,换道无解) | 静默终结(中断出口已自行写流内错误帧/402 信封) |
  | **候选适配性豁免(桥接工具限制;防御性保留)** | 请求含 role=tool / assistant.tool_calls 且候选为**未声明工具翻译完整的桥接型**(Bridger ∧ ToolRoundtripComplete=false) | **跳过候选,不计 key EMA/冷却**(适配性不匹配≠上游故障);候选取 key 之前生效 | —(检测在候选循环,先于 attempt;anthropic 桥接已声明完整不再触发,机制经测试替身钉住) |
- 
+
  候选耗尽仍失败 → 最终错误信封 `code=all_candidates_failed`;候选列表耗尽的 429/401 类错误在信封 `message` 中如实说明「已尝试全部候选」。**全部候选因桥接豁免跳过且无任何真实上游错误** → 最终信封 `code=bridge_tool_roundtrip_unsupported`(400,自解释文案;upstream-egress-batch 契约)。非流式请求没有「已过首 token」态(首字节前全部可重放)。
- 
+
 +## 请求级成本预算(request-cost-budget 契约)
 +
 +per-key 单请求成本上界(`max_request_cost_credits`,0=不限),两道闸把成本治理前移到「事中」:
@@ -769,11 +769,11 @@ index 515db55..bd6f143 100644
 +3. **诚实边界**:非流式无中断闸(上游原子生成,中断只省传输不省账单,不做伪保护);直通 passthrough 流已开闸段不中断(无原生协议错误帧合成机制,未开闸仍可拦);embeddings 端点不在闸覆盖内(输出形态不同)。三者均为登记限制,非缺陷。
 +
  ## SSE 透传实现契约
- 
+
  1. **逐事件转发**:读到完整事件(以空行 `\n\n` 分隔)即 `Write` + `http.Flusher.Flush()`,**禁止攒整包、禁止按行切分 SSE 事件**(多行 data 字段合法存在);半帧残留在缓冲区直到补齐,绝不解析半个事件。
 @@ -225,3 +234,9 @@ data: [DONE]
  ### 管道等价性
- 
+
  翻译产物与等价 chat 请求 canonical 逐字节同构 ⇒ 治理/插件/限流/failover/计量/语义缓存全同构(跨协议缓存命中钉子测试);gemini 候选工具多轮翻译完整,不触发桥接豁免(声明式缺口,ADR-0015 决策 4)。
 +
 +## 同步 images 通道（ADR-0016）
@@ -880,7 +880,7 @@ index 072693d..bdeac5b 100644
 +// Package admin 承载运维面双轨鉴权与动作审计；账号和共享令牌均未配置时整体关闭。
  // keys 管理与 Phase 2 CLI 同源(复用 auth 库函数);错误信封与业务面同格式。
  package admin
- 
+
 @@ -7,6 +6,7 @@ import (
  	"database/sql"
  	"encoding/json"
@@ -900,7 +900,7 @@ index 072693d..bdeac5b 100644
  	CacheStats CacheStatsProvider
 +	Topology   func() ([]config.Provider, map[string]*keypool.Pool)
  	Verifier   *auth.Verifier
- 
+
 -	PricingDir     *metering.PricingDirectory
 -	StaticPricing  map[string]StaticEntry
 -	RefreshPricing func() error
@@ -911,7 +911,7 @@ index 072693d..bdeac5b 100644
 +	StaticPricing      map[string]StaticEntry
 +	RefreshPricing     func() error
 +	Plugins            *plugin.Registry // WASM 插件注册表(ADR-0011);nil = 端点返回禁用态
- 
+
  	Logger *slog.Logger
  }
 @@ -62,6 +66,16 @@ type adminRouteEntry struct {
@@ -934,7 +934,7 @@ index 072693d..bdeac5b 100644
 @@ -81,32 +95,34 @@ var adminRouteTable = []adminRouteEntry{
  	{"PATCH /admin/v1/plugins/{name}", pluginPatch},
  }
- 
+
 -// New 构造管理面 handler;token 为空返回 nil(管理面关闭)。
 +// New 按共享令牌或活跃账号开放管理面，认证装配失败不暴露空壳。
  func New(d Deps) http.Handler {
@@ -982,10 +982,10 @@ index 072693d..bdeac5b 100644
 -	})
 +	return authOperators(d, auditOperators(d, mux))
  }
- 
+
  // secureEqual 恒定时间字符串比较。
 @@ -145,7 +161,15 @@ func respondErr(d Deps, w http.ResponseWriter, r *http.Request, err error, bizCo
- 
+
  func decode(r *http.Request, v any) error {
  	defer func() { _ = r.Body.Close() }()
 -	return json.NewDecoder(r.Body).Decode(v)
@@ -999,7 +999,7 @@ index 072693d..bdeac5b 100644
 +	}
 +	return nil
  }
- 
+
  // ---- tenants ----
 @@ -241,18 +265,26 @@ func listKeys(d Deps) http.HandlerFunc {
  func createKey(d Deps) http.HandlerFunc {
@@ -1091,7 +1091,7 @@ index 7bc7539..66c30fc 100644
 @@ -161,6 +161,58 @@ func TestAdmin_keysCRUD全链(t *testing.T) {
  	}
  }
- 
+
 +// 启停与请求级成本预算的 PATCH 契约:boolean/数值字段落库回显,负预算 400(整单拒绝)。
 +func TestAdmin_key启停与预算PATCH(t *testing.T) {
 +	db := openDB(t)
@@ -1152,7 +1152,7 @@ index a760ffa..1bb499e 100644
 --- a/internal/auth/auth.go
 +++ b/internal/auth/auth.go
 @@ -63,22 +63,28 @@ func Hash(plaintext string) string {
- 
+
  // KeyRecord 签发/列表回执(管理命令与控制台;明文只在 CreateKey 返回值出现一次)。
  // 限额三件套与过期时刻如实透出(零值/空 = 不限/永不过期)。
 +// Status 是生命周期终态位(active|revoked);Disabled 是可逆运行态(启停),两者正交:
@@ -1178,7 +1178,7 @@ index a760ffa..1bb499e 100644
 +	Disabled              bool       `json:"disabled"`
 +	MaxRequestCostCredits int64      `json:"max_request_cost_credits"`
  }
- 
+
  // KeyOpts 签发可选项:零值 = 不限/永不过期(现状等价,零回归)。
  type KeyOpts struct {
 -	TPMLimit          int64
@@ -1189,7 +1189,7 @@ index a760ffa..1bb499e 100644
 +	ExpiresAt             *time.Time
 +	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;负值在入口拒绝)
  }
- 
+
  // CreateKey 签发并落库;返回明文(仅此一次)与回执。
 @@ -87,8 +93,8 @@ func CreateKey(db *sql.DB, tenant, name string, rpm int64, opts KeyOpts) (string
  	if tenant == "" {
@@ -1221,7 +1221,7 @@ index a760ffa..1bb499e 100644
 +		Status: "active", Disabled: false, MaxRequestCostCredits: opts.MaxRequestCostCredits,
  	}, nil
  }
- 
+
  // LimitsPatch key 运行态限额的局部更新(PATCH 语义:省略字段不动)。
  // ClearExpires 表达「显式 null 清除过期」;ExpiresAt 非 nil 且未 Clear 时为设定新过期。
 +// Disabled 三态:true=停用(记 disabled_at)/false=恢复(清列)/nil=不动。
@@ -1239,7 +1239,7 @@ index a760ffa..1bb499e 100644
 +	Disabled              *bool
 +	MaxRequestCostCredits *int64
  }
- 
+
  // UpdateKeyLimits 局部更新 key 限额/过期(管理面 PATCH;写后调用方须 Verifier.Invalidate)。
 @@ -137,8 +147,9 @@ type LimitsPatch struct {
  func UpdateKeyLimits(db *sql.DB, keyID string, p LimitsPatch) (*KeyRecord, error) {
@@ -1300,9 +1300,9 @@ index a760ffa..1bb499e 100644
 +	r.Disabled = dis.Valid && dis.String != ""
  	return &r, nil
  }
- 
+
 @@ -209,7 +235,8 @@ func RevokeKeyByPrefix(db *sql.DB, prefix string) (int64, error) {
- 
+
  // ListKeys 列出 key(管理命令读侧;不含 hash 明文),按签发时间升序。
  func ListKeys(db *sql.DB) ([]KeyRecord, error) {
 -	rows, err := db.Query(`SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits, expires_at
@@ -1334,7 +1334,7 @@ index a760ffa..1bb499e 100644
 @@ -269,6 +298,9 @@ type Verifier struct {
  // errKeyExpired 过期哨兵(Middleware 据此给「已过期」message,与无效/吊销可区分)。
  var errKeyExpired = errors.New("key 已过期")
- 
+
 +// errKeyDisabled 停用哨兵(Middleware 据此给「已停用」message;用户动作:找管理员重新启用)。
 +var errKeyDisabled = errors.New("key 已停用")
 +
@@ -1363,7 +1363,7 @@ index a760ffa..1bb499e 100644
 +	ExpiresAt             time.Time
 +	MaxRequestCostCredits int64 // 单请求成本上界(0=不限;请求级成本预算闸消费)
  }
- 
+
  type ctxKey struct{}
 @@ -411,6 +444,8 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
  			msg := "API key 无效或已吊销"
@@ -1574,7 +1574,7 @@ index 7970965..1947d22 100644
 @@ -139,6 +139,13 @@ type ModelCapability struct {
  	MaxOutputTokens int64    `yaml:"max_output_tokens" json:"max_output_tokens"` // 输出上限(0=不限制);越界 clamp max_tokens
  }
- 
+
 +// ImagePrice 同步生成的静态兜底报价，与 token 价目互不接管。
 +type ImagePrice struct {
 +	Currency string            `yaml:"currency"`
@@ -1596,7 +1596,7 @@ index 7970965..1947d22 100644
 @@ -481,6 +489,17 @@ func (c *Config) validate() error {
  		add("metering.settlement 非法 %q(允许 CNY|USD)", c.Metering.Settlement)
  	}
- 
+
 +	for alias, pr := range c.ImagePricing {
 +		price, err := metering.ParseImagePrice(pr.Currency, pr.Default, pr.Tiers)
 +		if err != nil {
@@ -1616,7 +1616,7 @@ index 47a3bbe..4d93b25 100644
 --- a/internal/failover/class.go
 +++ b/internal/failover/class.go
 @@ -8,13 +8,14 @@ type ErrorClass string
- 
+
  // 错误分类常量(语义见 proxy-and-streaming 判定表)。
  const (
 -	ClassDialFail        ErrorClass = "dial_fail"        // 连不上、握手失败
@@ -1674,7 +1674,7 @@ index 9df1f40..66519d7 100644
 --- a/internal/proxy/metering.go
 +++ b/internal/proxy/metering.go
 @@ -5,6 +5,7 @@ package proxy
- 
+
  import (
  	"encoding/json"
 +	"fmt"
@@ -1684,7 +1684,7 @@ index 9df1f40..66519d7 100644
 @@ -17,6 +18,10 @@ import (
  	"github.com/solvela/muniu/internal/protocol"
  )
- 
+
 +// costBudgetExceededCode 请求级成本预算超限的错误码(402 quota_exceeded 类型族,
 +// 错误类型表零膨胀;预检拒绝与流中断言共用)。
 +const costBudgetExceededCode = "cost_budget_exceeded"
@@ -1707,12 +1707,12 @@ index 9df1f40..66519d7 100644
 +	budgetOut    int64             // 输出累计真值(usage 帧)
 +	budgetOutEst int64             // 输出逐帧估算累计(delta 文本/工具参数)
  }
- 
+
  // markFirstToken 记录首 token 延迟(仅首个内容帧时生效)。
 @@ -54,6 +69,36 @@ func (m *meterState) markFirstToken() {
  	m.firstMs = &ms
  }
- 
+
 +// budgetObserveUsage usage 帧真值并入预算累计(非零字段覆盖,与计量合并同缝)。
 +func (m *meterState) budgetObserveUsage(u protocol.Usage) {
 +	if u.PromptTokens > 0 {
@@ -1760,7 +1760,7 @@ index 9df1f40..66519d7 100644
 @@ -186,6 +231,27 @@ func estimateInputTokens(inputText, model string) int64 {
  	return n
  }
- 
+
 +// preflightBudgetExceeded 预检判定:预算>0 且价目可得且 max_tokens>0 时,
 +// 估算「输入成本 + max_tokens×输出价」上界(缓存折扣不计,保守不低估);
 +// 返回 (可读 message, 是否超限)。max_tokens 缺失 = 上界不可知,不伪保护(流式由中断闸兜底)。
@@ -1826,7 +1826,7 @@ index 9df1f40..66519d7 100644
 +		m.budgetOutEst += metering.EstimateOutputTokens(budgeted.String(), m.budgetModel)
 +	}
  }
- 
+
  // assembleStreamBody 流式成功后的缓存入库候选:按累计 content 拼标准 chat.completion 体。
 diff --git a/internal/proxy/native_attempt.go b/internal/proxy/native_attempt.go
 index 48f8015..d983ca1 100644
@@ -1862,7 +1862,7 @@ index f8dea1f..a7f4d9f 100644
 --- a/internal/proxy/proxy.go
 +++ b/internal/proxy/proxy.go
 @@ -17,6 +17,7 @@ import (
- 
+
  	"github.com/solvela/muniu/internal/adapter"
  	"github.com/solvela/muniu/internal/alerting"
 +	"github.com/solvela/muniu/internal/auth"
@@ -1878,7 +1878,7 @@ index f8dea1f..a7f4d9f 100644
  	Timeouts         Timeouts
  	Pipeline         *metering.Pipeline       // 计量管道;nil = 不计量(纯转发场景)
 @@ -60,21 +62,22 @@ type Config struct {
- 
+
  // Proxy 编排器:注册表 + 拓扑快照(路由/池/适配器/能力目录,3.1 原子热替换) + 三层超时 + 计量管道。
  type Proxy struct {
 -	registry  *adapter.Registry                // 启动装配容器(转发路径不再读——adapter 随拓扑快照)
@@ -1913,7 +1913,7 @@ index f8dea1f..a7f4d9f 100644
 +	client       *http.Client
 +	affinity     *affinityTable // 有状态粘性路由亲和表(进程内 TTL+LRU;protocol-native-passthrough)
  }
- 
+
  // New 构造代理:路由候选按 priority 升序排序;HTTP 客户端带拨号层超时与连接池。
 @@ -98,20 +101,21 @@ func New(cfg Config) *Proxy {
  		randIntn = func(n int) int { return rand.IntN(n) }
@@ -1954,7 +1954,7 @@ index f8dea1f..a7f4d9f 100644
 @@ -277,6 +281,17 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
  		}
  	}
- 
+
 +	// 请求级成本预算预检闸(per-request-cost-budget):可计算即拒绝——估算输入 + max_tokens
 +	// 输出上界超预算 402,上游零调用且不落计量行(strict 治理 400 同族);语义缓存命中已先行
 +	// 返回(命中成本为 0);失格请求 canonical 不可得,旁路(直通语义字节保真优先)
@@ -2022,10 +2022,10 @@ index 5214a56..923b6e9 100644
  				}
 +				return true, failover.ClassCostBudget
  			}
- 
+
  			if meta.IsDone && !gateOpen {
 @@ -304,8 +326,13 @@ func (p *Proxy) writeEvent(w http.ResponseWriter, raw []byte) {
- 
+
  // writeStreamAbort 断言出口:流内错误帧 + 补发 [DONE] 让客户端干净收尾。
  func (p *Proxy) writeStreamAbort(w http.ResponseWriter, r *http.Request, code string) {
 +	p.writeStreamAbortCode(w, r, protocol.TypeUpstreamError, code, "上游流中断,已生成部分可能不完整")
@@ -2077,7 +2077,7 @@ index 011dce0..6550bab 100644
 +	DisabledAt            *time.Time
 +	MaxRequestCostCredits int64
  }
- 
+
  // ErrNotFound 查无此行(哨兵,调用方 errors.Is 判定)。
 @@ -177,13 +181,15 @@ func TenantIDByName(db *sql.DB, name string) (string, error) {
  // expires_at 列损坏(非 RFC3339)按查询错误返回——宁可拒绝该 key,不放行时间语义不明的凭据。
@@ -2111,7 +2111,7 @@ index 011dce0..6550bab 100644
 +	}
  	return &k, nil
  }
- 
+
 diff --git a/muniu.example.yaml b/muniu.example.yaml
 index 8f5680e..ab65d54 100644
 --- a/muniu.example.yaml
@@ -2136,7 +2136,7 @@ index 5ce0aca..684bbf6 100644
 --- a/openspec/changes/archive/2026-10-02-recover-pending-usage-settlement/tasks.md
 +++ b/openspec/changes/archive/2026-10-02-recover-pending-usage-settlement/tasks.md
 @@ -7,4 +7,6 @@
- 
+
  - [x] 2.1 锦官实现完成后，以真实 Key ID + Mock 充值验收欠费、入账、原用量补扣、再次重放及密钥状态收敛。（≤ 2h）
  - [x] 2.2 执行 `make check`、OpenSpec 严格校验与代码审查，核对没有钱包/支付职责进入木牛。（≤ 2h）
 -- [ ] 2.3 两仓 HANDOFF 写入同一验收链路及结果；完成实现和验证后再同步主规格与归档。（≤ 2h）
@@ -2246,7 +2246,7 @@ index 0a01a80..a981c4e 100644
  import Providers from "./pages/Providers";
  import Pricing from "./pages/Pricing";
 +import Audit from "./pages/Audit";
- 
+
 -// 登录 = 输入 admin token,先经一次真实请求校验再进入(否则无效 token 表现为各页静默空白)
 -function Login({ onOk }: { onOk: () => void }) {
 -  const [v, setV] = useState("");
@@ -2367,10 +2367,10 @@ index 0a01a80..a981c4e 100644
    { key: "pricing", label: "价目管理", shortLabel: "价目", icon: Tags },
 +  { key: "audit", label: "操作审计", shortLabel: "审计", icon: ClipboardList },
  ];
- 
+
 -type TabKey = "overview" | "keys" | "usage" | "providers" | "pricing";
 +type TabKey = "overview" | "keys" | "usage" | "providers" | "pricing" | "audit";
- 
+
  export default function App() {
 -  const [logged, setLogged] = useState(getToken() !== "");
 +  const [actor, setActor] = useState<AdminActor | null>(null);
@@ -2420,7 +2420,7 @@ index 0a01a80..a981c4e 100644
 +      </div>
 +    );
 +  if (!actor) return <Login onOk={setActor} />;
- 
+
    const themeToggle = (
      <Button
 @@ -118,9 +196,21 @@ export default function App() {
@@ -3162,7 +3162,7 @@ index ab5cc2d..720d20f 100644
 @@ -1,6 +1,11 @@
  // 管理 API 客户端:类型一律来自 openapi-typescript 生成的 api-types.d.ts(禁手写 API 类型,ADR-005 纪律)。
  import type { components, paths } from "./api-types";
- 
+
 +export type AdminActor = components["schemas"]["AdminActor"];
 +export type AdminAudit = components["schemas"]["AdminAudit"];
 +
@@ -3183,7 +3183,7 @@ index ab5cc2d..720d20f 100644
      try {
 @@ -85,6 +93,20 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
  }
- 
+
  export const api = {
 +  login: (username: string, password: string) =>
 +    call<AdminActor>("POST", "/admin/v1/auth/login", { username, password }),
@@ -3294,7 +3294,7 @@ index 714d6a0..3876871 100644
 +import { StatusBadge, type StatusMeta } from "../components/status-badge";
  import { formatDateTime, formatNumber } from "../lib/datetime";
  import { fmtCredits, rfc3339ToLocal } from "../lib/utils";
- 
+
 +// key 状态徽章三态:吊销终态 > 可逆停用 > 启用(与后端判定顺序一致,先吊销后停用)。
 +const KEY_STATUS_META: StatusMeta = {
 +  active: { label: "启用", variant: "success" },
@@ -3319,13 +3319,13 @@ index 714d6a0..3876871 100644
    const [editTarget, setEditTarget] = useState<KeyRecord | null>(null);
 -  const [editForm, setEditForm] = useState({ rpm: 0, tpm: 0, quota: 0, expires: "" });
 +  const [editForm, setEditForm] = useState({ rpm: 0, tpm: 0, quota: 0, budget: 0, expires: "" });
- 
+
    const refresh = useCallback(() => {
      api
 @@ -88,6 +99,18 @@ export default function Keys() {
      }
    };
- 
+
 +  // 启停(可逆):吊销终态的 key 不允许启停操作(按钮层已隐藏,此处防御)
 +  const toggleDisabled = async (k: KeyRecord) => {
 +    if (!k.id || k.status === "revoked") return;
@@ -3469,7 +3469,7 @@ index bd7f6d9..b6a6dff 100644
 @@ -455,6 +456,7 @@ export default function Pricing() {
        </div>
        <DataList columns={columns} rows={entries} rowKey={(p) => p.alias ?? ""} empty="暂无价目" />
- 
+
 +      <ImagePricing />
        <AlertDialog
          open={removeTarget !== null}
