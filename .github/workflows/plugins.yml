@@ -71,13 +71,13 @@ jobs:
           cd plugins && cargo llvm-cov --workspace --summary-only --fail-under-lines 68
       # 工件仅存档用(无人消费):账号存储配额受限期间上传被拒,不应拖红整个
       # workflow;retention 缩短到 3 天,别让 90 天默认保留占账号 500MB 配额。
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         continue-on-error: true
         with:
           name: pii-masker-wasm
           path: plugins/pii-masker/pii_masker.wasm
           retention-days: 3
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         continue-on-error: true
         with:
           name: json-redactor-wasm
