@@ -162,6 +162,25 @@ func (c OAuthCfg) Declared() bool {
 	return c.AuthorizeURL != "" || c.TokenURL != "" || c.ClientID != "" || c.CallbackURL != ""
 }
 
+// AdminOIDCCfg 木牛 console 的锦官 OIDC RP 声明;空段 = 联邦轨关闭(本地账密/共享令牌
+// 照常)。ClientSecret 可空(公开客户端 + PKCE),非空时支持 ${VAR} 注入。
+type AdminOIDCCfg struct {
+	Issuer       string `yaml:"issuer"`
+	ClientID     string `yaml:"client_id"`
+	ClientSecret string `yaml:"client_secret"`
+	RedirectURL  string `yaml:"redirect_url"`
+}
+
+// Complete 联邦可用前提:issuer/client_id/redirect_url 齐备(端点由发现文档解析)。
+func (c AdminOIDCCfg) Complete() bool {
+	return c.Issuer != "" && c.ClientID != "" && c.RedirectURL != ""
+}
+
+// Declared 是否有任何字段被声明(部分声明的校验依据)。
+func (c AdminOIDCCfg) Declared() bool {
+	return c.Issuer != "" || c.ClientID != "" || c.ClientSecret != "" || c.RedirectURL != ""
+}
+
 // Candidate 是模型路由候选；优先级较小者先尝试，同优先级按权重随机确定起始候选。
 type Candidate struct {
 	Provider string `yaml:"provider"`
@@ -275,6 +294,8 @@ type Config struct {
 	// OAuth OAuth 端点声明(订阅账号授权流与刷新,oauth-subscription-lane 契约);
 	// 空段 = 授权流关闭(手动录入凭据仍可用),声明 oauth 渠道则四字段必齐。
 	OAuth OAuthCfg `yaml:"oauth"`
+	// AdminOIDC 锦官统一身份联邦(admin-operators 契约);部分声明加载期拒绝。
+	AdminOIDC AdminOIDCCfg `yaml:"admin_oidc"`
 	// OutboundProxy 顶层出站代理缺省(http/https);渠道 proxy_url 未声明时回退。
 	// 校验归一后该字段本身不再被下游消费(生效值已物化进各渠道)。
 	OutboundProxy    string                 `yaml:"outbound_proxy"`
@@ -391,6 +412,7 @@ func (c *Config) validate() error {
 	c.validatePricing(add)
 	c.validateSemantic(add)
 	c.validateOutboundProxy(add)
+	c.validateAdminOIDC(add)
 
 	if len(problems) > 0 {
 		return errors.New("配置校验失败(全部列出):\n  - " + strings.Join(problems, "\n  - "))
@@ -680,6 +702,24 @@ func validatePluginEntry(i int, pl PluginCfg, add problemAdder) {
 	}
 	if pl.PoolSize < 0 || pl.PoolSize > 64 {
 		add("plugins[%d](%s) pool_size 须在 1..64,实际 %d", i, pl.Name, pl.PoolSize)
+	}
+}
+
+// validateAdminOIDC 联邦段值域:成套声明、issuer/redirect_url 为绝对 http(s) URL。
+func (c *Config) validateAdminOIDC(add problemAdder) {
+	o := c.AdminOIDC
+	if !o.Declared() {
+		return
+	}
+	if !o.Complete() {
+		add("admin_oidc 段部分声明非法: issuer/client_id/redirect_url 必须成套声明")
+		return
+	}
+	if !isAbsoluteHTTPURL(o.Issuer) {
+		add("admin_oidc.issuer 非法: %q(须为 http(s) 绝对 URL)", o.Issuer)
+	}
+	if !isAbsoluteHTTPURL(o.RedirectURL) {
+		add("admin_oidc.redirect_url 非法: %q(须为 http(s) 绝对 URL)", o.RedirectURL)
 	}
 }
 

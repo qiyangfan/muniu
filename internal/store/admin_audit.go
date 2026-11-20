@@ -51,6 +51,10 @@ func ListAdminAudit(ctx context.Context, db *sql.DB, cursor string, limit int) (
 	if err != nil {
 		return nil, "", err
 	}
+	// 行数不足 limit 即末页:直接返回,越界切片会 panic(小结果集必现)
+	if len(out) <= limit {
+		return out, "", nil
+	}
 	next, err := nextAuditCursor(out[limit:])
 	if err != nil {
 		return nil, "", err

@@ -29,14 +29,37 @@ import Balances from "./pages/Balances";
 import OAuthAccounts from "./pages/OAuthAccounts";
 import Audit from "./pages/Audit";
 
-// 两种登录方式均通过 whoami 恢复会话；会话凭据由 HttpOnly cookie 保存。
+// readOidcError 读取联邦回调失败文案(首渲染即用,避免 effect 内 setState)。
+function readOidcError(): string {
+  return new URLSearchParams(window.location.search).get("oidc_error") ?? "";
+}
+
+// stripOidcError 展示后清除查询参数,避免刷新重复提示。
+function stripOidcError(): void {
+  const params = new URLSearchParams(window.location.search);
+  if (!params.has("oidc_error")) return;
+  params.delete("oidc_error");
+  const qs = params.toString();
+  window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
+}
+
+// 三种登录轨道均以 whoami 恢复会话；会话凭据由 HttpOnly cookie 保存，
+// 锦官联邦整页跳转经 OIDC 授权码 + PKCE，失败回带 oidc_error 查询参数。
 function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [tokenMode, setTokenMode] = useState(false);
   const [token, setLoginToken] = useState("");
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState(readOidcError);
   const [busy, setBusy] = useState(false);
+  const [federation, setFederation] = useState(false);
+  useEffect(() => {
+    api
+      .federationInfo()
+      .then((info) => setFederation(info.enabled))
+      .catch(() => setFederation(false));
+    stripOidcError();
+  }, []);
   const submitLogin = async () => {
     setBusy(true);
     setErr("");
@@ -63,6 +86,27 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
           <CardTitle as="h2">木牛控制台</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {federation && (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                onClick={() => {
+                  // 清掉残留的共享令牌:否则联邦会话过期后会静默回落到旧令牌身份
+                  setToken("");
+                  window.location.href = "/admin/v1/auth/oidc/start";
+                }}
+              >
+                锦官登录
+              </Button>
+              <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
+                <span className="h-px flex-1 bg-border" />
+                或使用本地凭据
+                <span className="h-px flex-1 bg-border" />
+              </div>
+            </>
+          )}
           <form
             className="grid gap-4"
             onSubmit={(e) => {

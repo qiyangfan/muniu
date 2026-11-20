@@ -9,7 +9,7 @@
 ## 2. CI 落点
 
 - [x] 2.1 触发覆盖 `push: branches: [main]` 与 `pull_request`;Action 版本按 handoff §5.0 基准(actions/checkout@v7),不 pin `latest`
-- [ ] 2.2 分支保护 required:将 `security` workflow 的 `secrets` job 设为 main 的 required check(仓库级设置变更,需 owner 授权后执行;当前 main 无 branch protection、无 ruleset)
+- [ ] 2.2 分支保护 required:将 `security` workflow 的 `secrets` job 设为 main 的 required check【阻塞:仓库级设置需 owner 授权;main 无分支保护、CI billing lock 未解,原因未消除】
 
 ## 3. 负向验收
 
@@ -20,5 +20,5 @@
 
 ## Workflow follow-up
 
-- [ ] 分支保护 required 与 PR 创建/推送等 git 与仓库设置写操作,等 owner 逐次授权
-- [ ] 本 change 待 PR 合并后 `openspec archive --skip-specs` 归档
+- [ ] 分支保护 required 与 PR 创建/推送等 git 与仓库设置写操作【阻塞:git/仓库写操作需 owner 逐次授权,原因未消除】
+- [x] 本 change 待 PR 合并后 `openspec archive --skip-specs` 归档【已完成(2026-11-20 复核):change 目录已在 archive/,归档为事实;PR/CI 受 billing lock 阻塞不影响本地归档】

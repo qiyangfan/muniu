@@ -2,6 +2,7 @@
 import type { components } from "./api-types";
 
 export type AdminActor = components["schemas"]["AdminActor"];
+export type FederationInfo = components["schemas"]["FederationInfo"];
 export type AdminAudit = components["schemas"]["AdminAudit"];
 
 export type ImagePricingEntry = components["schemas"]["ImagePricingView"];
@@ -108,6 +109,7 @@ export const api = {
     call<AdminActor>("POST", "/admin/v1/auth/login", { username, password }),
   logout: () => call<{ ok: boolean }>("POST", "/admin/v1/auth/logout"),
   whoami: () => call<AdminActor>("GET", "/admin/v1/auth/whoami"),
+  federationInfo: () => call<FederationInfo>("GET", "/admin/v1/auth/federation"),
   audit: (cursor = "") =>
     call<{ items: AdminAudit[]; next_cursor: string }>(
       "GET",

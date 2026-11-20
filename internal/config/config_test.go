@@ -1213,3 +1213,50 @@ func TestAuthDeclarationViolations_重复账号引用与控制面源(t *testing.
 		t.Fatalf("跨渠道共享账号应零违规: %v", vs)
 	}
 }
+
+func TestAdminOIDC_成套声明与URL值域(t *testing.T) {
+	base := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys:
+      - env: K1
+    weight: 10
+model_routes:
+  alias-a:
+    - { provider: a, model: m, priority: 0 }
+`
+	// 部分声明拒绝
+	_, err := Load(writeTemp(t, base+`
+admin_oidc:
+  issuer: "https://sso.example"
+  client_id: muniu-console
+`))
+	if err == nil || !strings.Contains(err.Error(), "必须成套声明") {
+		t.Fatalf("admin_oidc 部分声明应拒绝: %v", err)
+	}
+	// 非绝对 URL 拒绝
+	_, err = Load(writeTemp(t, base+`
+admin_oidc:
+  issuer: "sso.example"
+  client_id: muniu-console
+  redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
+`))
+	if err == nil || !strings.Contains(err.Error(), "admin_oidc.issuer 非法") {
+		t.Fatalf("admin_oidc.issuer 非绝对 URL 应拒绝: %v", err)
+	}
+	// 完整且合法放行
+	cfg, err := Load(writeTemp(t, base+`
+admin_oidc:
+  issuer: "https://sso.example"
+  client_id: muniu-console
+  redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
+`))
+	if err != nil {
+		t.Fatalf("合法 admin_oidc 应放行: %v", err)
+	}
+	if !cfg.AdminOIDC.Complete() {
+		t.Fatal("admin_oidc 应判定为完整声明")
+	}
+}

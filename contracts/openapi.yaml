@@ -10,8 +10,13 @@ components:
       type: object
       required: [kind, name]
       properties:
-        kind: {type: string, enum: [session, token, login]}
+        kind: {type: string, enum: [session, token, login, federated]}
         name: {type: string}
+    FederationInfo:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: {type: boolean}
     AdminUser:
       type: object
       required: [id, username, status, created_at]
@@ -21,13 +26,15 @@ components:
         status: {type: string, enum: [active, disabled]}
         created_at: {type: string}
         last_login_at: {type: string, nullable: true}
+        origin: {type: string, enum: [local, federated]}
+        external_subject: {type: string}
     AdminAudit:
       type: object
       required: [id, actor_kind, actor_name, action, outcome, created_at]
       properties:
         id: {type: string}
         request_id: {type: string}
-        actor_kind: {type: string, enum: [session, token, login]}
+        actor_kind: {type: string, enum: [session, token, login, federated]}
         actor_name: {type: string}
         action: {type: string}
         target_id: {type: string}
@@ -868,6 +875,27 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/AdminActor"}
+  /admin/v1/auth/federation:
+    get:
+      summary: 锦官联邦入口可用性（登录页据此渲染按钮）
+      responses:
+        "200":
+          description: 联邦是否已配置
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FederationInfo"}
+  /admin/v1/auth/oidc/start:
+    get:
+      summary: 发起锦官 OIDC 授权码 + PKCE 登录（浏览器整页跳转）
+      responses:
+        "302": {description: 跳转锦官授权端点，state/nonce 单次有效}
+        "404": {description: 联邦未配置}
+        "502": {description: 锦官权威不可达}
+  /admin/v1/auth/oidc/callback:
+    get:
+      summary: 锦官 OIDC 回调（state 即持有者凭据，验签后签发本地会话）
+      responses:
+        "302": {description: 回控制台并置会话 cookie；失败带 oidc_error 查询参数}
   /admin/v1/admins:
     get:
       summary: 管理员账号列表

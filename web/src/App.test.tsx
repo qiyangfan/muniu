@@ -7,13 +7,19 @@ const mocks = vi.hoisted(() => ({
   whoami: vi.fn(),
   login: vi.fn(),
   logout: vi.fn(),
+  federationInfo: vi.fn(),
   setToken: vi.fn(),
 }));
 vi.mock("./lib/api", async () => {
   const actual = await vi.importActual<typeof import("./lib/api")>("./lib/api");
   return {
     ...actual,
-    api: { whoami: mocks.whoami, login: mocks.login, logout: mocks.logout },
+    api: {
+      whoami: mocks.whoami,
+      login: mocks.login,
+      logout: mocks.logout,
+      federationInfo: mocks.federationInfo,
+    },
     setToken: mocks.setToken,
   };
 });
@@ -24,6 +30,7 @@ beforeEach(() => {
     .fn()
     .mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() });
   mocks.logout.mockResolvedValue({ ok: true });
+  mocks.federationInfo.mockResolvedValue({ enabled: false });
 });
 afterEach(cleanup);
 
@@ -74,5 +81,46 @@ describe("管理员双轨登录", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("网络连接失败"));
     expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
+  });
+});
+
+describe("锦官联邦登录", () => {
+  it("联邦可用时出现锦官登录入口，回调失败提示回显并清除查询参数", async () => {
+    const { ApiError } = await import("./lib/api");
+    mocks.whoami.mockRejectedValue(new ApiError(401, "登录已过期", "401"));
+    mocks.federationInfo.mockResolvedValue({ enabled: true });
+    window.history.replaceState(
+      null,
+      "",
+      "/console/?oidc_error=" + encodeURIComponent("锦官登录校验失败"),
+    );
+    render(<App />);
+    await screen.findByRole("button", { name: "锦官登录" });
+    expect(screen.getByRole("alert").textContent).toContain("锦官登录校验失败");
+    expect(window.location.search).toBe("");
+    cleanup();
+  });
+  it("点击锦官登录前清除残留令牌，避免跨轨身份回落", async () => {
+    const { ApiError } = await import("./lib/api");
+    mocks.whoami.mockRejectedValue(new ApiError(401, "登录已过期", "401"));
+    mocks.federationInfo.mockResolvedValue({ enabled: true });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "锦官登录" }));
+    expect(mocks.setToken).toHaveBeenCalledWith("");
+  });
+  it("联邦不可用时不渲染入口，本地账密照常", async () => {
+    const { ApiError } = await import("./lib/api");
+    mocks.whoami.mockRejectedValue(new ApiError(401, "登录已过期", "401"));
+    render(<App />);
+    await screen.findByLabelText("用户名");
+    expect(screen.queryByRole("button", { name: "锦官登录" })).toBeNull();
+    expect(screen.getByRole("button", { name: "使用管理令牌登录" })).toBeTruthy();
+  });
+  it("联邦会话经 whoami 恢复并展示锦官实名", async () => {
+    mocks.whoami.mockResolvedValue({ kind: "federated", name: "张三" });
+    render(<App />);
+    await screen.findByText("总览内容");
+    expect(screen.getByText("张三")).toBeTruthy();
+    expect(screen.queryByText("共享管理令牌")).toBeNull();
   });
 });

@@ -35,23 +35,30 @@ type Actor struct {
 // ActorFrom 返回当前运维身份，数据面 API key 不进入本上下文。
 func ActorFrom(ctx context.Context) Actor { a, _ := ctx.Value(actorKey{}).(Actor); return a }
 
-// exemptPaths 豁免管理面鉴权的请求：登录接口与 OAuth 回调（浏览器重定向不带管理凭据）。
+// exemptPaths 豁免管理面鉴权的请求：登录入口与 OAuth 回调（浏览器整页跳转不带管理凭据）。
+// 回调类豁免以 state（不可预测、单次、TTL 内）作持有者凭据，重放/伪造在各自 Flow 被拒。
 func exemptPaths(r *http.Request) bool {
-	if r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login" {
+	if r.Method != http.MethodGet {
+		return r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login"
+	}
+	switch r.URL.Path {
+	case "/admin/v1/oauth/callback", // 订阅账号授权流回调
+		"/admin/v1/auth/federation", // 登录页探测联邦入口是否可用
+		"/admin/v1/auth/oidc/start", // 锦官联邦发起(整页跳转)
+		"/admin/v1/auth/oidc/callback":
 		return true
 	}
-	// OAuth 回调豁免:state(不可预测、单次、TTL 内)即回调的持有者凭据,
-	// 重放/伪造在 Flow.Exchange 被拒——标准 OAuth 回调姿势。
-	return r.Method == http.MethodGet && r.URL.Path == "/admin/v1/oauth/callback"
+	return false
 }
 
-// resolveActor 认证管理面身份：优先管理员会话 cookie，其次共享令牌；失败已写出响应时 ok=false。
+// resolveActor 认证管理面身份：管理员会话 cookie（含锦官联邦签发的会话）、共享令牌；
+// 失败已写出响应时 ok=false。联邦会话按影子账号 origin 归因 federated，名字即锦官实名。
 func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) {
 	actor := Actor{}
 	if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
 		u, err := d.AdminAuth.Session(r.Context(), cookie.Value)
 		if err == nil {
-			actor = Actor{Kind: "session", Name: u.Username}
+			actor = Actor{Kind: actorKindOf(u), Name: u.Username}
 		} else if !errors.Is(err, auth.ErrAdminCredentials) {
 			respondErr(d, w, r, err, "auth_failed")
 			return actor, false
@@ -67,6 +74,14 @@ func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) 
 		return actor, false
 	}
 	return actor, true
+}
+
+// actorKindOf 会话轨归因：联邦影子账号记 federated，本地账号记 session。
+func actorKindOf(u store.AdminUser) string {
+	if u.Origin == "federated" {
+		return "federated"
+	}
+	return "session"
 }
 
 func authOperators(d Deps, next http.Handler) http.Handler {
@@ -108,8 +123,7 @@ func adminLogin(d Deps) http.HandlerFunc {
 			respondErr(d, w, r, err, "auth_failed")
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: token, Path: "/", //nolint:gosec // Secure 随 TLS 动态
-			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: 12 * 60 * 60})
+		setAdminCookie(w, r, token)
 		writeJSON(w, 200, Actor{Kind: "session", Name: u.Username})
 	}
 }
@@ -122,8 +136,7 @@ func adminLogout(d Deps) http.HandlerFunc {
 				return
 			}
 		}
-		http.SetCookie(w, &http.Cookie{Name: adminCookie, Value: "", Path: "/", //nolint:gosec // 同上
-			HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode, MaxAge: -1})
+		clearAdminCookie(w, r)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}
 }
@@ -395,7 +408,8 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 		_ = r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		detail, identity.name = auditSummary(body)
-		if login || actor.Kind == "session" {
+		// cookie 承载的会话(含联邦)一律过 CSRF;令牌轨与登录入口不走浏览器凭证
+		if login || actor.Kind == "session" || actor.Kind == "federated" {
 			if err := csrf.Check(r); err != nil {
 				writeAdminError(aw, r, 403, protocol.TypeAuthFailed, "cross_origin_denied", "不允许跨站管理操作")
 				return

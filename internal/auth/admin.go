@@ -118,6 +118,49 @@ func (s *AdminService) Login(ctx context.Context, username, password string) (st
 	return s.openSession(ctx, u, now)
 }
 
+// LoginFederated 联邦轨:锦官 sub 映射本地影子账号并签发本地会话。身份信任来自 RP
+// 验签后的 id_token,本轨不校验口令;停用账号拒绝,且不因再次登录自动恢复启用。
+func (s *AdminService) LoginFederated(ctx context.Context, subject, name string) (string, store.AdminUser, error) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return "", store.AdminUser{}, ErrAdminCredentials
+	}
+	now := s.now().UTC()
+	u, err := store.ResolveFederatedAdmin(ctx, s.db, uuid.NewV7().String(),
+		subject, federatedUsername(name), now.Format(time.RFC3339))
+	if err != nil {
+		return "", store.AdminUser{}, err
+	}
+	if u.Status != "active" {
+		return "", store.AdminUser{}, ErrAdminCredentials
+	}
+	return s.openSession(ctx, u, now)
+}
+
+// federatedUsername 锦官实名经本地用户名同一值域收敛:控符/换行拒绝,超长按 UTF-8
+// 边界截断;空名兜底固定前缀,避免建出不可辨识账号。
+func federatedUsername(name string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(name) {
+		if r == '\r' || r == '\n' || r == '\t' || r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := strings.TrimSpace(b.String())
+	if !utf8.ValidString(out) {
+		out = ""
+	}
+	for len(out) > 128 {
+		_, size := utf8.DecodeLastRuneInString(out)
+		out = out[:len(out)-size]
+	}
+	if out == "" {
+		return "锦官用户"
+	}
+	return out
+}
+
 // loginMaxFailures 同一用户名连续失败达此数即锁定;锁定窗口固定 15 分钟。
 const (
 	loginMaxFailures = 5

@@ -1,4 +1,5 @@
-// Package admin 承载运维面双轨鉴权与动作审计；账号和共享令牌均未配置时整体关闭。
+// Package admin 承载运维面三轨鉴权（本地会话/共享令牌/锦官 OIDC 联邦）与动作审计；
+// 账号、共享令牌与联邦均未配置时整体关闭。
 // API key 管理接口复用 auth 包的签发与校验逻辑。
 package admin
 
@@ -21,6 +22,7 @@ import (
 	"github.com/solvela/muniu/internal/logging"
 	"github.com/solvela/muniu/internal/metering"
 	"github.com/solvela/muniu/internal/oauth"
+	"github.com/solvela/muniu/internal/oidc"
 	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/store"
@@ -55,11 +57,12 @@ type Deps struct {
 	PricingDir             *metering.PricingDirectory
 	StaticPricing          map[string]StaticEntry
 	RefreshPricing         func() error
-	Plugins                *plugin.Registry // WASM 插件注册表；nil = 端点返回禁用态
-	Balance                *balance.Service // 余额观测服务;nil = 观测未启用,端点返回禁用/空态
-	Health                 *health.Manager  // 上游健康管理器;nil = 观测未启用,端点返回空态
-	AlertWebhookConfigured bool             // webhook_url 是否配置;false 时投递自监控端点返回关闭态
-	OAuthFlow              *oauth.Flow      // OAuth 授权流;nil = oauth 段未声明,授权端点返回关闭态(账号 CRUD 不依赖)
+	Plugins                *plugin.Registry   // WASM 插件注册表；nil = 端点返回禁用态
+	Balance                *balance.Service   // 余额观测服务;nil = 观测未启用,端点返回禁用/空态
+	Health                 *health.Manager    // 上游健康管理器;nil = 观测未启用,端点返回空态
+	AlertWebhookConfigured bool               // webhook_url 是否配置;false 时投递自监控端点返回关闭态
+	OAuthFlow              *oauth.Flow        // OAuth 授权流;nil = oauth 段未声明,授权端点返回关闭态(账号 CRUD 不依赖)
+	Federated              *oidc.RelyingParty // 锦官 OIDC 联邦;nil = admin_oidc 未声明,联邦入口返回关闭态
 
 	Logger *slog.Logger
 }
@@ -76,6 +79,9 @@ var adminRouteTable = []adminRouteEntry{
 	{"POST /admin/v1/auth/login", adminLogin},
 	{"POST /admin/v1/auth/logout", adminLogout},
 	{"GET /admin/v1/auth/whoami", adminWhoami},
+	{"GET /admin/v1/auth/federation", adminFederationInfo},
+	{"GET /admin/v1/auth/oidc/start", adminFederatedStart},
+	{"GET /admin/v1/auth/oidc/callback", adminFederatedCallback},
 	{"GET /admin/v1/admins", adminUsersList},
 	{"POST /admin/v1/admins", adminUsersCreate},
 	{"PATCH /admin/v1/admins/{id}", adminUsersPatch},
@@ -112,12 +118,12 @@ var adminRouteTable = []adminRouteEntry{
 	{"GET /admin/v1/upstream-health", upstreamHealth},
 }
 
-// New 按共享令牌或活跃账号开放管理面，认证装配失败不暴露空壳。
+// New 按共享令牌、活跃账号或锦官联邦开放管理面，认证装配失败不暴露空壳。
 func New(ctx context.Context, d Deps) http.Handler {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
-	if d.Token == "" {
+	if d.Token == "" && d.Federated == nil {
 		active, err := store.HasActiveAdmins(ctx, d.DB)
 		if err != nil {
 			d.Logger.Error("管理员挂载条件查询失败", "error_detail", err.Error())

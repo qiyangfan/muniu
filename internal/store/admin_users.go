@@ -10,13 +10,18 @@ import (
 
 // AdminUser 的哈希永不经 JSON 回显。
 type AdminUser struct {
-	ID           string  `json:"id"`
-	Username     string  `json:"username"`
-	PasswordHash string  `json:"-"`
-	Status       string  `json:"status"`
-	CreatedAt    string  `json:"created_at"`
-	LastLoginAt  *string `json:"last_login_at"`
+	ID              string  `json:"id"`
+	Username        string  `json:"username"`
+	PasswordHash    string  `json:"-"`
+	Status          string  `json:"status"`
+	CreatedAt       string  `json:"created_at"`
+	LastLoginAt     *string `json:"last_login_at"`
+	Origin          string  `json:"origin"`
+	ExternalSubject string  `json:"external_subject,omitempty"`
 }
+
+// adminUserCols 认证域读取列清单;origin 决定会话归因轨(session/federated)。
+const adminUserCols = `id,username,password_hash,status,created_at,last_login_at,origin,coalesce(external_subject,'')`
 
 // CreateAdminUser 用户名冲突以业务错误返回。
 func CreateAdminUser(ctx context.Context, db *sql.DB, u AdminUser) error {
@@ -31,9 +36,9 @@ func CreateAdminUser(ctx context.Context, db *sql.DB, u AdminUser) error {
 // GetAdminUser 按用户名读取，仅认证域消费哈希。
 func GetAdminUser(ctx context.Context, db *sql.DB, username string) (AdminUser, error) {
 	var u AdminUser
-	err := db.QueryRowContext(ctx, `SELECT id,username,password_hash,status,created_at,last_login_at
-		FROM admin_users WHERE username=?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Status, &u.CreatedAt, &u.LastLoginAt)
+	err := db.QueryRowContext(ctx, `SELECT `+adminUserCols+` FROM admin_users WHERE username=?`, username).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Status, &u.CreatedAt, &u.LastLoginAt,
+			&u.Origin, &u.ExternalSubject)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -43,7 +48,8 @@ func GetAdminUser(ctx context.Context, db *sql.DB, username string) (AdminUser, 
 // ListAdminUsers 公开形态不读取哈希。
 func ListAdminUsers(ctx context.Context, db *sql.DB) ([]AdminUser, error) {
 	rows, err := db.QueryContext(ctx,
-		`SELECT id,username,status,created_at,last_login_at FROM admin_users ORDER BY username`)
+		`SELECT id,username,status,created_at,last_login_at,origin,coalesce(external_subject,'')
+		 FROM admin_users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +57,8 @@ func ListAdminUsers(ctx context.Context, db *sql.DB) ([]AdminUser, error) {
 	out := []AdminUser{}
 	for rows.Next() {
 		var u AdminUser
-		if err := rows.Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.LastLoginAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.LastLoginAt,
+			&u.Origin, &u.ExternalSubject); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -154,10 +161,10 @@ func CreateAdminSession(ctx context.Context, db *sql.DB, u AdminUser, hash, crea
 func AdminSession(ctx context.Context, db *sql.DB, hash, now string) (AdminUser, error) {
 	var u AdminUser
 	var expires string
-	err := db.QueryRowContext(ctx, `SELECT u.id,u.username,u.status,u.created_at,u.last_login_at,s.expires_at
+	err := db.QueryRowContext(ctx, `SELECT u.id,u.username,u.status,u.created_at,u.last_login_at,u.origin,s.expires_at
 		FROM admin_sessions s JOIN admin_users u ON u.id=s.user_id
 		WHERE s.token_hash=? AND u.status='active'`, hash).
-		Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.LastLoginAt, &expires)
+		Scan(&u.ID, &u.Username, &u.Status, &u.CreatedAt, &u.LastLoginAt, &u.Origin, &expires)
 	if errors.Is(err, sql.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -183,4 +190,74 @@ func DeleteAdminSession(ctx context.Context, db *sql.DB, hash string) error {
 func CleanAdminSessions(ctx context.Context, db *sql.DB, now string) error {
 	_, err := db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE expires_at<=?`, now)
 	return err
+}
+
+// GetAdminUserBySubject 按锦官权威 sub 读取联邦映射行。
+func GetAdminUserBySubject(ctx context.Context, db *sql.DB, subject string) (AdminUser, error) {
+	var u AdminUser
+	err := db.QueryRowContext(ctx, `SELECT `+adminUserCols+`
+		FROM admin_users WHERE external_subject=?`, subject).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Status, &u.CreatedAt, &u.LastLoginAt,
+			&u.Origin, &u.ExternalSubject)
+	if errors.Is(err, sql.ErrNoRows) {
+		return u, ErrNotFound
+	}
+	return u, err
+}
+
+// ResolveFederatedAdmin 同一 sub 恒映射同一本地管理员:首次登录建号,用户名与既有
+// 账号冲突时以 sub 前缀消歧。并发首登由唯一索引兜底,冲突后回查。
+func ResolveFederatedAdmin(ctx context.Context, db *sql.DB, id, subject, username, now string) (AdminUser, error) {
+	if u, err := GetAdminUserBySubject(ctx, db, subject); err == nil {
+		return u, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return u, err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		name := username
+		if attempt == 1 {
+			name = username + "#" + subjectSuffix(subject)
+		}
+		// 联邦账号不落口令哈希:空哈希使本地账密轨对其恒失败(break-glass 仅限本地账号)
+		if _, err := db.ExecContext(ctx, `INSERT INTO admin_users(id,username,password_hash,status,`+
+			`created_at,origin,external_subject) VALUES(?,?,?,'active',?,'federated',?) ON CONFLICT DO NOTHING`,
+			id, name, "", now, subject); err != nil {
+			return AdminUser{}, err
+		}
+		u, err := GetAdminUserBySubject(ctx, db, subject)
+		if err == nil {
+			return u, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return u, err
+		}
+	}
+	return AdminUser{}, MarkBusiness(fmt.Errorf("联邦管理员建号失败:sub 映射冲突"))
+}
+
+// subjectSuffix 取 sub 末端 8 字符作用户名消歧后缀;sub 为不可信输入,只保留字母数字。
+func subjectSuffix(subject string) string {
+	var sb strings.Builder
+	for i := len(subject) - 1; i >= 0 && sb.Len() < 8; i-- {
+		if isAlphaNum(subject[i]) {
+			sb.WriteByte(subject[i])
+		}
+	}
+	s := sb.String()
+	if s == "" {
+		return "federated"
+	}
+	return reverseBytes(s)
+}
+
+func isAlphaNum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+func reverseBytes(s string) string {
+	b := []byte(s)
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
+	return string(b)
 }

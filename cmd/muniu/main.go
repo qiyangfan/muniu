@@ -33,6 +33,7 @@ import (
 	"github.com/solvela/muniu/internal/metering"
 	"github.com/solvela/muniu/internal/metrics"
 	"github.com/solvela/muniu/internal/oauth"
+	"github.com/solvela/muniu/internal/oidc"
 	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/protocol"
 	"github.com/solvela/muniu/internal/proxy"
@@ -178,18 +179,16 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 
 	verifier, entries := newVerifierAndRoutes(ctx, cfg, db, logger, chatProxy, tpm, sharedBackend)
 
-	// 未配置管理 token 且没有启用管理员账号时关闭管理面。
-	adminToken, adminSvc, err := newAdminContext(ctx, db, logger)
+	// 未配置管理 token、没有启用管理员账号且未声明联邦时关闭管理面。
+	adminHandler, adminToken, refreshPricing, err := adminSurface(ctx, adminWiring{
+		cfg: cfg, db: db, pools: pools, verifier: verifier, logger: logger,
+		balanceSvc: balanceSvc, healthMgr: healthMgr, px: chatProxy, pricingDir: pricingDir,
+		staticImages: staticImages, updateImages: updateImages, staticHuman: staticHuman,
+		pluginReg: pluginReg, oauthFlow: oauthFlow,
+	}, rebuildPricing, cacheInst)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	refreshPricing := func() error { return refreshPricingDirectory(rebuildPricing, pricingDir) }
-	adminHandler := newAdminHandlerWithDeps(ctx, adminWiring{
-		cfg: cfg, db: db, token: adminToken, adminSvc: adminSvc, pools: pools,
-		verifier: verifier, logger: logger, balanceSvc: balanceSvc, healthMgr: healthMgr,
-		px: chatProxy, pricingDir: pricingDir, staticImages: staticImages, updateImages: updateImages,
-		staticHuman: staticHuman, refreshPricing: refreshPricing, pluginReg: pluginReg, oauthFlow: oauthFlow,
-	}, cacheInst)
 
 	root, declared, cleanup := finishAssembly(ctx, cfg, logger, db, pipeline, chatProxy, entries,
 		adminHandler, adminToken, refreshPricing, cacheInst, late, embedKey,
@@ -212,6 +211,20 @@ func newAdminHandlerWithDeps(ctx context.Context, w adminWiring, cache *semantic
 	return newAdminHandler(ctx, buildAdminDeps(w), cache)
 }
 
+// adminSurface 装配管理面:管理 token/活跃管理员/锦官联邦三条件闭合后才挂载,
+// 并回报控制面价目刷新闭包(覆盖写入后重建运行目录)。
+func adminSurface(ctx context.Context, w adminWiring,
+	rebuildPricing func() (map[string]*metering.PricingTable, error), cache *semantic.Cache,
+) (http.Handler, string, func() error, error) {
+	token, svc, err := newAdminContext(ctx, w.cfg, w.db, w.logger)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	refreshPricing := func() error { return refreshPricingDirectory(rebuildPricing, w.pricingDir) }
+	w.token, w.adminSvc, w.federated, w.refreshPricing = token, svc, newFederation(w.cfg, w.logger), refreshPricing
+	return newAdminHandlerWithDeps(ctx, w, cache), token, refreshPricing, nil
+}
+
 // adminWiring 管理面依赖装配输入。
 type adminWiring struct {
 	cfg            *config.Config
@@ -231,6 +244,7 @@ type adminWiring struct {
 	refreshPricing func() error
 	pluginReg      *plugin.Registry
 	oauthFlow      *oauth.Flow
+	federated      *oidc.RelyingParty
 }
 
 // buildAdminDeps 组装管理面依赖。
@@ -248,6 +262,7 @@ func buildAdminDeps(w adminWiring) admin.Deps {
 		RefreshPricing:         w.refreshPricing,
 		Plugins:                w.pluginReg,
 		OAuthFlow:              w.oauthFlow, // nil = oauth 段未声明,授权端点返回关闭态
+		Federated:              w.federated, // nil = admin_oidc 未声明,联邦入口返回关闭态
 	}
 }
 
@@ -292,8 +307,10 @@ func newAdminHandler(ctx context.Context, deps admin.Deps, cache *semantic.Cache
 	return admin.New(ctx, deps)
 }
 
-// newAdminContext 读取管理 token 并构造管理员服务；两者皆缺时管理面关闭。
-func newAdminContext(ctx context.Context, db *sql.DB, logger *slog.Logger) (string, *auth.AdminService, error) {
+// newAdminContext 读取管理 token 并构造管理员服务;token/活跃账号/联邦三者皆缺时管理面关闭。
+func newAdminContext(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) (
+	string, *auth.AdminService, error,
+) {
 	token := os.Getenv("MUNIU_ADMIN_TOKEN")
 	svc, err := auth.NewAdminService(ctx, db)
 	if err != nil {
@@ -303,10 +320,23 @@ func newAdminContext(ctx context.Context, db *sql.DB, logger *slog.Logger) (stri
 	if err != nil {
 		return "", nil, err
 	}
-	if token == "" && !active {
-		logger.Warn("管理令牌与活跃管理员均未配置,管理面与控制台关闭")
+	if token == "" && !active && !cfg.AdminOIDC.Complete() {
+		logger.Warn("管理令牌、活跃管理员与锦官联邦均未配置,管理面与控制台关闭")
 	}
 	return token, svc, nil
+}
+
+// newFederation 按 admin_oidc 声明构造锦官 OIDC RP;未完整声明即关闭联邦轨(零网络开销)。
+func newFederation(cfg *config.Config, logger *slog.Logger) *oidc.RelyingParty {
+	if !cfg.AdminOIDC.Complete() {
+		return nil
+	}
+	rp := oidc.New(oidc.Config{
+		Issuer: cfg.AdminOIDC.Issuer, ClientID: cfg.AdminOIDC.ClientID,
+		ClientSecret: cfg.AdminOIDC.ClientSecret, RedirectURL: cfg.AdminOIDC.RedirectURL,
+	}, nil)
+	logger.Info("锦官 OIDC 联邦已就绪", "issuer", cfg.AdminOIDC.Issuer, "client_id", cfg.AdminOIDC.ClientID)
+	return rp
 }
 
 // startHealth 启用时启动探针循环。

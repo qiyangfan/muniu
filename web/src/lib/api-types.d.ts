@@ -1826,6 +1826,124 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/v1/auth/federation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 锦官联邦入口可用性（登录页据此渲染按钮） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 联邦是否已配置 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FederationInfo"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/auth/oidc/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 发起锦官 OIDC 授权码 + PKCE 登录（浏览器整页跳转） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 跳转锦官授权端点，state/nonce 单次有效 */
+                302: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 联邦未配置 */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 锦官权威不可达 */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/auth/oidc/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 锦官 OIDC 回调（state 即持有者凭据，验签后签发本地会话） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 回控制台并置会话 cookie；失败带 oidc_error 查询参数 */
+                302: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/v1/admins": {
         parameters: {
             query?: never;
@@ -2000,8 +2118,11 @@ export interface components {
     schemas: {
         AdminActor: {
             /** @enum {string} */
-            kind: "session" | "token" | "login";
+            kind: "session" | "token" | "login" | "federated";
             name: string;
+        };
+        FederationInfo: {
+            enabled: boolean;
         };
         AdminUser: {
             id: string;
@@ -2010,12 +2131,15 @@ export interface components {
             status: "active" | "disabled";
             created_at: string;
             last_login_at?: string | null;
+            /** @enum {string} */
+            origin?: "local" | "federated";
+            external_subject?: string;
         };
         AdminAudit: {
             id: string;
             request_id?: string;
             /** @enum {string} */
-            actor_kind: "session" | "token" | "login";
+            actor_kind: "session" | "token" | "login" | "federated";
             actor_name: string;
             action: string;
             target_id?: string;
