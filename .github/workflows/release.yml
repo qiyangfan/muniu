@@ -63,6 +63,6 @@ jobs:
       # SLSA 构建溯源:以 checksums.txt 为 subject 清单,覆盖全部归档与 SBOM;
       # 与 cosign 签名互补(前者证构建过程,后者证产物未篡改)
       - name: attest build provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
