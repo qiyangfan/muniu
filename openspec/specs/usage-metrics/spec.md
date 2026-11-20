@@ -1,6 +1,7 @@
 # usage-metrics Specification
 
 ## Purpose
+
 `/metrics` 运维序列补齐:token 流向、语义缓存判定分布、流式首字节延迟。全部序列从既有内部状态与计量口径导出(零新依赖、零新状态),标签基数受配置界约束;指标禁用时行为与开销逐字节等价于现状。
 
 ## Requirements

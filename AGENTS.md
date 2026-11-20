@@ -123,5 +123,5 @@ muniu.example.yaml 配置样例(真实 muniu.yaml 已 gitignore)
   (2026-10-02 增补 tw-animate-css:随三仓标准件视觉收敛入仓,聚合层宪法 Article 4 同步。)
 - 收尾门禁:`pnpm typecheck && pnpm lint && pnpm lint:css && pnpm knip && pnpm test && pnpm format:check` +
   `pnpm exec vite build --outDir /tmp/dist-check`(禁直接写 web/dist,那是 Go embed 的发布产物)
-  + 裸元素自检 grep(business 代码禁裸 button/input/select/textarea)+ 亮暗两态 ×
+  - 裸元素自检 grep(business 代码禁裸 button/input/select/textarea)+ 亮暗两态 ×
   375/768/1280 走查。

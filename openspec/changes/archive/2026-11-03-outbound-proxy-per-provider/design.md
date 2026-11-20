@@ -9,7 +9,7 @@
 ## 出站面接线
 
 | 出站面 | 现状 client | 改造 |
-|---|---|---|
+| --- | --- | --- |
 | 推理出站 | `proxy.client`(全局单例) | 按渠道查 client 表;直连渠道返回缺省 client |
 | 健康探针 | health 包自建/复用出站 | 装配层按渠道注入(探针本来就要经渠道适配器出站,顺 client 参数传递) |
 | 余额查询 | `balance.balanceHTTP` 全局变量 | Service 增 per-channel client 注入;全局变量退役为缺省值 |

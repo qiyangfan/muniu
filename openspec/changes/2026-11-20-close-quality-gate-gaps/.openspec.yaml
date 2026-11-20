@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-11-20
+goal: 补齐控制台 e2e/体积与文档门禁，SBOM 进 CI，漏洞扫描去路径门控
+skip_specs: true

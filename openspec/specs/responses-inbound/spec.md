@@ -1,6 +1,7 @@
 # responses-inbound Specification
 
 ## Purpose
+
 OpenAI Responses API 入站(无状态翻译 v1,ADR-0012):`POST /v1/responses` 经边缘翻译复用既有转发管道;响应与流式事件反向映射;服务端不存储 response 对象。管道等价性——同一别名的 Responses 请求与等价 chat 请求,在治理/缓存/限流/计量上可观测行为一致。
 
 ## Requirements

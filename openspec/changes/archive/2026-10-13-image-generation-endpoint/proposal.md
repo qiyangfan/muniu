@@ -17,9 +17,11 @@ muniu 的多模态能力目前只在输入侧(四路 lane 的 image 块翻译全
 ## Capabilities
 
 ### New Capabilities
+
 - `image-generation`:images 生成入站通道的行为契约——候选循环与能力探测、per-image 计量行口径、付费生成的换道计费纪律、预算精确预检。
 
 ### Modified Capabilities
+
 - `pricing-management`:价目管理域新增 per-image 价目维度(表形态、YAML 回落、在线改价与热路径即时生效、管理 API 契约与既有 `model_pricing` 同纪律)。
 - `request-cost-budget`:预检闸 Requirement 增补 images 场景——计价形态为精确单价(非 token 估算),超界拒绝语义与 chat 同族。
 

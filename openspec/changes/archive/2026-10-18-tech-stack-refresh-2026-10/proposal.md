@@ -9,6 +9,7 @@
 分四批推进,逐依赖决策与风险证据见 design.md:
 
 **Go 依赖批**
+
 - go-redis v9.22.0 → v9.23.0(无 API breaking;每 Client 默认专属 pipeline 连接池属连接行为变化,冒烟观察)
 - modernc.org/sqlite v1.58.0 → v1.60.1(查询密集 CPU 降耗 + 批量 INSERT 修复,store 层直接受益;libc 随版抬升)
 - miniredis v2.39.0 → v2.40.0(测试域增量,含 synctest 支持)
@@ -17,6 +18,7 @@
 - golangci-lint 2.14 → 2.15.0(mise.toml 与 ci.yml `version` 两处同改;errcheck 1.20→1.30 等大跨度 linter bump 可能出新告警,升完 make check 清零)
 
 **web 前端批**
+
 - 纯 update 批:react/react-dom 19.2.8→19.3.1(+@types 19.3.0)、radix-ui→1.8.1、tailwind-merge→3.7.0、vitest 5.0.5、jsdom 30.1.3、prettier 3.9.10、stylelint 17.16.0、typescript-eslint 8.71.2(tailwindcss 4.3.3 已最新零动作;tw-animate-css 经核查仍必需——`animate-in/out` 不在官方 core)
 - TypeScript ~5.7.2 → ~6.0.x:typescript-eslint 官方支持上限 <6.1.0;本仓 `strict` 已显式、target ES2022、@types 全显式依赖,三大 breaking 天然免疫。**TS 7 本轮明确不上**(typescript-eslint 被 tsgo 阻断,等其 7.1+ 支持再评估)
 - recharts 2.15.4 → 3.10.1(迁移面 = Overview.tsx 单文件 + 图表视觉回归)
@@ -27,6 +29,7 @@
 - pnpm 11.24.0 → 12.14.0(packageManager 字段;本仓 install 全部显式 `--frozen-lockfile`,免疫其主要 breaking)
 
 **CI 一致性批**
+
 - plugins.yml `actions/checkout@v5` → `@v7`(落后两个大版本);release.yml node 22 → 24(与 ci.yml 收敛;node 24 仍 LTS,26 于 2026-10-28 转 LTS 后下轮再议)
 
 **明确不做(本轮,理由见 design.md)**

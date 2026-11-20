@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json.schemastore.org/size-limit.json",
+  "//": "2026-11-20 实测基线:app js 242117 B / css 8116 B(gzip level 9)。limit 即实测字节数(无余量,涨 1 B 即红);新增依赖前先看这里。产物文件名带内容哈希,vite 单入口单 chunk,glob 应恰好命中 1 个文件;scripts/size-gate.mjs 执行。",
+  "size-limit": [
+    {
+      "name": "app js (gzip)",
+      "path": "dist/assets/index-*.js",
+      "gzip": true,
+      "limit": "242117 B"
+    },
+    {
+      "name": "app css (gzip)",
+      "path": "dist/assets/index-*.css",
+      "gzip": true,
+      "limit": "8116 B"
+    }
+  ]
+}

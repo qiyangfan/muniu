@@ -1,6 +1,6 @@
 name: ci
 
-on:
+"on":
   push:
     branches: [main]
   pull_request:
@@ -18,7 +18,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       web: ${{ steps.filter.outputs.web }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
       - id: filter
@@ -49,8 +49,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5  # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -60,7 +60,7 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9
         with:
           # 与 mise.toml 钉死的版本一致:latest 会随上游大版本漂移,门禁不可复现
           # (action 要求 v 前缀的完整版本号)
@@ -91,8 +91,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5  # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -110,24 +110,6 @@ jobs:
             go test ./internal/protocol/ -run='^$' -fuzz="^${target}$" -fuzztime=20s
           done
 
-  vuln:
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      # 版本钉死同 golangci-lint:govulncheck 会随漏洞库与规则演进,latest 不可复现;
-      # 有可达漏洞时退出码 3,直接红
-      - name: govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
-          govulncheck ./...
-
   web-check:
     needs: changes
     # 与 make check 的 web-check 同域:控制台 typecheck/lint 不进 CI,纯 web 改动会带着类型错误绿灯合并
@@ -135,14 +117,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115  # v6
         # 版本经 web/package.json 的 packageManager 字段钉死:pnpm 9 不认识
         # pnpm-workspace.yaml 的 allowBuilds(pnpm 11 字段)会报 packages field missing;
         # action 默认只读仓库根 package.json,须显式指向 web/
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           node-version: 24
           cache: pnpm
@@ -179,10 +161,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          fetch-depth: 0 # 提交信息检查需要 PR 基线;pre-commit 全文件扫描亦依赖完整工作树
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+          fetch-depth: 0  # 提交信息检查需要 PR 基线;pre-commit 全文件扫描亦依赖完整工作树
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5  # v7
         with:
           go-version-file: go.mod
           cache: true
@@ -214,6 +196,9 @@ jobs:
           curl -sSfL "https://github.com/goreleaser/goreleaser/releases/download/v${VERSION}/goreleaser_Linux_x86_64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin goreleaser
           goreleaser check
+      # 文档结构与排版(中文行宽 120;.zcode 等工具生成目录由配置排除)
+      - name: markdownlint
+        run: npx --yes markdownlint-cli2@0.24.1 "**/*.md"
       # 文档本地链接与锚点(零网络依赖;http 外链不在此检)
       - name: doc links
         run: python3 scripts/linkcheck.py

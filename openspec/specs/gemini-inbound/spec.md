@@ -1,6 +1,7 @@
 # gemini-inbound Specification
 
 ## Purpose
+
 Gemini 原生 REST 入站:`POST /v1beta/models/{model}:generateContent`(及 `:streamGenerateContent?alt=sse`)经边缘翻译复用既有管道(ADR-0012/0013 同款架构),让说 Gemini 协议的客户端(genai SDK、gemini-cli 等)只改 base_url 即可经 muniu 使用任意出站上游——无需真实 Gemini key。
 
 ## Requirements

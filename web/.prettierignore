@@ -2,3 +2,6 @@ dist
 pnpm-lock.yaml
 src/lib/api-types.d.ts
 coverage
+test-results
+playwright-report
+coverage/jscpd-report

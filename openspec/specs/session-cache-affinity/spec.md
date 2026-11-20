@@ -1,6 +1,7 @@
 # session-cache-affinity Specification
 
 ## Purpose
+
 chat/messages 入站的会话级缓存亲和:同会话在 stick 候选健康时稳定命中同渠道/key,保住上游前缀缓存(多轮 Agent 流量最大成本杠杆)。身份=自报头>apiKeyID+首条 user 消息哈希(归属隔离);worth 闸门(缓存读>0)建粘、失败即清、冷却让位保留;熔断收缩>池冷却/禁用/欠费>亲和>WRR,亲和零新增候选与重试。
 
 ## Requirements

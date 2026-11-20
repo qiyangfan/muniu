@@ -26,6 +26,7 @@
 2. **幂等靠原地收敛天然达成**:drop 已删字段=无操作,clamp 已收敛值=同值;attempt 重试从入站原请求出发的现有行为不变,治理重复执行无叠加效应,无副本开销。
 3. **能力条目键 = (provider, model) 二元组,必填,不做通配**:显式、可审计;模型名跨 provider 冲突时零歧义。少一行声明换掉一整套通配语义,值。
 4. **YAML 形态(示意,字段微调为实现级)**:
+
    ```yaml
    models:
      - { provider: deepseek, model: deepseek-reasoner,
@@ -33,6 +34,7 @@
      - { provider: dashscope, model: qwen-vl-max, max_output_tokens: 8192 }
    strict_governance: false   # 全局开关,默认宽松
    ```
+
 5. **协议规则不入目录**:anthropic thinking 模型 temperature 必须为 1 之类「协议对全体思考模型的规则」归 bridge(它本来就在做形态映射);目录只收「单模型个性」。分界口诀进宪法(upstream-adapters.md),代码评审据此归层。
 6. **留痕双通道**:日志走既有 access log 旁路结构化字段(request_id/provider/model/param/action/原值);响应头 `X-Muniu-Normalized`(逗号列参数名)在响应写头阶段注入,流式首字节前可写,无兼容问题。
 7. **strict 语义 = 干预点前移为拒绝**:同一套约束解析,strict 时不再改写而是按统一错误信封返回 400;实现上是一处分支,不是两套逻辑。

@@ -1,6 +1,7 @@
 # protocol-native-passthrough Specification
 
 ## Purpose
+
 同构协议直通路由:入站协议与候选的原生协议一致时,出站使用客户端原始请求体、响应原样返回,消除同构流量的双重翻译保真损失;翻译只属于跨协议对——协议平等,chat 非特权 wire 形态,canonical 仅作控制面内部键。控制面(治理/缓存/限流/计量/插件)语义不变。
 
 ## Requirements

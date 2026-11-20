@@ -1,6 +1,7 @@
 # anthropic-bridge Specification
 
 ## Purpose
+
 Anthropic 桥接对工具多轮流量的显式边界:多轮中途标记(请求含 `role=tool` 或 assistant 带 `tool_calls`)的请求,桥接候选按适配性豁免处理——多候选别名换道跳过,仅桥接可达时返回自解释终态信封。消除「原样透传让上游 400 再以 upstream_error 冒出」的不诚实失败模式;首轮 tools 声明不受影响(响应侧翻译完整)。
 
 ## Requirements

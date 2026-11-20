@@ -7,7 +7,7 @@
 OpenAI 兼容是国产大模型 API 的「普通话」,但 usage 字段恰恰是大家各说方言的地方。muniu 归一化表(upstream-adapters.md,2026-09 官方文档核对)里最典型的三行:
 
 | 统一字段 | OpenAI | DeepSeek | Kimi/Moonshot |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | cached_tokens | `prompt_tokens_details.cached_tokens` | **顶层** `prompt_cache_hit_tokens` | **顶层** `cached_tokens` |
 | reasoning_tokens | `completion_tokens_details.reasoning_tokens` | 同 OpenAI(已确认存在) | —(计入 completion) |
 | 流式 usage 帧 | `stream_options.include_usage` 后,[DONE] 前空 choices 帧 | 同 OpenAI | 同 OpenAI,**不开就没有**(估算兜底路径) |
@@ -54,7 +54,7 @@ Phase 3 加入缓存价后扩为三段:`ceil(未命中输入×input) + ceil(缓�
 ## 一组值得记住的对照
 
 | 家 | 缓存命中字段 | 流式 reasoning | usage 缺失风险 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | OpenAI | details 嵌套 | (reasoning 模型) | 低(include_usage 稳定) |
 | DeepSeek | 顶层 hit/miss 分列 | reasoning_content,与 content 逐帧互斥 | 低 |
 | Kimi | 顶层 cached_tokens | 思考模型才有 | **高:缺省配置流式无 usage** |

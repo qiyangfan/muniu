@@ -6,7 +6,7 @@ muniu 的样例插件与插件 SDK。ABI v0 契约(冻结)见 `docs/design/plugi
 ## 成员
 
 | crate | 类型 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | `sdk`(muniu-plugin-sdk) | 库 | ABI v0 机制层:6 导出生成、双 arena 代际回收、两段式配置读取、日志透传;**unsafe 全部收口于此**,插件作者零 unsafe |
 | `pii-masker` | 插件 | 内容扫描:正则规则脱敏自由文本(身份证/手机号/邮箱,可自定义) |
 | `json-redactor` | 插件 | 结构定向:JSON Pointer 字段级删除/替换(与内容扫描正交的定位机制) |
@@ -22,7 +22,7 @@ rustup target add wasm32-unknown-unknown   # 首次
 产物落位到各插件目录(文档与 muniu.yaml 样例引用的稳定路径):
 
 | 产物 | 注册路径 |
-|---|---|
+| --- | --- |
 | `pii-masker/pii_masker.wasm` | `./plugins/pii-masker/pii_masker.wasm` |
 | `json-redactor/json_redactor.wasm` | `./plugins/json-redactor/json_redactor.wasm` |
 

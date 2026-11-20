@@ -30,7 +30,7 @@ kongming 的 agent 面直接持有各上游供应商的 API key(DeepSeek/Moonsho
 ## 否决清单(备选方案为何不选)
 
 | 备选 | 否决理由 |
-|---|---|
+| --- | --- |
 | 维持直连(现状) | 上述三项持续成本不消失;多上游故障语义永远缺失 |
 | one-api | 无 arm64 官方镜像;无首 token 边界语义;无 conformance 测试集;配额模型与我们的整数 credit 口径不一致 |
 | LiteLLM proxy | Python 运行时,与单二进制零依赖运维诉求冲突;代理层性能与内存开销更高 |

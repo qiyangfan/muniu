@@ -9,7 +9,7 @@
 ## 已证实并修复
 
 | 编号/严重度 | 位置 | 问题 | 修法与证明 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 缺陷 | internal/protocol/images.go · ParseImageRequest | Go 结构体反序列化把未知大写 N/Size/Quality 当计价字段，转发体与扣费口径分离 | 仅读取精确标准键，保留 Raw；TestImages_计价只消费标准字段先红后绿 |
 | 2 缺陷 | internal/proxy/metering.go · preflightBudgetExceeded/budgetCost | max_tokens 极值使乘积回绕，绕过预算并调用上游 | bits 宽乘积、逐段 ceil、检查最终可表示范围；极大上界用例及 255 组 big.Int 对拍通过 |
 | 3 缺陷 | internal/proxy/metering.go · record | 中断前只有输入 usage 时，已生成输出漏账且未标估算 | 字段级补齐缺失输出、保留输入真值；TestCostBudget_输入usage不能吞掉中断输出通过 |
@@ -33,7 +33,7 @@
 单一结论：chat 编排路径使用请求入口有效价目，预算与落账共用不可变快照。旧实现的完成时刻重读会让相同请求随运行期间改价而重新定价；这不是保持外部契约的充分理由，但改动必须获得授权。本轮已明确说明影响，owner 回复“你自己决定”后实施。
 
 | 维度 | 原完成时刻读取 | 请求入口快照（采用） |
-|---|---|---|
+| --- | --- | --- |
 | 复杂度 | 预检/attempt/record 分别读取，跨阶段口径分离 | 在既有 meterState 保存 Pricing 值及是否已选定，候选共享；常数复杂度 |
 | 性能 | 同一请求重复 Load/At；逐帧预算本身已有计数 | 一次 Load/At，无锁或数据库查询增加，复制既有小值对象 |
 | 兼容性 | 运行期间改价或跨窗时按结束价 | API/schema/credit 精度不变；仅这些在途 chat 请求按入口价，新请求仍立即使用新价 |

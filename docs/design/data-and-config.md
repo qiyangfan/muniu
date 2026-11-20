@@ -3,7 +3,7 @@
 ## 分工边界(ADR-0004)
 
 | 类别 | 载体 | 例 |
-|---|---|---|
+| --- | --- | --- |
 | 静态拓扑(部署即定,git 可审计) | `muniu.yaml` | providers/model_routes/pricing/超时 |
 | 运行态(运行中增删改) | 内嵌 SQLite | tenants/api_keys/usage_logs/(Phase 4)语义缓存 |
 | 秘密 | 环境变量 | provider keys(YAML/DB 只存引用名) |

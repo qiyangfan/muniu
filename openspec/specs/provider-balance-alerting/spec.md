@@ -1,6 +1,7 @@
 # provider-balance-alerting Specification
 
 ## Purpose
+
 渠道上游余额的运营观测与主动告警:按渠道从多源查询真实余额(官方 Bearer 接口、云账务签名接口、手动录入),结合网关自身计量外推剩余可用时间,在余额低于绝对阈值或剩余时间穿越档位时经 webhook 主动通知——把上游欠费导致的业务中断提前为预算式运维。
 
 ## Requirements

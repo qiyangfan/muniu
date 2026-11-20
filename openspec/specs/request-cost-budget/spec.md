@@ -1,6 +1,7 @@
 # request-cost-budget Specification
 
 ## Purpose
+
 单请求粒度的成本闸:预检拒绝必然超预算的请求(上游零调用),流式中断失控生成(已发生部分如实计量),把成本治理从「事后对账」前移到「事中拦截」。预算挂在 key 治理面,0=不限(现状等价,零回归)。
 
 ## Requirements

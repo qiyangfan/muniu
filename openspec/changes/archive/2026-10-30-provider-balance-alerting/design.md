@@ -11,7 +11,7 @@
 上游余额 API 调研结论(官方文档/源码核实,2026-10-29):
 
 | kind | 端点(base_url 同源) | 凭证 | 余额解析 | 币种 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `deepseek` | GET `/user/balance` | 渠道 key Bearer | `balance_infos[].total_balance`(十进制串) | 响应携带 CNY/USD |
 | `moonshot` | GET `/v1/users/me/balance` | 渠道 key Bearer | `data.available_balance`(数值,含代金券) | CNY |
 | `siliconflow` | GET `/v1/user/info` | 渠道 key Bearer | `data.totalBalance`(十进制串,充值+赠送;不用 `balance` 赠送口径) | CNY |

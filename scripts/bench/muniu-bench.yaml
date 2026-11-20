@@ -1,7 +1,11 @@
 # 压测配置：上游指向本机的 fake_upstream.py。
 server:
   addr: "127.0.0.1:8787"
-  timeouts: { dial: 2, first_token: 120, chunk_idle: 60 }
+  # 首 token 超时放宽到窗口余量两倍,避免 fake 上游调度抖动误判超时
+  timeouts:
+    dial: 2
+    first_token: 120
+    chunk_idle: 60
 log:
   level: warn
   format: json
@@ -12,7 +16,7 @@ providers:
   - name: fake
     adapter: openai
     base_url: "http://127.0.0.1:59990"
-    keys: [ { env: BENCH_FAKE_KEY } ]
+    keys: [{env: BENCH_FAKE_KEY}]
     weight: 10
 model_routes:
   bench-alias:

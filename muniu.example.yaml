@@ -162,7 +162,7 @@ pricing:
   deepseek-chat:
     currency: USD
     input: 0.44        # $0.44 / 百万输入 Token(峰时,缓存未命中)
-    cached_input: 0.014 # $0.014 / 百万缓存命中输入(峰时);缺省=input
+    cached_input: 0.014  # $0.014 / 百万缓存命中输入(峰时);缺省=input
     # vision_input: 0.88 # 视觉输入单价/百万 token；缺省时同 input
     output: 1.32       # $1.32 / 百万输出 Token(峰时)
     # 可选时段倍率；按声明顺序匹配，支持跨午夜。

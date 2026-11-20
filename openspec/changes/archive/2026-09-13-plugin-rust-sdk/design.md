@@ -29,7 +29,7 @@ muniu_plugin_sdk::plugin! {
 ## 决策 3:plugin_start 错误码映射保持原语义(宿主可见行为零变化)
 
 | 退出码 | 语义 | 来源 |
-|---|---|---|
+| --- | --- | --- |
 | 0 | 初始化成功 | — |
 | 1 | init 返回 Err(坏配置/坏规则) | 拒载,不允许静默降级(与现行一致) |
 | 2 | 重复 plugin_start | 实例已初始化,防御 |
@@ -42,7 +42,7 @@ muniu_plugin_sdk::plugin! {
 与 pii-masker 的机制正交性(证明 SDK 抽象普适的关键):
 
 | | pii-masker | json-redactor |
-|---|---|---|
+| --- | --- | --- |
 | 定位方式 | 内容扫描(正则命中即替换) | 结构定向(JSON Pointer 精确路径) |
 | 输入抽象 | 字符串值逐个过规则 | 树上定位后整值操作 |
 | 典型场景 | 自由文本里的身份证/手机号/邮箱 | 已结构化字段(`metadata.user_id`、`messages/*/name`) |

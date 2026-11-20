@@ -4,14 +4,13 @@
 
 `muniu.cluster.yaml` 已配 `ratelimit.backend: redis`(compose 内含 redis 服务):RPM/TPM 计数跨副本共享,消除实例独立计数的 ×N 松弛;redis 不可达时各副本自动降级实例自治并告警,恢复后自动回共享视图(宁有弱限制,勿无限制)。日配额的全局权威仍由控制面 ingest 聚合承担。
 
-
 > 参考样例而非生产清单:两副本 muniu(无状态)+ nginx 轮询 LB + 控制面(锦官/任意
 > 实现下述契约端点的服务)。镜像以两仓实际发布渠道为准,或经根 `Containerfile` 构建。
 
 ## 工件清单
 
 | 文件 | 用途 |
-|---|---|
+| --- | --- |
 | [docker-compose.cluster.yml](docker-compose.cluster.yml) | compose/podman compose 一键起 LB + 双副本 + 锦官 |
 | [nginx.conf](nginx.conf) | LB 配置(SSE 三件套:清 Connection 头 / 关 buffering / 长读超时) |
 | [muniu.cluster.yaml](muniu.cluster.yaml) | cluster 形态 muniu 配置(三管子指向锦官真实端点) |
@@ -25,7 +24,7 @@ compose 用法:本目录放 `.env`(`DEEPSEEK_API_KEY_1` / `MUNIU_ADMIN_TOKEN` /
 ## 控制面对接契约(锦官已实现端点;联调实录 2026-09-13)
 
 | 管子 | 端点(锦官) | muniu 侧配置 | 认证 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 价目下发 | `GET /control/v1/pricing` | `control_plane.pricing_url` | 无认证头(部署网络隔离保护,现实契约;拉取认证为双方演进项) |
 | key 吊销 | `GET /control/v1/key-revocations` | `auth.revocations_url` | 同上 |
 | 计量 ingest | `POST /ingest/usage` | `metering.sink: ingest` + `ingest_url` | Bearer 独立静态 token(`${VAR}` 展开) |

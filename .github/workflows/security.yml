@@ -1,10 +1,13 @@
 name: security
 
 # 安全作业独立于 ci.yml:ci.yml 按路径裁剪(fail-open),放在里面会被路径过滤静默跳过。
-on:
+"on":
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # 每周一 11:23(UTC+8):无代码变更也能发现新披露漏洞与新增规则命中。
+    - cron: "23 3 * * 1"
 
 permissions:
   contents: read
@@ -14,12 +17,49 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
-          fetch-depth: 0 # gitleaks 扫全历史,浅克隆会漏掉既有提交
+          fetch-depth: 0  # gitleaks 扫全历史,浅克隆会漏掉既有提交
       - name: gitleaks
         run: |
           VERSION=8.30.1
           curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
             | sudo tar -xz -C /usr/local/bin gitleaks
           gitleaks detect --source . --redact --verbose --exit-code 1
+
+  deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5  # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      # 版本钉死同 golangci-lint:govulncheck 会随漏洞库与规则演进,latest 不可复现;
+      # 有可达漏洞时退出码 3,直接红。安全作业不做路径裁剪,保证 web-only 变更也会跑。
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+          govulncheck ./...
+
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          persist-credentials: false
+      - name: syft
+        run: |
+          VERSION=1.57.2
+          curl -sSfL "https://github.com/anchore/syft/releases/download/v${VERSION}/syft_${VERSION}_linux_amd64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin syft
+          syft dir:. -o cyclonedx-json=sbom.cdx.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom.cdx.json
+          path: sbom.cdx.json
+          retention-days: 30

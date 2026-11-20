@@ -16,6 +16,7 @@
 ## Capabilities
 
 ### New Capabilities
+
 - `admin-operators`:管理面身份与审计契约——本地管理员账号生命周期、会话认证与 token 双轨兼容、登录硬化纪律、管理动作审计归因与查询。
 
 ### Modified Capabilities

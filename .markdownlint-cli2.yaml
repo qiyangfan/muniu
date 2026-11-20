@@ -1,0 +1,40 @@
+# markdownlint-cli2 配置:全仓 Markdown 的结构与排版门禁。
+# 入口:Makefile 的 docs-lint 与 CI infra-lint 作业(npx 取钉版 markdownlint-cli2)。
+# 纪律:规则默认从严;确需放宽的逐条在此写原因,不按路径静默豁免。
+config:
+  # 行宽不做机器强制:中文长段与 URL 存量多,强制折行只会制造 churn;
+  # 结构类规则(标题/围栏/列表/表格)仍执法。
+  MD013: false
+  # openspec 规格在不同 Requirement 下重复出现同名 Scenario 是结构常态,
+  # markdownlint 的嵌套判定无法表达;重复标题不视为错误。
+  MD024: false
+  MD033:
+    # 允许必要的 HTML:徽章、折叠块、文档内锚点;其余行内 HTML 一律报错
+    allowed_elements: [a, br, details, summary, sub, sup, kbd, img, source, picture, provider]
+  MD041:
+    # 首行标题必须是 H1;规格文件以 front matter 起也适用
+    level: 1
+  # 存量围栏缺语言标注的图示较多;语言标注由评审把关,不做机器强制。
+  MD040: false
+  MD046:
+    # 代码块风格统一为围栏;历史缩进式块已批量改写
+    style: fenced
+  MD048:
+    code_fence_style: backtick
+  MD049:
+    emphasis_style: underscore
+  MD050:
+    strong_style: asterisk
+  MD060: false
+
+# 检查范围由命令行 glob 决定;这里排除构建产物与第三方生成内容
+ignores:
+  - ".zcode/**" # 工具生成的命令/Skill 文档,不属于项目文档资产
+  - "openspec/changes/archive/**" # 归档变更不做回溯整改
+  - "docs/acceptance/**" # 历史验收记录,不改写
+  - "web/node_modules/**"
+  - "web/dist/**"
+  - "web/coverage/**"
+  - ".playwright-mcp/**"
+  - "docs/benchmarks/raw-*/**"
+  - "HANDOFF.md"

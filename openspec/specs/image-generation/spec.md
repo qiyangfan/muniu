@@ -1,6 +1,7 @@
 # image-generation Specification
 
 ## Purpose
+
 images 生成入站通道的行为契约:OpenAI 兼容同步 `/v1/images/generations` 经多候选出站,per-image 计价与计量行口径,付费非幂等生成的换道计费纪律。audio 生成(二进制流/multipart)不在本能力域。
 
 ## Requirements

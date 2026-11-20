@@ -1,6 +1,6 @@
 name: release
 
-on:
+"on":
   push:
     tags: ["v*"]
 
@@ -21,20 +21,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5  # v7
         with:
           go-version-file: go.mod
           cache: true
       # 控制台必须先于 goreleaser 构建:go:embed 静态嵌入 dist,缺步会发布出空壳控制台的二进制
       # pnpm 版本经 web/package.json 的 packageManager 字段钉死(与本地/ci 一致);
       # action 默认只读仓库根 package.json,须显式指向 web/
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115  # v6
         with:
           package_json_file: web/package.json
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7
         with:
           # 与 ci.yml 收敛同一 LTS 线(node 26 于 2026-10-28 转 LTS 后另行评估)
           node-version: 24
@@ -55,7 +55,7 @@ jobs:
           curl -sSfL "https://github.com/sigstore/cosign/releases/download/v3.1.4/cosign-linux-amd64" \
             -o /tmp/cosign
           sudo install -m 755 /tmp/cosign /usr/local/bin/cosign
-      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de  # v7
         with:
           args: release --clean
         env:
@@ -63,6 +63,6 @@ jobs:
       # SLSA 构建溯源:以 checksums.txt 为 subject 清单,覆盖全部归档与 SBOM;
       # 与 cosign 签名互补(前者证构建过程,后者证产物未篡改)
       - name: attest build provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
         with:
           subject-checksums: dist/checksums.txt

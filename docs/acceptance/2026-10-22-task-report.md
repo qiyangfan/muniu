@@ -5,7 +5,7 @@
 按[冻结快照](2026-10-22-task-snapshot.md)，工作集合为 OpenSpec change `dashscope-multimodal-embeddings` 的 1.1–1.9，以及 HANDOFF 关联的 Phase 0 T0.9、Phase 5 T5.2 和 T5.6。OpenSpec change 已归档至 `openspec/changes/archive/2026-10-22-dashscope-multimodal-embeddings/`，同步更新主规格。
 
 | 条目 | 终态 | 关键结果 |
-|---|---|---|
+| --- | --- | --- |
 | 1.1 | 完成并验证 | 原生请求 DTO、路由模型解析、必填字段校验与原始 JSON 保留；Qwen 独立/融合和 Tongyi 多图 fixture。 |
 | 1.2 | 完成并验证 | 新增 provider 原生 URL 配置及校验，贯通 YAML、SIGHUP 和控制面 topology 快照原子替换。 |
 | 1.3 | 完成并验证 | 新增可选多模态出站能力；Qwen/DashScope 适配器使用显式原生 URL、Bearer key 和原生路径，只改写顶层 model。 |
@@ -24,7 +24,7 @@
 本次选择显式 `vision_tokens` 与 `vision_input` 字段，将图像/视频作为一个视觉计价段；没有建设任意 modality-rate map 或价目子表。
 
 | 维度 | 当前视觉字段方案 | 可行的通用 modality 价目表方案 |
-|---|---|---|
+| --- | --- | --- |
 | 复杂度 | 在现有固定 token 价目和计量结构上增加一个明确字段，热路径直接做有限段整数计算。 | 需要模态注册/键值解析或子表查询，并让管理 API、OpenAPI、控制台支持动态行与未知类型治理。 |
 | 性能 | 固定字段读取，无额外映射查询；对现有文本请求保持原公式。 | 小型 map 查询本身成本不大，但不会改善本次热路径；任意模态处理还需迭代各段。 |
 | 兼容性 | 迁移为加列且默认 0，未配置视觉价回落 input；旧配置和纯文本请求保持兼容。 | 需要从现有 input/cached/output 价目双读或回填，明确未知模态和旧客户端序列化行为。 |
@@ -36,14 +36,14 @@
 ## 验证证据
 
 | 命令 | 结果 |
-|---|---|
+| --- | --- |
 | `openspec validate dashscope-multimodal-embeddings --strict` | 通过；归档前 change 校验有效。 |
 | `openspec archive dashscope-multimodal-embeddings --yes` | 成功；新增 `native-multimodal-embeddings` 主规格并更新计量、状态同步和价目规格。 |
 | `openspec validate --all --strict` | 23/24 通过。唯一失败是既存 `openspec/specs/protocol-native-passthrough/spec.md` 的 `requirements[3]` 超过 500 字警告。该规格不在冻结工作集合内，未为清理它扩展范围。 |
 | `PATH=/tmp/gclbin:$PATH make check` | 通过：Go vet、golangci-lint 0 issues、web typecheck/lint/lint:css/format、Vitest 7 files/16 tests、Go 全包 race tests；coverage gate 70.7%。裸 PATH 首次使用旧 golangci 2.13.0 时复现 Go stdlib 导出格式不兼容，按 HANDOFF 用当前 Go 临时构建 v2.15.0 后全门禁通过。 |
 | `make build` | 通过，静态 muniu 构建完成。 |
 | `pnpm exec vite build --outDir /tmp/dist-check` | 通过；Vite 提示一个压缩后超过 500 kB 的 chunk，不影响构建。 |
-| `rg -n -P --glob '!**/components/ui/**' '<(button|input|select|textarea)(\s|>)' web/src` | 无命中，业务层未发现裸交互元素。 |
+| `rg -n -P --glob '!**/components/ui/**' '<(button | input | select | textarea)(\s | >)' web/src` | 无命中，业务层未发现裸交互元素。 |
 | `git diff --check` | 报告与 HANDOFF 更新后执行，检查通过。 |
 
 DashScope 真上游 smoke 未运行；该检查保留在手动档，不作为 CI 验收。

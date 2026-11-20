@@ -1,6 +1,7 @@
 # native-multimodal-embeddings Specification
 
 ## Purpose
+
 通过百炼原生多模态向量 API 透传 `qwen3-vl-embedding` 与 `tongyi-embedding-vision-flash`，使视觉与文本 embedding 请求在共享鉴权、治理、换道和计量链路下保留供应商 wire 语义。
 
 ## Requirements

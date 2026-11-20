@@ -1,0 +1,44 @@
+# yamllint 配置(2026-11-20 起;与 .editorconfig 的 2 空格缩进、LF 换行、去尾随空白同口径)
+# 入口:Makefile 的 infra-lint 与 CI infra-lint 作业。
+# 行宽 120(与 markdownlint 同一口径)暂未启用:存量超宽行集中在契约描述与远端 URL,
+# 断行会改变可读性,登记为下一批逐条处理(见 openspec 2026-11-20-close-quality-gate-gaps)。
+extends: default
+
+rules:
+  line-length: disable
+
+  # 本仓习惯:文件头直接写注释,不写 --- 起始标记(openspec/.openspec.yaml 亦如此)
+  document-start: disable
+
+  # 注释与内容同级缩进、# 后留一个空格
+  comments:
+    min-spaces-from-content: 1
+    require-starting-space: true
+
+  # 单行 flow mapping 在契约里是刻意的紧凑写法(`{ type: string }`);
+  # 只禁止括号内多余空格,不强制块式
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 0
+  commas:
+    max-spaces-before: 0
+    min-spaces-after: 1
+
+  # 注释缩进不是解析问题,本仓多处用对齐注释排版,不做一致性约束
+  comments-indentation: disable
+
+  empty-lines:
+    max: 2
+    max-start: 0
+    max-end: 1
+
+  # 只接受小写 true/false:Go/Python/JS 的 YAML 解析器对 yes/no/on/off 解释不一;
+  # workflow 顶层 on: 已按 yaml 1.1 语义加引号,不受此规则影响
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false

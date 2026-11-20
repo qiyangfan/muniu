@@ -1,6 +1,7 @@
 # admin-operators Specification
 
 ## Purpose
+
 管理面身份与审计契约:本地管理员账号生命周期、三轨鉴权(本地会话/共享令牌/锦官 OIDC 联邦)、登录硬化纪律、管理动作审计归因与查询、控制面失联降级。把「共享令牌零归因」的运维面升级为「可追责」,同时不破坏既有 Bearer token 契约。
 
 ## Requirements

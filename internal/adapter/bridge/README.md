@@ -7,7 +7,7 @@
 ## 请求(OpenAI → Anthropic)
 
 | OpenAI 形态 | Anthropic 形态 | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | `Authorization: Bearer <key>` | `x-api-key: <key>` + `anthropic-version: 2023-06-01` | 鉴权头重写 |
 | `messages[role=system/developer]` | 顶层 `system`(多条 `\n\n` 拼接) | system 提升 |
 | `messages[user/assistant]` | `messages`(纯文本 content 折叠为字符串;工具上下文为块数组) | 连续同角色合并(纯文本 `\n\n` 连接、工具上下文块级合并;Anthropic 要求交替) |
@@ -24,7 +24,7 @@
 ## 非流式响应(Anthropic → OpenAI)
 
 | Anthropic | OpenAI |
-|---|---|
+| --- | --- |
 | `id` / `model` | `id` / `model`(原样透出) |
 | `content[type=text]` 拼接 | `choices[0].message.content` |
 | `content[type=thinking]` | `message.reasoning_content`(非标准扩展字段,便于客户端展示) |
@@ -35,7 +35,7 @@
 ## 流式事件机(Anthropic SSE → OpenAI chunk)
 
 | Anthropic 事件 | OpenAI 翻译 | meta |
-|---|---|---|
+| --- | --- | --- |
 | `message_start`(usage.input_tokens/cache_read) | usage 帧 `{choices:[],usage:{prompt_tokens,cached_tokens}}` | IsUsage |
 | `content_block_start(tool_use)` | 首个 tool_calls delta `{index,id,type:function,function:{name,arguments:""}}`(index=块序号) | HasContent |
 | `content_block_start(text 等)` / `content_block_stop` / `ping` | 不产出(对客户端不可见) | — |

@@ -6,7 +6,7 @@
 ## 核对范围与结论
 
 | 设计文档 | 结论 | 处理 |
-|---|---|---|
+| --- | --- | --- |
 | architecture.md | 1 处漂移:包结构列表缺 Phase 1 新增的 `server/`、Phase 4 新增的 `admin/` 与 `web/`(go:embed) | ✅ 已改文档对齐实现 |
 | metering.md | 1 处漂移:计价公式仍为两段;Phase 3 落地缓存价后为三段(CostWithCached) | ✅ 已改文档对齐实现 |
 | proxy-and-streaming.md | 判定表/SSE 契约/流内错误帧/超时模型与实现一致;26 格判定表测试全绿 | ✅ 一致 |

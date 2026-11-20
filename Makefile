@@ -35,6 +35,7 @@ infra-lint:
 	@if command -v hadolint >/dev/null 2>&1; then hadolint Containerfile; else echo "[infra-lint] hadolint 未安装,跳过"; fi
 	@if command -v kubeconform >/dev/null 2>&1; then kubeconform -strict -summary deploy/cluster/k8s.yaml; else echo "[infra-lint] kubeconform 未安装,跳过"; fi
 	@if command -v goreleaser >/dev/null 2>&1; then goreleaser check; else echo "[infra-lint] goreleaser 未安装,跳过"; fi
+	@if command -v npx >/dev/null 2>&1; then npx --yes markdownlint-cli2@0.24.1 "**/*.md"; else echo "[infra-lint] npx 未安装,跳过 markdownlint"; fi
 	@if command -v pre-commit >/dev/null 2>&1; then SKIP=gitleaks pre-commit run --all-files; else echo "[infra-lint] pre-commit 未安装,跳过文件卫生检查"; fi
 
 ## doclink: 文档相对链接与标题锚点检查(零网络依赖,287 篇 Markdown 全量)

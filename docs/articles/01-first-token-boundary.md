@@ -33,7 +33,7 @@ data: [DONE]
 两个世界的处理规则被固化为一张判定表(`internal/failover/decide.go`),一行一个错误分类,两列(未过/已过首 token):
 
 | ErrorClass | 未过首 token | 已过首 token(流式) |
-|---|---|---|
+| --- | --- | --- |
 | dial_fail / timeout_first | 换下一候选 | —(不可出现,防御归断言) |
 | upstream_5xx | 换下一候选 | 断言 |
 | rate_limited_429 | 换下一候选(该 key 记冷却) | 断言 |

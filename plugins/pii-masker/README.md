@@ -9,9 +9,11 @@ ADR-0011。基于 `muniu-plugin-sdk` 实现(业务代码 ~90 行,零 unsafe;ABI 
 ## 规则
 
 - 宿主配置注入(`plugins[].config.rules` 或管理面注册参数),JSON 数组:
+
   ```json
   [{"pattern": "1[3-9]\\d{9}", "replacement": "[PHONE]"}]
   ```
+
 - 未配置 `rules` 时使用内置缺省:身份证 18 位 → `[ID]`、手机号 → `[PHONE]`、邮箱 → `[EMAIL]`。
 - 规则非法 → init Err → 注册即拒载(坏规则不允许静默降级)。
 

@@ -31,7 +31,7 @@
 中转(获得 key 池/failover/计量计费/限流)。
 
 | 家 | base_url | 形态 | 模型示例 | 备注 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | OpenAI | `https://api.openai.com/v1` | openai | gpt-5.6-sol | yaml 既有示例 |
 | DeepSeek | `https://api.deepseek.com` | deepseek(quirk) | deepseek-v4-flash / deepseek-v4-pro | `/v1` 前缀亦兼容(yaml 示例用 `/v1`);Responses 原生 |
 | Kimi(Moonshot 国内) | `https://api.moonshot.cn/v1` | moonshot(quirk) | kimi-k3 | Responses 原生;usage 须 `stream_options.include_usage` |
@@ -62,7 +62,7 @@
 客户端(如 kongming)零改动。
 
 | 家 | 分支 base_url | 产品线 |
-|---|---|---|
+| --- | --- | --- |
 | Anthropic(官方) | `https://api.anthropic.com` | 按量(Claude 官方) |
 | DeepSeek | `https://api.deepseek.com/anthropic` | 按量 |
 | Kimi(Moonshot) | `https://api.moonshot.cn/anthropic` | 按量;intl=`api.moonshot.ai/anthropic` |
@@ -92,7 +92,7 @@
 以下非模型厂商,但属官方运营的推理平台,openai 基座直用,作端点样例收录:
 
 | 平台 | base_url | 备注 |
-|---|---|---|
+| --- | --- | --- |
 | SiliconFlow 硅基流动 | `https://api.siliconflow.cn/v1` | 国际站 `api.siliconflow.com/v1` |
 | ModelScope 魔搭 | `https://api-inference.modelscope.cn/v1` | 模型 id 带组织前缀(如 `ZhipuAI/GLM-5.2`) |
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` | 同上 |
@@ -103,7 +103,7 @@
 ### responses 原生端点可用性实证(`native_responses` 声明依据;ADR-0014 声明制)
 
 | 家 | responses 原生端点 | 实证状态(2026-10-11) | 声明建议 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | OpenAI 官方 | `https://api.openai.com/v1`( Responses API 发源地) | 未直测(大陆不可达);官方契约完整 | 可声明(官方文档背书) |
 | Qwen 百炼(dashscope) | `/api/v2/services/agents`(独立端点,非 compatible-mode);compatible-mode `/v1/responses` **单轮可用** | 多轮工具回放四路径全 400(服务端把 `function_call_output` 译成 `role:'tool'` 被自家校验器拒;kongming e2e 实证);**2026-10-14 冒烟补充**:compatible-mode 单轮 create(GET/POST)真实可用——直通创建 200、单查 GET 200 完整对象 | 多轮回放缺口仍在,**勿声明**(声明会放行 prev_id 粘性流量踩缺口);单轮语义已实证,上游补齐回放后翻开关即切,零代码改动 |
 | 其余 openai 系 | 逐家未实证 | 「OpenAI 兼容」≠「responses 端点可用」 | 未实证前勿声明;首次接入按 `make smoke` responses 场景实证后声明 |
@@ -113,7 +113,7 @@
 ## D. 需要新协议工作的家(backlog,目录不承诺)
 
 | 家 | 差异 | 评估 |
-|---|---|---|
+| --- | --- | --- |
 | Azure OpenAI | deployment 路径 + `api-key` 头 + `api-version` query | OpenAI 形态变体,可能 quirk 级可表达;出现真实消费即评估 |
 | AWS Bedrock | sigv4 签名 + 自家事件流协议 | 真桥接工作量;出现真实消费再补 ADR |
 | GitHub Copilot | OAuth 设备流 + 特化端点 | agent-CP 特化,网关场景弱需求 |

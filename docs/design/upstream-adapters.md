@@ -37,7 +37,7 @@ type Adapter interface {
 ## 归一化:统一 Usage 形态(计量与 conformance 的对齐基准)
 
 | 统一字段 | OpenAI | Anthropic(桥接) | Gemini 原生(ADR-0015 已接入) | DeepSeek(quirk) | 备注置 |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | prompt_tokens | usage.prompt_tokens | usage.input_tokens | usageMetadata.promptTokenCount | prompt_tokens | — |
 | completion_tokens | usage.completion_tokens | usage.output_tokens | usageMetadata.candidatesTokenCount | completion_tokens | — |
 | reasoning_tokens | completion_tokens_details.reasoning_tokens | —(thinking 另计⚠) | thoughtsTokenCount | completion_tokens_details.reasoning_tokens | 缺失=0;Gemini 口径=completion 子集,不与 candidates 相加 |
@@ -66,7 +66,7 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 新 lane 使用百炼原生 `POST /api/v1/services/embeddings/multimodal-embedding/multimodal-embedding`，不进入 OpenAI `/v1/embeddings` 基座。当前范围只有 `qwen3-vl-embedding` 和 `tongyi-embedding-vision-flash`：
 
 | 模型快照 | 当前输入与向量模式 | 官方参数边界（百炼校验） |
-|---|---|---|
+| --- | --- | --- |
 | `qwen3-vl-embedding` | text、image、video；支持多个 image 条目；默认独立向量，`parameters.enable_fusion=true` 时融合 | text 最长 32,000 Token；图片单张 ≤10 MB；视频 ≤50 MB；一次最多 20 个内容元素、10 张图片、1 个视频；维度为 2560/2048/1536/1024/768/512/256（默认 2560） |
 | `tongyi-embedding-vision-flash` | text、image、video、`multi_images`；当前快照仅独立向量 | 固定 768 维，不接受 `dimension`；媒体格式、批次 token 及数量限制以当前所用区域的百炼 API 文档为准 |
 
@@ -88,7 +88,7 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 ## 协议矩阵(2026-09-09 官方文档核对后更新;⚠=仍待实证项)
 
 | 供应商 | 接入形态 | 鉴权 | 流式 reasoning | usage 特有 | 已知坑(登记后入 quirks+fixture) |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | OpenAI | openai 基座 | Bearer | reasoning 模型 ⚠ | prompt/completion_tokens_details | 组织头可选;beta 头漂移 ⚠ |
 | DeepSeek | openai 基座 | Bearer | `reasoning_content` delta,与 content 逐帧互斥、推理先出(thinking_mode 文档确认) | 顶层 `prompt_cache_hit_tokens`/`prompt_cache_miss_tokens`(非 OpenAI details 嵌套);`completion_tokens_details.reasoning_tokens` 确认存在 | reasoning 与 content 互斥出现 |
 | Moonshot | openai 基座 | Bearer(已迁 platform.kimi.com;jwt 方案确认废弃) | 思考模型 `delta.reasoning_content` 确认 | 流式 usage **必须** `stream_options.include_usage` 才返回([DONE] 前独立帧、choices 空),否则缺失→估算路径;`cached_tokens` 为 OpenAI 风格命名 | 多轮须回传历史 reasoning_content;流中断可能无 usage 帧 |
@@ -113,7 +113,7 @@ GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(
 
 ## Conformance 测试集(独立开源资产,目录即契约)
 
-```
+```text
 conformance/
 ├── README.md               数据集说明:来源、回放方法、贡献规范
 ├── schema.json             fixture 结构定义(JSON Schema)
@@ -126,6 +126,7 @@ conformance/
 fixture 形态:`{ "provider": "...", "scenario": "...", "source_url": "官方文档锚点", "inbound": {OpenAI 形态请求}, "upstream_raw": {录制的上游原始响应/SSE 序列(脱敏)}, "expect": {归一化断言: usage/字段/passthrough 等价性} }`。
 
 纪律:
+
 1. fixture 来自**官方文档与抓包脱敏**,不入真实 key、不含用户数据;
 2. CI 只回放 fixture(打 fake 上游),真上游冒烟走 `make smoke` 手动档;
 3. 新 quirk 修复必须先补一个能复现 bug 的 fixture(回归钉死),这正是「测试集是资产、网关是消费者」的落地;

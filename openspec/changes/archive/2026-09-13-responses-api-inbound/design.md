@@ -7,7 +7,7 @@
 ## 2. 请求映射表(契约,fixture 钉死)
 
 | Responses 入站 | 规范 chat | 说明 |
-|---|---|---|
+| --- | --- | --- |
 | `instructions` | system 消息 | 与 input 中显式 system 并存时 instructions 在前 |
 | `input`(string) | 单条 user 消息 | 快捷形态 |
 | `input[]` type=message | 同 role 消息 | content parts: text 拼接;其余类型 400 |

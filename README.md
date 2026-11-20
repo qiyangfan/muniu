@@ -11,7 +11,7 @@
 
 muniu 是一个**单二进制、OpenAI 兼容入站**的 LLM 网关,用 Go 写成。它站在你的 AI 应用与各家模型供应商之间,把「换模型、管密钥、控成本、扛故障」这些脏活收进一条粮道:
 
-```
+```text
  你的应用(kongming / 任意 OpenAI SDK)
         │  Authorization: Bearer mk-xxxx   (muniu 签发的 key)
         ▼
@@ -34,7 +34,7 @@ muniu 是一个**单二进制、OpenAI 兼容入站**的 LLM 网关,用 Go 写�
 以下能力全部实现并测试覆盖(契约见 [docs/design/](docs/design/),验收轨迹见 [openspec/](openspec/changes/archive/)):
 
 | 域 | 能力 |
-|---|---|
+| --- | --- |
 | 接入 | OpenAI 兼容入站(chat/completions + embeddings + models 模型发现 + responses 无状态翻译 v1,ADR-0012);上游适配矩阵:DeepSeek / Moonshot / GLM(方言适配)、Qwen / Doubao(基座直用)、任意 OpenAI 兼容端点(如 ollama)、Anthropic(协议桥接);官方端点预设目录见 [docs/provider-presets.md](docs/provider-presets.md);Anthropic Messages 入站(ADR-0013,Claude Code 直连/类 cc-switch 反代)见 [docs/claude-code.md](docs/claude-code.md) |
 | 鉴权与租户 | `mk-` 平台 key 签发(SHA-256 落库 + LRU 缓存;key 级 RPM/TPM/日配额与过期时刻,运行态 PATCH 调整)、多租户隔离、日配额(事后记账模型) |
 | 流量治理 | RPM 令牌桶 + TPM 滑动窗口;key 池平滑加权轮询 + EMA 健康度 + 三态状态机(健康/冷却/禁用);failover 首 token 边界语义;请求参数治理(模型能力目录,换道重治理,Raw 字节层改写零丢失) |
@@ -111,7 +111,7 @@ muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:
 压测口径先行:以下为**同机假上游、SSE 流式**下网关数据面的纯转发开销——真实 LLM 场景的延迟与吞吐瓶颈在上游模型(秒级)与带宽,这组数字回答的是「网关自身吃掉多少」,而不是「端到端快多少」。硬件、方法、p50/p99 全量数据见 [docs/benchmarks/2026-09-10.md](docs/benchmarks/2026-09-10.md)。
 
 | 并发 | 产品 | 成功率 | 首字节 p50 | 吞吐 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | 100 | muniu | 100% | 1.15ms | 1,444 rps |
 | 100 | one-api v0.6.10 | 100% | 8.98ms | 255 rps |
 | 1000 | muniu | 100% | 17.28ms | 38,498 rps |
@@ -130,6 +130,7 @@ muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:
 - **chaos 演练**(`internal/proxy/chaos_test.go`):failover 判定表 26 格覆盖 + 上游故障注入(半帧、断连、超时)。
 - **全仓 `-race`**:`make check` 即全量门禁,数据竞争零容忍。
 - **发布产物可验证**:每个归档附 syft 生成的 SPDX SBOM;`checksums.txt` 与各 SBOM 由 cosign keyless(GitHub OIDC)签名,签名以 `.sigstore.json` 包随 release 发布。校验方式:
+
   ```bash
   cosign verify-blob --bundle checksums.txt.sigstore.json \
     --certificate-identity-regexp 'https://github.com/qiyangfan/muniu/.github/workflows/release.yml@refs/tags/.*' \
@@ -137,6 +138,7 @@ muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:
   sha256sum -c checksums.txt
   gh attestation verify muniu_<版本>_linux_amd64.tar.gz -R qiyangfan/muniu
   ```
+
 - **正确性与上下文门禁**:`errorlint`/`bodyclose`/`contextcheck`/`nilerr`/`sqlclosecheck`/`noctx` 全开——DB/HTTP/监听的每个阻塞调用都可被 context 取消,请求 ctx 一路贯通到 store 层。
 - **前端类型感知 lint**:ESLint 走 `recommendedTypeChecked`(`no-floating-promises`/`no-misused-promises`/`no-unsafe-*`),组件测试与逐文件覆盖率闸兜底。
 - **文档链接检查**:287 篇 Markdown 的相对链接与标题锚点零网络校验(`make doclink`),死链直接红。
@@ -169,7 +171,7 @@ token 数,muniu 的取舍是「宁可记账精确、偶发小额超限」,不做
 ## 文档地图
 
 | 文档 | 内容 |
-|---|---|
+| --- | --- |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 六阶段路线、验收闸门、backlog |
 | [docs/design/](docs/design/) | 架构、流式与 failover 语义、适配器矩阵、流量治理、计量、缓存、存储与配置 |
 | [docs/adr/](docs/adr/) | 关键选型决策(为什么) |

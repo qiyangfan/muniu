@@ -60,7 +60,7 @@
 ### 3.1 三组序列与观测点
 
 | 序列 | 类型 | 标签 | 观测点 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `muniu_tokens_total` | counter | `direction`(prompt/cached_prompt/completion)、`provider`、`model` | 计量落账处(此处 usage 三段有终值,含估算行) |
 | `muniu_semantic_cache_queries_total` | counter | `model`、`result`(hit/miss/skip) | 缓存判定分支:实际检索=hit/miss,缓存未参与(全局/租户关、tools 请求等)=skip |
 | `muniu_first_token_duration_ms` | histogram | `provider`、`model` | 流式首帧到达(仅流式;非流式不观测,总延迟已有 `muniu_request_duration_ms`) |

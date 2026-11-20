@@ -19,6 +19,8 @@ const allowed = new Set([
 let raw;
 try {
   raw = execFileSync("pnpm", ["licenses", "list", "--prod", "--json"], {
+    // 依赖清单只存在于 web/ 工作区;从仓库根直接调用时也给回真实的检查对象
+    cwd: new URL("../web/", import.meta.url),
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,
   });

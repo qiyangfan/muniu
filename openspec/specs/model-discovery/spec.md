@@ -1,6 +1,7 @@
 # model-discovery Specification
 
 ## Purpose
+
 OpenAI 兼容模型发现端点:客户端经 `GET /v1/models` 与 `GET /v1/models/{model}` 完成模型目录发现与连通性探测。目录与转发拓扑同源(同一快照),热替换同步可见;端点为只读元数据面,零上游调用、零计量、不消耗配额与限流额度。
 
 ## Requirements

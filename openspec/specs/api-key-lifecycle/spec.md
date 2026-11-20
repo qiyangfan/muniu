@@ -1,6 +1,7 @@
 # api-key-lifecycle Specification
 
 ## Purpose
+
 `mk-` 查库 key 的签发粒度与生命周期:签发时限额字段完整可定(消除「存储与执行链路已在、入口不暴露」的死配置),支持到期自动失效,支持运行态限额调整而无需换密钥。零值/空值语义 = 现状等价(不限/永不过期),standalone 默认行为零回归。
 
 ## Requirements

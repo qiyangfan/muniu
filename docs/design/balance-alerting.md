@@ -9,7 +9,7 @@
 ## 余额源 kind 对照表
 
 | kind | 凭证 | 端点(base_url 同源) | 余额字段 | 币种 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `deepseek` | 渠道 key Bearer | GET `/user/balance` | `balance_infos[].total_balance` | 响应携带(CNY/USD) |
 | `moonshot` | 渠道 key Bearer | GET `/v1/users/me/balance` | `data.available_balance`(含代金券) | CNY |
 | `openrouter` | 渠道 key Bearer | GET `/api/v1/key` | `data.limit − data.usage`;`limit=null` 不限额 → 余额不可知 | USD |
@@ -39,7 +39,7 @@
 复用 `webhook-alerting` 管道(去重/退避/未配置零开销),事件键与载荷:
 
 | 事件键 | severity | 上下文 |
-|---|---|---|
+| --- | --- | --- |
 | `balance_below:<provider>` | critical | provider/rule/balance/currency |
 | `balance_tier:<provider>:<h>h` | 30d/14d→info、7d/3d→warning、≤1d→critical | +remaining_hours |
 | `balance_source_error:<provider>` | warning | consecutive_failures |

@@ -7,7 +7,7 @@
 单进程单二进制。内部只有三类长生命周期 goroutine,其余全部「每请求一 goroutine」:
 
 | goroutine | 数量 | 职责 | 生命周期 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | HTTP server(main) | 1 | Accept + 中间件链,每请求派生 goroutine | 进程全程 |
 | metering flusher | 1 | 从计量 channel 批量落库 usage_logs(500ms 或满 256 条) | 进程全程 |
 | signal watcher | 1 | 监听 SIGINT/SIGTERM 触发优雅退出 | 进程全程 |
@@ -49,7 +49,7 @@ key 池状态、限流窗口、apikey 缓存全部进程内内存态,由 mutex �
 ## 指标序列(/metrics,ADR-0009 零依赖直写)
 
 | 序列 | 类型 | 标签 | 语义 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `muniu_requests_total` | counter | model,status | 转发请求数 |
 | `muniu_upstream_total` | counter | provider,class | 上游结果数(按错误分类) |
 | `muniu_request_duration_ms` | histogram | — | 请求总耗时(ms) |

@@ -5,7 +5,7 @@
 ## 超时模型(三层,各自独立计时)
 
 | 层 | 默认 | 计时起点→终点 | 超时动作 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 拨号 dial | 5s | 发起连接→TLS 握手完成 | 判连接失败,进 failover(可换道) |
 | 首 token first_token | 60s | 请求发出→首个**内容帧**到达(非流式=首字节) | 判上游无响应,进 failover(可换道,请求未产生对客户端的任何输出,重放安全) |
 | 帧间 chunk_idle | 30s | 上一帧→下一帧 | 判上游僵死;**首 token 后 → 断言出口**(见下) |
@@ -24,7 +24,7 @@
 错误分类 `internal/failover`(纯函数):把「适配器返回的 ErrorClass × 是否已过首 token × 流式与否」映射为动作。
 
 | ErrorClass | 说明 | 未过首 token(流式或非流式) | 已过首 token(流式) |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | dial_fail / timeout_first | 连不上、握手败、首 token 超时 | **换下一候选**(重放安全) | —(不可能出现) |
 | upstream_5xx | 上游 500/502/503 | 换下一候选 | **断言**:流内错误帧+关流 |
 | rate_limited_429 | 上游限频 | 该 key 记冷却(语义见 traffic-governance),**立即换下一候选**(不 sleep 等待) | 断言 |
@@ -97,7 +97,7 @@ data: [DONE]
 ### 请求映射表
 
 | Responses 入站 | 规范 chat | 约束 |
-|---|---|---|
+| --- | --- | --- |
 | `model` | `model`(别名) | 必填,路由解析与 chat 同规 |
 | `instructions` | system 消息(置于最前) | 与 input 显式 system 并存时 instructions 在前 |
 | `input`(string) | 单条 user 消息(content=原文字符串) | 快捷形态 |
@@ -149,7 +149,7 @@ data: [DONE]
 ### 请求映射表
 
 | Anthropic 入站 | 规范 chat | 约束 |
-|---|---|---|
+| --- | --- | --- |
 | `model` | `model`(别名) | 必填,路由解析与 chat 同规 |
 | `max_tokens` | `max_tokens` | Anthropic 必填;缺失时省略(不伪造缺省值) |
 | `system`(string \| text 块数组) | system 消息(置于最前) | 多块换行合并;非 text 块 400 |
@@ -174,7 +174,7 @@ data: [DONE]
 ### 响应与流式事件映射
 
 - 非流式:chat.completion → `{id:"msg_"+request_id, type:"message", role:"assistant", model, content[], stop_reason, stop_sequence:null, usage}`。content[]:reasoning_content → `{type:"thinking"}`(**无签名的展示形态**);文本 → `{type:"text"}`;tool_calls → `{type:"tool_use", id/name, input=arguments 解析}`。stop_reason 映射:stop→end_turn、length→max_tokens、tool_calls→tool_use、其余 null。usage:prompt→input_tokens、completion→output_tokens、cached→cache_read_input_tokens(reasoning 为 completion 子集不另立)。
-- 流式(顺序不变式:message_start 首帧、message_stop 终帧、content_block_* 仅出现于两者之间;块切换先 content_block_stop;块索引按发出顺序递增):
+- 流式(顺序不变式:message_start 首帧、message_stop 终帧、content_block_*仅出现于两者之间;块切换先 content_block_stop;块索引按发出顺序递增):
   `message_start` → [`content_block_start` → `content_block_delta`(text_delta \| thinking_delta \| input_json_delta)* → `content_block_stop`]* → `message_delta`(stop_reason + usage)→ `message_stop`。
   **已知偏差(登记)**:`message_start.usage.input_tokens` 恒 0(上游 usage 流尾才知),真实用量在 `message_delta.usage` 补全;SSE 用 data-only 帧(事件 type 在 JSON 内,无 `event:` 行,SDK 兼容)。
 - 流中失败(上游 mid_stream_fail 或无 [DONE] 收尾):发 `error` 事件后终止——诚实失败,不伪造 message_stop;管道在流开始前失败的信封 body 改写为 Anthropic error JSON(状态码不变)。
@@ -190,7 +190,7 @@ data: [DONE]
 ### 路径判定表(每 attempt;判定点唯一)
 
 | 入站 | 候选 | 路径 | 声明来源 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | chat | 任意 | 翻译(基座透传) | —(无直通增益) |
 | messages | anthropic 适配器 | **直通** | 适配器类型即声明(`NativeProto` 协议身份自述) |
 | messages | 其他适配器 | 翻译 | 协议身份不符 |
@@ -227,7 +227,7 @@ data: [DONE]
 ### 请求映射表
 
 | Gemini 入站 | 规范 chat | 约束 |
-|---|---|---|
+| --- | --- | --- |
 | 路径 `{model}` | `model`(别名) | 别名不存在与 chat `model_not_found` 同规(信封 Gemini 形态) |
 | `contents[].role` user/model | user/assistant | 未知 role 400 `input_invalid` |
 | `parts[].text` | 文本拼接(多部件换行合并) | thought 请求部件丢弃(签名回传语义不成立) |
@@ -255,6 +255,7 @@ data: [DONE]
 独立 handler 挂载于既有数据面鉴权/限流/配额链，插件请求体钩子在候选循环前执行。OpenAI 兼容基座声明 `ImagePreparer`，只改模型名；不具备能力的适配器返回 400 `images_not_supported`，不换道。沿用非流式 failover 判定表，5xx/429/传输错误可换候选；请求体 4MiB、响应体 64MiB，超限或中断不交付半包。响应读取在同一 FirstToken 计时器内完成，请求取消传导至出站。全请求仅加载一次拓扑与价格快照。
 
 只支持同步 generations；异步 submit/poll、edits/variations、audio 不在此通道。上游 url 原样返回，不托管图片、不注入 response_format。断流候选 cost=0，可能发生的上游生成费用为诚实边界，见 metering.md。
+
 ## 会话缓存亲和(session-cache-affinity 契约,ADR-0020)
 
 **路由行为变化**:chat/messages 两条入站 lane,同一会话在候选循环前查亲和表——stick(渠道,key)健康时该渠道获 iterator 起点提示(`NewIteratorWithStick`,组内起点恒为 stick 成员,环绕仍遍历全组)+ 池同键提示(`PickWithHint`,hint 健康直取不耗 WRR 记账)。优先级不变式(测试钉死):**熔断收缩 > 池冷却/禁用/欠费 > 亲和 > WRR**;亲和零新增候选、零新增重试。

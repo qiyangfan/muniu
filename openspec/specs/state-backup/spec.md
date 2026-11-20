@@ -1,6 +1,7 @@
 # state-backup Specification
 
 ## Purpose
+
 standalone 形态的 muniu 把全量运营态(key、用量账本、价目)存在单个 SQLite 文件里;本能力给出状态备份与恢复契约:备份是在线一致快照 + 配置副本 + 可校验的 manifest,恢复是带前置闸与失败原子性的离线动作。目标是「一条命令备份、一条命令恢复」,与单二进制运维叙事闭环。
 
 ## Requirements

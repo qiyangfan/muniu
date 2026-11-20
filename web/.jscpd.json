@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/kucherenko/jscpd/master/packages/jscpd/schema.json",
+  "//": "2026-11-20 实测基线:重复率 0.74%(35/4721 行)。阈值 = 实测 + 0.5%(保留两位小数,故记 1.24)。生成物(api-types.d.ts)来自 openapi-typescript 不可手改,测试文件里的同类脚手架本就不该判重,两者经 ignore 排除。",
+  "path": ["src"],
+  "pattern": "**/*.{ts,tsx}",
+  "format": ["typescript", "tsx"],
+  "ignore": ["**/*.test.{ts,tsx}", "**/*.d.ts"],
+  "gitignore": true,
+  "minTokens": 50,
+  "reporters": ["console", "threshold"],
+  "threshold": 1.24,
+  "output": "coverage/jscpd-report"
+}

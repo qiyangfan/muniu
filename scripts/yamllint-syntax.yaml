@@ -1,0 +1,26 @@
+# 语法档:只校验 YAML 可解析性,登记全部入库 YAML(含 web/pnpm-workspace.yaml、
+# openspec/.openspec.yaml 等格式约定之外的文件)。由 Makefile 的 yaml-parse 目标与
+# CI infra-lint 作业调用:pre-commit 的 check-yaml 不跟随 rg 式全量 glob,
+# 这条兜底保证「仓库内任何 YAML 坏了都会红」。
+extends: default
+
+rules:
+  document-start: disable
+  # 其余格式规则一律关闭,避免与 scripts/yamllint.yaml 的口径重叠
+  braces: disable
+  brackets: disable
+  colons: disable
+  commas: disable
+  comments: disable
+  comments-indentation: disable
+  empty-lines: disable
+  hyphens: disable
+  indentation: disable
+  key-duplicates: disable
+  line-length: disable
+  new-line-at-end-of-file: disable
+  new-lines: disable
+  octal-values: disable
+  quoted-strings: disable
+  trailing-spaces: disable
+  truthy: disable

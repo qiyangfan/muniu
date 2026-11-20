@@ -1,6 +1,7 @@
 # webhook-alerting 变更(webhook-alerting)
 
 ## Purpose
+
 运营关键事件(key 池不可用/候选全失败/计量汇降级)的主动通知:事件→去重→退避重试→webhook,让无人值守形态下「网关出事有人知道」。
 
 ## ADDED Requirements

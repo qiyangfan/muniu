@@ -25,7 +25,7 @@
 ## lane 与交互边界
 
 | lane | 行为 |
-|---|---|
+| --- | --- |
 | `/v1/chat/completions` | 接入 |
 | `/v1/messages`(anthropic 入站) | 接入(翻译后 canonical chat 上同一亲和点) |
 | `/v1/responses` | 不动(既有状态亲和) |

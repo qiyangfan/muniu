@@ -1,6 +1,7 @@
 # plugin-runtime Specification
 
 ## Purpose
+
 请求生命周期内的用户可扩展逻辑执行:第三方编译的 WASM 插件在宿主沙箱内对入站请求载荷做检查与改写,具备资源上限与故障隔离;插件不持有凭证、不触网,崩溃不波及网关进程。
 
 ## Requirements

@@ -1,6 +1,7 @@
 # gemini-native-outbound Specification
 
 ## Purpose
+
 Gemini 原生出站适配器(`adapter: gemini`):把规范 chat 请求翻译为 Gemini REST `v1beta` wire 形态(`:generateContent` / `:streamGenerateContent?alt=sse`),响应/流/usage 归一回 OpenAI 形态。ADR-0003 三分法中的「真异构协议」整家实现;曾被 `retire-gemini-adapter-token` 因无实现退役的类型名,本次以真实实现回归值域单源。
 
 ## Requirements
