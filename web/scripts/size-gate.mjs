@@ -26,14 +26,17 @@ async function gzipSize(file) {
 }
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+const artifacts = process.env.SIZE_DIR ?? "dist";
 const config = JSON.parse(await readFile(`${root}.size-limit.json`, "utf8"));
+const resolvePath = (f) => (f.startsWith("/") ? f : `${root}${f}`);
 let bad = false;
 for (const check of config["size-limit"]) {
   const files = [];
-  for await (const f of glob(check.path, { cwd: root })) files.push(`${root}${f}`);
+  const pattern = check.path.replace(/^dist\//, `${artifacts}/`);
+  for await (const f of glob(pattern, { cwd: root })) files.push(resolvePath(f));
   const limit = parseLimit(check.limit);
   if (files.length === 0) {
-    console.log(`size gate FAIL: ${check.name} 未匹配到产物(${check.path}),先跑构建`);
+    console.log(`size gate FAIL: ${check.name} 未匹配到产物(${pattern}),先跑构建`);
     bad = true;
     continue;
   }
@@ -47,10 +50,10 @@ for (const check of config["size-limit"]) {
 if (!bad) {
   // 产物文件数兜底:多出来的 chunk 说明入口被拆分,门禁覆盖范围需同步更新
   const all = [];
-  for await (const f of glob("dist/assets/*", { cwd: root })) all.push(f);
+  for await (const f of glob(`${artifacts}/assets/*`, { cwd: root })) all.push(f);
   if (all.length > config["size-limit"].length) {
     console.log(
-      `size gate FAIL: dist/assets 下有 ${all.length} 个产物,配置只覆盖 ${config["size-limit"].length} 个`,
+      `size gate FAIL: ${artifacts}/assets 下有 ${all.length} 个产物,配置只覆盖 ${config["size-limit"].length} 个`,
     );
     bad = true;
   }

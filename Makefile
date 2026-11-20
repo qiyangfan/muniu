@@ -10,7 +10,7 @@ check: vet lint deadcode licenses secrets doclink infra-lint tidy-check web-chec
 .PHONY: web-check
 web-check:
 	@command -v pnpm >/dev/null 2>&1 || { echo "[web-check] pnpm 未安装,跳过控制台门禁"; exit 0; }
-	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm knip && pnpm test && pnpm format:check && node ../scripts/weblicensecheck.mjs && pnpm generate:api && git diff --exit-code -- src/lib/api-types.d.ts && pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir
+	cd web && pnpm install --frozen-lockfile >/dev/null && pnpm typecheck && pnpm lint && pnpm lint:css && pnpm knip && pnpm test && pnpm format:check && node ../scripts/weblicensecheck.mjs && pnpm generate:api && git diff --exit-code -- src/lib/api-types.d.ts && pnpm exec vite build --outDir /tmp/dist-check --emptyOutDir && pnpm e2e && SIZE_DIR=/tmp/dist-check pnpm size
 
 ## web-build: 构建控制台产物到 web/dist(嵌入二进制)
 .PHONY: web-build

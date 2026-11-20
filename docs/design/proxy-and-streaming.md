@@ -174,8 +174,8 @@ data: [DONE]
 ### 响应与流式事件映射
 
 - 非流式:chat.completion → `{id:"msg_"+request_id, type:"message", role:"assistant", model, content[], stop_reason, stop_sequence:null, usage}`。content[]:reasoning_content → `{type:"thinking"}`(**无签名的展示形态**);文本 → `{type:"text"}`;tool_calls → `{type:"tool_use", id/name, input=arguments 解析}`。stop_reason 映射:stop→end_turn、length→max_tokens、tool_calls→tool_use、其余 null。usage:prompt→input_tokens、completion→output_tokens、cached→cache_read_input_tokens(reasoning 为 completion 子集不另立)。
-- 流式(顺序不变式:message_start 首帧、message_stop 终帧、content_block_*仅出现于两者之间;块切换先 content_block_stop;块索引按发出顺序递增):
-  `message_start` → [`content_block_start` → `content_block_delta`(text_delta \| thinking_delta \| input_json_delta)* → `content_block_stop`]* → `message_delta`(stop_reason + usage)→ `message_stop`。
+- 流式(顺序不变式:message_start 首帧、message_stop 终帧、`content_block_*` 仅出现于两者之间;块切换先 content_block_stop;块索引按发出顺序递增):
+  `message_start` → [`content_block_start` → `content_block_delta`(text_delta \| thinking_delta \| input_json_delta)\* → `content_block_stop`]* → `message_delta`(stop_reason + usage)→ `message_stop`。
   **已知偏差(登记)**:`message_start.usage.input_tokens` 恒 0(上游 usage 流尾才知),真实用量在 `message_delta.usage` 补全;SSE 用 data-only 帧(事件 type 在 JSON 内,无 `event:` 行,SDK 兼容)。
 - 流中失败(上游 mid_stream_fail 或无 [DONE] 收尾):发 `error` 事件后终止——诚实失败,不伪造 message_stop;管道在流开始前失败的信封 body 改写为 Anthropic error JSON(状态码不变)。
 

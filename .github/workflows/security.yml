@@ -1,7 +1,7 @@
 name: security
 
 # 安全作业独立于 ci.yml:ci.yml 按路径裁剪(fail-open),放在里面会被路径过滤静默跳过。
-"on":
+on:
   push:
     branches: [main]
   pull_request:
@@ -55,9 +55,12 @@ jobs:
       - name: syft
         run: |
           VERSION=1.57.2
-          curl -sSfL "https://github.com/anchore/syft/releases/download/v${VERSION}/syft_${VERSION}_linux_amd64.tar.gz" \
-            | sudo tar -xz -C /usr/local/bin syft
-          syft dir:. -o cyclonedx-json=sbom.cdx.json
+          BASE="https://github.com/anchore/syft/releases/download/v${VERSION}"
+          curl -sSfL "${BASE}/syft_${VERSION}_checksums.txt" -o /tmp/syft.checksums
+          curl -sSfL "${BASE}/syft_${VERSION}_linux_amd64.tar.gz" -o /tmp/syft.tar.gz
+          (cd /tmp && grep " syft_${VERSION}_linux_amd64.tar.gz\$" syft.checksums | sha256sum --check)
+          sudo tar -xzf /tmp/syft.tar.gz -C /usr/local/bin syft
+          syft dir:. -c .syft.yaml -o cyclonedx-json=sbom.cdx.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: sbom.cdx.json

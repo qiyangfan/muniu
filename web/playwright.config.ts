@@ -22,7 +22,7 @@ export default defineConfig({
   projects: [{ name: "chrome", use: { ...devices["Desktop Chrome"] } }],
   // preview 服务消费 vite build 产物;CI 先跑 build,再经 webServer 起静态服务
   webServer: {
-    command: "pnpm exec vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    command: "pnpm exec vite preview --outDir /tmp/dist-check --host 127.0.0.1 --port 4173 --strictPort",
     url: "http://127.0.0.1:4173/console/",
     // 本地保留复用:手动起过 preview 时不必再拉一份;CI 上端口只能是本作业自己起的
     reuseExistingServer: !isCI,

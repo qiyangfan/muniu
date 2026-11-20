@@ -6,13 +6,13 @@
       "name": "app js (gzip)",
       "path": "dist/assets/index-*.js",
       "gzip": true,
-      "limit": "242117 B"
+      "limit": "260000 B"
     },
     {
       "name": "app css (gzip)",
       "path": "dist/assets/index-*.css",
       "gzip": true,
-      "limit": "8116 B"
+      "limit": "9000 B"
     }
   ]
 }

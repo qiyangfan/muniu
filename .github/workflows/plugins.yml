@@ -2,7 +2,7 @@
 # plugins/** 变更时构建全部插件 wasm、跑 Rust 宿主单测并上传 artifact。
 # 宿主(Go)侧测试与发布不依赖 Rust 工具链——本 workflow 独立可选,失败不阻塞网关 CI。
 name: plugins
-"on":
+on:
   push:
     branches: [main]
     paths: ["plugins/**", ".github/workflows/plugins.yml"]

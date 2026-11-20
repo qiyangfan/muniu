@@ -2,7 +2,7 @@
 # gosec 看单点危险调用,CodeQL 看跨函数的污点传播(注入/越权路径)。
 name: codeql
 
-"on":
+on:
   push:
     branches: [main]
   pull_request:

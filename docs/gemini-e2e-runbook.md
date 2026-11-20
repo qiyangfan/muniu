@@ -16,7 +16,7 @@ genai SDK / gemini-cli ──► 实例 A(出站 adapter: gemini)──► 实�
 ## 步骤(127.0.0.1:1878x 一次性实例惯例;临时 key create→revoke、用毕拆除)
 
 1. **实例 B**:`MUNIU_ADMIN_TOKEN=dev-b` 起实例(端口 18781),配 dashscope 真上游(qwen-plus 冒烟口径:「你好」≈13/1 tokens),签发数据面 key。
-2. **实例 A**:`MUNIU_ADMIN_TOKEN=dev-a` 起实例(端口 18782),provider `adapter: gemini`、`base_url: http://127.0.0.1:18781`(base_url 含版本段 /v1beta——官方端点为 <https://generativelanguage.googleapis.com/v1beta),签发> key。
+2. **实例 A**:`MUNIU_ADMIN_TOKEN=dev-a` 起实例(端口 18782),provider `adapter: gemini`、`base_url: http://127.0.0.1:18781`(base_url 含版本段 /v1beta——官方端点为 `https://generativelanguage.googleapis.com/v1beta`),签发 key。
 3. **入站冒烟(直打 B)**:`curl -H "x-goog-api-key: <B-key>" -d '{"contents":[{"role":"user","parts":[{"text":"你好"}]}]}' "http://127.0.0.1:18781/v1beta/models/<alias>:generateContent"` → 断言 candidates[].parts 有文本、usageMetadata.promptTokenCount≈13。
 4. **往返冒烟(打 A)**:同请求体打 A 的同名端点 → 断言同上;B 侧计量落账核对(usage_logs 一行,ok)。
 5. **流式**:`:streamGenerateContent?alt=sse` → 断言增量帧在先、终帧含 finishReason=STOP 与 usageMetadata(12/8 口径按真实上游回填);**不以 200 判成功**。

@@ -1,0 +1,8 @@
+# 控制台依赖已由 weblicensecheck/pnpm audit 覆盖;SBOM 只收发布相关的 Go 二进制与仓库资产,
+# 排除构建缓存、前端产物与本地编译出的单二进制,避免把同一依赖重复计入。
+exclude:
+  - "./web/node_modules/**"
+  - "./web/dist/**"
+  - "./web/coverage/**"
+  - "./coverage.out"
+  - "./muniu"
