@@ -162,23 +162,34 @@ func (c OAuthCfg) Declared() bool {
 	return c.AuthorizeURL != "" || c.TokenURL != "" || c.ClientID != "" || c.CallbackURL != ""
 }
 
-// AdminOIDCCfg 木牛 console 的锦官 OIDC RP 声明;空段 = 联邦轨关闭(本地账密/共享令牌
-// 照常)。ClientSecret 可空(公开客户端 + PKCE),非空时支持 ${VAR} 注入。
+// AdminOIDCCfg 木牛 console 的虎符 OIDC RP 声明;空段 = 联邦轨关闭(只剩共享令牌轨,
+// 本地账密已删除)。ClientSecret 可空(公开客户端 + PKCE),非空时支持 ${VAR} 注入。
 type AdminOIDCCfg struct {
-	Issuer       string `yaml:"issuer"`
-	ClientID     string `yaml:"client_id"`
-	ClientSecret string `yaml:"client_secret"`
-	RedirectURL  string `yaml:"redirect_url"`
+	Issuer                string   `yaml:"issuer"`
+	ClientID              string   `yaml:"client_id"`
+	ClientSecret          string   `yaml:"client_secret"`
+	RedirectURL           string   `yaml:"redirect_url"`
+	AdminSubjects         []string `yaml:"admin_subjects"`           // 允许登录管理面的虎符 sub 白名单
+	PostLogoutRedirectURL string   `yaml:"post_logout_redirect_url"` // 虎符登出后回跳地址(须在 client 登记)
 }
 
-// Complete 联邦可用前提:issuer/client_id/redirect_url 齐备(端点由发现文档解析)。
+// Complete 联邦可用前提:issuer/client_id/redirect_url/admin_subjects 齐备(端点由发现文档解析)。
 func (c AdminOIDCCfg) Complete() bool {
-	return c.Issuer != "" && c.ClientID != "" && c.RedirectURL != ""
+	return c.Issuer != "" && c.ClientID != "" && c.RedirectURL != "" && len(c.AdminSubjects) > 0
 }
 
 // Declared 是否有任何字段被声明(部分声明的校验依据)。
 func (c AdminOIDCCfg) Declared() bool {
-	return c.Issuer != "" || c.ClientID != "" || c.ClientSecret != "" || c.RedirectURL != ""
+	return c.Issuer != "" || c.ClientID != "" || c.ClientSecret != "" || c.RedirectURL != "" ||
+		len(c.AdminSubjects) > 0 || c.PostLogoutRedirectURL != ""
+}
+
+// AdminCookiesSecure 管理面 cookie 是否带 Secure:显式配置优先,缺省按虎符 issuer 协议推导。
+func (c *Config) AdminCookiesSecure() bool {
+	if c.AdminCookieSecure != nil {
+		return *c.AdminCookieSecure
+	}
+	return strings.HasPrefix(strings.ToLower(c.AdminOIDC.Issuer), "https://")
 }
 
 // Candidate 是模型路由候选；优先级较小者先尝试，同优先级按权重随机确定起始候选。
@@ -294,8 +305,11 @@ type Config struct {
 	// OAuth OAuth 端点声明(订阅账号授权流与刷新,oauth-subscription-lane 契约);
 	// 空段 = 授权流关闭(手动录入凭据仍可用),声明 oauth 渠道则四字段必齐。
 	OAuth OAuthCfg `yaml:"oauth"`
-	// AdminOIDC 锦官统一身份联邦(admin-operators 契约);部分声明加载期拒绝。
+	// AdminOIDC 虎符统一身份联邦(admin-operators 契约);部分声明加载期拒绝。
 	AdminOIDC AdminOIDCCfg `yaml:"admin_oidc"`
+	// AdminCookieSecure 管理面 cookie 的 Secure 标记;未声明时按 admin_oidc.issuer 是否 https 推导。
+	// 反代终止 TLS 时 r.TLS 恒为 nil,因此必须由部署显式表达。
+	AdminCookieSecure *bool `yaml:"admin_cookie_secure"`
 	// OutboundProxy 顶层出站代理缺省(http/https);渠道 proxy_url 未声明时回退。
 	// 校验归一后该字段本身不再被下游消费(生效值已物化进各渠道)。
 	OutboundProxy    string                 `yaml:"outbound_proxy"`
@@ -712,7 +726,7 @@ func (c *Config) validateAdminOIDC(add problemAdder) {
 		return
 	}
 	if !o.Complete() {
-		add("admin_oidc 段部分声明非法: issuer/client_id/redirect_url 必须成套声明")
+		add("admin_oidc 段部分声明非法: issuer/client_id/redirect_url/admin_subjects 必须成套声明")
 		return
 	}
 	if !isAbsoluteHTTPURL(o.Issuer) {
@@ -720,6 +734,25 @@ func (c *Config) validateAdminOIDC(add problemAdder) {
 	}
 	if !isAbsoluteHTTPURL(o.RedirectURL) {
 		add("admin_oidc.redirect_url 非法: %q(须为 http(s) 绝对 URL)", o.RedirectURL)
+	}
+	if o.PostLogoutRedirectURL != "" && !isAbsoluteHTTPURL(o.PostLogoutRedirectURL) {
+		add("admin_oidc.post_logout_redirect_url 非法: %q(须为 http(s) 绝对 URL)", o.PostLogoutRedirectURL)
+	}
+	validateAdminSubjects(o.AdminSubjects, add)
+}
+
+// validateAdminSubjects 白名单逐项:非空、无首尾空白、不重复。
+func validateAdminSubjects(subjects []string, add problemAdder) {
+	seen := map[string]bool{}
+	for i, sub := range subjects {
+		if strings.TrimSpace(sub) != sub || sub == "" {
+			add("admin_oidc.admin_subjects[%d] 非法: 不得为空或含首尾空白", i)
+			continue
+		}
+		if seen[sub] {
+			add("admin_oidc.admin_subjects[%d] 重复: %q", i, sub)
+		}
+		seen[sub] = true
 	}
 }
 

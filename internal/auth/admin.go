@@ -8,193 +8,122 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strings"
-	"sync"
 	"time"
-	"unicode/utf8"
-	"uuid"
 
 	"github.com/solvela/muniu/internal/store"
 )
 
-// ErrAdminCredentials / ErrAdminLocked 为登录与会话拒绝分类，内部存储错误不混入认证错误。
-var (
-	ErrAdminCredentials = errors.New("管理员凭据无效")
-	ErrAdminLocked      = errors.New("账号暂时锁定，请稍后重试")
-)
+// ErrAdminCredentials 会话/联邦登录拒绝的唯一分类;内部存储错误不混入认证错误。
+var ErrAdminCredentials = errors.New("管理员凭据无效")
 
-type adminFailures struct {
-	count int
-	until time.Time
-}
-
-// AdminService 本地单进程登录锁定与会话服务；计数在重启后自然清零。
+// AdminService 管理面会话服务。管理员主体由虎符(唯一账户权威)签发,本服务只做
+// 「sub → 主体 → 会话」的本地投影,不持有任何口令或登录失败状态。
 type AdminService struct {
-	db        *sql.DB
-	now       func() time.Time
-	mu        sync.Mutex // 登录验证与计数串行，避免并发失败穿透阈值；管理面低频。
-	failures  map[string]adminFailures
-	dummyHash string
+	db      *sql.DB
+	allowed map[string]struct{}
+	now     func() time.Time
 }
 
-// NewAdminService 启动时清扫过期会话，失败拒绝装配。
-func NewAdminService(ctx context.Context, db *sql.DB) (*AdminService, error) {
+// NewAdminService 启动时清扫过期会话与登录中 state,失败拒绝装配。
+// allowed 为虎符 sub 白名单:非空时仅名单内主体可建号登录(生产装配必填);nil 仅供测试。
+func NewAdminService(ctx context.Context, db *sql.DB, allowed []string) (*AdminService, error) {
 	if err := store.CleanAdminSessions(ctx, db, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		return nil, err
 	}
-	dummy, err := HashAdminPassword("invalid-account-dummy")
-	if err != nil {
+	if err := store.CleanOIDCStates(ctx, db, time.Now().Add(-15*time.Minute).UTC().Format(time.RFC3339Nano)); err != nil {
 		return nil, err
 	}
-	return &AdminService{db: db, now: time.Now, failures: map[string]adminFailures{}, dummyHash: dummy}, nil
-}
-
-// Create API 与 CLI 共用用户名及口令校验。
-func (s *AdminService) Create(ctx context.Context, username, password string) (store.AdminUser, error) {
-	username = strings.TrimSpace(username)
-	if !utf8.ValidString(username) {
-		return store.AdminUser{}, store.MarkBusiness(fmt.Errorf("用户名须为有效 UTF-8 文本"))
-	}
-	if username == "" || len(username) > 128 || strings.ContainsAny(username, "\r\n\t") {
-		return store.AdminUser{}, store.MarkBusiness(fmt.Errorf("用户名必填，最长 128 字节，不可含控制字符"))
-	}
-	hash, err := HashAdminPassword(password)
-	if err != nil {
-		return store.AdminUser{}, store.MarkBusiness(err)
-	}
-	u := store.AdminUser{
-		ID: uuid.NewV7().String(), Username: username, PasswordHash: hash,
-		Status: "active", CreatedAt: s.now().UTC().Format(time.RFC3339),
-	}
-	if err := store.CreateAdminUser(ctx, s.db, u); err != nil {
-		return store.AdminUser{}, err
-	}
-	return u, nil
-}
-
-// Patch 改密或停用后旧会话即刻失效；启用不恢复旧会话。
-func (s *AdminService) Patch(ctx context.Context, id string, disabled *bool, password string) error {
-	hash := ""
-	if password != "" {
-		var err error
-		hash, err = HashAdminPassword(password)
-		if err != nil {
-			return store.MarkBusiness(err)
+	svc := &AdminService{db: db, now: time.Now}
+	if allowed != nil {
+		svc.allowed = make(map[string]struct{}, len(allowed))
+		for _, sub := range allowed {
+			svc.allowed[sub] = struct{}{}
 		}
 	}
-	return store.PatchAdminUser(ctx, s.db, id, disabled, hash)
+	return svc, nil
 }
 
-// Login 以真实账号累计失败；不存在账号仍计算等成本哈希，但不积累无界用户名状态。
-func (s *AdminService) Login(ctx context.Context, username, password string) (string, store.AdminUser, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.now().UTC()
-	f := s.failures[username]
-	if now.Before(f.until) {
-		return "", store.AdminUser{}, ErrAdminLocked
-	}
-	if !f.until.IsZero() {
-		f = adminFailures{}
-	}
-	u, err := store.GetAdminUser(ctx, s.db, username)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return "", u, err
-	}
-	hash := u.PasswordHash
-	if hash == "" {
-		hash = s.dummyHash
-	}
-	valid := VerifyAdminPassword(hash, password)
-	// 不存在的账号不计失败:否则随机用户名会把锁定表撑成无界状态
-	if errors.Is(err, store.ErrNotFound) {
-		return "", store.AdminUser{}, ErrAdminCredentials
-	}
-	if !valid || u.Status != "active" {
-		return "", store.AdminUser{}, s.recordFailure(username, f, now)
-	}
-	delete(s.failures, username)
-	return s.openSession(ctx, u, now)
-}
-
-// LoginFederated 联邦轨:锦官 sub 映射本地影子账号并签发本地会话。身份信任来自 RP
-// 验签后的 id_token,本轨不校验口令;停用账号拒绝,且不因再次登录自动恢复启用。
-func (s *AdminService) LoginFederated(ctx context.Context, subject, name string) (string, store.AdminUser, error) {
+// LoginFederated 联邦轨:虎符 sub 直接作为主体键建/取主体并签发本地会话。
+// 身份信任来自 RP 验签后的 id_token,本轨不校验任何口令;停用主体拒绝,且不因再次登录自动恢复启用。
+// 配置白名单后,任何不在名单内的已验证 sub 都不得到达建号路径。
+func (s *AdminService) LoginFederated(ctx context.Context, subject, name string) (string, store.AdminPrincipal, error) {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return "", store.AdminUser{}, ErrAdminCredentials
+		return "", store.AdminPrincipal{}, ErrAdminCredentials
+	}
+	if s.allowed != nil {
+		if _, ok := s.allowed[subject]; !ok {
+			return "", store.AdminPrincipal{}, ErrAdminCredentials
+		}
 	}
 	now := s.now().UTC()
-	u, err := store.ResolveFederatedAdmin(ctx, s.db, uuid.NewV7().String(),
-		subject, federatedUsername(name), now.Format(time.RFC3339))
+	p, err := store.ResolveAdminPrincipal(ctx, s.db, subject, principalUsername(name),
+		now.Format(time.RFC3339))
 	if err != nil {
-		return "", store.AdminUser{}, err
+		return "", store.AdminPrincipal{}, err
 	}
-	if u.Status != "active" {
-		return "", store.AdminUser{}, ErrAdminCredentials
+	if p.Status != "active" {
+		return "", store.AdminPrincipal{}, ErrAdminCredentials
 	}
-	return s.openSession(ctx, u, now)
+	return s.openSession(ctx, p, now)
 }
 
-// federatedUsername 锦官实名经本地用户名同一值域收敛:控符/换行拒绝,超长按 UTF-8
-// 边界截断;空名兜底固定前缀,避免建出不可辨识账号。
-func federatedUsername(name string) string {
+// Patch 启停主体;停用即撤销该主体全部会话,启用不恢复旧会话。
+func (s *AdminService) Patch(ctx context.Context, subject string, disabled bool) error {
+	return store.PatchAdminPrincipal(ctx, s.db, subject, disabled)
+}
+
+// principalUsername 实名经展示名同一值域收敛:控符/换行剔除,超长按 UTF-8 边界截断;
+// range 字符串已把非法字节规整为 U+FFFD,无需另做 UTF-8 校验;
+// 空名兜底固定前缀,避免列表出现不可辨识行。
+func principalUsername(name string) string {
 	var b strings.Builder
 	for _, r := range strings.TrimSpace(name) {
-		if r == '\r' || r == '\n' || r == '\t' || r < 0x20 || r == 0x7f {
+		if r < 0x20 || r == 0x7f {
 			continue
 		}
 		b.WriteRune(r)
 	}
 	out := strings.TrimSpace(b.String())
-	if !utf8.ValidString(out) {
-		out = ""
-	}
 	for len(out) > 128 {
-		_, size := utf8.DecodeLastRuneInString(out)
-		out = out[:len(out)-size]
+		out = out[:lastRuneStart(out)]
 	}
 	if out == "" {
-		return "锦官用户"
+		return "虎符用户"
 	}
 	return out
 }
 
-// loginMaxFailures 同一用户名连续失败达此数即锁定;锁定窗口固定 15 分钟。
-const (
-	loginMaxFailures = 5
-	loginLockWindow  = 15 * time.Minute
-)
-
-// recordFailure 累计失败并返回对外统一错误;阈值处顺带设定锁定截止。
-func (s *AdminService) recordFailure(username string, f adminFailures, now time.Time) error {
-	f.count++
-	if f.count >= loginMaxFailures {
-		f.until = now.Add(loginLockWindow)
+// lastRuneStart 返回末字符起始字节,按 UTF-8 边界截断不产生非法串;
+// 输入来自 RP 验签后的 name,仍可能含非法字节(Go range 产出 U+FFFD),此路径一并消除。
+func lastRuneStart(s string) int {
+	for i := len(s) - 1; i > 0; i-- {
+		if s[i]&0xC0 != 0x80 {
+			return i
+		}
 	}
-	s.failures[username] = f
-	return ErrAdminCredentials
+	return 0
 }
 
-// openSession 签发会话令牌；会话落库时用户已消失仍归凭据无效。
-func (s *AdminService) openSession(ctx context.Context, u store.AdminUser, now time.Time) (
-	string, store.AdminUser, error,
+// openSession 签发会话令牌;会话落库时主体已停用则归凭据无效。
+func (s *AdminService) openSession(ctx context.Context, p store.AdminPrincipal, now time.Time) (
+	string, store.AdminPrincipal, error,
 ) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", u, err
+		return "", p, err
 	}
 	token := base64.RawURLEncoding.EncodeToString(b)
 	expires := now.Add(12 * time.Hour).Format(time.RFC3339)
-	if err := store.CreateAdminSession(ctx, s.db, u, adminTokenHash(token),
+	if err := store.CreateAdminSession(ctx, s.db, p.Subject, adminTokenHash(token),
 		now.Format(time.RFC3339), expires); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return "", u, ErrAdminCredentials
+			return "", p, ErrAdminCredentials
 		}
-		return "", u, err
+		return "", p, err
 	}
-	return token, u, nil
+	return token, p, nil
 }
 
 func adminTokenHash(token string) string {
@@ -202,19 +131,19 @@ func adminTokenHash(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Session 逐请求查服务端状态，账户失效、会话不存在与过期统一拒绝。
-func (s *AdminService) Session(ctx context.Context, token string) (store.AdminUser, error) {
+// Session 逐请求查服务端状态:主体停用、会话不存在与过期统一拒绝。
+func (s *AdminService) Session(ctx context.Context, token string) (store.AdminPrincipal, error) {
 	if token == "" {
-		return store.AdminUser{}, ErrAdminCredentials
+		return store.AdminPrincipal{}, ErrAdminCredentials
 	}
-	u, err := store.AdminSession(ctx, s.db, adminTokenHash(token), s.now().UTC().Format(time.RFC3339))
+	p, err := store.AdminSession(ctx, s.db, adminTokenHash(token), s.now().UTC().Format(time.RFC3339))
 	if errors.Is(err, store.ErrNotFound) {
-		return u, ErrAdminCredentials
+		return p, ErrAdminCredentials
 	}
-	return u, err
+	return p, err
 }
 
-// Logout 删除哈希记录，令牌明文不进入数据库。
+// Logout 删除哈希记录,令牌明文不进入数据库。
 func (s *AdminService) Logout(ctx context.Context, token string) error {
 	return store.DeleteAdminSession(ctx, s.db, adminTokenHash(token))
 }

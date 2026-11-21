@@ -1,5 +1,5 @@
-// Package admin 承载运维面三轨鉴权（本地会话/共享令牌/锦官 OIDC 联邦）与动作审计；
-// 账号、共享令牌与联邦均未配置时整体关闭。
+// Package admin 承载运维面鉴权（虎符 OIDC 联邦会话/共享令牌）与动作审计；
+// 共享令牌、活跃主体与联邦均未配置时整体关闭。本地账密轨已删除，账户权威只在虎符。
 // API key 管理接口复用 auth 包的签发与校验逻辑。
 package admin
 
@@ -25,6 +25,7 @@ import (
 	"github.com/solvela/muniu/internal/oidc"
 	"github.com/solvela/muniu/internal/plugin"
 	"github.com/solvela/muniu/internal/protocol"
+	"github.com/solvela/muniu/internal/ratelimit"
 	"github.com/solvela/muniu/internal/store"
 )
 
@@ -62,7 +63,11 @@ type Deps struct {
 	Health                 *health.Manager    // 上游健康管理器;nil = 观测未启用,端点返回空态
 	AlertWebhookConfigured bool               // webhook_url 是否配置;false 时投递自监控端点返回关闭态
 	OAuthFlow              *oauth.Flow        // OAuth 授权流;nil = oauth 段未声明,授权端点返回关闭态(账号 CRUD 不依赖)
-	Federated              *oidc.RelyingParty // 锦官 OIDC 联邦;nil = admin_oidc 未声明,联邦入口返回关闭态
+	Federated              *oidc.RelyingParty // 虎符 OIDC 联邦;nil = admin_oidc 未声明,联邦入口返回关闭态
+	AdminSubjects          []string           // 允许建立管理主体的虎符 sub 白名单;空 = 不限(仅测试注入)
+	PostLogoutRedirect     string             // 虎符登出后回跳;空则按 redirect_url 同源推导 /console/
+	SecureCookies          bool               // 管理面 cookie 是否带 Secure(反代终止 TLS 时必须显式开启)
+	LoginLimiter           *ratelimit.Limiter // 登录发起/回调按 IP 限流;nil 由 New 装配进程内实现
 
 	Logger *slog.Logger
 }
@@ -76,15 +81,14 @@ type adminRouteEntry struct {
 // adminRouteTable 管理面路由单一事实源：New 据此注册，Routes() 据此回报，漂移门禁消费同一份。
 // 两处手写必然漂移，模式只在这里声明一次。
 var adminRouteTable = []adminRouteEntry{
-	{"POST /admin/v1/auth/login", adminLogin},
 	{"POST /admin/v1/auth/logout", adminLogout},
+	{"POST /admin/v1/auth/logout/sso", adminLogoutSSO},
 	{"GET /admin/v1/auth/whoami", adminWhoami},
 	{"GET /admin/v1/auth/federation", adminFederationInfo},
 	{"GET /admin/v1/auth/oidc/start", adminFederatedStart},
 	{"GET /admin/v1/auth/oidc/callback", adminFederatedCallback},
 	{"GET /admin/v1/admins", adminUsersList},
-	{"POST /admin/v1/admins", adminUsersCreate},
-	{"PATCH /admin/v1/admins/{id}", adminUsersPatch},
+	{"PATCH /admin/v1/admins/{subject}", adminUsersPatch},
 	{"GET /admin/v1/audit", adminAuditList},
 	{"GET /admin/v1/image-pricing", imagePricingList},
 	{"PUT /admin/v1/image-pricing/{alias}", imagePricingPut},
@@ -118,13 +122,13 @@ var adminRouteTable = []adminRouteEntry{
 	{"GET /admin/v1/upstream-health", upstreamHealth},
 }
 
-// New 按共享令牌、活跃账号或锦官联邦开放管理面，认证装配失败不暴露空壳。
+// New 按共享令牌、活跃主体或虎符联邦开放管理面，认证装配失败不暴露空壳。
 func New(ctx context.Context, d Deps) http.Handler {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
 	}
 	if d.Token == "" && d.Federated == nil {
-		active, err := store.HasActiveAdmins(ctx, d.DB)
+		active, err := store.HasActiveAdminPrincipals(ctx, d.DB)
 		if err != nil {
 			d.Logger.Error("管理员挂载条件查询失败", "error_detail", err.Error())
 			return nil
@@ -134,18 +138,26 @@ func New(ctx context.Context, d Deps) http.Handler {
 		}
 	}
 	if d.AdminAuth == nil {
-		svc, err := auth.NewAdminService(ctx, d.DB)
+		svc, err := auth.NewAdminService(ctx, d.DB, d.AdminSubjects)
 		if err != nil {
 			d.Logger.Error("管理员认证装配失败", "error_detail", err.Error())
 			return nil
 		}
 		d.AdminAuth = svc
 	}
+	initLoginLimiter(&d)
 	mux := http.NewServeMux()
 	for _, e := range adminRouteTable {
 		mux.Handle(e.Pattern, e.Handler(d))
 	}
 	return authOperators(d, auditOperators(d, mux))
+}
+
+// initLoginLimiter 联邦入口默认进程内每 IP 限流;装配层可注入共享/测试实现。
+func initLoginLimiter(d *Deps) {
+	if d.Federated != nil && d.LoginLimiter == nil {
+		d.LoginLimiter = ratelimit.New()
+	}
 }
 
 // secureEqual 恒定时间字符串比较。

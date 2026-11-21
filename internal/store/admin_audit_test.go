@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -44,8 +45,8 @@ func TestListAdminAudit_结果不足一页不panic(t *testing.T) {
 	}
 }
 
-// 迁移 0020:审计值域接纳 federated;admin_users 只增列且联邦 sub 唯一。
-func TestMigration0020_联邦身份列与审计值域(t *testing.T) {
+// 迁移 0020:审计值域接纳 federated(本地登录轨删除后 login 值域仅作历史兼容保留)。
+func TestMigration0020_联邦审计值域(t *testing.T) {
 	db := auditDB(t)
 	ctx := context.Background()
 	if err := AppendAdminAudit(ctx, db, AdminAudit{
@@ -60,26 +61,60 @@ func TestMigration0020_联邦身份列与审计值域(t *testing.T) {
 	}); err == nil {
 		t.Fatal("非值域 actor_kind 必须被 CHECK 拒绝")
 	}
+}
 
-	// 本地账号默认 origin=local 且 external_subject 为空
-	if err := CreateAdminUser(ctx, db, AdminUser{
-		ID: "u1", Username: "local", PasswordHash: "h", Status: "active", CreatedAt: "2026-11-20T00:00:00Z",
-	}); err != nil {
+// 迁移 0021:主体以虎符 sub 为主键,同名展示名可并存;会话按 subject 归属。
+func TestMigration0021_主体以subject为主键(t *testing.T) {
+	db := auditDB(t)
+	ctx := context.Background()
+	first, err := ResolveAdminPrincipal(ctx, db, "hufu:sub-1", "张三", "2026-11-21T00:00:00Z")
+	if err != nil || first.Subject != "hufu:sub-1" || first.Status != "active" {
+		t.Fatalf("首登建档失败: %+v %v", first, err)
+	}
+	again, err := ResolveAdminPrincipal(ctx, db, "hufu:sub-1", "张三", "2026-11-21T00:00:00Z")
+	if err != nil || again.CreatedAt != first.CreatedAt {
+		t.Fatalf("同一 sub 必须复用既有行: %+v %v", again, err)
+	}
+	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:sub-2", "张三", "2026-11-21T00:00:00Z"); err != nil {
+		t.Fatalf("同名不同 sub 必须可并存(身份键是 sub 不是名字): %v", err)
+	}
+
+	// 会话仅对活跃主体可建;停用即删该主体会话
+	if err := CreateAdminSession(ctx, db, "hufu:sub-1", "h1", "2026-11-21T00:00:00Z", "2026-11-21T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	u, err := GetAdminUser(ctx, db, "local")
-	if err != nil || u.Origin != "local" || u.ExternalSubject != "" {
-		t.Fatalf("本地账号默认值错误: %+v %v", u, err)
+	if _, err := AdminSession(ctx, db, "h1", "2026-11-21T01:00:00Z"); err != nil {
+		t.Fatal(err)
 	}
+	if err := PatchAdminPrincipal(ctx, db, "hufu:sub-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AdminSession(ctx, db, "h1", "2026-11-21T01:00:00Z"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("停用后会话必须失效: %v", err)
+	}
+	if err := CreateAdminSession(ctx, db, "hufu:sub-1", "h2", "2026-11-21T00:00:00Z", "2026-11-21T12:00:00Z"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("停用主体不得签发会话: %v", err)
+	}
+	if err := PatchAdminPrincipal(ctx, db, "hufu:none", false); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("不存在主体应 ErrNotFound: %v", err)
+	}
+}
 
-	// 联邦影子账号:同一 sub 唯一
-	fed, err := ResolveFederatedAdmin(ctx, db, "u2", "sub-1", "张三", "2026-11-20T00:00:00Z")
-	if err != nil || fed.Origin != "federated" || fed.ExternalSubject != "sub-1" {
-		t.Fatalf("联邦建号失败: %+v %v", fed, err)
+// 启动闸:旧 admin_users 含本地账密行必须明确拒绝,联邦行不得误伤。
+func TestEnsureNoLocalAdminAccounts_拒本地账密行(t *testing.T) {
+	db := auditDB(t)
+	ctx := context.Background()
+	if err := EnsureNoLocalAdminAccounts(ctx, db); err != nil {
+		t.Fatal(err)
 	}
-	again, err := ResolveFederatedAdmin(ctx, db, "u3", "sub-1", "张三", "2026-11-20T00:00:00Z")
-	if err != nil || again.ID != fed.ID {
-		t.Fatalf("同一 sub 必须复用既有行: %+v %v", again, err)
+	if _, err := db.ExecContext(ctx, `INSERT INTO admin_users(id,username,password_hash,status,created_at,origin)
+		VALUES('u1','legacy-shadow','','active','2026-11-20T00:00:00Z','federated'),
+		('u2','legacy-formal','$argon2id$y','active','2026-11-20T00:00:00Z','local')`); err != nil {
+		t.Fatal(err)
+	}
+	err := EnsureNoLocalAdminAccounts(ctx, db)
+	if !IsBusiness(err) || !strings.Contains(err.Error(), "legacy-formal") || strings.Contains(err.Error(), "legacy-shadow") {
+		t.Fatalf("启动闸必须指名本地行且放行联邦行: %v", err)
 	}
 }
 

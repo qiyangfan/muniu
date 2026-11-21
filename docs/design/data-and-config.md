@@ -129,20 +129,21 @@ standalone 形态的全量运营态(key 哈希/用量账本/价目)在单文件 
 - 明确不做:定时/自动备份(OS 层 cron/launchd/Time Machine 的职责)、云同步、加密、
   增量备份、cluster 形态(无状态副本 + jinguan PG 自有备份生态,ADR-0005 边界)。
 
-## 图片价目与管理面身份（ADR-0016/0017）
+## 图片价目与管理面身份（ADR-0016/0017/0022）
 
 追加迁移 0011 `image_pricing(alias TEXT PK,currency TEXT CNY|USD,default_credits INTEGER>0,tiers TEXT JSON,updated_at TEXT)`。tiers 为 `size|quality → credit/张` 对象；读取期严格解析，损坏拒启/拒刷新。配置 `image_pricing` 是按别名组织的静态报价映射（currency/default/tiers 字符串），与既有 pricing 平行。
 
-追加迁移 0012：
+追加迁移 0012 的三表在 ADR-0017 时代为本地账密模型；木牛去账号化（ADR-0022，虎符为唯一账户权威）后追加迁移 0021 收敛为 subject 主键模型：
 
-- `admin_users(id TEXT UUIDv7 PK,username TEXT UNIQUE,password_hash TEXT,status TEXT active|disabled,created_at TEXT,last_login_at TEXT nullable)`；哈希为 argon2id PHC 串，列表/API/日志不回显。
-- `admin_sessions(token_hash TEXT SHA-256 PK,user_id TEXT FK,created_at TEXT,expires_at TEXT)`；令牌 32 随机字节，固定 12h、HttpOnly、SameSite=Lax、Path=/；逐请求查活跃账号，停用/改密与全部会话删除同事务，登录签发条件再次核验活跃状态与密码版本，防止并发停用/改密后签发旧凭据。
-- `admin_audit_log(id TEXT UUIDv7 PK,request_id TEXT,actor_kind TEXT session|token|login,actor_name TEXT,action TEXT,target_id TEXT,outcome TEXT,detail TEXT,created_at TEXT)`，按 created_at/id 倒序复合游标查询，只增不改；变更与登录成败同步留痕，写失败告警，动作不回滚。
+- `admin_principals(subject TEXT PK,username TEXT,status TEXT active|disabled,created_at TEXT,last_login_at TEXT nullable)`：subject 为虎符规范 sub（issuer+sub），是唯一身份键；username 只是 id_token 展示名，同名不同 sub 可并存。主体只能由虎符首登自动建档，不再保留 `password_hash` 作为登录凭据。
+- `admin_sessions(token_hash TEXT SHA-256 PK,subject TEXT FK→admin_principals,created_at TEXT,expires_at TEXT)`：令牌 32 随机字节，固定 12h、HttpOnly、SameSite=Lax、Path=/；逐请求 JOIN 主体状态，停用即删该主体全部会话且签发时条件核验活跃状态。
+- `admin_audit_log` 不变（actor_kind 值域保留 session/login 作历史行兼容，新行只用 federated/token/unauthenticated），按 created_at/id 倒序复合游标查询，只增不改；变更同步留痕，写失败告警，动作不回滚。
+- 迁移纪律：零存量重建——生产从未建过本地管理员；旧库 `admin_users` 含本地账密行时装配期启动闸 `store.EnsureNoLocalAdminAccounts` 指名行并拒绝启动，不静默丢行。旧表与联邦影子 id 列保留但不读写。
 
-管理面挂载条件为共享令牌或活跃管理员账号；现行 Bearer 轨保留，actor 为 management-token。`muniu admins add|list|disable|enable|passwd` 直连同库，口令走 stdin，tty 禁回显并双次确认。`POST /admin/v1/auth/login|logout`、`GET /admin/v1/auth/whoami`、`GET/POST /admin/v1/admins`、`PATCH /admin/v1/admins/{id}`、`GET /admin/v1/audit` 是管理 API；数据面 API key 与运维身份分离。
+管理面挂载条件为共享令牌、存在活跃主体或虎符联邦已声明；现行 Bearer 轨保留，actor 为 management-token。`muniu admins list|disable --subject|enable --subject` 直连同库；`POST /admin/v1/auth/logout`、`GET /admin/v1/auth/whoami`、`GET /admin/v1/auth/federation`、`GET /admin/v1/auth/oidc/start|callback`、`GET /admin/v1/admins`、`PATCH /admin/v1/admins/{subject}`（路径参数即 subject）、`GET /admin/v1/audit` 是管理 API；本地账密 `POST /admin/v1/auth/login` 与 `POST /admin/v1/admins` 已删除。数据面 API key 与运维身份分离。
 
-登录连续失败 5 次锁 15 分钟，进程内计数重启清零。PHC 参数随串解析且施加资源上限；口令至少 8 字符。过期会话启动清扫/命中惰性清理，不增加后台任务。会话轨与登录入口使用 Go 标准库 CrossOriginProtection 拒绝跨站写操作；Bearer 脚本轨行为保留。cookie 在本地 HTTP 不设 Secure；远程访问须由 TLS 反代终止。审计 body 只取允许的业务标量，password/token/secret 脱敏，未知字段只留字段名。管理请求体上限 1MiB。
+登录失败锁定、口令哈希、改密注销等本地账密硬化随账密轨一并移除；会话失效只剩两条：主体停用（即时）与到期/注销。过期会话启动清扫/命中惰性清理，不增加后台任务。会话轨使用 Go 标准库 CrossOriginProtection 拒绝跨站写操作；Bearer 脚本轨行为保留。管理面 cookie 的 Secure 由顶层 `admin_cookie_secure` 决定（缺省按 `admin_oidc.issuer` 是否 https 推导），反代终止 TLS 时必须显式开启；state 与登录发起另有每 IP 限流。审计 body 只取允许的业务标量，password/token/secret 脱敏，未知字段只留字段名。管理请求体上限 1MiB。
 
-`GET /metrics` 仍独立使用 Bearer token 门禁，不因账号轨引入而开放；身份与静态报价仍不属于 SIGHUP 热更域。
+`GET /metrics` 仍独立使用 Bearer token 门禁，不因主体轨引入而开放；身份与静态报价仍不属于 SIGHUP 热更域。
 
 供应商管理页与 keypool gauge 在每次读取时复用 Proxy.Topology() 的当前同一快照，不持启动时 providers/pools 作为热更后的真相；无动态视图注入的管理 handler 保留静态形态用于独立调用与测试。

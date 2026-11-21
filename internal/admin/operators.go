@@ -23,8 +23,6 @@ import (
 const adminCookie = "muniu_admin_session"
 
 type actorKey struct{}
-type loginIdentityKey struct{}
-type loginIdentity struct{ name string }
 
 // Actor 身份沿 request context 传播；共享令牌保留具名但不冒认个人归因。
 type Actor struct {
@@ -35,30 +33,33 @@ type Actor struct {
 // ActorFrom 返回当前运维身份，数据面 API key 不进入本上下文。
 func ActorFrom(ctx context.Context) Actor { a, _ := ctx.Value(actorKey{}).(Actor); return a }
 
-// exemptPaths 豁免管理面鉴权的请求：登录入口与 OAuth 回调（浏览器整页跳转不带管理凭据）。
+// exemptPaths 豁免管理面鉴权的请求：OIDC 联邦入口与 OAuth 回调（浏览器整页跳转不带管理凭据）。
 // 回调类豁免以 state（不可预测、单次、TTL 内）作持有者凭据，重放/伪造在各自 Flow 被拒。
 func exemptPaths(r *http.Request) bool {
+	if r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/logout/sso" {
+		return true // 登出只清自身会话;会话已过期时也须能清 cookie 并跳转
+	}
 	if r.Method != http.MethodGet {
-		return r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login"
+		return false
 	}
 	switch r.URL.Path {
 	case "/admin/v1/oauth/callback", // 订阅账号授权流回调
 		"/admin/v1/auth/federation", // 登录页探测联邦入口是否可用
-		"/admin/v1/auth/oidc/start", // 锦官联邦发起(整页跳转)
+		"/admin/v1/auth/oidc/start", // 虎符联邦发起(整页跳转)
 		"/admin/v1/auth/oidc/callback":
 		return true
 	}
 	return false
 }
 
-// resolveActor 认证管理面身份：管理员会话 cookie（含锦官联邦签发的会话）、共享令牌；
-// 失败已写出响应时 ok=false。联邦会话按影子账号 origin 归因 federated，名字即锦官实名。
+// resolveActor 认证管理面身份：虎符联邦会话 cookie、共享令牌；失败已写出响应时 ok=false。
+// 本地账密轨已删除,会话轨只有虎符一条来源,名字即 id_token 展示名。
 func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) {
 	actor := Actor{}
 	if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
-		u, err := d.AdminAuth.Session(r.Context(), cookie.Value)
+		p, err := d.AdminAuth.Session(r.Context(), cookie.Value)
 		if err == nil {
-			actor = Actor{Kind: actorKindOf(u), Name: u.Username}
+			actor = Actor{Kind: "federated", Name: p.Username}
 		} else if !errors.Is(err, auth.ErrAdminCredentials) {
 			respondErr(d, w, r, err, "auth_failed")
 			return actor, false
@@ -76,14 +77,6 @@ func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) 
 	return actor, true
 }
 
-// actorKindOf 会话轨归因：联邦影子账号记 federated，本地账号记 session。
-func actorKindOf(u store.AdminUser) string {
-	if u.Origin == "federated" {
-		return "federated"
-	}
-	return "session"
-}
-
 func authOperators(d Deps, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		actor := Actor{}
@@ -92,40 +85,28 @@ func authOperators(d Deps, next http.Handler) http.Handler {
 			if actor, ok = resolveActor(d, w, r); !ok {
 				return
 			}
+		} else if r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/logout/sso" {
+			// 统一登出必须能清掉失效会话;有效会话仍归因到主体,供审计使用。
+			actor = optionalSessionActor(d, r)
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), actorKey{}, actor)))
 	})
 }
 
-func adminLogin(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if d.AdminAuth == nil {
-			writeAdminError(w, r, 401, protocol.TypeAuthFailed, "auth_failed", "管理员凭据无效")
-			return
-		}
-		var in struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		}
-		if err := decode(r, &in); err != nil || in.Username == "" || len(in.Username) > 128 {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "用户名与密码必填")
-			return
-		}
-		if identity, ok := r.Context().Value(loginIdentityKey{}).(*loginIdentity); ok {
-			identity.name = in.Username
-		}
-		token, u, err := d.AdminAuth.Login(r.Context(), in.Username, in.Password)
-		if errors.Is(err, auth.ErrAdminCredentials) || errors.Is(err, auth.ErrAdminLocked) {
-			writeAdminError(w, r, 401, protocol.TypeAuthFailed, "auth_failed", err.Error())
-			return
-		}
-		if err != nil {
-			respondErr(d, w, r, err, "auth_failed")
-			return
-		}
-		setAdminCookie(w, r, token)
-		writeJSON(w, 200, Actor{Kind: "session", Name: u.Username})
+// optionalSessionActor 只读解析会话,失败不写响应;供免鉴权但需要审计归因的路径使用。
+func optionalSessionActor(d Deps, r *http.Request) Actor {
+	if d.AdminAuth == nil {
+		return Actor{}
 	}
+	c, err := r.Cookie(adminCookie)
+	if err != nil {
+		return Actor{}
+	}
+	p, err := d.AdminAuth.Session(r.Context(), c.Value)
+	if err != nil {
+		return Actor{}
+	}
+	return Actor{Kind: "federated", Name: p.Username}
 }
 
 func adminLogout(d Deps) http.HandlerFunc {
@@ -136,7 +117,7 @@ func adminLogout(d Deps) http.HandlerFunc {
 				return
 			}
 		}
-		clearAdminCookie(w, r)
+		clearAdminCookie(w, d.SecureCookies)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}
 }
@@ -147,53 +128,26 @@ func adminWhoami(_ Deps) http.HandlerFunc {
 
 func adminUsersList(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		u, err := store.ListAdminUsers(r.Context(), d.DB)
+		p, err := store.ListAdminPrincipals(r.Context(), d.DB)
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"admins": u})
+		writeJSON(w, 200, map[string]any{"admins": p})
 	}
 }
 
-func adminUsersCreate(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		var in struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		}
-		if err := decode(r, &in); err != nil {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
-			return
-		}
-		u, err := d.AdminAuth.Create(r.Context(), in.Username, in.Password)
-		if err != nil {
-			respondErr(d, w, r, err, "bad_request")
-			return
-		}
-		writeJSON(w, 200, u)
-	}
-}
-
+// adminUsersPatch 按 sub 启停主体;主体只能由虎符首登产生(不再提供本地创建/改密)。
 func adminUsersPatch(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Disabled *bool   `json:"disabled"`
-			Password *string `json:"password"`
+			Disabled *bool `json:"disabled"`
 		}
-		if err := decode(r, &in); err != nil || in.Disabled == nil && in.Password == nil {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "须提供 disabled 或 password")
+		if err := decode(r, &in); err != nil || in.Disabled == nil {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "须提供 disabled")
 			return
 		}
-		password := ""
-		if in.Password != nil {
-			password = *in.Password
-			if password == "" {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "密码不可为空")
-				return
-			}
-		}
-		err := d.AdminAuth.Patch(r.Context(), r.PathValue("id"), in.Disabled, password)
+		err := d.AdminAuth.Patch(r.Context(), r.PathValue("subject"), *in.Disabled)
 		if errors.Is(err, store.ErrNotFound) {
 			writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
 			return
@@ -329,7 +283,7 @@ func fillPathValues(r *http.Request, pattern string) {
 	}
 }
 
-// auditAction 由路由模式与请求方法推导动作名，如 keys.patch、auth.login。
+// auditAction 由路由模式与请求方法推导动作名，如 keys.patch、auth.logout。
 func auditAction(pattern, method string) string {
 	parts := strings.Fields(pattern)
 	action := strings.ToLower(method)
@@ -339,17 +293,18 @@ func auditAction(pattern, method string) string {
 	path := strings.Split(strings.TrimPrefix(parts[1], "/admin/v1/"), "/")
 	action = path[0] + "." + strings.ToLower(parts[0])
 	if path[0] == "auth" && len(path) > 1 {
-		action = "auth." + path[1]
+		// 保留完整子路径,避免 logout 与 logout/sso、oidc/start 与 oidc/callback 互相覆盖。
+		action = "auth." + strings.Join(path[1:], ".")
 	}
 	return action
 }
 
-// auditTarget 审计目标：优先 id，其次 prefix/alias/name 路径参数。
+// auditTarget 审计目标：优先 id，其次 subject/prefix/alias/name 路径参数。
 func auditTarget(r *http.Request) string {
 	if target := r.PathValue("id"); target != "" {
 		return target
 	}
-	for _, name := range []string{"prefix", "alias", "name"} {
+	for _, name := range []string{"subject", "prefix", "alias", "name"} {
 		if v := r.PathValue(name); v != "" {
 			return v
 		}
@@ -357,12 +312,12 @@ func auditTarget(r *http.Request) string {
 	return ""
 }
 
-// auditOutcome 按响应状态定结论；登录失败单独记为 denied。
-func auditOutcome(status int, login bool) string {
+// auditOutcome 按响应状态定结论；拒绝(401/403)单独记为 denied。
+func auditOutcome(status int) string {
 	if status < 400 {
 		return "ok"
 	}
-	if login {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return "denied"
 	}
 	return fmt.Sprintf("error:%d", status)
@@ -391,14 +346,11 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 		r.Pattern = pattern
 		fillPathValues(r, pattern)
 		actor := ActorFrom(r.Context())
-		login := r.Method == http.MethodPost && r.URL.Path == "/admin/v1/auth/login"
-		identity := &loginIdentity{}
-		r = r.WithContext(context.WithValue(r.Context(), loginIdentityKey{}, identity))
 		detail := "{}"
 		aw := &auditWriter{ResponseWriter: w}
-		// 所有已认证变更与登录拒绝共用收尾，读取失败也留下安全摘要。
+		// 已认证变更与鉴权拒绝共用收尾，读取失败也留下安全摘要。
 		defer func() {
-			aw.finishAudit(d, r, actor, identity, login, detail)
+			aw.finishAudit(d, r, actor, detail)
 		}()
 		body, err := io.ReadAll(http.MaxBytesReader(aw, r.Body, 1<<20))
 		if err != nil {
@@ -407,9 +359,9 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 		}
 		_ = r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
-		detail, identity.name = auditSummary(body)
-		// cookie 承载的会话(含联邦)一律过 CSRF;令牌轨与登录入口不走浏览器凭证
-		if login || actor.Kind == "session" || actor.Kind == "federated" {
+		detail, _ = auditSummary(body)
+		// cookie 承载的虎符会话一律过 CSRF;令牌轨不走浏览器凭证
+		if actor.Kind == "federated" {
 			if err := csrf.Check(r); err != nil {
 				writeAdminError(aw, r, 403, protocol.TypeAuthFailed, "cross_origin_denied", "不允许跨站管理操作")
 				return
@@ -420,17 +372,14 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 }
 
 // finishAudit 收尾落审计行；panic 场景由调用方置 500 由本函数如实记录。
-func (aw *auditWriter) finishAudit(
-	d Deps, r *http.Request,
-	actor Actor, identity *loginIdentity,
-	login bool, detail string,
-) {
+func (aw *auditWriter) finishAudit(d Deps, r *http.Request, actor Actor, detail string) {
 	panicValue := recover()
 	if panicValue != nil {
 		defer func() { panic(panicValue) }()
 	}
-	if login {
-		actor = Actor{Kind: "login", Name: identity.name}
+	// 免鉴权 POST(当前仅统一登出)没有 actor:会话可能已过期,仍须留下动作行。
+	if actor.Kind == "" {
+		actor = Actor{Kind: "login", Name: "anonymous"}
 	}
 	status := aw.status
 	if panicValue != nil {
@@ -440,9 +389,6 @@ func (aw *auditWriter) finishAudit(
 		status = 200
 	}
 	action := auditAction(r.Pattern, r.Method)
-	if login {
-		action = "auth.login"
-	}
 	a := store.AdminAudit{
 		ID:        uuid.NewV7().String(),
 		RequestID: logging.RequestIDFrom(r.Context()),
@@ -450,7 +396,7 @@ func (aw *auditWriter) finishAudit(
 		ActorName: actor.Name,
 		Action:    action,
 		TargetID:  auditTarget(r),
-		Outcome:   auditOutcome(status, login),
+		Outcome:   auditOutcome(status),
 		Detail:    detail,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}

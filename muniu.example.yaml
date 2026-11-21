@@ -56,15 +56,22 @@ metering:
 #   client_id: "<声明的 OAuth client_id>"
 #   callback_url: "http://127.0.0.1:8787/admin/v1/oauth/callback"
 
-# 可选:木牛 console 的统一身份 OIDC 联邦(虎符/锦官,admin-operators 契约)。声明即启用
-# 登录入口,端点经 issuer 的发现文档解析;三字段必齐(部分声明加载期拒绝)。
-# client_secret 可空(公开客户端 + PKCE);非空时建议经环境变量注入,勿明文入库。
-# 联邦轨失败不影响本地 break-glass 账密与 MUNIU_ADMIN_TOKEN(控制面失联降级)。
-# 接入虎符示例(公开客户端,无 secret):
+# 管理面统一身份(虎符 OIDC RP,admin-operators 契约):控制台唯一的人员登录入口,
+# 人员主体按虎符 sub 建档;本地账密已删除。声明即启用,端点经 issuer 发现文档解析,
+# issuer/client_id/redirect_url/admin_subjects 必齐(部分声明加载期拒绝)。client_secret 可空
+# (公开客户端 + PKCE),非空时经环境变量注入。admin_subjects 是允许进入管理面的虎符 sub
+# 白名单,名单外主体一律拒绝;post_logout_redirect_url 须在虎符 client 登记。
+# 未声明时只剩 MUNIU_ADMIN_TOKEN 一条运维轨(CLI/脚本),联邦失败不影响它。
 # admin_oidc:
 #   issuer: "http://127.0.0.1:8080"
 #   client_id: "muniu-console"
 #   redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
+#   admin_subjects: ["0192f0c4-7a1e-7c3b-9d2e-5f6a7b8c9d0e"]
+#   post_logout_redirect_url: "http://127.0.0.1:8787/console/"
+#
+# 管理面 cookie 的 Secure 标记(顶层键,与 admin_oidc 平级):反代终止 TLS 时 r.TLS 恒为空,
+# 不能据请求推断;缺省按 admin_oidc.issuer 是否 https 推导,生产经反代暴露时显式置 true。
+# admin_cookie_secure: true
 
 # 启用后需配置 MUNIU_ADMIN_TOKEN 才会挂载 Prometheus 指标端点 GET /metrics。
 # metrics:

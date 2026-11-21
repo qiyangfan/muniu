@@ -4,7 +4,7 @@ PKG := github.com/solvela/muniu
 
 ## check: 全量门禁(vet、lint、死代码、许可证、密钥扫描、基础设施 lint(含文件卫生)、依赖整洁、web 检查、race test/覆盖率、插件)
 .PHONY: check
-check: vet lint deadcode licenses secrets doclink infra-lint tidy-check web-check test plugin-check
+check: vet lint deadcode licenses secrets doclink infra-lint tidy-check web-check test plugin-check spec-check
 
 ## web-check: 控制台类型检查/lint/组件测试/契约类型漂移(pnpm 存在时执行,否则跳过)
 .PHONY: web-check
@@ -21,6 +21,10 @@ web-build:
 .PHONY: vet
 vet:
 	$(GO) vet ./...
+
+## spec-check: OpenSpec 规格/变更 strict 校验(工具缺失时跳过)
+spec-check:
+	@if command -v openspec >/dev/null 2>&1; then openspec validate --all --strict; else echo "[spec-check] openspec 未安装,跳过"; fi
 
 ## lint: golangci-lint 未安装时跳过并提示(安装见 docs/plans/phase-0-bootstrap.md)
 .PHONY: lint

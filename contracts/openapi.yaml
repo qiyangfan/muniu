@@ -10,7 +10,7 @@ components:
       type: object
       required: [kind, name]
       properties:
-        kind: {type: string, enum: [session, token, login, federated]}
+        kind: {type: string, enum: [federated, token]}
         name: {type: string}
     FederationInfo:
       type: object
@@ -19,15 +19,13 @@ components:
         enabled: {type: boolean}
     AdminUser:
       type: object
-      required: [id, username, status, created_at]
+      required: [subject, username, status, created_at]
       properties:
-        id: {type: string}
-        username: {type: string}
+        subject: {type: string, description: 虎符 subject，主体唯一键}
+        username: {type: string, description: 展示名，来自 id_token name，不参与身份判定}
         status: {type: string, enum: [active, disabled]}
         created_at: {type: string}
         last_login_at: {type: string, nullable: true}
-        origin: {type: string, enum: [local, federated]}
-        external_subject: {type: string}
     AdminAudit:
       type: object
       required: [id, actor_kind, actor_name, action, outcome, created_at]
@@ -841,31 +839,24 @@ paths:
         "200": {description: 已回落静态兜底}
         "404": {description: 无运行态覆盖}
 
-  /admin/v1/auth/login:
-    post:
-      summary: 管理员账密登录
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username, password]
-              properties:
-                username: {type: string}
-                password: {type: string, format: password}
-      responses:
-        "200":
-          description: 签发 HttpOnly 会话 cookie，有效期 12 小时
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/AdminActor"}
-        "401": {description: 凭据无效或账号锁定}
   /admin/v1/auth/logout:
     post:
       summary: 注销当前管理员会话
       responses:
         "200": {description: 会话已失效}
+  /admin/v1/auth/logout/sso:
+    post:
+      summary: 注销本地会话并给出虎符 end_session 地址（统一登出）
+      responses:
+        "200":
+          description: 本地会话已失效；权威不可达时 redirect_url 退回控制台
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [redirect_url]
+                properties:
+                  redirect_url: {type: string}
   /admin/v1/auth/whoami:
     get:
       summary: 当前操作员身份
@@ -877,7 +868,7 @@ paths:
               schema: {$ref: "#/components/schemas/AdminActor"}
   /admin/v1/auth/federation:
     get:
-      summary: 锦官联邦入口可用性（登录页据此渲染按钮）
+      summary: 虎符联邦入口可用性（登录页据此渲染入口）
       responses:
         "200":
           description: 联邦是否已配置
@@ -886,14 +877,14 @@ paths:
               schema: {$ref: "#/components/schemas/FederationInfo"}
   /admin/v1/auth/oidc/start:
     get:
-      summary: 发起锦官 OIDC 授权码 + PKCE 登录（浏览器整页跳转）
+      summary: 发起虎符 OIDC 授权码 + PKCE 登录（浏览器整页跳转）
       responses:
-        "302": {description: 跳转锦官授权端点，state/nonce 单次有效}
+        "302": {description: 跳转虎符授权端点，state/nonce 单次有效}
         "404": {description: 联邦未配置}
-        "502": {description: 锦官权威不可达}
+        "502": {description: 虎符权威不可达}
   /admin/v1/auth/oidc/callback:
     get:
-      summary: 锦官 OIDC 回调（state 即持有者凭据，验签后签发本地会话）
+      summary: 虎符 OIDC 回调（state 即持有者凭据，验签后按 sub 建取主体并签发本地会话）
       responses:
         "302": {description: 回控制台并置会话 cookie；失败带 oidc_error 查询参数}
   /admin/v1/admins:
@@ -901,7 +892,7 @@ paths:
       summary: 管理员账号列表
       responses:
         "200":
-          description: 账号公开字段，不含密码或哈希
+          description: 主体公开字段（subject 为主键），不含任何凭据
           content:
             application/json:
               schema:
@@ -911,42 +902,23 @@ paths:
                   admins:
                     type: array
                     items: {$ref: "#/components/schemas/AdminUser"}
-    post:
-      summary: 创建管理员
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username, password]
-              properties:
-                username: {type: string}
-                password: {type: string, minLength: 8, format: password}
-      responses:
-        "200":
-          description: 已创建
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/AdminUser"}
-        "400": {description: 用户名冲突或口令非法}
-  /admin/v1/admins/{id}:
+  /admin/v1/admins/{subject}:
     parameters:
-      - {name: id, in: path, required: true, schema: {type: string}}
+      - {name: subject, in: path, required: true, schema: {type: string}}
     patch:
-      summary: 启停管理员或改密
+      summary: 按虎符 subject 启停管理员主体
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [disabled]
               properties:
                 disabled: {type: boolean}
-                password: {type: string, minLength: 8, format: password}
       responses:
-        "200": {description: 已更新，停用或改密即时注销该账号全部会话}
-        "404": {description: 账号不存在}
+        "200": {description: 已更新，停用即时注销该主体全部会话}
+        "404": {description: 主体不存在}
   /admin/v1/audit:
     get:
       summary: 操作审计倒序游标分页

@@ -2,160 +2,150 @@ package auth
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/solvela/muniu/internal/store"
-	"golang.org/x/crypto/argon2"
 )
 
-func TestAdminPassword_PHC与参数迁移(t *testing.T) {
-	hash, err := HashAdminPassword("password123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !VerifyAdminPassword(hash, "password123") || VerifyAdminPassword(hash, "wrong") {
-		t.Fatal("口令校验错误")
-	}
-	salt := []byte("0123456789abcdef")
-	key := argon2.IDKey([]byte("password123"), salt, 3, 20*1024, 1, 32)
-	old := fmt.Sprintf("$argon2id$v=19$m=20480,t=3,p=1$%s$%s", base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key))
-	if !VerifyAdminPassword(old, "password123") {
-		t.Fatal("PHC 自带参数迁移失败")
-	}
-	for _, bad := range []string{"", "$argon2id$v=19$m=0,t=0,p=0$a$b", "$argon2id$v=19$m=999999999,t=1,p=1$a$b"} {
-		if VerifyAdminPassword(bad, "x") {
-			t.Fatal("畸形 PHC 被接受")
-		}
-	}
-}
-
-func TestAdminAuth_会话锁定生命周期(t *testing.T) {
+func newAdminTestService(t *testing.T) *AdminService {
+	t.Helper()
 	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "admin.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = db.Close() }()
-	svc, err := NewAdminService(context.Background(), db)
+	t.Cleanup(func() { _ = db.Close() })
+	svc, err := NewAdminService(context.Background(), db, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
-	svc.now = func() time.Time { return now }
-	user, err := svc.Create(context.Background(), "alice", "password123")
+	svc.now = func() time.Time { return time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC) }
+	return svc
+}
+
+// TestAdminAuth_会话生命周期 覆盖联邦首登建档、同一 sub 复用、注销幂等与过期惰性清理。
+func TestAdminAuth_会话生命周期(t *testing.T) {
+	svc := newAdminTestService(t)
+	ctx := context.Background()
+	token, p, err := svc.LoginFederated(ctx, "hufu-sub-alice", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 5; i++ {
-		if _, _, err := svc.Login(context.Background(), "alice", "wrong"); !errors.Is(err, ErrAdminCredentials) {
-			t.Fatal(err)
-		}
+	if p.Subject != "hufu-sub-alice" || p.Status != "active" {
+		t.Fatalf("subject 主键建档错误: %+v", p)
 	}
-	if _, _, err := svc.Login(context.Background(), "alice", "password123"); !errors.Is(err, ErrAdminLocked) {
-		t.Fatal("锁定期正确口令未拒绝", err)
-	}
-	other, err := NewAdminService(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	other.now = svc.now
-	if _, _, err := other.Login(context.Background(), "alice", "password123"); err != nil {
-		t.Fatal("进程重启未清锁", err)
-	}
-	now = now.Add(15 * time.Minute)
-	token, _, err := svc.Login(context.Background(), "alice", "password123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, err := svc.Session(context.Background(), token); err != nil || got.Username != "alice" {
+	if got, err := svc.Session(ctx, token); err != nil || got.Subject != "hufu-sub-alice" {
 		t.Fatal("会话校验", err)
 	}
-	if err := svc.Patch(context.Background(), user.ID, nil, "newpassword"); err != nil {
+	if _, again, err := svc.LoginFederated(ctx, "hufu-sub-alice", "alice2"); err != nil || again.Subject != p.Subject {
+		t.Fatalf("同一 sub 必须复用主体: %+v %v", again, err)
+	}
+	if principals, err := store.ListAdminPrincipals(ctx, svc.db); err != nil || len(principals) != 1 {
+		t.Fatalf("同一 sub 只应有一个主体: %+v %v", principals, err)
+	}
+	if err := svc.Logout(ctx, token); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
-		t.Fatal("改密未注销会话", err)
+	if _, err := svc.Session(ctx, token); !errors.Is(err, ErrAdminCredentials) {
+		t.Fatal("注销未失效")
 	}
-	token, _, err = svc.Login(context.Background(), "alice", "newpassword")
+	if err := svc.Logout(ctx, token); err != nil {
+		t.Fatalf("重复注销应幂等: %v", err)
+	}
+	token, _, err = svc.LoginFederated(ctx, "hufu-sub-alice", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	disabled := true
-	if err := svc.Patch(context.Background(), user.ID, &disabled, ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
-		t.Fatal("停用未失效", err)
-	}
-	disabled = false
-	if err := svc.Patch(context.Background(), user.ID, &disabled, ""); err != nil {
-		t.Fatal(err)
-	}
-	token, _, err = svc.Login(context.Background(), "alice", "newpassword")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.Logout(context.Background(), token); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
-		t.Fatal("注销未失效", err)
-	}
-	token, _, err = svc.Login(context.Background(), "alice", "newpassword")
-	if err != nil {
-		t.Fatal(err)
-	}
-	now = now.Add(12 * time.Hour)
-	if _, err := svc.Session(context.Background(), token); !errors.Is(err, ErrAdminCredentials) {
-		t.Fatal("过期未拒绝", err)
+	svc.now = func() time.Time { return time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC) }
+	if _, err := svc.Session(ctx, token); !errors.Is(err, ErrAdminCredentials) {
+		t.Fatal("过期未拒绝")
 	}
 	var n int
-	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_sessions WHERE token_hash=?`, adminTokenHash(token)).Scan(&n); err != nil || n != 0 {
+	if err := svc.db.QueryRowContext(ctx, `SELECT count(*) FROM admin_sessions WHERE token_hash=?`,
+		adminTokenHash(token)).Scan(&n); err != nil || n != 0 {
 		t.Fatal("过期未惰性清理", n, err)
 	}
 }
 
-func TestAdminAuth_不存在账号不占用锁定状态(t *testing.T) {
-	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "limits.db"))
+// TestAdminAuth_停用即时失效且拒绝再登录 覆盖停用撤销会话、停用拒绝登录、启用不恢复旧会话。
+func TestAdminAuth_停用即时失效且拒绝再登录(t *testing.T) {
+	svc := newAdminTestService(t)
+	ctx := context.Background()
+	token, _, err := svc.LoginFederated(ctx, "hufu-sub-bob", "bob")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = db.Close() }()
-	svc, err := NewAdminService(context.Background(), db)
-	if err != nil {
+	if err := svc.Patch(ctx, "hufu-sub-bob", true); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 8; i++ {
-		if _, _, err := svc.Login(context.Background(), fmt.Sprintf("missing-%d", i), "password123"); !errors.Is(err, ErrAdminCredentials) {
-			t.Fatal(err)
-		}
+	if _, err := svc.Session(ctx, token); !errors.Is(err, ErrAdminCredentials) {
+		t.Fatal("停用后存量会话必须失效")
 	}
-	if len(svc.failures) != 0 {
-		t.Fatalf("未认证随机用户名永久积累 %d 条锁定状态", len(svc.failures))
+	if _, _, err := svc.LoginFederated(ctx, "hufu-sub-bob", "bob"); !errors.Is(err, ErrAdminCredentials) {
+		t.Fatal("停用主体必须拒绝登录")
+	}
+	if err := svc.Patch(ctx, "hufu-sub-bob", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Session(ctx, token); !errors.Is(err, ErrAdminCredentials) {
+		t.Fatal("启用不得恢复旧会话")
+	}
+	if _, _, err := svc.LoginFederated(ctx, "hufu-sub-bob", "bob"); err != nil {
+		t.Fatal("启用后应可重新登录", err)
+	}
+	if err := svc.Patch(ctx, "hufu-sub-missing", true); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("不存在主体应 ErrNotFound: %v", err)
 	}
 }
 
-func TestAdminAuth_CLI凭据必须可由JSON无损表达(t *testing.T) {
-	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "utf8.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = db.Close() }()
-	svc, err := NewAdminService(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, in := range []struct{ username, password string }{
-		{"alice", strings.Repeat(string([]byte{0xff}), 8)},
-		{string([]byte{'a', 0xff}), "password123"},
-	} {
-		if _, err := svc.Create(context.Background(), in.username, in.password); err == nil {
-			t.Fatal("CLI 接受了无法由 JSON 无损表达的凭据")
+// TestAdminAuth_空subject拒绝 覆盖 RP 缺失 sub 的防御路径。
+func TestAdminAuth_空subject拒绝(t *testing.T) {
+	svc := newAdminTestService(t)
+	for _, sub := range []string{"", "   "} {
+		if _, _, err := svc.LoginFederated(context.Background(), sub, "x"); !errors.Is(err, ErrAdminCredentials) {
+			t.Fatalf("空 sub 必须拒绝: %q %v", sub, err)
 		}
+	}
+}
+
+// TestAdminAuth_白名单外sub拒绝 覆盖「任意虎符用户都可进控制台」缺口。
+func TestAdminAuth_白名单外sub拒绝(t *testing.T) {
+	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "allow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	svc, err := NewAdminService(context.Background(), db, []string{"hufu-sub-ops"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, _, err := svc.LoginFederated(ctx, "hufu-sub-outsider", "路人"); !errors.Is(err, ErrAdminCredentials) {
+		t.Fatalf("名单外 sub 必须拒绝: %v", err)
+	}
+	if _, _, err := svc.LoginFederated(ctx, "hufu-sub-ops", "运维"); err != nil {
+		t.Fatalf("名单内 sub 应可登录: %v", err)
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM admin_principals`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("拒绝路径不得建主体: %d %v", n, err)
+	}
+}
+
+// TestPrincipalUsername_展示名收敛 覆盖控制字符剔除、UTF-8 边界截断与空名兜底。
+func TestPrincipalUsername_展示名收敛(t *testing.T) {
+	if got := principalUsername(" 张\n三\t "); got != "张三" {
+		t.Fatalf("控制字符未剔除: %q", got)
+	}
+	if got := principalUsername(""); got != "虎符用户" {
+		t.Fatalf("空名兜底错误: %q", got)
+	}
+	long := strings.Repeat("长", 100)
+	got := principalUsername(long)
+	if len(got) > 128 || !strings.HasPrefix(long, got) || strings.ContainsRune(got, '\uFFFD') {
+		t.Fatalf("超长名未按 UTF-8 边界截断: %d %q", len(got), got)
 	}
 }

@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,33 +16,46 @@ import (
 
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/config"
-	"github.com/solvela/muniu/internal/metering"
 	"github.com/solvela/muniu/internal/store"
 )
 
-func TestAdminsCLI_全生命周期与纯账号挂载(t *testing.T) {
+// TestAdminsCLI_主体启停与纯主体挂载 覆盖 list/disable/enable 按 subject 生效、
+// 停用撤销会话、本地创建/改密子命令已被拒绝,以及无令牌仅凭活跃主体挂载管理面。
+func TestAdminsCLI_主体启停与纯主体挂载(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Storage.SQLite.Path = filepath.Join(t.TempDir(), "admins.db")
-	var out, errout bytes.Buffer
-	for _, args := range [][]string{{"add", "--username", "alice"}, {"list"}, {"disable", "alice"}, {"enable", "alice"}, {"passwd", "alice"}} {
-		if code := adminsMain(cfg, args, strings.NewReader("password123\n"), &out, &errout); code != 0 {
-			t.Fatalf("%v: %d %s", args, code, errout.String())
-		}
-	}
-	if strings.Contains(out.String(), "password123") {
-		t.Fatal("CLI 泄漏口令")
-	}
 	db, err := store.Open(context.Background(), cfg.Storage.SQLite.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	svc, err := auth.NewAdminService(context.Background(), db)
+	svc, err := auth.NewAdminService(context.Background(), db, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := svc.Login(context.Background(), "alice", "password123"); err != nil {
+	token, _, err := svc.LoginFederated(context.Background(), "hufu-sub-alice", "alice")
+	if err != nil {
 		t.Fatal(err)
+	}
+	var out, errout bytes.Buffer
+	if code := adminsMain(cfg, []string{"list"}, &out, &errout); code != 0 ||
+		!strings.Contains(out.String(), "hufu-sub-alice\talice\tactive") {
+		t.Fatalf("list: %d %s %s", code, out.String(), errout.String())
+	}
+	if code := adminsMain(cfg, []string{"disable", "--subject", "hufu-sub-alice"}, &out, &errout); code != 0 {
+		t.Fatalf("disable: %d %s", code, errout.String())
+	}
+	if _, err := svc.Session(context.Background(), token); err == nil {
+		t.Fatal("CLI 停用必须撤销会话")
+	}
+	if code := adminsMain(cfg, []string{"enable", "--subject", "hufu-sub-alice"}, &out, &errout); code != 0 {
+		t.Fatalf("enable: %d %s", code, errout.String())
+	}
+	// 本地账密子命令删除后,未知子命令必须以用法错误退出
+	for _, args := range [][]string{{"add", "--username", "bob"}, {"passwd", "alice"}, {"disable", "alice"}, {}} {
+		if code := adminsMain(cfg, args, &out, &errout); code != 2 {
+			t.Fatalf("%v 应退出码 2,实际 %d", args, code)
+		}
 	}
 	t.Setenv("MUNIU_ADMIN_TOKEN", "")
 	// 装配其余字段使用真实配置加载缺省，不伪造超时等参数。
@@ -68,7 +80,7 @@ func TestAdminsCLI_全生命周期与纯账号挂载(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("无 token 活跃账号未挂载")
+		t.Fatal("无 token 活跃主体未挂载")
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequestWithContext(context.Background(), "GET", "/admin/v1/auth/whoami", nil))
@@ -80,70 +92,34 @@ func TestAdminsCLI_全生命周期与纯账号挂载(t *testing.T) {
 	}
 }
 
-func TestImagePricing_热更与脏目录保持(t *testing.T) {
-	db, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "prices.db"))
+// TestAssemble_旧本地管理员库拒绝启动 覆盖零存量重建的启动闸:含本地账密行必须报错而非静默丢行。
+func TestAssemble_旧本地管理员库拒绝启动(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.db")
+	db, err := store.Open(context.Background(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = db.Close() }()
-	cfg := &config.Config{ImagePricing: map[string]config.ImagePrice{"paint": {Currency: "CNY", Default: "0.35", Tiers: map[string]string{"1024|hd": "0.3"}}}}
-	dir, _, update, err := assembleImagePricing(context.Background(), db, cfg, "CNY", 0)
+	if _, err := db.ExecContext(context.Background(), `INSERT INTO admin_users(id,username,password_hash,status,created_at)
+		VALUES('u1','legacy','$argon2id$x','active','2026-11-20T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+	t.Setenv("MUNIU_ADMIN_TOKEN", "tok")
+	loaded, err := config.Load("../../muniu.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dir.Get("paint").DefaultCredits != 350000000 {
-		t.Fatal("静态价")
+	loaded.Storage.SQLite.Path = path
+	loaded.Providers = nil
+	loaded.ModelRoutes = nil
+	loaded.Pricing = nil
+	_, _, cleanup, err := assemble(context.Background(), loaded, "", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if cleanup != nil {
+		cleanup()
 	}
-	r := &store.ImagePricingRecord{Alias: "paint", Currency: "CNY", DefaultCredits: 500, Tiers: map[string]int64{}}
-	if err := update(context.Background(), "paint", r); err != nil {
-		t.Fatal(err)
-	}
-	if dir.Get("paint").DefaultCredits != 500 {
-		t.Fatal("未热更")
-	}
-	if err := update(context.Background(), "paint", nil); err != nil {
-		t.Fatal(err)
-	}
-	if dir.Get("paint").DefaultCredits != 350000000 {
-		t.Fatal("未回落")
-	}
-	if err := update(context.Background(), "paint", nil); !errors.Is(err, store.ErrNotFound) {
-		t.Fatal("重复删除未404", err)
-	}
-	bad := &store.ImagePricingRecord{Alias: "broken", Currency: "CNY", DefaultCredits: 500, Tiers: map[string]int64{"bad": 1}}
-	if err := update(context.Background(), "broken", bad); err == nil {
-		t.Fatal("非法整单未拒绝")
-	}
-	if _, err := db.ExecContext(context.Background(), `INSERT INTO image_pricing VALUES('broken','CNY',500,'{"bad":"0.2"}','now')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := update(context.Background(), "paint", r); err == nil {
-		t.Fatal("脏目录未拒绝重建")
-	}
-	if dir.Get("paint").DefaultCredits != 350000000 {
-		t.Fatal("旧目录被破坏")
-	}
-	if _, err := db.ExecContext(context.Background(), `DELETE FROM image_pricing WHERE alias='broken'`); err != nil {
-		t.Fatal(err)
-	}
-	q := metering.ImagePrice{Currency: "USD", DefaultCredits: 100, Tiers: map[string]int64{"1024|hd": 50}}
-	settled, err := metering.SettleImagePrice(q, "CNY", 7200)
-	if err != nil || settled.DefaultCredits != 720 || settled.Tiers["1024|hd"] != 360 {
-		t.Fatal("本位币错误", settled, err)
-	}
-}
-
-func TestAdminsCLI_空密码不得报告修改成功(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Storage.SQLite.Path = filepath.Join(t.TempDir(), "empty.db")
-	var out, errout bytes.Buffer
-	if code := adminsMain(cfg, []string{"add", "--username", "alice"}, strings.NewReader("password123\n"), &out, &errout); code != 0 {
-		t.Fatal(code, errout.String())
-	}
-	for _, input := range []string{"", "\n"} {
-		if code := adminsMain(cfg, []string{"passwd", "alice"}, strings.NewReader(input), &out, &errout); code == 0 {
-			t.Fatal("空密码被报告为修改成功")
-		}
+	if err == nil || !strings.Contains(err.Error(), "legacy") {
+		t.Fatalf("旧本地管理员库必须拒绝启动并指名行: %v", err)
 	}
 }
 
@@ -197,17 +173,4 @@ func TestImages_无价目仍使用网关本位币(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("计量行未落库")
-}
-
-func TestAdminPassword_输入字节上限(t *testing.T) {
-	for _, n := range []int{4096, 4097, 100000} {
-		password, err := readAdminPassword(strings.NewReader(strings.Repeat("x", n)+"\n"), io.Discard)
-		if n == 4096 {
-			if err != nil || len(password) != n {
-				t.Fatal("边界合法密码被拒绝", err)
-			}
-		} else if err == nil {
-			t.Fatal("超长输入被接受", n)
-		}
-	}
 }

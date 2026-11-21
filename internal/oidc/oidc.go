@@ -34,9 +34,10 @@ type Config struct {
 	ClientSecret string
 	RedirectURL  string
 	Scopes       []string
+	StateStore   StateStore // nil = 仅进程内(state 随重启丢失,单副本可用)
 }
 
-// Identity 验签通过后的锦官身份投影。
+// Identity 验签通过后的虎符身份投影。
 type Identity struct {
 	Subject string
 	Name    string
@@ -67,7 +68,16 @@ type discovery struct {
 	AuthorizeURL  string   `json:"authorization_endpoint"`
 	TokenURL      string   `json:"token_endpoint"`
 	JWKSURL       string   `json:"jwks_uri"`
+	EndSessionURL string   `json:"end_session_endpoint"`
 	CodeChallenge []string `json:"code_challenge_methods_supported"`
+}
+
+// StateStore 持久化登录中 state:多副本/重启不丢请求;实现按 state 哈希存取并清理过期行。
+type StateStore interface {
+	// Save 写入本次登录材料;ttl 用于顺带清理已过期存量,避免只发起不回调时无限增长。
+	Save(ctx context.Context, state, verifier, nonce string, createdAt time.Time, ttl time.Duration) error
+	// Take 单次取出并删除;不存在或超过 ttl 返回 ok=false。
+	Take(ctx context.Context, state string, now time.Time, ttl time.Duration) (verifier, nonce string, ok bool, err error)
 }
 
 type jwkKey struct {
@@ -114,6 +124,9 @@ func New(cfg Config, hc *http.Client) *RelyingParty {
 
 func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
+// RedirectURL 返回声明的回调地址,供同源推导登出回跳等装配级用途。
+func (rp *RelyingParty) RedirectURL() string { return rp.cfg.RedirectURL }
+
 // Begin 拉取发现文档并生成授权 URL;state 绑定 verifier 与 nonce,回调单次弹出。
 func (rp *RelyingParty) Begin(ctx context.Context) (string, error) {
 	doc, err := rp.metadata(ctx)
@@ -135,20 +148,13 @@ func (rp *RelyingParty) Begin(ctx context.Context) (string, error) {
 	verifier, state, nonce := b64url(vb), b64url(sb), b64url(nb)
 	challengeSum := sha256.Sum256([]byte(verifier))
 
-	rp.mu.Lock()
-	for s, p := range rp.pending {
-		if rp.now().Sub(p.createdAt) > pendingTTL {
-			delete(rp.pending, s)
-		}
+	if err := rp.savePending(ctx, state, verifier, nonce); err != nil {
+		return "", err
 	}
-	rp.pending[state] = pendingAuth{verifier: verifier, nonce: nonce, createdAt: rp.now()}
-	rp.mu.Unlock()
 
 	u, err := url.Parse(doc.AuthorizeURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		rp.mu.Lock()
-		delete(rp.pending, state)
-		rp.mu.Unlock()
+		rp.dropState(state)
 		return "", fmt.Errorf("oidc: authorization_endpoint 非法: %q", doc.AuthorizeURL)
 	}
 	q := u.Query()
@@ -164,8 +170,58 @@ func (rp *RelyingParty) Begin(ctx context.Context) (string, error) {
 	return u.String(), nil
 }
 
+// savePending 落 state 与 PKCE 材料:配置了持久化则写库,否则进进程内表并顺带清过期项。
+func (rp *RelyingParty) savePending(ctx context.Context, state, verifier, nonce string) error {
+	if rp.cfg.StateStore != nil {
+		if err := rp.cfg.StateStore.Save(ctx, state, verifier, nonce, rp.now(), pendingTTL); err != nil {
+			return fmt.Errorf("oidc: 持久化 state: %w", err)
+		}
+		return nil
+	}
+	rp.mu.Lock()
+	for s, p := range rp.pending {
+		if rp.now().Sub(p.createdAt) > pendingTTL {
+			delete(rp.pending, s)
+		}
+	}
+	rp.pending[state] = pendingAuth{verifier: verifier, nonce: nonce, createdAt: rp.now()}
+	rp.mu.Unlock()
+	return nil
+}
+
 // Complete 用授权码换 id_token 并验签;state 单次弹出,重放在此被拒。
 func (rp *RelyingParty) Complete(ctx context.Context, state, code string) (Identity, error) {
+	verifier, nonce, ok, err := rp.takePending(ctx, state)
+	if err != nil {
+		return Identity{}, err
+	}
+	if !ok {
+		return Identity{}, ErrStateInvalid
+	}
+	doc, err := rp.metadata(ctx)
+	if err != nil {
+		return Identity{}, err
+	}
+	raw, err := rp.exchange(ctx, doc.TokenURL, verifier, code)
+	if err != nil {
+		return Identity{}, err
+	}
+	claims, err := rp.verify(ctx, raw, doc, nonce)
+	if err != nil {
+		return Identity{}, err
+	}
+	return identityFromClaims(claims), nil
+}
+
+// takePending 单次取出 state 对应的 PKCE 材料;不存在/过期/已用均 ok=false。
+func (rp *RelyingParty) takePending(ctx context.Context, state string) (string, string, bool, error) {
+	if rp.cfg.StateStore != nil {
+		verifier, nonce, ok, err := rp.cfg.StateStore.Take(ctx, state, rp.now(), pendingTTL)
+		if err != nil {
+			return "", "", false, fmt.Errorf("oidc: 读取 state: %w", err)
+		}
+		return verifier, nonce, ok, nil
+	}
 	rp.mu.Lock()
 	p, ok := rp.pending[state]
 	if ok {
@@ -173,21 +229,41 @@ func (rp *RelyingParty) Complete(ctx context.Context, state, code string) (Ident
 	}
 	rp.mu.Unlock()
 	if !ok || rp.now().Sub(p.createdAt) > pendingTTL {
-		return Identity{}, ErrStateInvalid
+		return "", "", false, nil
 	}
+	return p.verifier, p.nonce, true, nil
+}
+
+// dropState 撤销未能交付给浏览器的 state;持久化实现靠 TTL 惰性清理。
+func (rp *RelyingParty) dropState(state string) {
+	if rp.cfg.StateStore != nil {
+		return
+	}
+	rp.mu.Lock()
+	delete(rp.pending, state)
+	rp.mu.Unlock()
+}
+
+// EndSessionURL 构造虎符 RP 发起登出地址;调用方须保证 postLogoutRedirect 已在 client 登记。
+func (rp *RelyingParty) EndSessionURL(ctx context.Context, postLogoutRedirect string) (string, error) {
 	doc, err := rp.metadata(ctx)
 	if err != nil {
-		return Identity{}, err
+		return "", err
 	}
-	raw, err := rp.exchange(ctx, doc.TokenURL, p.verifier, code)
-	if err != nil {
-		return Identity{}, err
+	if doc.EndSessionURL == "" {
+		return "", errors.New("oidc: 发现文档缺 end_session_endpoint")
 	}
-	claims, err := rp.verify(ctx, raw, doc, p.nonce)
-	if err != nil {
-		return Identity{}, err
+	u, err := url.Parse(doc.EndSessionURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("oidc: end_session_endpoint 非法: %q", doc.EndSessionURL)
 	}
-	return identityFromClaims(claims), nil
+	q := u.Query()
+	q.Set("client_id", rp.cfg.ClientID)
+	if postLogoutRedirect != "" {
+		q.Set("post_logout_redirect_uri", postLogoutRedirect)
+	}
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 // exchange 标准 token 端点交互:application/x-www-form-urlencoded(RFC 6749)。

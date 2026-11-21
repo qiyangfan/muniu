@@ -1242,9 +1242,20 @@ admin_oidc:
   issuer: "sso.example"
   client_id: muniu-console
   redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
+  admin_subjects: ["sub-ops"]
 `))
 	if err == nil || !strings.Contains(err.Error(), "admin_oidc.issuer 非法") {
 		t.Fatalf("admin_oidc.issuer 非绝对 URL 应拒绝: %v", err)
+	}
+	// 缺白名单拒绝:联邦轨不得让任意虎符主体进入管理面
+	_, err = Load(writeTemp(t, base+`
+admin_oidc:
+  issuer: "https://sso.example"
+  client_id: muniu-console
+  redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
+`))
+	if err == nil || !strings.Contains(err.Error(), "必须成套声明") {
+		t.Fatalf("缺 admin_subjects 应拒绝: %v", err)
 	}
 	// 完整且合法放行
 	cfg, err := Load(writeTemp(t, base+`
@@ -1252,11 +1263,34 @@ admin_oidc:
   issuer: "https://sso.example"
   client_id: muniu-console
   redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
+  admin_subjects: ["sub-ops"]
+  post_logout_redirect_url: "http://127.0.0.1:8787/console/"
 `))
 	if err != nil {
 		t.Fatalf("合法 admin_oidc 应放行: %v", err)
 	}
 	if !cfg.AdminOIDC.Complete() {
 		t.Fatal("admin_oidc 应判定为完整声明")
+	}
+}
+
+// TestAdminCookiesSecure_Secure由部署配置决定 覆盖反代终止 TLS 时不能依赖 r.TLS。
+func TestAdminCookiesSecure_由部署配置决定(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{"无联邦且未配置", Config{}, false},
+		{"https issuer 缺省开启", Config{AdminOIDC: AdminOIDCCfg{Issuer: "https://sso.example"}}, true},
+		{"http issuer 缺省关闭", Config{AdminOIDC: AdminOIDCCfg{Issuer: "http://sso.example"}}, false},
+		{"显式关闭覆盖 https", Config{AdminOIDC: AdminOIDCCfg{Issuer: "https://sso.example"}, AdminCookieSecure: &no}, false},
+		{"显式开启覆盖 http", Config{AdminOIDC: AdminOIDCCfg{Issuer: "http://sso.example"}, AdminCookieSecure: &yes}, true},
+	}
+	for _, tc := range cases {
+		if got := tc.cfg.AdminCookiesSecure(); got != tc.want {
+			t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -2,89 +2,70 @@
 
 ## Purpose
 
-管理面身份与审计契约:本地管理员账号生命周期、三轨鉴权(本地会话/共享令牌/锦官 OIDC 联邦)、登录硬化纪律、管理动作审计归因与查询、控制面失联降级。把「共享令牌零归因」的运维面升级为「可追责」,同时不破坏既有 Bearer token 契约。
+管理面身份与审计契约:管理员主体(虎符 sub 主键)生命周期、双轨鉴权(虎符会话/共享令牌)、管理动作审计归因与查询、虎符失联降级。历史来源:ADR-0017「共享令牌零归因 → 可追责」,本地账密轨已由 ADR-0022 删除,不破坏既有 Bearer token 契约。
 
 ## Requirements
 
-### Requirement: 管理员账号与会话
+### Requirement: 管理员主体与会话
 
-系统必须 (MUST) 支持本地管理员账号(username 唯一,软停用不物理删除);账密登录成功必须 (MUST) 签发 HttpOnly 会话 cookie(服务端存令牌哈希,固定有效期),注销必须 (MUST) 立即失效该会话。会话校验必须 (MUST) 逐请求确认账号仍活跃——账号停用后其全部存量会话必须 (MUST) 即时失效(下一请求即 401);密码修改必须 (MUST) 注销该账号全部会话。管理员账号管理必须 (MUST) 经管理面与管理 CLI 双形态(创建/列表/停用启用/改密)。
+管理员主体必须 (MUST) 以虎符 sub 为唯一键(`admin_principals.subject` 主键);展示名来自 id_token `name`,必须 (MUST) 不参与身份判定(同名不同 sub 可并存)。系统必须 (MUST NOT) 接受任何本地口令登录,不得保存 `password_hash` 作为登录凭据。登录成功必须 (MUST) 签发 HttpOnly 会话 cookie(服务端只存令牌哈希,固定有效期),注销必须 (MUST) 立即失效该会话。会话校验必须 (MUST) 逐请求确认主体仍活跃——主体停用后其全部存量会话必须 (MUST) 即时失效(下一请求即 401),启用必须 (MUST NOT) 恢复旧会话。主体只能由虎符首登自动建档;管理必须 (MUST) 提供按 subject 的列表/停用/启用(管理 API 与 `muniu admins` CLI)。
 
 #### Scenario: 登录签发会话
 
-- **WHEN** 活跃管理员以正确账密调用登录端点
+- **WHEN** 活跃主体经虎符 OIDC 授权码 + PKCE 完成登录
 - **THEN** 返回会话 cookie(HttpOnly)与操作员身份,后续带 cookie 的管理面请求获准
+
+#### Scenario: 本地账密不可用
+
+- **WHEN** 向 `/admin/v1/auth/login` 提交用户名与口令,或向 `/admin/v1/admins` 提交建号请求
+- **THEN** 该路由不存在/不接受本地凭据,请求不产生任何会话
 
 #### Scenario: 停用即时踢会话
 
-- **WHEN** 管理员 A 已持会话,另一管理员将 A 停用
-- **THEN** A 的下一请求返回 401,存量会话不再可用
-
-#### Scenario: 改密注销全部会话
-
-- **WHEN** 管理员 A 的密码被修改
-- **THEN** A 的全部存量会话失效,新密码登录后才恢复
+- **WHEN** 主体 A 已持会话,另一管理员将 A 停用
+- **THEN** A 的下一请求返回 401,存量会话不再可用,且 A 无法再次登录
 
 #### Scenario: 注销立即失效
 
 - **WHEN** 持会话管理员调用注销端点
 - **THEN** 该会话立即失效,重放返回 401
 
-### Requirement: 管理面三轨鉴权
+#### Scenario: 零存量重建拒绝本地账密行
 
-管理面鉴权必须 (MUST) 接受「会话 cookie / Bearer 管理令牌 / 锦官 OIDC 联邦」任一;现行 `MUNIU_ADMIN_TOKEN` 路径必须 (MUST) 原样保留(CLI/脚本契约零破坏);三轨请求必须 (MUST) 均识别为具名 actor(令牌轨保留身份、会话轨 username、联邦轨锦官实名)。鉴权失败必须 (MUST) 保持现行 401 信封。管理面挂载条件必须 (MUST) 为「管理令牌已配置或存在活跃管理员账号或联邦已配置」;皆无时管理面整体不注册。
+- **WHEN** 旧库 `admin_users` 仍含本地账密管理员行
+- **THEN** 启动被拒绝并指名这些行,不得静默丢弃数据
+
+### Requirement: 管理面鉴权
+
+管理面鉴权必须 (MUST) 接受「虎符 federated 会话 cookie / Bearer 管理令牌」任一;现行 `MUNIU_ADMIN_TOKEN` 路径必须 (MUST) 原样保留(CLI/脚本契约零破坏);两条路径请求必须 (MUST) 均识别为具名 actor(令牌轨保留身份、会话轨 id_token 展示名)。鉴权失败必须 (MUST) 保持现行 401 信封。管理面挂载条件必须 (MUST) 为「管理令牌已配置或存在活跃主体或虎符联邦已声明」;皆无时管理面整体不注册。
 
 #### Scenario: 令牌轨零回归
 
 - **WHEN** 以现行 Bearer 管理令牌调用任一既有管理端点
 - **THEN** 行为与变更前一致,既有测试零改动通过
 
-#### Scenario: 三轨并存
+#### Scenario: 双轨并存
 
-- **WHEN** 分别以会话 cookie、Bearer 令牌、锦官联邦调用管理端点
-- **THEN** 三者均获准,审计分别归因到 username、令牌身份、锦官实名
+- **WHEN** 分别以虎符会话 cookie 与 Bearer 令牌调用管理端点
+- **THEN** 两者均获准,审计分别归因为展示名与令牌身份
 
 #### Scenario: 皆未配置整体关闭
 
-- **WHEN** 管理令牌未配置且无活跃管理员账号且联邦未配置
+- **WHEN** 管理令牌未配置且无活跃主体且联邦未声明
 - **THEN** 管理面与控制台不注册
-
-### Requirement: 登录硬化
-
-口令必须 (MUST) 以 argon2id(PHC 串形态,参数随串存储可迁移)存储,校验必须 (MUST) 恒时比较;同一 username 连续登录失败达到阈值必须 (MUST) 锁定该账号一段时间(锁定期内正确账密也拒绝),锁定计数为进程内存态(重启清零,登记为边界)。登录成功与失败(含锁定拒绝)必须 (MUST) 均产生审计行。
-
-#### Scenario: 错误口令拒绝
-
-- **WHEN** 以错误口令登录
-- **THEN** 返回 401,不签发会话,产生失败审计行
-
-#### Scenario: 连续失败锁定
-
-- **WHEN** 同一 username 连续失败达到阈值后以正确账密再登录
-- **THEN** 锁定期内仍返回 401,产生锁定拒绝审计行;锁定期过后正确账密恢复登录
-
-#### Scenario: 口令不落明文
-
-- **WHEN** 读取管理员存储
-- **THEN** 仅存在 argon2id PHC 串,任何端点/列表/日志不回显口令或其哈希
 
 ### Requirement: 管理动作审计
 
-管理面全部变更动作(非 GET)必须 (MUST) 留痕审计行:actor(kind + 名字)、action(路由模式规整)、目标标识、结局(状态码)、脱敏 detail、request_id、时间。`actor_kind` 值域必须 (MUST) 扩展以容纳联邦身份(federated),联邦管理员必须 (MUST) 归因到锦官实名。审计 detail 必须 (MUST) 对口令/令牌类敏感字段脱敏;审计行必须 (MUST) 只增不改;查询必须 (MUST) 经 `GET /admin/v1/audit` 游标分页。
+管理面全部变更动作(非 GET)必须 (MUST) 留痕审计行:actor(kind + 名字)、action(路由模式规整)、目标标识、结局(状态码,401/403 记 denied)、脱敏 detail、request_id、时间。`actor_kind` 新行值域为 `federated`/`token`/`unauthenticated`(`session`/`login` 仅为历史行兼容保留)。审计 detail 必须 (MUST) 对口令/令牌类敏感字段脱敏;审计行必须 (MUST) 只增不改;查询必须 (MUST) 经 `GET /admin/v1/audit` 游标分页。
 
-#### Scenario: 联邦管理员归因
+#### Scenario: 主体归因
 
-- **WHEN** 经锦官联邦登录的管理员调用变更端点
-- **THEN** 审计行 actor_kind=federated、actor=锦官实名
-
-#### Scenario: 变更动作归因
-
-- **WHEN** 管理员 A 经会话调用 key 停用端点
-- **THEN** 产生审计行:actor=A(username 轨)、action=该路由规整名、目标=key 标识、结局=成功状态码
+- **WHEN** 经虎符登录的管理员调用变更端点
+- **THEN** 审计行 actor_kind=federated、actor=id_token 展示名、目标=subject 或资源标识
 
 #### Scenario: 敏感字段脱敏
 
-- **WHEN** 变更请求体含口令字段(如创建管理员)
+- **WHEN** 变更请求体含口令/令牌类字段
 - **THEN** 审计 detail 中该字段以脱敏形态存储,明文不落审计
 
 #### Scenario: 游标分页查询
@@ -92,32 +73,67 @@
 - **WHEN** 以游标参数调用审计查询
 - **THEN** 返回该页审计行与下一游标,按时间倒序稳定
 
-### Requirement: 联邦登录与影子映射
+### Requirement: 联邦登录与主体投影
 
-console 必须 (MUST) 支持经锦官 OIDC 授权码 + PKCE 登录;联邦管理员必须 (MUST) 映射锦官 ADMIN(平凡映射);`admin_users` 必须 (MUST) 以 `origin`/`external_subject` 列(只增)记录联邦来源与权威 sub;同一 sub 必须 (MUST) 恒映射同一本地管理员。
+console 必须 (MUST) 支持经虎符 OIDC 授权码 + PKCE 登录;同一 sub 必须 (MUST) 恒投影为同一主体,不得生成影子 id;只有 `admin_oidc.admin_subjects` 白名单内的 sub 可以 (MUST) 建号并登录;登录页必须 (MUST) 只展示「统一身份登录」入口(联邦未声明时禁用并提示)与管理令牌入口。
 
-#### Scenario: 锦官登录
+#### Scenario: 统一身份登录
 
-- **WHEN** 运营者经「锦官登录」完成授权码 + PKCE
-- **THEN** 签发本地会话,actor 归因锦官实名
+- **WHEN** 运营者点「统一身份登录」并完成授权码 + PKCE
+- **THEN** 签发本地会话,actor 归因为展示名
 
-#### Scenario: sub 稳定映射
+#### Scenario: 白名单外主体被拒
 
-- **GIVEN** external_subject 已映射
-- **WHEN** 同一锦官用户再次登录
-- **THEN** 命中既有本地管理员,不重复建号
+- **GIVEN** 白名单未包含某虎符 sub
+- **WHEN** 该 sub 完成上游认证回到回调
+- **THEN** 拒绝建号登录并回控制台错误页,不签发会话
 
-### Requirement: 控制面失联降级
+#### Scenario: 回调必须绑定发起浏览器
 
-锦官权威不可达时,本地 break-glass 管理员账密登录与 `MUNIU_ADMIN_TOKEN` 必须 (MUST) 仍可认证(控制面失联数据面照跑);联邦轨失败必须 (MUST NOT) 阻断本地/令牌轨。
+- **GIVEN** 发起授权的浏览器持有 state cookie
+- **WHEN** 回调缺少或携带不匹配的 state cookie
+- **THEN** 拒绝回调,state 不可复用
 
-#### Scenario: 锦官不可达仍可登录
+#### Scenario: 统一登出
 
-- **GIVEN** 锦官权威不可达
-- **WHEN** 以本地 break-glass 账密或共享令牌登录
+- **WHEN** 已登录操作员退出
+- **THEN** 删除本地会话并返回虎符 end_session 地址;权威不可达时退回控制台
+
+#### Scenario: 联邦登录留痕
+
+- **WHEN** 回调完成(成功或拒绝)
+- **THEN** 写 `auth.oidc.login` 审计,只含 provider 与固定原因码
+
+#### Scenario: Secure cookie 由部署决定
+
+- **GIVEN** 生产经反代终止 TLS
+- **WHEN** `admin_cookie_secure: true`
+- **THEN** 会话与 state cookie 均带 Secure,不依赖请求的 TLS 状态
+
+#### Scenario: 登录入口按 IP 限流
+
+- **GIVEN** 同一 IP 每分钟超过 30 次登录发起或回调
+- **WHEN** 再次请求
+- **THEN** 返回 429,不写 state、不触发出站发现
+
+#### Scenario: 只发起不回调的 state 不堆积
+
+- **GIVEN** 历史 state 已超过 TTL
+- **WHEN** 新的登录发起写入 state
+- **THEN** 过期行随本次写入被删除
+
+#### Scenario: sub 稳定投影
+
+- **GIVEN** sub 已建档
+- **WHEN** 同一虎符用户再次登录
+- **THEN** 命中既有主体,不重复建号
+
+### Requirement: 虎符失联降级
+
+虎符权威不可达时,`MUNIU_ADMIN_TOKEN` 必须 (MUST) 仍可认证,数据面照跑;联邦轨失败必须 (MUST NOT) 阻断令牌轨。
+
+#### Scenario: 虎符不可达仍可用令牌
+
+- **GIVEN** 虎符权威不可达
+- **WHEN** 以共享令牌调用管理端点
 - **THEN** 认证成功,管理面可用
-
-#### Scenario: 联邦失败不阻断本地
-
-- **WHEN** 联邦轨认证失败
-- **THEN** 本地/令牌轨不受影响

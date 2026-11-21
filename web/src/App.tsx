@@ -43,11 +43,10 @@ function stripOidcError(): void {
   window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
 }
 
-// 三种登录轨道均以 whoami 恢复会话；会话凭据由 HttpOnly cookie 保存，
-// 锦官联邦整页跳转经 OIDC 授权码 + PKCE，失败回带 oidc_error 查询参数。
+// 登录入口:身份统一由虎符(唯一账户权威)签发,控制台只保留「统一身份登录」整页跳转与
+// 运维共享令牌两条;账密表单已随木牛去账号化删除。会话凭据由 HttpOnly cookie 保存,
+// OIDC 授权码 + PKCE 失败回带 oidc_error 查询参数(首渲染即读,避免 effect 内 setState)。
 function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
   const [tokenMode, setTokenMode] = useState(false);
   const [token, setLoginToken] = useState("");
   const [err, setErr] = useState(readOidcError);
@@ -60,18 +59,12 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
       .catch(() => setFederation(false));
     stripOidcError();
   }, []);
-  const submitLogin = async () => {
+  const submitToken = async () => {
     setBusy(true);
     setErr("");
     try {
-      setToken("");
-      if (tokenMode) {
-        setToken(token.trim());
-        onOk(await api.whoami());
-      } else {
-        onOk(await api.login(username, password));
-      }
-      setPassword("");
+      setToken(token.trim());
+      onOk(await api.whoami());
     } catch (e2) {
       setToken("");
       setErr(errorMessage(e2));
@@ -79,6 +72,21 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
       setBusy(false);
     }
   };
+  const sso = (
+    <Button
+      type="button"
+      variant="outline"
+      className="w-full"
+      disabled={busy || !federation}
+      onClick={() => {
+        // 清掉残留的共享令牌:否则联邦会话过期后会静默回落到旧令牌身份
+        setToken("");
+        window.location.href = "/admin/v1/auth/oidc/start";
+      }}
+    >
+      统一身份登录
+    </Button>
+  );
   return (
     <div className="min-h-dvh grid place-items-center bg-background px-4">
       <Card className="w-full max-w-96">
@@ -86,35 +94,14 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
           <CardTitle as="h2">木牛控制台</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {federation && (
-            <>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => {
-                  // 清掉残留的共享令牌:否则联邦会话过期后会静默回落到旧令牌身份
-                  setToken("");
-                  window.location.href = "/admin/v1/auth/oidc/start";
-                }}
-              >
-                锦官登录
-              </Button>
-              <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden>
-                <span className="h-px flex-1 bg-border" />
-                或使用本地凭据
-                <span className="h-px flex-1 bg-border" />
-              </div>
-            </>
-          )}
-          <form
-            className="grid gap-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submitLogin();
-            }}
-          >
-            {tokenMode ? (
+          {tokenMode ? (
+            <form
+              className="grid gap-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void submitToken();
+              }}
+            >
               <FormRow label="管理员令牌" htmlFor="admin-token">
                 <Input
                   id="admin-token"
@@ -125,34 +112,20 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
                   required
                 />
               </FormRow>
-            ) : (
-              <>
-                <FormRow label="用户名" htmlFor="admin-username">
-                  <Input
-                    id="admin-username"
-                    autoComplete="username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                  />
-                </FormRow>
-                <FormRow label="密码" htmlFor="admin-password">
-                  <Input
-                    id="admin-password"
-                    type="password"
-                    autoComplete="current-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                </FormRow>
-              </>
-            )}
-            {err && <ErrorAlert text={err} />}
-            <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "登录中…" : "登录"}
-            </Button>
-          </form>
+              {err && <ErrorAlert text={err} />}
+              <Button type="submit" className="w-full" disabled={busy}>
+                {busy ? "登录中…" : "登录"}
+              </Button>
+            </form>
+          ) : (
+            <>
+              {sso}
+              {!federation && (
+                <p className="text-sm text-muted-foreground">统一身份登录未配置,请联系平台管理员</p>
+              )}
+              {err && <ErrorAlert text={err} />}
+            </>
+          )}
           <Button
             variant="ghost"
             className="w-full"
@@ -161,7 +134,7 @@ function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
               setErr("");
             }}
           >
-            {tokenMode ? "使用账号登录" : "使用管理令牌登录"}
+            {tokenMode ? "返回统一身份登录" : "使用管理令牌登录"}
           </Button>
         </CardContent>
       </Card>
@@ -248,10 +221,13 @@ export default function App() {
   );
   const doLogout = async () => {
     try {
-      await api.logout();
+      const { redirect_url } = await api.logoutSso();
       setToken("");
       setActor(null);
       setProbeError("");
+      if (redirect_url && import.meta.env.MODE !== "test") {
+        window.location.assign(redirect_url);
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setToken("");

@@ -85,7 +85,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     throw e;
   }
   const text = await resp.text();
-  if (resp.status === 401 && revision === authRevision && path !== "/admin/v1/auth/login") {
+  // 登录入口只剩整页跳转与 whoami 探测,401 一律视为会话过期
+  if (resp.status === 401 && revision === authRevision) {
     window.dispatchEvent(new Event("muniu-session-expired"));
   }
   if (!resp.ok) {
@@ -105,9 +106,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 }
 
 export const api = {
-  login: (username: string, password: string) =>
-    call<AdminActor>("POST", "/admin/v1/auth/login", { username, password }),
   logout: () => call<{ ok: boolean }>("POST", "/admin/v1/auth/logout"),
+  logoutSso: () => call<{ redirect_url: string }>("POST", "/admin/v1/auth/logout/sso"),
   whoami: () => call<AdminActor>("GET", "/admin/v1/auth/whoami"),
   federationInfo: () => call<FederationInfo>("GET", "/admin/v1/auth/federation"),
   audit: (cursor = "") =>

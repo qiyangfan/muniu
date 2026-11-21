@@ -221,7 +221,8 @@ func adminSurface(ctx context.Context, w adminWiring,
 		return nil, "", nil, err
 	}
 	refreshPricing := func() error { return refreshPricingDirectory(rebuildPricing, w.pricingDir) }
-	w.token, w.adminSvc, w.federated, w.refreshPricing = token, svc, newFederation(w.cfg, w.logger), refreshPricing
+	w.token, w.adminSvc, w.federated, w.refreshPricing = token, svc,
+		newFederation(w.cfg, w.db, w.logger), refreshPricing
 	return newAdminHandlerWithDeps(ctx, w, cache), token, refreshPricing, nil
 }
 
@@ -263,6 +264,9 @@ func buildAdminDeps(w adminWiring) admin.Deps {
 		Plugins:                w.pluginReg,
 		OAuthFlow:              w.oauthFlow, // nil = oauth 段未声明,授权端点返回关闭态
 		Federated:              w.federated, // nil = admin_oidc 未声明,联邦入口返回关闭态
+		AdminSubjects:          w.cfg.AdminOIDC.AdminSubjects,
+		PostLogoutRedirect:     w.cfg.AdminOIDC.PostLogoutRedirectURL,
+		SecureCookies:          w.cfg.AdminCookiesSecure(),
 	}
 }
 
@@ -307,35 +311,40 @@ func newAdminHandler(ctx context.Context, deps admin.Deps, cache *semantic.Cache
 	return admin.New(ctx, deps)
 }
 
-// newAdminContext 读取管理 token 并构造管理员服务;token/活跃账号/联邦三者皆缺时管理面关闭。
+// newAdminContext 读取管理 token 并构造管理员服务;本地账密轨已删除,启动闸拒绝含本地账密行的旧库。
+// token/活跃主体/虎符联邦三者皆缺时管理面关闭。
 func newAdminContext(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) (
 	string, *auth.AdminService, error,
 ) {
 	token := os.Getenv("MUNIU_ADMIN_TOKEN")
-	svc, err := auth.NewAdminService(ctx, db)
+	if err := store.EnsureNoLocalAdminAccounts(ctx, db); err != nil {
+		return "", nil, err
+	}
+	svc, err := auth.NewAdminService(ctx, db, cfg.AdminOIDC.AdminSubjects)
 	if err != nil {
 		return "", nil, err
 	}
-	active, err := store.HasActiveAdmins(ctx, db)
+	active, err := store.HasActiveAdminPrincipals(ctx, db)
 	if err != nil {
 		return "", nil, err
 	}
 	if token == "" && !active && !cfg.AdminOIDC.Complete() {
-		logger.Warn("管理令牌、活跃管理员与锦官联邦均未配置,管理面与控制台关闭")
+		logger.Warn("管理令牌、活跃主体与虎符联邦均未配置,管理面与控制台关闭")
 	}
 	return token, svc, nil
 }
 
-// newFederation 按 admin_oidc 声明构造锦官 OIDC RP;未完整声明即关闭联邦轨(零网络开销)。
-func newFederation(cfg *config.Config, logger *slog.Logger) *oidc.RelyingParty {
+// newFederation 按 admin_oidc 声明构造虎符 OIDC RP;未完整声明即关闭联邦轨(零网络开销)。
+func newFederation(cfg *config.Config, db *sql.DB, logger *slog.Logger) *oidc.RelyingParty {
 	if !cfg.AdminOIDC.Complete() {
 		return nil
 	}
 	rp := oidc.New(oidc.Config{
 		Issuer: cfg.AdminOIDC.Issuer, ClientID: cfg.AdminOIDC.ClientID,
 		ClientSecret: cfg.AdminOIDC.ClientSecret, RedirectURL: cfg.AdminOIDC.RedirectURL,
+		StateStore: admin.NewOIDCStateStore(db),
 	}, nil)
-	logger.Info("锦官 OIDC 联邦已就绪", "issuer", cfg.AdminOIDC.Issuer, "client_id", cfg.AdminOIDC.ClientID)
+	logger.Info("虎符 OIDC 联邦已就绪", "issuer", cfg.AdminOIDC.Issuer, "client_id", cfg.AdminOIDC.ClientID)
 	return rp
 }
 

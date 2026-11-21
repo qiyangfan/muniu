@@ -15,7 +15,7 @@ async function mockApi(page: Page): Promise<void> {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ enabled: false, login_url: "" }),
+        body: JSON.stringify({ enabled: false }),
       });
     }
     // 其余管理面请求按未登录处理
@@ -31,23 +31,24 @@ test.beforeEach(async ({ page }) => {
   await mockApi(page);
 });
 
+// 木牛去账号化后登录页只保留「统一身份登录」整页跳转与管理令牌两条,不再有本地账密表单。
 test("登录页壳层可渲染并完成登录态探测", async ({ page }) => {
   const resp = await page.goto("/console/");
   expect(resp?.status()).toBe(200);
   await expect(page.getByRole("heading", { name: "木牛控制台" })).toBeVisible();
-  await expect(page.getByLabel("用户名")).toBeVisible();
-  await expect(page.getByLabel("密码")).toBeVisible();
-  await expect(page.getByRole("button", { name: "登录", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "统一身份登录" })).toBeVisible();
+  await expect(page.getByLabel("用户名")).toHaveCount(0);
+  await expect(page.getByLabel("密码")).toHaveCount(0);
   // 探测失败(401)不得把登录页替换成错误页
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("登录页本地账号与令牌模式切换", async ({ page }) => {
+test("登录页统一身份入口与令牌模式切换", async ({ page }) => {
   await page.goto("/console/");
   await page.getByRole("button", { name: "使用管理令牌登录" }).click();
   await expect(page.getByLabel("管理员令牌")).toBeVisible();
-  await page.getByRole("button", { name: "使用账号登录" }).click();
-  await expect(page.getByLabel("用户名")).toBeVisible();
+  await page.getByRole("button", { name: "返回统一身份登录" }).click();
+  await expect(page.getByRole("button", { name: "统一身份登录" })).toBeVisible();
 });
 
 // 只拦 serious/critical:minor/moderate 多为对比度边角,留给设计走查,避免噪声淹没真缺陷。

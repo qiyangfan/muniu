@@ -10,23 +10,28 @@ import (
 	"strings"
 	"testing"
 
+	"database/sql"
+
 	"github.com/solvela/muniu/internal/admin"
-	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/server"
 	"github.com/solvela/muniu/internal/store"
 )
 
+// loginCookie 经联邦轨签出一枚真实会话 cookie,审计用例据此走已认证变更路径。
+func loginCookie(t *testing.T, db *sql.DB, h http.Handler, idp *testIdP) *http.Cookie {
+	t.Helper()
+	cookie, _ := federatedLogin(t, h, idp)
+	return cookie
+}
+
 func TestAdminOperators_双轨审计生命周期(t *testing.T) {
 	db := openDB(t)
-	svc, err := auth.NewAdminService(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
+	idp := newTestIdP(t)
+	h, svc := newFederatedAdmin(t, db, "admin-test", idp.rp())
+	cookie := loginCookie(t, db, h, idp)
+	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatal("cookie 硬化缺失")
 	}
-	u, err := svc.Create(context.Background(), "alice", "password123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := admin.New(context.Background(), admin.Deps{DB: db, Token: "admin-test", AdminAuth: svc})
 	call := func(method, path, body, token string, cookie *http.Cookie) *httptest.ResponseRecorder {
 		r := httptest.NewRequestWithContext(context.Background(), method, path, strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")
@@ -40,35 +45,27 @@ func TestAdminOperators_双轨审计生命周期(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w
 	}
-	w := call("POST", "/admin/v1/auth/login", `{"username":"alice","password":"password123"}`, "", nil)
-	if w.Code != 200 || len(w.Result().Cookies()) != 1 {
-		t.Fatalf("登录: %d %s", w.Code, w.Body.String())
-	}
-	cookie := w.Result().Cookies()[0]
-	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
-		t.Fatal("cookie 硬化缺失")
-	}
 	for _, tc := range []struct {
 		token  string
 		cookie *http.Cookie
 		name   string
-	}{{"", cookie, "alice"}, {"admin-test", nil, "management-token"}} {
-		w = call("GET", "/admin/v1/auth/whoami", "", tc.token, tc.cookie)
+	}{{"", cookie, "张三"}, {"admin-test", nil, "management-token"}} {
+		w := call("GET", "/admin/v1/auth/whoami", "", tc.token, tc.cookie)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), tc.name) {
 			t.Fatalf("whoami %d %s", w.Code, w.Body.String())
 		}
 	}
-	w = call("POST", "/admin/v1/admins", `{"username":"bob","password":"password-bob","unknown":"do-not-log"}`, "", cookie)
-	if w.Code != 200 {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	w = call("POST", "/admin/v1/tenants", `{"name":"audit-target","password":"private","nested":{"secret":"private"},"daily_quota_credits":9007199254740993}`, "admin-test", nil)
+	w := call("POST", "/admin/v1/tenants", `{"name":"audit-target","password":"private","nested":{"secret":"private"},"daily_quota_credits":9007199254740993}`, "admin-test", nil)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	w = call("GET", "/admin/v1/admins", "", "", cookie)
-	if w.Code != 200 || strings.Contains(w.Body.String(), "password") {
-		t.Fatal("账号列表泄漏", w.Body.String())
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "jinguan-sub-1") || strings.Contains(w.Body.String(), "password") {
+		t.Fatal("主体列表应以 sub 为主键且不泄漏敏感字段", w.Body.String())
+	}
+	// 再补一条审计行,使首"页"(limit=1)必然还有下一页游标
+	if w := call("POST", "/admin/v1/tenants", `{"name":"audit-target-2"}`, "admin-test", nil); w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
 	}
 	var before, after int
 	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log`).Scan(&before); err != nil {
@@ -104,10 +101,10 @@ func TestAdminOperators_双轨审计生命周期(t *testing.T) {
 	}
 
 	var leak int
-	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log WHERE detail LIKE '%password123%' OR detail LIKE '%password-bob%' OR detail LIKE '%private%' OR detail LIKE '%do-not-log%'`).Scan(&leak); err != nil || leak != 0 {
+	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log WHERE detail LIKE '%private%'`).Scan(&leak); err != nil || leak != 0 {
 		t.Fatal("审计泄漏", leak, err)
 	}
-	w = call("PATCH", "/admin/v1/admins/"+u.ID, `{"disabled":true}`, "admin-test", nil)
+	w = call("PATCH", "/admin/v1/admins/jinguan-sub-1", `{"disabled":true}`, "admin-test", nil)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -115,68 +112,63 @@ func TestAdminOperators_双轨审计生命周期(t *testing.T) {
 	if w.Code != 401 || !strings.Contains(w.Body.String(), "管理 token 无效") {
 		t.Fatal("旧会话未失效/信封变化", w.Body.String())
 	}
-	// 无 token 但有活跃账号时仍挂载；零凭据零账号时依旧整体关闭。
+	// 无 token 但仍有活跃主体时照常挂载;主体全停用时整体关闭。
+	if h := admin.New(context.Background(), admin.Deps{DB: db, AdminAuth: svc}); h != nil {
+		t.Fatal("无活跃主体且无令牌时管理面必须关闭")
+	}
+	if err := svc.Patch(context.Background(), "jinguan-sub-1", false); err != nil {
+		t.Fatal(err)
+	}
 	if admin.New(context.Background(), admin.Deps{DB: db, AdminAuth: svc}) == nil {
-		t.Fatal("纯账号管理面未挂载")
-	}
-	for i := 0; i < 6; i++ {
-		w = call("POST", "/admin/v1/auth/login", `{"username":"nobody","password":"wrong"}`, "", nil)
-		if w.Code != 401 {
-			t.Fatal(w.Code)
-		}
-	}
-	var denied int
-	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log WHERE actor_kind='login' AND outcome='denied'`).Scan(&denied); err != nil || denied < 6 {
-		t.Fatal("登录失败审计缺失", denied, err)
+		t.Fatal("纯主体管理面未挂载")
 	}
 }
 
 func TestAdminOperators_严格JSON与拒绝路径审计(t *testing.T) {
 	db := openDB(t)
-	svc, err := auth.NewAdminService(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = svc.Create(context.Background(), "alice", "password123")
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := admin.New(context.Background(), admin.Deps{DB: db, Token: "admin-test", AdminAuth: svc})
-	request := func(body string, origin string) *httptest.ResponseRecorder {
-		r := httptest.NewRequestWithContext(context.Background(), "POST", "/admin/v1/auth/login", strings.NewReader(body))
+	idp := newTestIdP(t)
+	h, _ := newFederatedAdmin(t, db, "admin-test", idp.rp())
+	cookie := loginCookie(t, db, h, idp)
+	request := func(method, path, body string, origin string, c *http.Cookie) *httptest.ResponseRecorder {
+		r := httptest.NewRequestWithContext(context.Background(), method, path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
 		if origin != "" {
 			r.Header.Set("Origin", origin)
+		}
+		if c != nil {
+			r.AddCookie(c)
 		}
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		return w
 	}
-	w := request(`{"username":"alice","password":"password123"} {}`, "")
+	w := request("PATCH", "/admin/v1/admins/jinguan-sub-1", `{"disabled":false} {}`, "", cookie)
 	if w.Code != 400 {
 		t.Fatalf("多值 JSON 未拒: %d", w.Code)
 	}
-	w = request(`{"Username":"alice","Password":"password123"}`, "")
+	w = request("PATCH", "/admin/v1/admins/jinguan-sub-1", `{"Disabled":false}`, "", cookie)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	var name string
-	if err := db.QueryRowContext(context.Background(), `SELECT actor_name FROM admin_audit_log WHERE outcome='ok' ORDER BY created_at DESC,id DESC LIMIT 1`).Scan(&name); err != nil || name != "alice" {
-		t.Fatal("大小写字段归因丢失", name, err)
+	target := "jinguan-sub-1"
+	if err := db.QueryRowContext(context.Background(), `SELECT target_id FROM admin_audit_log WHERE outcome='ok' ORDER BY created_at DESC,id DESC LIMIT 1`).Scan(&target); err != nil || target != "jinguan-sub-1" {
+		t.Fatal("大小写字段请求未落审计目标", target, err)
 	}
-	w = request(`{"username":"alice","password":"password123"}`, "https://evil.example")
+	w = request("PATCH", "/admin/v1/admins/jinguan-sub-1", `{"disabled":false}`, "https://evil.example", cookie)
 	if w.Code != 403 {
-		t.Fatal("跨站登录未拒", w.Code)
+		t.Fatal("跨站变更未拒", w.Code)
 	}
 	var n int
-	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log WHERE outcome='denied'`).Scan(&n); err != nil || n < 2 {
+	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log WHERE outcome='denied'`).Scan(&n); err != nil || n < 1 {
 		t.Fatal("拒绝出口审计缺失", n, err)
 	}
-	w = request(strings.Repeat(" ", (1<<20)+1), "")
+	w = request("PATCH", "/admin/v1/admins/jinguan-sub-1", strings.Repeat(" ", (1<<20)+1), "", cookie)
 	if w.Code != 400 {
 		t.Fatal("超大 body 未拒", w.Code)
 	}
 	var all int
-	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_audit_log`).Scan(&all); err != nil || all != 4 {
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT count(*) FROM admin_audit_log WHERE action <> 'auth.oidc.login'`).Scan(&all); err != nil || all != 4 {
 		t.Fatal("body拒绝出口审计缺失", all, err)
 	}
 }

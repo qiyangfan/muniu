@@ -1705,57 +1705,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/v1/auth/login": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** 管理员账密登录 */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        username: string;
-                        /** Format: password */
-                        password: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description 签发 HttpOnly 会话 cookie，有效期 12 小时 */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["AdminActor"];
-                    };
-                };
-                /** @description 凭据无效或账号锁定 */
-                401: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/admin/v1/auth/logout": {
         parameters: {
             query?: never;
@@ -1781,6 +1730,44 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/auth/logout/sso": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 注销本地会话并给出虎符 end_session 地址（统一登出） */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 本地会话已失效；权威不可达时 redirect_url 退回控制台 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            redirect_url: string;
+                        };
+                    };
                 };
             };
         };
@@ -1833,7 +1820,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 锦官联邦入口可用性（登录页据此渲染按钮） */
+        /** 虎符联邦入口可用性（登录页据此渲染入口） */
         get: {
             parameters: {
                 query?: never;
@@ -1869,7 +1856,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 发起锦官 OIDC 授权码 + PKCE 登录（浏览器整页跳转） */
+        /** 发起虎符 OIDC 授权码 + PKCE 登录（浏览器整页跳转） */
         get: {
             parameters: {
                 query?: never;
@@ -1879,7 +1866,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description 跳转锦官授权端点，state/nonce 单次有效 */
+                /** @description 跳转虎符授权端点，state/nonce 单次有效 */
                 302: {
                     headers: {
                         [name: string]: unknown;
@@ -1893,7 +1880,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description 锦官权威不可达 */
+                /** @description 虎符权威不可达 */
                 502: {
                     headers: {
                         [name: string]: unknown;
@@ -1917,7 +1904,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 锦官 OIDC 回调（state 即持有者凭据，验签后签发本地会话） */
+        /** 虎符 OIDC 回调（state 即持有者凭据，验签后按 sub 建取主体并签发本地会话） */
         get: {
             parameters: {
                 query?: never;
@@ -1961,7 +1948,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description 账号公开字段，不含密码或哈希 */
+                /** @description 主体公开字段（subject 为主键），不含任何凭据 */
                 200: {
                     headers: {
                         [name: string]: unknown;
@@ -1975,54 +1962,19 @@ export interface paths {
             };
         };
         put?: never;
-        /** 创建管理员 */
-        post: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": {
-                        username: string;
-                        /** Format: password */
-                        password: string;
-                    };
-                };
-            };
-            responses: {
-                /** @description 已创建 */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["AdminUser"];
-                    };
-                };
-                /** @description 用户名冲突或口令非法 */
-                400: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/admin/v1/admins/{id}": {
+    "/admin/v1/admins/{subject}": {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                id: string;
+                subject: string;
             };
             cookie?: never;
         };
@@ -2032,34 +1984,32 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 启停管理员或改密 */
+        /** 按虎符 subject 启停管理员主体 */
         patch: {
             parameters: {
                 query?: never;
                 header?: never;
                 path: {
-                    id: string;
+                    subject: string;
                 };
                 cookie?: never;
             };
             requestBody: {
                 content: {
                     "application/json": {
-                        disabled?: boolean;
-                        /** Format: password */
-                        password?: string;
+                        disabled: boolean;
                     };
                 };
             };
             responses: {
-                /** @description 已更新，停用或改密即时注销该账号全部会话 */
+                /** @description 已更新，停用即时注销该主体全部会话 */
                 200: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content?: never;
                 };
-                /** @description 账号不存在 */
+                /** @description 主体不存在 */
                 404: {
                     headers: {
                         [name: string]: unknown;
@@ -2118,22 +2068,21 @@ export interface components {
     schemas: {
         AdminActor: {
             /** @enum {string} */
-            kind: "session" | "token" | "login" | "federated";
+            kind: "federated" | "token";
             name: string;
         };
         FederationInfo: {
             enabled: boolean;
         };
         AdminUser: {
-            id: string;
+            /** @description 虎符 subject，主体唯一键 */
+            subject: string;
+            /** @description 展示名，来自 id_token name，不参与身份判定 */
             username: string;
             /** @enum {string} */
             status: "active" | "disabled";
             created_at: string;
             last_login_at?: string | null;
-            /** @enum {string} */
-            origin?: "local" | "federated";
-            external_subject?: string;
         };
         AdminAudit: {
             id: string;
