@@ -50,6 +50,8 @@ func newFakeIdP(t *testing.T) *fakeIdP {
 			"authorization_endpoint": idp.srv.URL + "/authorize",
 			"token_endpoint":         idp.srv.URL + "/token",
 			"jwks_uri":               idp.srv.URL + "/jwks",
+			// 标准发现文档为数组;曾误声明为 string 导致解析失败(回归保护)。
+			"code_challenge_methods_supported": []string{"S256"},
 		})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {

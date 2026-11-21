@@ -63,11 +63,11 @@ type pendingAuth struct {
 }
 
 type discovery struct {
-	Issuer        string `json:"issuer"`
-	AuthorizeURL  string `json:"authorization_endpoint"`
-	TokenURL      string `json:"token_endpoint"`
-	JWKSURL       string `json:"jwks_uri"`
-	CodeChallenge string `json:"code_challenge_methods_supported"`
+	Issuer        string   `json:"issuer"`
+	AuthorizeURL  string   `json:"authorization_endpoint"`
+	TokenURL      string   `json:"token_endpoint"`
+	JWKSURL       string   `json:"jwks_uri"`
+	CodeChallenge []string `json:"code_challenge_methods_supported"`
 }
 
 type jwkKey struct {

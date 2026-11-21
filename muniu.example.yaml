@@ -56,14 +56,14 @@ metering:
 #   client_id: "<声明的 OAuth client_id>"
 #   callback_url: "http://127.0.0.1:8787/admin/v1/oauth/callback"
 
-# 可选:木牛 console 的锦官 OIDC 联邦(统一身份,admin-operators 契约)。声明即启用
-# 「锦官登录」入口,端点经 issuer 的发现文档解析;三字段必齐(部分声明加载期拒绝)。
+# 可选:木牛 console 的统一身份 OIDC 联邦(虎符/锦官,admin-operators 契约)。声明即启用
+# 登录入口,端点经 issuer 的发现文档解析;三字段必齐(部分声明加载期拒绝)。
 # client_secret 可空(公开客户端 + PKCE);非空时建议经环境变量注入,勿明文入库。
 # 联邦轨失败不影响本地 break-glass 账密与 MUNIU_ADMIN_TOKEN(控制面失联降级)。
+# 接入虎符示例(公开客户端,无 secret):
 # admin_oidc:
-#   issuer: "https://sso.example.com"
+#   issuer: "http://127.0.0.1:8080"
 #   client_id: "muniu-console"
-#   client_secret: "<非空时经环境变量注入,勿明文入库>"
 #   redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
 
 # 启用后需配置 MUNIU_ADMIN_TOKEN 才会挂载 Prometheus 指标端点 GET /metrics。
