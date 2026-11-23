@@ -1,6 +1,7 @@
 # admin-tenant-scope Specification
 
 ## Purpose
+
 管理面范围收敛:范围模型(`GLOBAL`/`TENANT`)、租户绑定生命周期、路由分类与单点执行、
 租户资源的读写收敛、范围不可确定时 fail-closed、契约纯增。数据面授权(api key→tenant)
 不归本域;OPA 与 IdP 角色映射不在本域。

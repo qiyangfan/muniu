@@ -89,9 +89,9 @@ HttpOnly 会话 cookie(服务端只存令牌哈希,固定有效期),注销必须
 
 管理面全部变更动作(非 GET)必须 (MUST) 留痕审计行:actor(kind + 名字)、action(路由模式
 规整)、目标标识、结局(状态码,401/403 记 denied)、脱敏 detail、request_id、时间。
-`actor_kind` 新行值域为 `federated`/`token`/`unauthenticated`(`session`/`login` 仅为历史
-行兼容保留)。审计 detail 必须 (MUST) 对口令/令牌类敏感字段脱敏;审计行必须 (MUST) 只增
-不改;查询必须 (MUST) 经 `GET /admin/v1/audit` 游标分页。
+`actor_kind` 值域为 `session`/`token`/`login`/`federated`(`session` 仅为历史行兼容保留;
+`login` 用于登录事件与匿名动作行,见 ADR-0023)。审计 detail 必须 (MUST) 对口令/令牌类
+敏感字段脱敏;审计行必须 (MUST) 只增不改;查询必须 (MUST) 经 `GET /admin/v1/audit` 游标分页。
 
 scope 拒绝必须 (MUST) 留痕:任意方法(含 GET)的 403 记 denied 并与固定原因码一并落审计;
 非拒绝的 GET 不新增审计行。上述扩展不得改变既有归因、脱敏、只增与分页语义。

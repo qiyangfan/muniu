@@ -137,7 +137,7 @@ standalone 形态的全量运营态(key 哈希/用量账本/价目)在单文件 
 
 - `admin_principals(subject TEXT PK,username TEXT,status TEXT active|disabled,created_at TEXT,last_login_at TEXT nullable)`：subject 为虎符规范 sub（issuer+sub），是唯一身份键；username 只是 id_token 展示名，同名不同 sub 可并存。主体只能由虎符首登自动建档，不再保留 `password_hash` 作为登录凭据。
 - `admin_sessions(token_hash TEXT SHA-256 PK,subject TEXT FK→admin_principals,created_at TEXT,expires_at TEXT)`：令牌 32 随机字节，固定 12h、HttpOnly、SameSite=Lax、Path=/；逐请求 JOIN 主体状态，停用即删该主体全部会话且签发时条件核验活跃状态。
-- `admin_audit_log` 不变（actor_kind 值域保留 session/login 作历史行兼容，新行只用 federated/token/unauthenticated），按 created_at/id 倒序复合游标查询，只增不改；变更同步留痕，写失败告警，动作不回滚。
+- `admin_audit_log` 不变（actor_kind 值域为 session/token/login/federated；session 仅历史行兼容保留，login 用于登录事件与匿名动作行（ADR-0023），人员会话行用 federated），按 created_at/id 倒序复合游标查询，只增不改；变更同步留痕，写失败告警，动作不回滚。
 - 迁移纪律：零存量重建——生产从未建过本地管理员；旧库 `admin_users` 含本地账密行时装配期启动闸 `store.EnsureNoLocalAdminAccounts` 指名行并拒绝启动，不静默丢行。旧表与联邦影子 id 列保留但不读写。
 
 管理面挂载条件为共享令牌、存在活跃主体或虎符联邦已声明；现行 Bearer 轨保留，actor 为 management-token。`muniu admins list|disable --subject|enable --subject` 直连同库；`POST /admin/v1/auth/logout`、`GET /admin/v1/auth/whoami`、`GET /admin/v1/auth/federation`、`GET /admin/v1/auth/oidc/start|callback`、`GET /admin/v1/admins`、`PATCH /admin/v1/admins/{subject}`（路径参数即 subject）、`GET /admin/v1/audit` 是管理 API；本地账密 `POST /admin/v1/auth/login` 与 `POST /admin/v1/admins` 已删除。数据面 API key 与运维身份分离。
