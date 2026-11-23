@@ -159,6 +159,51 @@ func federatedLogin(t *testing.T, h http.Handler, idp *testIdP) (*http.Cookie, s
 	return nil, ""
 }
 
+// startFederated 只发起授权;existing 用于模拟浏览器已有的 state cookie。
+func startFederated(t *testing.T, h http.Handler, existing *http.Cookie) (string, string, []*http.Cookie) {
+	t.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/admin/v1/auth/oidc/start", nil)
+	if existing != nil {
+		req.AddCookie(existing)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("start 应 302,实际 %d: %s", rec.Code, rec.Body.String())
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, nonce := loc.Query().Get("state"), loc.Query().Get("nonce")
+	if state == "" || nonce == "" {
+		t.Fatal("授权 URL 缺 state/nonce")
+	}
+	return state, nonce, rec.Result().Cookies()
+}
+
+func stateCookieFrom(cookies []*http.Cookie) *http.Cookie {
+	for _, c := range cookies {
+		if c.Name == "muniu_oidc_state" {
+			return c
+		}
+	}
+	return nil
+}
+
+func federatedCallback(t *testing.T, h http.Handler, state string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet,
+		"/admin/v1/auth/oidc/callback?code=c1&state="+url.QueryEscape(state), nil)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
 func send(h http.Handler, method, path string, cookie *http.Cookie, body string) *httptest.ResponseRecorder {
 	var rd io.Reader
 	if body != "" {
@@ -340,6 +385,83 @@ func TestFederation_回调缺浏览器绑定cookie被拒(t *testing.T) {
 	}
 	if !denied {
 		t.Fatalf("拒绝路径必须写 auth.oidc.login 审计: %+v", items)
+	}
+}
+
+// TestFederation_并发tab各自完成登录 覆盖 state 列表共存、回调只消费自己的 state。
+func TestFederation_并发tab各自完成登录(t *testing.T) {
+	db := openDB(t)
+	idp := newTestIdP(t)
+	h, _ := newFederatedAdmin(t, db, "tok", idp.rp())
+
+	firstState, firstNonce, firstCookies := startFederated(t, h, nil)
+	firstCookie := stateCookieFrom(firstCookies)
+	if firstCookie == nil {
+		t.Fatal("首次 start 未设置 state cookie")
+	}
+	secondState, secondNonce, secondCookies := startFederated(t, h, firstCookie)
+	secondCookie := stateCookieFrom(secondCookies)
+	if secondCookie == nil {
+		t.Fatal("第二次 start 未设置 state cookie")
+	}
+	if got := strings.Split(secondCookie.Value, "."); len(got) != 2 ||
+		got[0] != firstState || got[1] != secondState {
+		t.Fatalf("并发 state 应共存: %q", secondCookie.Value)
+	}
+
+	idp.nonce = firstNonce
+	rec1 := federatedCallback(t, h, firstState, secondCookie)
+	if rec1.Code != http.StatusFound || !strings.HasPrefix(rec1.Header().Get("Location"), "/console/") {
+		t.Fatalf("第一个 tab 回调应成功: %d %s", rec1.Code, rec1.Header().Get("Location"))
+	}
+	remaining := stateCookieFrom(rec1.Result().Cookies())
+	if remaining == nil || remaining.Value != secondState {
+		t.Fatalf("消费第一个 state 后应只保留第二个: %+v", remaining)
+	}
+
+	idp.nonce = secondNonce
+	rec2 := federatedCallback(t, h, secondState, remaining)
+	if rec2.Code != http.StatusFound || !strings.HasPrefix(rec2.Header().Get("Location"), "/console/") {
+		t.Fatalf("第二个 tab 回调应成功: %d %s", rec2.Code, rec2.Header().Get("Location"))
+	}
+	if c := stateCookieFrom(rec2.Result().Cookies()); c != nil && c.Value != "" {
+		t.Fatalf("最后一个 state 消费后应清空 cookie: %q", c.Value)
+	}
+}
+
+// TestFederation_并发state上限丢最旧 覆盖超过 8 个 tab 时旧 state 被挤出且不误伤新 state。
+func TestFederation_并发state上限丢最旧(t *testing.T) {
+	db := openDB(t)
+	idp := newTestIdP(t)
+	h, _ := newFederatedAdmin(t, db, "tok", idp.rp())
+
+	states := make([]string, 0, 9)
+	nonces := make([]string, 0, 9)
+	var cookie *http.Cookie
+	for range 9 {
+		state, nonce, cookies := startFederated(t, h, cookie)
+		states = append(states, state)
+		nonces = append(nonces, nonce)
+		cookie = stateCookieFrom(cookies)
+		if cookie == nil {
+			t.Fatal("start 未设置 state cookie")
+		}
+	}
+	if got := strings.Split(cookie.Value, "."); len(got) != 8 ||
+		got[0] != states[1] || got[7] != states[8] {
+		t.Fatalf("超出上限应丢最旧并保留最近 8 个: %q", cookie.Value)
+	}
+
+	idp.nonce = nonces[0]
+	old := federatedCallback(t, h, states[0], cookie)
+	if old.Code != http.StatusFound || !strings.Contains(old.Header().Get("Location"), "oidc_error=") {
+		t.Fatalf("被挤出上限的 state 必须拒绝: %d %s", old.Code, old.Header().Get("Location"))
+	}
+
+	idp.nonce = nonces[8]
+	newest := federatedCallback(t, h, states[8], cookie)
+	if newest.Code != http.StatusFound || !strings.HasPrefix(newest.Header().Get("Location"), "/console/") {
+		t.Fatalf("最新 state 应仍可登录: %d %s", newest.Code, newest.Header().Get("Location"))
 	}
 }
 

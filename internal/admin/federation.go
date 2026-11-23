@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 	"uuid"
 
@@ -85,21 +86,91 @@ func adminFederatedStart(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "内部错误")
 			return
 		}
-		setOIDCStateCookie(w, target.Query().Get("state"), d.SecureCookies)
+		appendOIDCStateCookie(w, r, target.Query().Get("state"), d.SecureCookies)
 		http.Redirect(w, r, u, http.StatusFound)
 	}
 }
 
-// setOIDCStateCookie 绑定发起授权与回调浏览器;Path 收敛到回调前缀,避免随业务请求携带。
-func setOIDCStateCookie(w http.ResponseWriter, state string, secure bool) {
+// oidcStateCookieMax 并发 tab 上限:超出丢最旧,控制 cookie 体积。
+const oidcStateCookieMax = 8
+
+// splitOIDCStates 解析点分隔 state 列表;旧单值形态天然兼容。
+// state 由 b64url 生成,字母表不含点。
+func splitOIDCStates(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ".")
+	states := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part != "" {
+			states = append(states, part)
+		}
+	}
+	return states
+}
+
+// joinOIDCStates 去重保序并截取最近上限;空列表返回空串。
+func joinOIDCStates(states []string) string {
+	seen := make(map[string]struct{}, len(states))
+	unique := make([]string, 0, len(states))
+	for _, state := range states {
+		if state == "" {
+			continue
+		}
+		if _, ok := seen[state]; ok {
+			continue
+		}
+		seen[state] = struct{}{}
+		unique = append(unique, state)
+	}
+	if len(unique) > oidcStateCookieMax {
+		unique = unique[len(unique)-oidcStateCookieMax:]
+	}
+	return strings.Join(unique, ".")
+}
+
+// readOIDCStates 读取浏览器绑定的 state 列表(无 cookie 返回 nil)。
+func readOIDCStates(r *http.Request) []string {
+	c, err := r.Cookie(oidcStateCookie)
+	if err != nil || c.Value == "" {
+		return nil
+	}
+	return splitOIDCStates(c.Value)
+}
+
+// setOIDCStateCookie 写 state 列表;Path 收敛到回调前缀,避免随业务请求携带。
+func setOIDCStateCookie(w http.ResponseWriter, states []string, secure bool) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure 由部署配置决定
-		Name: oidcStateCookie, Value: state, Path: "/admin/v1/auth/oidc",
+		Name: oidcStateCookie, Value: joinOIDCStates(states), Path: "/admin/v1/auth/oidc",
 		HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
 		MaxAge: int(oidcStateTTL.Seconds()),
 	})
 }
 
-// clearOIDCStateCookie 回调无论成败都即刻失效,失败重试需重新发起授权。
+// appendOIDCStateCookie 追加本次发起 state,保留未回调 tab 的 state。
+func appendOIDCStateCookie(w http.ResponseWriter, r *http.Request, state string, secure bool) {
+	setOIDCStateCookie(w, append(readOIDCStates(r), state), secure)
+}
+
+// removeOIDCStateCookie 只移除已消费 state;其余 tab 的 state 保留。
+func removeOIDCStateCookie(w http.ResponseWriter, r *http.Request, state string, secure bool) {
+	states := readOIDCStates(r)
+	remaining := make([]string, 0, len(states))
+	for _, candidate := range states {
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(state)) == 1 {
+			continue
+		}
+		remaining = append(remaining, candidate)
+	}
+	if len(remaining) == 0 {
+		clearOIDCStateCookie(w, secure)
+		return
+	}
+	setOIDCStateCookie(w, remaining, secure)
+}
+
+// clearOIDCStateCookie 清空列表;removeOIDCStateCookie 在无剩余项时调用。
 func clearOIDCStateCookie(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // 同上
 		Name: oidcStateCookie, Value: "", Path: "/admin/v1/auth/oidc",
@@ -109,11 +180,14 @@ func clearOIDCStateCookie(w http.ResponseWriter, secure bool) {
 
 // stateCookieMatches 恒定时间比较,阻断回调 URL 被转交他人的登录 CSRF。
 func stateCookieMatches(r *http.Request, state string) bool {
-	c, err := r.Cookie(oidcStateCookie)
-	if err != nil || c.Value == "" {
-		return false
+	matched := false
+	for _, candidate := range readOIDCStates(r) {
+		// 不短路:比较次数只与列表长度相关
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(state)) == 1 {
+			matched = true
+		}
 	}
-	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) == 1
+	return matched
 }
 
 // adminFederatedCallback 授权码回调:state 单次凭据,换码验签后按Keycloak sub 建取主体并签发本地会话。
@@ -152,7 +226,6 @@ func federatedIdentity(d Deps, w http.ResponseWriter, r *http.Request) (subject,
 		return "", "", nil, false
 	}
 	q := r.URL.Query()
-	clearOIDCStateCookie(w, d.SecureCookies)
 	if q.Get("error") != "" {
 		auditOIDCLogin(d, r, "", "denied", "upstream_error")
 		redirectConsole(w, r, "统一身份登录未完成,请重试")
@@ -168,6 +241,7 @@ func federatedIdentity(d Deps, w http.ResponseWriter, r *http.Request) (subject,
 		redirectConsole(w, r, "统一身份登录校验失败,请使用管理令牌")
 		return "", "", nil, false
 	}
+	removeOIDCStateCookie(w, r, q.Get("state"), d.SecureCookies)
 	identity, err := d.Federated.Complete(r.Context(), q.Get("state"), q.Get("code"))
 	if err != nil {
 		auditOIDCLogin(d, r, "", "denied", "state_or_token_invalid")

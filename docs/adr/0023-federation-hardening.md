@@ -1,12 +1,12 @@
 # ADR-0023:木牛联邦登录加固——白名单、浏览器绑定与状态落库
 
-- 状态:部分被取代(2026-11-23;第 1 条「sub 白名单」由 ADR-0024 改为 Keycloak client role,其余条款仍有效);补充 ADR-0022,不改变「虎符 sub 为唯一管理员主体键」
+- 状态:部分被取代(2026-11-23;第 1 条「sub 白名单」由 ADR-0024 改为 Keycloak client role;第 2 条调整为有界多值 state cookie,回调只移除已消费项,其余条款仍有效);补充 ADR-0022,不改变「虎符 sub 为唯一管理员主体键」
 - 背景:去账号化后默认行为是「任何通过虎符认证的 sub 首次登录即建 active 主体」,等于把虎符全体用户变成木牛管理员;state 仅存进程内且未绑定浏览器,重启丢登录、回调 URL 可被转交完成登录 CSRF;登出只删本地会话,虎符会话仍有效。
 
 ## 决策
 
 1. **sub 白名单**:`admin_oidc.admin_subjects` 为必填列表,与 issuer/client_id/redirect_url 成套声明;名单外 sub 在 `LoginFederated` 入口即拒绝,不进入建号路径。空列表视为配置不完整,加载期拒绝。
-2. **state 浏览器绑定**:发起授权时下发 `muniu_oidc_state`(HttpOnly、SameSite=Lax、Path=/admin/v1/auth/oidc、10 分钟);回调以恒定时间比较校验,无论成败即刻清除。
+2. **state 浏览器绑定**:发起授权时下发 `muniu_oidc_state`(HttpOnly、SameSite=Lax、Path=/admin/v1/auth/oidc、10 分钟);cookie 存点分隔 state 列表(上限 8,旧单值兼容),回调以恒定时间比较校验,命中后只移除已消费 state,其余 tab 的 state 保留。
 3. **state 落库**:新增 `oidc_pending_states(state_hash PK, verifier, nonce, created_at)`,state 只存 SHA-256;单次取出即删除,启动与每次回调顺带清理过期行。RelyingParty 通过 `StateStore` 接口注入,单测仍可用进程内实现。
 4. **统一登出**:新增 `POST /admin/v1/auth/logout/sso`,删除本地会话并返回虎符 `end_session` 地址(client_id + 已登记回跳);权威不可达时退回 `/console/`,不留「本地已退、上游仍活」的静默状态。
 5. **Cookie Secure 由部署表达**:管理面 cookie 的 `Secure` 不再看 `r.TLS`(反代终止 TLS 时恒为 nil),改读顶层 `admin_cookie_secure`;缺省按 `admin_oidc.issuer` 是否 https 推导,显式配置优先。
