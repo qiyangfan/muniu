@@ -1,7 +1,7 @@
 # 木牛管理面接入 Keycloak(OIDC RP)runbook
 
-> 配套 `../../docs/INTEGRATION-PLAN.md` §1 与 `../../platform/docs/spikes/2026-11-keycloak-light-theme.md`
-> (相对本文件位于 `muniu/docs/`,跨仓文档在 longzhong 根)。
+> 配套 `../../platform/docs/INTEGRATION-PLAN.md` §1 与 `../../platform/docs/spikes/2026-11-keycloak-light-theme.md`
+> (相对本文件位于 `muniu/docs/`;跨仓文档在 platform 仓或 longzhong 聚合层)。
 > 本仓只做标准 OIDC RP;IdP 为自托管 Keycloak(realm `longzhong`)。本地账密已删除,不恢复。
 
 ## 0 前置
