@@ -246,3 +246,47 @@ func TestGemini_回环对拍(t *testing.T) {
 		t.Fatal("tools 不得丢失")
 	}
 }
+
+// TestTranslateGeminiRequestEx_双形态 Gemini 入站双形态：原始体逐字节保留、失格标记与结构性非法二分。
+func TestTranslateGeminiRequestEx_双形态(t *testing.T) {
+	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"你好"}]}]}`)
+	res := TranslateGeminiRequestEx("alias-g", body, true)
+	if res.Fatal != nil || res.Ineligible != nil || res.Chat == nil {
+		t.Fatalf("合法请求应翻译成功: fatal=%v ineligible=%v", res.Fatal, res.Ineligible)
+	}
+	if string(res.Raw) != string(body) || res.Proto != InboundGemini || res.Model != "alias-g" || !res.Stream {
+		t.Fatalf("双形态不符: proto=%s model=%q stream=%v raw=%s", res.Proto, res.Model, res.Stream, res.Raw)
+	}
+
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"fileData 部件", `{"contents":[{"role":"user","parts":[{"fileData":{"fileUri":"gs://x"}}]}]}`},
+		{"音频 inlineData", `{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"audio/wav","data":"AA=="}}]}]}`},
+		{"system 非文本部件", `{"systemInstruction":{"parts":[{"fileData":{"fileUri":"gs://s"}}]},"contents":[{"role":"user","parts":[{"text":"x"}]}]}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := TranslateGeminiRequestEx("alias-g", []byte(c.body), false)
+			if r.Fatal != nil || r.Chat != nil || r.Ineligible == nil {
+				t.Fatalf("应仅标记失格: fatal=%v chat=%v", r.Fatal, r.Chat)
+			}
+			var ge *GeminiUnsupportedError
+			if !errors.As(r.Ineligible, &ge) || ge.Code != CodeGeminiContentPartUnsupported {
+				t.Fatalf("失格码不符: %v", r.Ineligible)
+			}
+			if r.Model != "alias-g" || r.Stream {
+				t.Fatalf("失格请求须可轻量路由: model=%q stream=%v", r.Model, r.Stream)
+			}
+		})
+	}
+
+	// 结构性非法保持 Fatal，与直通无关
+	if r := TranslateGeminiRequestEx("alias-g", []byte(`{"contents":[]}`), false); r.Fatal == nil || r.Ineligible != nil {
+		t.Fatalf("空 contents 应为结构性非法: %v", r.Fatal)
+	}
+	if r := TranslateGeminiRequestEx("", body, false); r.Fatal == nil {
+		t.Fatal("空路径模型应为结构性非法")
+	}
+}

@@ -377,3 +377,74 @@ func TestGemini_StreamSequencer_跨帧并行工具与同帧聚合(t *testing.T) 
 		t.Fatalf("非流式同名 id 应去重: %s", out)
 	}
 }
+
+// TestGemini_NativePrepare 直通出站：URL 承载模型与流式方法、x-goog-api-key 注入、原始体逐字节保留。
+func TestGemini_NativePrepare(t *testing.T) {
+	g := geminiAdapter(t)
+	raw := []byte(`{"contents":[{"role":"user","parts":[{"fileData":{"fileUri":"gs://x"}}]}],"safetySettings":[{"category":"HARM_CATEGORY_HARASSMENT","threshold":"BLOCK_NONE"}]}`)
+
+	if g.NativeProto() != protocol.InboundGemini {
+		t.Fatalf("NativeProto 不符: %s", g.NativeProto())
+	}
+	out, err := g.PrepareNative(&protocol.NativeRequest{Proto: protocol.InboundGemini, Raw: raw}, "gemini-up", "gk-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.URL != "https://gem.invalid/v1beta/models/gemini-up:generateContent" {
+		t.Fatalf("URL 不符: %s", out.URL)
+	}
+	if string(out.Body) != string(raw) {
+		t.Fatalf("直通体必须逐字节保留:\n got=%s\nwant=%s", out.Body, raw)
+	}
+	if out.Header.Get("x-goog-api-key") != "gk-1" || out.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("直通头不符: %v", out.Header)
+	}
+
+	out, err = g.PrepareNative(&protocol.NativeRequest{Proto: protocol.InboundGemini, Raw: raw, Stream: true}, "gemini-up", "gk-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.URL != "https://gem.invalid/v1beta/models/gemini-up:streamGenerateContent?alt=sse" {
+		t.Fatalf("流式 URL 不符: %s", out.URL)
+	}
+}
+
+// TestGemini_NativeStreamEvent与usage 直通读侧：Gemini 帧产出 canonical 内部帧，meta 驱动计量与首 token。
+func TestGemini_NativeStreamEvent与usage(t *testing.T) {
+	g := geminiAdapter(t)
+	internal, meta, err := g.NativeStreamEvent([]byte(`{"candidates":[{"content":{"parts":[{"text":"你好"}],"role":"model"},"index":0}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !meta.HasContent || !strings.Contains(string(internal), `"content":"你好"`) {
+		t.Fatalf("内部帧不符: meta=%+v body=%s", meta, internal)
+	}
+	internal, meta, err = g.NativeStreamEvent([]byte(`{"candidates":[{"content":{"parts":[]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":8,"cachedContentTokenCount":3,"thoughtsTokenCount":2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !meta.IsUsage || !strings.Contains(string(internal), `"prompt_tokens":12`) {
+		t.Fatalf("usage 帧不符: meta=%+v body=%s", meta, internal)
+	}
+	u, err := g.NormalizeNativeUsage(json.RawMessage(`{"promptTokenCount":12,"candidatesTokenCount":8,"cachedContentTokenCount":3,"thoughtsTokenCount":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PromptTokens != 12 || u.CompletionTokens != 8 || u.CachedTokens != 3 || u.ReasoningTokens != 2 {
+		t.Fatalf("原生 usage 归一不符: %+v", u)
+	}
+	// 流式计量消费的是 canonical 内部帧的 usage 片段（平铺键），须与非流式同口径
+	var frag struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(internal, &frag); err != nil || len(frag.Usage) == 0 {
+		t.Fatalf("内部帧缺 usage 片段: %s", internal)
+	}
+	u, err = g.NormalizeNativeUsage(frag.Usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PromptTokens != 12 || u.CompletionTokens != 8 || u.CachedTokens != 3 || u.ReasoningTokens != 2 {
+		t.Fatalf("流帧 usage 归一不符(平铺键丢失): %+v", u)
+	}
+}

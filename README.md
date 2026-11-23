@@ -9,22 +9,23 @@
 
 ## 它是什么
 
-muniu 是一个**单二进制、OpenAI 兼容入站**的 LLM 网关,用 Go 写成。它站在你的 AI 应用与各家模型供应商之间,把「换模型、管密钥、控成本、扛故障」这些脏活收进一条粮道:
+muniu 是一个**单二进制、多协议原生入站**的 LLM 网关,用 Go 写成。它站在你的 AI 应用与各家模型供应商之间,把「换模型、管密钥、控成本、扛故障」这些脏活收进一条粮道。OpenAI chat/responses、Anthropic Messages、Gemini generateContent 均可原生进出:**同构协议直通、跨协议只翻一把**,不拿任何协议当固定中转站。
 
 ```text
- 你的应用(kongming / 任意 OpenAI SDK)
+ 你的应用(任意 OpenAI SDK / Claude Code / Gemini CLI / kongming)
         │  Authorization: Bearer mk-xxxx   (muniu 签发的 key)
         ▼
 ┌─────────────────────────────────────────────┐
 │                  muniu 网关                  │
-│  鉴权 → 租户/配额 → 限流 → 路由 → 流式代理     │
+│  多协议入站 → 鉴权 → 租户/配额 → 限流 → 路由    │
+│  同构直通优先 / 跨协议单跳翻译 → 流式代理        │
 │         │            │           │          │
 │    key 池调度   failover 语义   usage 计量计费 │
 └───────┬─────────────┬─────────────┬──────────┘
         ▼             ▼             ▼
    DeepSeek       任意 OpenAI     Anthropic
-   Moonshot       兼容端点        (协议桥接)
-   GLM / Qwen / Doubao
+   Moonshot       兼容端点        (原生/兼容分支)
+   GLM / Qwen / Doubao            Gemini(原生)
 ```
 
 一句话:**接入一次,后面随便换粮仓。**
@@ -35,7 +36,7 @@ muniu 是一个**单二进制、OpenAI 兼容入站**的 LLM 网关,用 Go 写�
 
 | 域 | 能力 |
 | --- | --- |
-| 接入 | OpenAI 兼容入站(chat/completions + embeddings + models 模型发现 + responses 无状态翻译 v1,ADR-0012);上游适配矩阵:DeepSeek / Moonshot / GLM(方言适配)、Qwen / Doubao(基座直用)、任意 OpenAI 兼容端点(如 ollama)、Anthropic(协议桥接);官方端点预设目录见 [docs/provider-presets.md](docs/provider-presets.md);Anthropic Messages 入站(ADR-0013,Claude Code 直连/类 cc-switch 反代)见 [docs/claude-code.md](docs/claude-code.md) |
+| 接入 | **多协议原生入站**:OpenAI chat/completions + embeddings + images + models、Responses(ADR-0012;原生直通与有状态粘性路由,ADR-0014)、Anthropic Messages(ADR-0013)、Gemini generateContent(ADR-0015)、百炼原生多模态向量。**同构直通优先**(messages×anthropic、responses×`native_responses`、gemini×gemini),跨协议只经 canonical 单跳翻译;上游适配矩阵:DeepSeek / Moonshot / GLM(方言适配)、Qwen / Doubao(基座直用)、任意 OpenAI 兼容端点(如 ollama)、Anthropic(原生/协议桥接)、Gemini(原生);官方端点预设目录见 [docs/provider-presets.md](docs/provider-presets.md);Anthropic Messages 入站(Claude Code 直连/类 cc-switch 反代)见 [docs/claude-code.md](docs/claude-code.md) |
 | 鉴权与租户 | `mk-` 平台 key 签发(SHA-256 落库 + LRU 缓存;key 级 RPM/TPM/日配额与过期时刻,运行态 PATCH 调整)、多租户隔离、日配额(事后记账模型) |
 | 流量治理 | RPM 令牌桶 + TPM 滑动窗口;key 池平滑加权轮询 + EMA 健康度 + 三态状态机(健康/冷却/禁用);failover 首 token 边界语义;请求参数治理(模型能力目录,换道重治理,Raw 字节层改写零丢失) |
 | 计量计费 | 流式 usage 归一 + tiktoken 离线估算兜底;分时段倍率;动态改价零重启;异步批量落库 + 缓冲续传 |

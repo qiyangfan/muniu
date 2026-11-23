@@ -51,6 +51,7 @@ func TestDecideNativePath(t *testing.T) {
 	cand := failover.Candidate{Provider: "p1", Model: "m1"}
 
 	msgAdapter := map[string]adapter.Adapter{"p1": stubNative{proto: protocol.InboundMessages}}
+	gemAdapter := map[string]adapter.Adapter{"p1": stubNative{proto: protocol.InboundGemini}}
 	cases := []struct {
 		name           string
 		nat            *inboundNative
@@ -67,6 +68,9 @@ func TestDecideNativePath(t *testing.T) {
 		{"responses×声明=直通", &inboundNative{proto: protocol.InboundResponses}, map[string]adapter.Adapter{"p1": stubNative{proto: protocol.InboundResponses}}, map[string]bool{"p1": true}, false, true, ""},
 		{"responses×未声明=翻译兜底", &inboundNative{proto: protocol.InboundResponses}, map[string]adapter.Adapter{"p1": stubNative{proto: protocol.InboundResponses}}, map[string]bool{"p1": false}, false, false, ""},
 		{"responses×无能力=翻译兜底", &inboundNative{proto: protocol.InboundResponses}, map[string]adapter.Adapter{"p1": stubPlain{}}, map[string]bool{"p1": true}, false, false, ""},
+		{"gemini×直通能力=直通", &inboundNative{proto: protocol.InboundGemini}, gemAdapter, nil, false, true, ""},
+		{"gemini×无能力=翻译", &inboundNative{proto: protocol.InboundGemini}, map[string]adapter.Adapter{"p1": stubPlain{}}, nil, false, false, ""},
+		{"gemini×协议身份不符=翻译", &inboundNative{proto: protocol.InboundGemini}, msgAdapter, nil, false, false, ""},
 		{"插件改写回落翻译", &inboundNative{proto: protocol.InboundMessages}, msgAdapter, nil, true, false, "plugin_modified"},
 	}
 	for _, c := range cases {

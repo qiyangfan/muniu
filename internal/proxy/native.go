@@ -39,8 +39,8 @@ func inboundFrom(r *http.Request) *inboundNative {
 	return n
 }
 
-// laneKey 入站 lane 标记：不携带原生上下文的 lane(gemini)经此声明身份,chat 裸入站
-// 无标记(零值)。公共管道内 lane 相关判定(亲和范围/oauth 收窄)同源消费,防再劈叉。
+// laneKey 入站 lane 标记：gemini 委托 chat 管道时声明身份（同时携带原生上下文），
+// chat 裸入站无标记(零值)。公共管道内 lane 相关判定(亲和范围/oauth 收窄)同源消费,防再劈叉。
 type laneKey struct{}
 
 // withLane 标记请求的入站 lane(gemini handler 委托 chat 管道前挂载)。
@@ -137,6 +137,8 @@ func (p *Proxy) upgradeIneligible(w http.ResponseWriter, r *http.Request, nat *i
 	switch nat.proto {
 	case protocol.InboundMessages:
 		writeMessagesError(w, http.StatusBadRequest, "invalid_request_error", nat.ineligMsg)
+	case protocol.InboundGemini:
+		writeGeminiError(w, http.StatusBadRequest, 400, nat.ineligMsg, "INVALID_ARGUMENT", nat.ineligCode)
 	default:
 		p.writeError(w, r, protocol.TypeBadRequest, nat.ineligCode, nat.ineligMsg)
 	}

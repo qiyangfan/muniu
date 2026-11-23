@@ -59,7 +59,11 @@ func (o *OpenAI) Classify(status int, _ []byte) failover.ErrorClass {
 type openAIUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
-	PromptDetails    struct {
+	// 平铺方言键：部分上游(Qwen)与 muniu 统一流帧把 cached/reasoning 放在 usage 顶层；
+	// 嵌套 details 缺省时回落这两个键，否则流式计量丢 reasoning/cached。
+	CachedTokens    int64 `json:"cached_tokens"`
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+	PromptDetails   struct {
 		CachedTokens int64 `json:"cached_tokens"`
 	} `json:"prompt_tokens_details"`
 	CompletionDetails struct {
@@ -68,16 +72,25 @@ type openAIUsage struct {
 }
 
 // NormalizeUsage 将 OpenAI usage 转为统一形态；缺失字段按 0 处理。
+// cached/reasoning 嵌套 details 优先，缺省回落平铺方言键(与 extractCacheRead 的双摆位口径一致)。
 func (o *OpenAI) NormalizeUsage(raw json.RawMessage) (protocol.Usage, error) {
 	var raw_ openAIUsage
 	if err := json.Unmarshal(raw, &raw_); err != nil {
 		return protocol.Usage{}, fmt.Errorf("adapter: 解析上游 usage: %w", err)
 	}
+	cached := raw_.PromptDetails.CachedTokens
+	if cached == 0 {
+		cached = raw_.CachedTokens
+	}
+	reasoning := raw_.CompletionDetails.ReasoningTokens
+	if reasoning == 0 {
+		reasoning = raw_.ReasoningTokens
+	}
 	return protocol.Usage{
 		PromptTokens:     raw_.PromptTokens,
 		CompletionTokens: raw_.CompletionTokens,
-		ReasoningTokens:  raw_.CompletionDetails.ReasoningTokens,
-		CachedTokens:     raw_.PromptDetails.CachedTokens,
+		ReasoningTokens:  reasoning,
+		CachedTokens:     cached,
 	}, nil
 }
 

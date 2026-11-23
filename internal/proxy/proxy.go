@@ -45,8 +45,8 @@ const providerCircuitOpenCode = "provider_circuit_open"
 // oauthLaneUnsupportedCode oauth lane 收窄的显式拒绝码:候选均为订阅渠道而入站 lane 不支持。
 const oauthLaneUnsupportedCode = "oauth_lane_unsupported"
 
-// oauthSkippedLane 收窄判定:nat 非空且非 messages 入站(responses)命中 oauth 渠道即跳过;
-// gemini 经 lane 标记判定;chat(nat 空且无 lane 标记)与 messages 恒放行。
+// oauthSkippedLane 收窄判定:nat 非空且非 messages 入站(responses/gemini)命中 oauth 渠道即跳过;
+// 无原生上下文时以 lane 标记兜底;chat(nat 空且无 lane 标记)与 messages 恒放行。
 func oauthSkippedLane(r *http.Request, nat *inboundNative, authModes map[string]string, provider string) bool {
 	if nat != nil {
 		return nat.proto != protocol.InboundMessages &&
@@ -589,8 +589,8 @@ type stickState struct {
 }
 
 // resolveStick 解析会话缓存亲和(ADR-0020):仅 chat/messages 两条入站 lane 参与(nat 为空
-// 且无 lane 标记 =chat 原生;InboundMessages=翻译后;gemini 经 lane 标记排除——gemini 委托
-// 管道不携带任何身份,不得被误当 chat 参与亲和)。
+// 且无 lane 标记 =chat 原生;InboundMessages=翻译后);gemini/responses 经 proto 判定排除,
+// 不得被误当 chat 参与亲和。
 func (p *Proxy) resolveStick(r *http.Request, nat *inboundNative, req *protocol.ChatRequest) stickState {
 	var sk stickState
 	affinityLane := (nat == nil && laneFrom(r) == "") || (nat != nil && nat.proto == protocol.InboundMessages)
@@ -891,10 +891,35 @@ func (p *Proxy) fillBudgetEstimate(r *http.Request, req *protocol.ChatRequest, n
 	}
 }
 
+// governNativeAttempt 直通 attempt 的治理评估：gemini 的采样参数在 generationConfig 嵌套且命名
+// 不同(maxOutputTokens/topK)，原始体评估会让能力约束失效，故取 canonical 与翻译路径同一判据；
+// 其余协议字段名与 canonical 同域，维持原始体评估以覆盖翻译器丢弃的参数。干预即回落翻译路径。
+func (p *Proxy) governNativeAttempt(r *http.Request, snap *topologySnapshot, req *protocol.ChatRequest,
+	nat *inboundNative, path *attemptPath, cand failover.Candidate) ([]governChange, string) {
+	capability, ok := snap.caps[governKey{cand.Provider, cand.Model}]
+	if !ok {
+		return nil, ""
+	}
+	evalReq := &protocol.ChatRequest{Raw: nat.raw}
+	if nat.proto == protocol.InboundGemini && req != nil {
+		evalReq = req
+	}
+	_, changes, reject := governChat(evalReq, capability, p.strictGov)
+	if len(changes) > 0 {
+		path.native = false
+		path.fallback = "governance_intervened"
+		p.logger.Info("直通回落翻译路径(治理干预)",
+			"request_id", loggingRequestID(r.Context()),
+			"provider", cand.Provider, "model", cand.Model, "changes", len(changes))
+	}
+	return changes, reject
+}
+
 // prepareAttempt 请求参数治理：每次 attempt 从原始请求出发按目标 (provider, model) 重新治理，
 // 换道后不得沿用上一目标的收敛结果，strict 命中即 400 终结。
-// 直通 attempt 以原始体评估治理，翻译器静默丢弃的参数不在 canonical，只评 canonical 会漏；
-// 失格请求 raw 同样可评，声明约束经干预回落翻译，由升格拒绝兜底，语义一致。
+// 直通 attempt 默认以原始体评估治理，翻译器静默丢弃的参数不在 canonical，只评 canonical 会漏；
+// gemini 例外取 canonical（采样参数在 generationConfig 嵌套且命名不同，raw 评估会失效，见
+// governNativeAttempt）。失格请求 raw 同样可评，声明约束经干预回落翻译，由升格拒绝兜底，语义一致。
 // 翻译路径治理消费 canonical：失格请求 canonical 不可得，治理不可评估，直通免治。
 // 治理干预可把直通降级为翻译路径，故 path 经指针就地改写。
 func (p *Proxy) prepareAttempt(w http.ResponseWriter, r *http.Request, snap *topologySnapshot,
@@ -903,16 +928,7 @@ func (p *Proxy) prepareAttempt(w http.ResponseWriter, r *http.Request, snap *top
 	var out attemptPrep
 	var greject string
 	if path.native {
-		if capability, ok := snap.caps[governKey{cand.Provider, cand.Model}]; ok {
-			_, out.changes, greject = governChat(&protocol.ChatRequest{Raw: nat.raw}, capability, p.strictGov)
-			if len(out.changes) > 0 {
-				path.native = false
-				path.fallback = "governance_intervened"
-				p.logger.Info("直通回落翻译路径(治理干预)",
-					"request_id", loggingRequestID(r.Context()),
-					"provider", cand.Provider, "model", cand.Model, "changes", len(out.changes))
-			}
-		}
+		out.changes, greject = p.governNativeAttempt(r, snap, req, nat, path, cand)
 	}
 	if nat != nil && nat.ineligCode != "" {
 		// 失格请求单一出口：治理干预落翻译路径或 strict 命中即升格既有 400 信封，
@@ -938,7 +954,9 @@ func (p *Proxy) prepareAttempt(w http.ResponseWriter, r *http.Request, snap *top
 func (p *Proxy) execNativeAttempt(w http.ResponseWriter, r *http.Request, upstream *http.Client,
 	ad adapter.Adapter, path attemptPath, key *keypool.Key, m *meterState, nat *inboundNative,
 	cand failover.Candidate) (bool, failover.ErrorClass) {
-	out, err := path.preparer.PrepareNative(&protocol.NativeRequest{Proto: nat.proto, Raw: nat.raw}, cand.Model, key.Value)
+	out, err := path.preparer.PrepareNative(&protocol.NativeRequest{
+		Proto: nat.proto, Raw: nat.raw, Stream: nat.stream,
+	}, cand.Model, key.Value)
 	if err != nil {
 		p.writeError(w, r, protocol.TypeBadRequest, "bad_request", "出站请求构造失败")
 		return true, failover.ClassBadRequest

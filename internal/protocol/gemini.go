@@ -4,6 +4,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -85,6 +86,29 @@ type geminiRequest struct {
 	Tools             []geminiTool    `json:"tools"`
 	ToolConfig        json.RawMessage `json:"toolConfig"` // {functionCallingConfig:{mode,allowedFunctionNames}}
 	GenerationConfig  geminiGenConfig `json:"generationConfig"`
+}
+
+// TranslateGeminiRequestEx Gemini 入站双形态翻译：原始体逐字节保留 + 失格标记。
+// content_part_unsupported（fileData、音频/视频、system 非文本部件）直通可服务，标 Ineligible；
+// 结构性非法维持 Fatal，行为与直通无关。
+func TranslateGeminiRequestEx(pathModel string, body []byte, stream bool) *TranslationResult {
+	res := &TranslationResult{Raw: body, Proto: InboundGemini, Model: pathModel, Stream: stream}
+	req, err := TranslateGeminiRequest(pathModel, body, stream)
+	switch {
+	case err == nil:
+		res.Chat = req
+	case isGeminiIneligible(err):
+		res.Ineligible = err
+	default:
+		res.Fatal = err
+	}
+	return res
+}
+
+// isGeminiIneligible 翻译能力缺口判定：仅内容部件类可经原生直通服务。
+func isGeminiIneligible(err error) bool {
+	var ge *GeminiUnsupportedError
+	return errors.As(err, &ge) && ge.Code == CodeGeminiContentPartUnsupported
 }
 
 // TranslateGeminiRequest 将 generateContent 请求转换为规范 chat 请求；模型名来自路径，流式模式由端点决定。

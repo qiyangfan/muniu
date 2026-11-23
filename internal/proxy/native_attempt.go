@@ -6,6 +6,7 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -69,14 +70,20 @@ func (p *Proxy) attemptNativeNonStream(w http.ResponseWriter, r *http.Request,
 }
 
 // absorbNativeBody 非流式原生体计量：usage 原生形态归一并捕获 responses 响应 id，供亲和回写。
+// Gemini 的原生键为 usageMetadata，其余协议为 usage。
 func (m *meterState) absorbNativeBody(nat *inboundNative, respBody []byte) {
 	var probe struct {
-		ID    string          `json:"id"`
-		Usage json.RawMessage `json:"usage"`
+		ID            string          `json:"id"`
+		Usage         json.RawMessage `json:"usage"`
+		UsageMetadata json.RawMessage `json:"usageMetadata"` // gemini 原生形态
 	}
 	_ = json.Unmarshal(respBody, &probe)
-	if len(probe.Usage) > 0 && string(probe.Usage) != "null" {
-		m.usageFrames = append(m.usageFrames, probe.Usage)
+	usage := probe.Usage
+	if nat.proto == protocol.InboundGemini {
+		usage = probe.UsageMetadata
+	}
+	if len(usage) > 0 && string(usage) != "null" {
+		m.usageFrames = append(m.usageFrames, usage)
 	} else {
 		m.est = true
 	}
@@ -176,18 +183,27 @@ func (p *Proxy) nativeStreamStep(w http.ResponseWriter, r *http.Request, m *mete
 		return true, handled, class
 	}
 	if res.err != nil {
-		handled, class := p.nativeStreamReadErr(w, r, m, g, res.err, opCancel)
+		handled, class := p.nativeStreamReadErr(w, r, m, g, ns, res.err, opCancel)
 		return true, handled, class
 	}
 	return p.nativeStreamFrame(w, r, m, g, ns, res, opCancel)
 }
 
 // nativeStreamReadErr 直通读帧出错：断连/未开闸可换道，已开闸如实终止已透传字节。
+// 无终止标记协议（gemini）的干净关流等价终态：原字节已透传，不合成任何帧；
+// 空内容响应(仅 finish/usage 帧)先放行缓冲再收尾，零事件空流仍按断流交候选循环。
 func (p *Proxy) nativeStreamReadErr(w http.ResponseWriter, r *http.Request, m *meterState,
-	g *firstTokGate, err error, opCancel context.CancelFunc) (bool, failover.ErrorClass) {
+	g *firstTokGate, ns *nativeStreamState, err error, opCancel context.CancelFunc) (bool, failover.ErrorClass) {
 	opCancel()
 	if r.Context().Err() != nil {
 		return p.streamClientGone(func() {}, m, g)
+	}
+	if errors.Is(err, io.EOF) {
+		if scd, ok := ns.np.(adapter.StreamCloseDone); ok && scd.StreamCloseIsDone() {
+			if p.finishNativeCleanClose(w, g, ns, m) {
+				return true, ""
+			}
+		}
 	}
 	if !g.gateOpen {
 		if g.firstTokFired.Load() {
@@ -199,6 +215,21 @@ func (p *Proxy) nativeStreamReadErr(w http.ResponseWriter, r *http.Request, m *m
 	m.status, m.class = "error", failover.ClassMidStreamFail
 	m.est = true
 	return true, failover.ClassMidStreamFail
+}
+
+// finishNativeCleanClose 直通干净关流收尾：已开闸直接收尾；未开闸但已收到完整帧时
+// 先放行缓冲（空内容响应首字节即终帧）；零事件返回 false，交候选循环按断流处理。
+func (p *Proxy) finishNativeCleanClose(w http.ResponseWriter, g *firstTokGate,
+	ns *nativeStreamState, m *meterState) bool {
+	if !g.gateOpen {
+		if len(g.pending) == 0 {
+			return false
+		}
+		p.openGate(w)
+		p.writeEvents(w, g.pending)
+	}
+	m.finishNativeStream(ns)
+	return true
 }
 
 // nativeStreamFrame 直通正常读帧：原生事件解析、计量、预算闸与开闸/原字节透传。
@@ -325,11 +356,11 @@ func (p *Proxy) writeUpstreamPassthrough(w http.ResponseWriter, m *meterState) {
 }
 
 // canonicalFromNative 直通响应转 canonical chat 形态，作为缓存双存的 canonical 侧：
-// messages 走桥接翻译 RewriteResponse，responses 走受限逆映射；失败返回 nil，
+// messages/gemini 走适配器翻译 RewriteResponse，responses 走受限逆映射；失败返回 nil，
 // 仅降级为跨协议不可命中，不失败请求、不损同构回放。
 func canonicalFromNative(ad adapter.Adapter, proto protocol.InboundProtocol, body []byte) []byte {
 	switch proto {
-	case protocol.InboundMessages:
+	case protocol.InboundMessages, protocol.InboundGemini:
 		canonical, _, err := ad.RewriteResponse(body)
 		if err != nil {
 			return nil

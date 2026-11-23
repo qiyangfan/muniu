@@ -1,6 +1,6 @@
 # ADR-0015:Gemini 原生协议出入站
 
-- 状态:已接受(2026-10-11;owner 点名立项——无原生 key,以 wire-format 对齐完成双向联调;ADR-0013 备选记录「Gemini 入站出现真实需求再立法」由本次触发解除)
+- 状态:已接受(2026-10-11;owner 点名立项——无原生 key,以 wire-format 对齐完成双向联调;ADR-0013 备选记录「Gemini 入站出现真实需求再立法」由本次触发解除)。2026-11-23 补记:决策 6 的 gemini×gemini 直通 follow-up 由 owner 点名落地,openspec change `gemini-native-passthrough` 增补路径判定表行,协议平等闭合。
 
 ## 决策
 
@@ -16,7 +16,7 @@ Gemini 原生 wire 双向内置化:**入站** `POST /v1beta/models/{model}:gener
 
 - **外部转换器拼装模拟端点(owner 初版方案)**:形态正确但外部 Node 工具不进仓(依赖白名单制),且只模拟 wire 不产生契约资产;内置化后外部工具降级为可选联调替身。
 - **Vertex gRPC**:目标 JD 明确要求再立项(既有裁决沿用)。
-- **gemini×gemini 直通并入本变更**:协议平等原则下同权,但属 passthrough 路由判定表增补一行的小变更,owner 指令触发(登记 follow-up)。
+- **gemini×gemini 直通并入本变更**:协议平等原则下同权,但属 passthrough 路由判定表增补一行的小变更,owner 指令触发(登记 follow-up;2026-11-23 已由 change `gemini-native-passthrough` 落地)。
 
 ## 后果
 

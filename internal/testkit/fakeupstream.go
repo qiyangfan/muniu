@@ -27,6 +27,7 @@ type Upstream struct {
 	mu      sync.Mutex
 	bodies  [][]byte
 	headers []http.Header
+	urls    []string
 }
 
 // URL 返回 fake 上游基址。
@@ -50,6 +51,16 @@ func (u *Upstream) LastBody() []byte {
 		return nil
 	}
 	return u.bodies[len(u.bodies)-1]
+}
+
+// LastURL 最近一次请求的完整 URL（含路径与查询串），供直通出站 URL 断言。
+func (u *Upstream) LastURL() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if len(u.urls) == 0 {
+		return ""
+	}
+	return u.urls[len(u.urls)-1]
 }
 
 // LastHeader 最近一次请求的指定头。
@@ -97,6 +108,7 @@ func (u *Upstream) recordBody(r *http.Request, body []byte) {
 	defer u.mu.Unlock()
 	u.bodies = append(u.bodies, body)
 	u.headers = append(u.headers, r.Header.Clone())
+	u.urls = append(u.urls, r.URL.String())
 }
 
 // serveStream 剧本执行器：逐事件延时、可选半帧切分、写出并 flush；CloseAfter 用

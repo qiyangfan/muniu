@@ -11,13 +11,12 @@ import (
 // InboundProtocol 入站协议标签，直通路径判定载体，随请求传入管道。
 type InboundProtocol string
 
-// 入站协议标签值域：chat 无直通增益，messages/responses 具同构直通语义；
-// gemini 为纯翻译型(委托 chat 管道,lane 身份标记载体,无直通 lane)。
+// 入站协议标签值域：chat 无直通增益，messages/responses/gemini 具同构直通语义。
 const (
 	InboundChat      InboundProtocol = "chat" // 原生 chat，基座本就透传，无直通增益
 	InboundMessages  InboundProtocol = "messages"
 	InboundResponses InboundProtocol = "responses"
-	InboundGemini    InboundProtocol = "gemini" // 翻译型 lane 标记(亲和范围/oauth 收窄判定消费)
+	InboundGemini    InboundProtocol = "gemini" // 同构直通 lane；流式方法在 URL 后缀，亲和范围/oauth 收窄判定同源消费
 )
 
 // TranslationResult 边缘翻译结果双形态。不变式：Chat != nil ⇔ Fatal == nil ∧ Ineligible == nil。
@@ -97,9 +96,11 @@ func TranslateResponsesRequest(body []byte) (*ChatRequest, error) {
 
 // NativeRequest 直通出站入参：客户端原始请求体与入站协议标签。
 // 适配器按标签选原生端点；Raw 仅允许经 RewriteModelInPlace 做 model 字段原位替换。
+// Stream 供流式语义不在请求体内、而由端点（URL 方法后缀）承载的协议消费，如 gemini。
 type NativeRequest struct {
-	Proto InboundProtocol
-	Raw   []byte
+	Proto  InboundProtocol
+	Raw    []byte
+	Stream bool
 }
 
 // isIneligible 机器码级失格判定，unsupported 内容类错误即直通可服务。

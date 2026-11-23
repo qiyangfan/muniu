@@ -196,18 +196,21 @@ data: [DONE]
 | messages | 其他适配器 | 翻译 | 协议身份不符 |
 | responses | `native_responses: true` | **直通** | provider 显式声明(零自动探测) |
 | responses | 未声明 | 翻译兜底 | 「OpenAI 兼容」≠「responses 端点可用」 |
+| gemini | gemini 适配器 | **直通** | 适配器类型即声明;模型名在 URL,流式方法由 `NativeRequest.Stream` 决定 |
+| gemini | 其他适配器 | 翻译 | 协议身份不符(单跳 canonical) |
 
 回落信号(该 attempt 放弃直通改翻译,不计失败不动 key 健康度):①治理对该候选实际干预(直通 attempt 以**原始体**评估治理——翻译器静默丢弃的参数不在 canonical,治理对 wire 的裁决权必须覆盖它们);②插件改写 canonical(原始体过期)。
 
 ### 保真不变式与错误信封分域
 
 - 直通出站除 model 值字节外**逐字节**等于客户端原始体(`RewriteModelInPlace` 原位手术,禁 map 往返重排键序);响应状态/头/体(流式逐帧)原样透传。重复顶层 `model` 键收敛为单键(首处换值、其余整段摘除,仅触及 model 字段字节)——真实上游对重复键均拒绝(百炼兼容模式报缺参、deepseek 报 duplicate field,2026-10-30 真端点实证),只改末键会恰好产出该形态。
+- **Gemini 直通变体**:模型名在 URL 方法后缀而不在体内,出站体零改写即客户端原始字节;流式形态由 `NativeRequest.Stream` 选 `:generateContent` / `:streamGenerateContent?alt=sse`。Gemini 流无 `[DONE]`,干净关流即终态(`StreamCloseDone`),直通零合成终帧、零补 `[DONE]`。
 - **错误信封按路径分域**:直通=上游信封原样到达(不换道类,含流内失败帧诚实透传后终止,不合成任何非上游形态);翻译=既有归一信封。两套契约并存,禁顺手统一。
 - writer 模式位(直通=恒等写/翻译=反向映射)仅首字节提交前可切换;已提交绝不换道/二次写出/混用形态(`tw.committed` 既有不变式)。
 
 ### 惰性拒绝(失格标记)
 
-翻译失格(image 等)不再一律边缘 400:别名含直通候选 → 放行直通(多模态原生支持);换道落翻译候选 → 出站前升格既有 400 信封(`content_block_unsupported`/`input_item_unsupported`,文案不变);无直通候选别名 → 维持现状即时 400(逐字节一致)。失格请求跳过语义缓存检索与入库、不影响 key 健康度。
+翻译失格(image 等)不再一律边缘 400:别名含直通候选 → 放行直通(多模态原生支持);换道落翻译候选 → 出站前升格既有 400 信封(`content_block_unsupported`/`input_item_unsupported`/`content_part_unsupported`,文案不变);无直通候选别名 → 维持现状即时 400(逐字节一致)。失格请求跳过语义缓存检索与入库、不影响 key 健康度。
 
 ### 语义缓存双存
 
@@ -223,6 +226,10 @@ data: [DONE]
 ## Gemini 入站翻译(ADR-0015,契约;conformance/gemini 语料钉死本表)
 
 `POST /v1beta/models/{model}:generateContent`(及 `:streamGenerateContent?alt=sse`)与 Responses/Messages 入站同款**边缘翻译**:模型别名取自 URL 路径(Gemini wire 无 model 字段;流式语义在端点本身,canonical 注入 `stream:true`)。鉴权适配 `server.AdaptGeminiKey`(x-goog-api-key 头 / ?key= 参数 → Bearer;?key= 读后剥离)。
+
+**直通优先**:别名含 `adapter: gemini` 候选时,该 attempt 按同构直通服务——原始体逐字节出站(模型在 URL)、响应/流式帧原样透传(fileData/音视频/安全设置等原生能力零损失);本节映射仅在跨协议候选或直通候选耗尽回落时执行。`content_part_unsupported` 类翻译缺口按惰性拒绝纪律处理(见「同构直通/惰性拒绝」),`stream_form_unsupported`(缺 alt=sse)维持端点契约 400。
+
+**空内容流**:仅 finish/usage 帧而无内容帧的合法流(如 `maxOutputTokens` 被 thinking 吃光)按干净关流正常收尾——直通原样透传上游帧,翻译路径放行缓冲后合成协议终态(裸 chat 补 `[DONE]`),两条路径均不判 `mid_stream_fail`;零事件空流仍按断流交候选循环。
 
 ### 请求映射表
 

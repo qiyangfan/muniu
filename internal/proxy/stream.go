@@ -256,17 +256,26 @@ func (p *Proxy) streamReadErr(w http.ResponseWriter, r *http.Request, ad adapter
 }
 
 // finishCleanStream 无终止标记协议如 gemini 实现 StreamCloseDone：干净关流即正常收尾，等价 IsDone；
-// 未实现者维持断流按 mid_stream_fail 处理的既有契约。返回 true 表示已按正常收尾处理。
+// 空内容响应(未开闸但已收到完整帧)先放行缓冲再合成终态；零事件空流维持断流交候选循环。
+// 未实现 StreamCloseDone 者维持断流按 mid_stream_fail 处理的既有契约。返回 true 表示已按正常收尾处理。
 func (p *Proxy) finishCleanStream(w http.ResponseWriter, ad adapter.Adapter, m *meterState,
 	g *firstTokGate, err error) bool {
-	if !errors.Is(err, io.EOF) || !g.gateOpen {
+	if !errors.Is(err, io.EOF) {
 		return false
 	}
 	scd, ok := ad.(adapter.StreamCloseDone)
 	if !ok || !scd.StreamCloseIsDone() {
 		return false
 	}
-	m.markFirstToken()
+	if !g.gateOpen {
+		if len(g.pending) == 0 {
+			return false // 上游零事件：真空流按断流交候选循环
+		}
+		p.openGate(w)
+		p.writeEvents(w, g.pending)
+	} else {
+		m.markFirstToken()
+	}
 	if len(m.usageFrames) == 0 {
 		m.est = true
 	}

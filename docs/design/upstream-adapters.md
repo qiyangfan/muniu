@@ -45,17 +45,19 @@ type Adapter interface {
 
 GLM/Qwen/Moonshot/Doubao:默认继承 OpenAI 列,quirk 层只覆盖实测差异(以 conformance fixture 实证后登记)。
 
+**平铺方言键**:usage 顶层的 `cached_tokens`/`reasoning_tokens`(Qwen 流帧、muniu 统一流帧、百炼缓存族)按双摆位归一——嵌套 details 优先,缺省回落平铺键;只读嵌套会让流式 reasoning/cached 落库恒 0(2026-11-23 真实 Gemini e2e 实证修复)。
+
 ## 字段改写白名单(客户端可见行为)
 
-默认**零改写**:基座与 quirk 对流式事件只读不写(读侧归一仅供计量)。桥接型(当前仅 anthropic)是唯一改写者——它们必须把异构事件翻译为 OpenAI 形态(该翻译矩阵另立 `bridge/README.md`,随 Phase 2 编写并配 fixture)。此白名单的意义:兼容型供应商的客户端体验与直连**逐字节一致**,网关透明性可被 conformance 断言。
+默认**零改写**:基座与 quirk 对流式事件只读不写(读侧归一仅供计量)。桥接型(anthropic/gemini)是唯一改写者——它们必须把异构事件翻译为 OpenAI 形态(该翻译矩阵另立 `bridge/README.md`,随 Phase 2 编写并配 fixture)。此白名单的意义:兼容型供应商的客户端体验与直连**逐字节一致**,网关透明性可被 conformance 断言。
 
 ## 同构直通接口(protocol-native-passthrough;ADR-0014)
 
 `adapter.NativePreparer` 可选能力接口(与 `EmbeddingPreparer` 同款,proxy 类型断言探测):
 
-- `NativeProto()`:本适配器原生直通的入站协议(协议身份自述;桥接=messages,基座=responses)。
-- `PrepareNative(NativeRequest, model, key)`:原始体直通出站——URL/鉴权头按既有声明,body 仅 model 字段原位手术(`protocol.RewriteModelInPlace`),其余逐字节保留。
-- `NativeStreamEvent(data)`:直通流事件 meta-only 读侧——返回内部统一 chunk(计量/缓存拼包与翻译路径同缝)+ meta;客户端恒收上游原字节,本方法不改写 wire。
+- `NativeProto()`:本适配器原生直通的入站协议(协议身份自述;桥接=messages 或 gemini,基座=responses)。
+- `PrepareNative(NativeRequest, model, key)`:原始体直通出站——URL/鉴权头按既有声明,body 仅 model 字段原位手术(`protocol.RewriteModelInPlace`),其余逐字节保留;gemini 的模型名在 URL 方法后缀、流式形态由 `NativeRequest.Stream` 决定,body 零改写。
+- `NativeStreamEvent(data)`:直通流事件 meta-only 读侧——返回内部统一 chunk(计量/缓存拼包与翻译路径同缝)+ meta;客户端恒收上游原字节,本方法不改写 wire(无终止标记协议如 gemini 由 `StreamCloseDone` 声明干净关流即终态)。
 - `NormalizeNativeUsage(raw)`:直通响应原生 usage → 统一 Usage(计量口径与翻译路径一致)。
 - `adapter.NativeFetcher.PrepareNativeFetch(respID, key)`:GET 状态查询代理出站(有状态 lane)。
 

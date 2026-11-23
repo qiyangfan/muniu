@@ -101,6 +101,16 @@ func TestOpenAI_NormalizeUsage_归一表(t *testing.T) {
 			raw:  `{"prompt_tokens":10,"completion_tokens":20}`,
 			want: protocol.Usage{PromptTokens: 10, CompletionTokens: 20},
 		},
+		{
+			name: "平铺方言键(cached/reasoning 顶层)",
+			raw:  `{"prompt_tokens":10,"completion_tokens":20,"cached_tokens":4,"reasoning_tokens":6}`,
+			want: protocol.Usage{PromptTokens: 10, CompletionTokens: 20, ReasoningTokens: 6, CachedTokens: 4},
+		},
+		{
+			name: "嵌套 details 优先于平铺",
+			raw:  `{"prompt_tokens":10,"completion_tokens":20,"cached_tokens":9,"reasoning_tokens":9,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":6}}`,
+			want: protocol.Usage{PromptTokens: 10, CompletionTokens: 20, ReasoningTokens: 6, CachedTokens: 4},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

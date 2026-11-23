@@ -159,10 +159,10 @@ func TestGeminiE2E_streamForm校验(t *testing.T) {
 	}
 }
 
-// TestGeminiE2E_路径别名与翻译拒绝 验证同规错误与显式拒绝的 Gemini 信封形态。
+// TestGeminiE2E_路径别名与翻译拒绝 验证同规错误与翻译型候选的显式拒绝（Gemini 信封形态）。
 func TestGeminiE2E_路径别名与翻译拒绝(t *testing.T) {
 	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
-	p := newGeminiProxy(t, up)
+	p := newGeminiTranslationProxy(t, up)
 	ts := mountGemini(t, p)
 
 	// 别名不存在：与 chat model_not_found 同规，400 加同文案，信封改写为 Gemini 形态。
@@ -173,7 +173,7 @@ func TestGeminiE2E_路径别名与翻译拒绝(t *testing.T) {
 	if up.RequestCount() != 0 {
 		t.Fatal("不得触达上游")
 	}
-	// fileData 显式拒绝
+	// fileData 在无直通候选的别名上显式拒绝（原生直通服务见直通 e2e）
 	status, body = postGemini(t, ts.URL, "gemini-x:generateContent",
 		`{"contents":[{"role":"user","parts":[{"fileData":{"fileUri":"gs://x"}}]}]}`, http.Header{}, "")
 	if status != 400 || !strings.Contains(body, "content_part_unsupported") {
@@ -181,9 +181,27 @@ func TestGeminiE2E_路径别名与翻译拒绝(t *testing.T) {
 	}
 }
 
+// newGeminiTranslationProxy 纯翻译型拓扑（openai 候选）：gemini 入站跨协议单跳翻译路径。
+func newGeminiTranslationProxy(t *testing.T, up *testkit.Upstream) *Proxy {
+	t.Helper()
+	reg := adapter.NewRegistry()
+	reg.Register("oai", adapter.NewOpenAI(up.URL(), ""))
+	return New(Config{
+		Registry:  reg,
+		Providers: []config.Provider{{Name: "oai", Adapter: "openai"}},
+		Routes: map[string][]config.Candidate{
+			"gemini-x": {{Provider: "oai", Model: "up-o", Priority: 0}},
+		},
+		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
+		Pools:    map[string]*keypool.Pool{"oai": keypool.NewPool([]keypool.KeyInput{{ID: "KO", Value: "ok", Weight: 1}})},
+		RandIntn: func(n int) int { return 0 },
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+}
+
 // TestGeminiE2E_鉴权适配剥离 两种凭证形态放行，?key= 读取后从 URL 剥离。
 func TestGeminiE2E_鉴权适配剥离(t *testing.T) {
-	up := testkit.StartJSONUpstream(t, 200, usageJSONBody)
+	up := testkit.StartJSONUpstream(t, 200, geminiJSONBody)
 	reg := adapter.NewRegistry()
 	reg.Register("gem", adapter.NewGemini(up.URL()))
 	p := New(Config{
@@ -241,6 +259,25 @@ func TestGeminiE2E_bridgegate声明式缺口(t *testing.T) {
 	}
 	if !strings.Contains(string(up.LastBody()), `"functionResponse"`) {
 		t.Fatalf("出站应含 functionResponse: %s", up.LastBody())
+	}
+}
+
+// TestGeminiE2E_翻译空内容流 chat 入站 × gemini 上游的空内容干净关流须按正常收尾：
+// finish 帧翻译为 chat chunk，网关补 [DONE]，不得判 mid_stream_fail。
+func TestGeminiE2E_翻译空内容流(t *testing.T) {
+	finish := `{"candidates":[{"content":{"parts":[{"text":""}],"role":"model"},"finishReason":"MAX_TOKENS","index":0}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":0}}`
+	up := testkit.StartStreamUpstream(t, []testkit.Event{{Data: "data: " + finish + "\n\n"}})
+	p := newGeminiProxy(t, up)
+	ts := httptest.NewServer(p.Handler())
+	t.Cleanup(ts.Close)
+
+	status, body := postChat(t, ts.URL,
+		`{"model":"gemini-x","stream":true,"messages":[{"role":"user","content":"hi"}],"max_tokens":1}`)
+	if status.StatusCode != http.StatusOK {
+		t.Fatalf("空内容流应正常收尾: %d %s", status.StatusCode, body)
+	}
+	if !strings.Contains(body, `"finish_reason":"length"`) || !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("空内容流应输出 finish 帧并补 [DONE]: %s", body)
 	}
 }
 

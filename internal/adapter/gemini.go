@@ -827,6 +827,37 @@ func geminiChatUsage(m *geminiUsageMetadata) map[string]any {
 // BridgeKind 标记 Gemini 为真异构协议桥接，翻译为 OpenAI 形态。
 func (g *Gemini) BridgeKind() string { return "gemini" }
 
+// NativeProto 返回 Gemini，即 gemini 入站对该候选直通。
+func (g *Gemini) NativeProto() protocol.InboundProtocol { return protocol.InboundGemini }
+
+// PrepareNative 构造原生 generateContent 直通出站：模型名在 URL 方法后缀，请求体逐字节保留；
+// 流式形态由 Stream 标志决定（Gemini wire 的流式语义不在请求体内）。
+func (g *Gemini) PrepareNative(in *protocol.NativeRequest, upstreamModel, apiKey string) (*Outbound, error) {
+	method := ":generateContent"
+	if in.Stream {
+		method = ":streamGenerateContent?alt=sse"
+	}
+	h := http.Header{}
+	h.Set("Content-Type", "application/json")
+	h.Set("x-goog-api-key", apiKey)
+	return &Outbound{
+		URL:    g.baseURL + "/models/" + upstreamModel + method,
+		Header: h,
+		Body:   in.Raw,
+	}, nil
+}
+
+// NativeStreamEvent 直通读侧：复用无状态帧翻译产出 canonical 内部帧供计量与首 token 判定，
+// 客户端收到的仍是上游原始帧。工具跨帧序号只影响内部帧，计量不依赖。
+func (g *Gemini) NativeStreamEvent(data []byte) ([]byte, EventMeta, error) {
+	return g.StreamEvent(data)
+}
+
+// NormalizeNativeUsage 归一上游原生 usageMetadata。
+func (g *Gemini) NormalizeNativeUsage(raw json.RawMessage) (protocol.Usage, error) {
+	return g.NormalizeUsage(raw)
+}
+
 // ToolRoundtripComplete 声明工具多轮请求侧翻译完整，functionCall/functionResponse 双向支持。
 func (g *Gemini) ToolRoundtripComplete() bool { return true }
 
