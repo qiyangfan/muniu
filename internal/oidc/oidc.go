@@ -37,11 +37,12 @@ type Config struct {
 	StateStore   StateStore // nil = 仅进程内(state 随重启丢失,单副本可用)
 }
 
-// Identity 验签通过后的虎符身份投影。
+// Identity 验签通过后的Keycloak身份投影。
 type Identity struct {
-	Subject string
-	Name    string
-	Email   string
+	Subject     string
+	Name        string
+	Email       string
+	ClientRoles []string
 }
 
 // ErrStateInvalid state 未知/过期/重放(回调拒绝,不进行 token 交换)。
@@ -210,7 +211,7 @@ func (rp *RelyingParty) Complete(ctx context.Context, state, code string) (Ident
 	if err != nil {
 		return Identity{}, err
 	}
-	return identityFromClaims(claims), nil
+	return identityFromClaims(claims, rp.cfg.ClientID), nil
 }
 
 // takePending 单次取出 state 对应的 PKCE 材料;不存在/过期/已用均 ok=false。
@@ -244,7 +245,7 @@ func (rp *RelyingParty) dropState(state string) {
 	rp.mu.Unlock()
 }
 
-// EndSessionURL 构造虎符 RP 发起登出地址;调用方须保证 postLogoutRedirect 已在 client 登记。
+// EndSessionURL 构造Keycloak RP 发起登出地址;调用方须保证 postLogoutRedirect 已在 client 登记。
 func (rp *RelyingParty) EndSessionURL(ctx context.Context, postLogoutRedirect string) (string, error) {
 	doc, err := rp.metadata(ctx)
 	if err != nil {
@@ -686,8 +687,9 @@ func hashFor(alg string, input []byte) (crypto.Hash, []byte) {
 	return 0, nil
 }
 
-// identityFromClaims 实名优先 name,其次 preferred_username/email,兜底 sub。
-func identityFromClaims(claims map[string]any) Identity {
+// identityFromClaims 实名优先 name,其次 preferred_username/email,兜底 sub;
+// ClientRoles 只取本 client 的 resource_access roles,其它 client 与 realm roles 忽略。
+func identityFromClaims(claims map[string]any, clientID string) Identity {
 	str := func(key string) string {
 		s, _ := claims[key].(string)
 		return strings.TrimSpace(s)
@@ -703,5 +705,29 @@ func identityFromClaims(claims map[string]any) Identity {
 	if name == "" {
 		name = sub
 	}
-	return Identity{Subject: sub, Name: name, Email: str("email")}
+	return Identity{Subject: sub, Name: name, Email: str("email"),
+		ClientRoles: clientRoles(claims, clientID)}
+}
+
+// clientRoles 从 resource_access[clientID].roles 提取字符串角色;缺失/类型不符返回 nil。
+func clientRoles(claims map[string]any, clientID string) []string {
+	ra, ok := claims["resource_access"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	client, ok := ra[clientID].(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := client["roles"].([]any)
+	if !ok {
+		return nil
+	}
+	roles := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if role, ok := v.(string); ok {
+			roles = append(roles, role)
+		}
+	}
+	return roles
 }

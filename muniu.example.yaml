@@ -59,15 +59,14 @@ metering:
 # 管理面统一身份(OIDC RP,admin-operators 契约):控制台唯一的人员登录入口,
 # 人员主体按 IdP sub 建档;本地账密已删除。IdP 为自托管 Keycloak(realm longzhong),
 # 接入步骤见 docs/runbook-keycloak-oidc.md。声明即启用,端点经 issuer 发现文档解析,
-# issuer/client_id/redirect_url/admin_subjects 必齐(部分声明加载期拒绝)。client_secret 可空
-# (公开客户端 + PKCE),非空时经环境变量注入。admin_subjects 是允许进入管理面的 IdP sub
-# 白名单,名单外主体一律拒绝;post_logout_redirect_url 须在 IdP client 登记。
+# issuer/client_id/redirect_url 必齐(部分声明加载期拒绝)。client_secret 可空
+# (公开客户端 + PKCE),非空时经环境变量注入。准入要求 id_token 的
+# resource_access["muniu-admin"].roles 含 `muniu-admin`;post_logout_redirect_url 须在 IdP client 登记。
 # 未声明时只剩 MUNIU_ADMIN_TOKEN 一条运维轨(CLI/脚本),联邦失败不影响它。
 # admin_oidc:
 #   issuer: "http://127.0.0.1:8080/realms/longzhong"
 #   client_id: "muniu-admin"
 #   redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
-#   admin_subjects: ["<Keycloak sub>"]
 #   post_logout_redirect_url: "http://127.0.0.1:8787/console/"
 #
 # 管理面 cookie 的 Secure 标记(顶层键,与 admin_oidc 平级):反代终止 TLS 时 r.TLS 恒为空,

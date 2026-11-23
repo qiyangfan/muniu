@@ -63,39 +63,39 @@ func TestMigration0020_联邦审计值域(t *testing.T) {
 	}
 }
 
-// 迁移 0021:主体以虎符 sub 为主键,同名展示名可并存;会话按 subject 归属。
+// 迁移 0021:主体以Keycloak sub 为主键,同名展示名可并存;会话按 subject 归属。
 func TestMigration0021_主体以subject为主键(t *testing.T) {
 	db := auditDB(t)
 	ctx := context.Background()
-	first, err := ResolveAdminPrincipal(ctx, db, "hufu:sub-1", "张三", "2026-11-21T00:00:00Z")
-	if err != nil || first.Subject != "hufu:sub-1" || first.Status != "active" {
+	first, err := ResolveAdminPrincipal(ctx, db, "keycloak:sub-1", "张三", "2026-11-21T00:00:00Z")
+	if err != nil || first.Subject != "keycloak:sub-1" || first.Status != "active" {
 		t.Fatalf("首登建档失败: %+v %v", first, err)
 	}
-	again, err := ResolveAdminPrincipal(ctx, db, "hufu:sub-1", "张三", "2026-11-21T00:00:00Z")
+	again, err := ResolveAdminPrincipal(ctx, db, "keycloak:sub-1", "张三", "2026-11-21T00:00:00Z")
 	if err != nil || again.CreatedAt != first.CreatedAt {
 		t.Fatalf("同一 sub 必须复用既有行: %+v %v", again, err)
 	}
-	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:sub-2", "张三", "2026-11-21T00:00:00Z"); err != nil {
+	if _, err := ResolveAdminPrincipal(ctx, db, "keycloak:sub-2", "张三", "2026-11-21T00:00:00Z"); err != nil {
 		t.Fatalf("同名不同 sub 必须可并存(身份键是 sub 不是名字): %v", err)
 	}
 
 	// 会话仅对活跃主体可建;停用即删该主体会话
-	if err := CreateAdminSession(ctx, db, "hufu:sub-1", "h1", "2026-11-21T00:00:00Z", "2026-11-21T12:00:00Z"); err != nil {
+	if err := CreateAdminSession(ctx, db, "keycloak:sub-1", "h1", "2026-11-21T00:00:00Z", "2026-11-21T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := AdminSession(ctx, db, "h1", "2026-11-21T01:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if err := PatchAdminPrincipal(ctx, db, "hufu:sub-1", true); err != nil {
+	if err := PatchAdminPrincipal(ctx, db, "keycloak:sub-1", true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := AdminSession(ctx, db, "h1", "2026-11-21T01:00:00Z"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("停用后会话必须失效: %v", err)
 	}
-	if err := CreateAdminSession(ctx, db, "hufu:sub-1", "h2", "2026-11-21T00:00:00Z", "2026-11-21T12:00:00Z"); !errors.Is(err, ErrNotFound) {
+	if err := CreateAdminSession(ctx, db, "keycloak:sub-1", "h2", "2026-11-21T00:00:00Z", "2026-11-21T12:00:00Z"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("停用主体不得签发会话: %v", err)
 	}
-	if err := PatchAdminPrincipal(ctx, db, "hufu:none", false); !errors.Is(err, ErrNotFound) {
+	if err := PatchAdminPrincipal(ctx, db, "keycloak:none", false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("不存在主体应 ErrNotFound: %v", err)
 	}
 }

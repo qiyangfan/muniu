@@ -17,45 +17,35 @@ import (
 // ErrAdminCredentials 会话/联邦登录拒绝的唯一分类;内部存储错误不混入认证错误。
 var ErrAdminCredentials = errors.New("管理员凭据无效")
 
-// AdminService 管理面会话服务。管理员主体由虎符(唯一账户权威)签发,本服务只做
+// AdminService 管理面会话服务。管理员主体由Keycloak(唯一账户权威)签发,本服务只做
 // 「sub → 主体 → 会话」的本地投影,不持有任何口令或登录失败状态。
 type AdminService struct {
-	db      *sql.DB
-	allowed map[string]struct{}
-	now     func() time.Time
+	db  *sql.DB
+	now func() time.Time
 }
 
+// FederatedAdminRole 管理面准入的唯一 Keycloak client role(与 platform realm 初始化一致)。
+const FederatedAdminRole = "muniu-admin"
+
 // NewAdminService 启动时清扫过期会话与登录中 state,失败拒绝装配。
-// allowed 为虎符 sub 白名单:非空时仅名单内主体可建号登录(生产装配必填);nil 仅供测试。
-func NewAdminService(ctx context.Context, db *sql.DB, allowed []string) (*AdminService, error) {
+func NewAdminService(ctx context.Context, db *sql.DB) (*AdminService, error) {
 	if err := store.CleanAdminSessions(ctx, db, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		return nil, err
 	}
 	if err := store.CleanOIDCStates(ctx, db, time.Now().Add(-15*time.Minute).UTC().Format(time.RFC3339Nano)); err != nil {
 		return nil, err
 	}
-	svc := &AdminService{db: db, now: time.Now}
-	if allowed != nil {
-		svc.allowed = make(map[string]struct{}, len(allowed))
-		for _, sub := range allowed {
-			svc.allowed[sub] = struct{}{}
-		}
-	}
-	return svc, nil
+	return &AdminService{db: db, now: time.Now}, nil
 }
 
-// LoginFederated 联邦轨:虎符 sub 直接作为主体键建/取主体并签发本地会话。
-// 身份信任来自 RP 验签后的 id_token,本轨不校验任何口令;停用主体拒绝,且不因再次登录自动恢复启用。
-// 配置白名单后,任何不在名单内的已验证 sub 都不得到达建号路径。
-func (s *AdminService) LoginFederated(ctx context.Context, subject, name string) (string, store.AdminPrincipal, error) {
+// LoginFederated 联邦轨:验签后的 sub 作为主体键建/取主体并签发本地会话。
+// 准入要求 client roles 含 FederatedAdminRole;本轨不校验口令;停用主体拒绝且不自动恢复。
+func (s *AdminService) LoginFederated(
+	ctx context.Context, subject, name string, roles []string,
+) (string, store.AdminPrincipal, error) {
 	subject = strings.TrimSpace(subject)
-	if subject == "" {
+	if subject == "" || !hasFederatedAdminRole(roles) {
 		return "", store.AdminPrincipal{}, ErrAdminCredentials
-	}
-	if s.allowed != nil {
-		if _, ok := s.allowed[subject]; !ok {
-			return "", store.AdminPrincipal{}, ErrAdminCredentials
-		}
 	}
 	now := s.now().UTC()
 	p, err := store.ResolveAdminPrincipal(ctx, s.db, subject, principalUsername(name),
@@ -67,6 +57,15 @@ func (s *AdminService) LoginFederated(ctx context.Context, subject, name string)
 		return "", store.AdminPrincipal{}, ErrAdminCredentials
 	}
 	return s.openSession(ctx, p, now)
+}
+
+func hasFederatedAdminRole(roles []string) bool {
+	for _, role := range roles {
+		if role == FederatedAdminRole {
+			return true
+		}
+	}
+	return false
 }
 
 // Patch 启停主体;停用即撤销该主体全部会话,启用不恢复旧会话。
@@ -90,7 +89,7 @@ func principalUsername(name string) string {
 		out = out[:lastRuneStart(out)]
 	}
 	if out == "" {
-		return "虎符用户"
+		return "Keycloak用户"
 	}
 	return out
 }

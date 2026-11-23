@@ -67,7 +67,7 @@ func TestTenantScope_Keys读写收敛(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, p, err := svc.LoginFederated(ctx, "hufu:op1", "租户操作员")
+	token, p, err := svc.LoginFederated(ctx, "keycloak:op1", "租户操作员", testAdminRoles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestTenantScope_Usage聚合收敛(t *testing.T) {
 	if err := store.InsertUsageBatch(ctx, d.DB, rows); err != nil {
 		t.Fatal(err)
 	}
-	token, p, err := svc.LoginFederated(ctx, "hufu:op2", "用量操作员")
+	token, p, err := svc.LoginFederated(ctx, "keycloak:op2", "用量操作员", testAdminRoles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestTenantScope_Admins授予契约(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opToken, p, err := svc.LoginFederated(ctx, "hufu:op3", "被授予者")
+	opToken, p, err := svc.LoginFederated(ctx, "keycloak:op3", "被授予者", testAdminRoles)
 	if err != nil {
 		t.Fatal(err)
 	}

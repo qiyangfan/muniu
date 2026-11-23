@@ -264,7 +264,6 @@ func buildAdminDeps(w adminWiring) admin.Deps {
 		Plugins:                w.pluginReg,
 		OAuthFlow:              w.oauthFlow, // nil = oauth 段未声明,授权端点返回关闭态
 		Federated:              w.federated, // nil = admin_oidc 未声明,联邦入口返回关闭态
-		AdminSubjects:          w.cfg.AdminOIDC.AdminSubjects,
 		PostLogoutRedirect:     w.cfg.AdminOIDC.PostLogoutRedirectURL,
 		SecureCookies:          w.cfg.AdminCookiesSecure(),
 	}
@@ -312,7 +311,7 @@ func newAdminHandler(ctx context.Context, deps admin.Deps, cache *semantic.Cache
 }
 
 // newAdminContext 读取管理 token 并构造管理员服务;本地账密轨已删除,启动闸拒绝含本地账密行的旧库。
-// token/活跃主体/虎符联邦三者皆缺时管理面关闭。
+// token/活跃主体/Keycloak联邦三者皆缺时管理面关闭。
 func newAdminContext(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) (
 	string, *auth.AdminService, error,
 ) {
@@ -320,7 +319,7 @@ func newAdminContext(ctx context.Context, cfg *config.Config, db *sql.DB, logger
 	if err := store.EnsureNoLocalAdminAccounts(ctx, db); err != nil {
 		return "", nil, err
 	}
-	svc, err := auth.NewAdminService(ctx, db, cfg.AdminOIDC.AdminSubjects)
+	svc, err := auth.NewAdminService(ctx, db)
 	if err != nil {
 		return "", nil, err
 	}
@@ -329,12 +328,12 @@ func newAdminContext(ctx context.Context, cfg *config.Config, db *sql.DB, logger
 		return "", nil, err
 	}
 	if token == "" && !active && !cfg.AdminOIDC.Complete() {
-		logger.Warn("管理令牌、活跃主体与虎符联邦均未配置,管理面与控制台关闭")
+		logger.Warn("管理令牌、活跃主体与Keycloak联邦均未配置,管理面与控制台关闭")
 	}
 	return token, svc, nil
 }
 
-// newFederation 按 admin_oidc 声明构造虎符 OIDC RP;未完整声明即关闭联邦轨(零网络开销)。
+// newFederation 按 admin_oidc 声明构造Keycloak OIDC RP;未完整声明即关闭联邦轨(零网络开销)。
 func newFederation(cfg *config.Config, db *sql.DB, logger *slog.Logger) *oidc.RelyingParty {
 	if !cfg.AdminOIDC.Complete() {
 		return nil
@@ -344,7 +343,7 @@ func newFederation(cfg *config.Config, db *sql.DB, logger *slog.Logger) *oidc.Re
 		ClientSecret: cfg.AdminOIDC.ClientSecret, RedirectURL: cfg.AdminOIDC.RedirectURL,
 		StateStore: admin.NewOIDCStateStore(db),
 	}, nil)
-	logger.Info("虎符 OIDC 联邦已就绪", "issuer", cfg.AdminOIDC.Issuer, "client_id", cfg.AdminOIDC.ClientID)
+	logger.Info("Keycloak OIDC 联邦已就绪", "issuer", cfg.AdminOIDC.Issuer, "client_id", cfg.AdminOIDC.ClientID)
 	return rp
 }
 

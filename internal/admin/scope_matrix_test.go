@@ -37,11 +37,11 @@ func TestScopeMatrix_路由与主体矩阵(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	unboundToken, _, err := svc.LoginFederated(ctx, "hufu:unbound", "无绑定")
+	unboundToken, _, err := svc.LoginFederated(ctx, "keycloak:unbound", "无绑定", testAdminRoles)
 	if err != nil {
 		t.Fatal(err)
 	}
-	boundToken, p, err := svc.LoginFederated(ctx, "hufu:bound", "多绑定")
+	boundToken, p, err := svc.LoginFederated(ctx, "keycloak:bound", "多绑定", testAdminRoles)
 	if err != nil {
 		t.Fatal(err)
 	}

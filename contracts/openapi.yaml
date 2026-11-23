@@ -12,7 +12,7 @@ components:
       properties:
         kind: {type: string, enum: [federated, token]}
         name: {type: string}
-        subject: {type: string, description: 虎符 subject；共享令牌轨为空串}
+        subject: {type: string, description: Keycloak subject；共享令牌轨为空串}
         scope: {type: string, enum: [GLOBAL, TENANT], description: 管理范围；令牌轨恒 GLOBAL}
         tenant_ids: {type: array, items: {type: string}, description: TENANT 范围的绑定租户 id（GLOBAL 为空数组）}
     FederationInfo:
@@ -24,7 +24,7 @@ components:
       type: object
       required: [subject, username, status, scope, tenant_ids, created_at]
       properties:
-        subject: {type: string, description: 虎符 subject，主体唯一键}
+        subject: {type: string, description: Keycloak subject，主体唯一键}
         username: {type: string, description: 展示名，来自 id_token name，不参与身份判定}
         status: {type: string, enum: [active, disabled]}
         scope: {type: string, enum: [GLOBAL, TENANT], description: 管理范围}
@@ -851,7 +851,7 @@ paths:
         "200": {description: 会话已失效}
   /admin/v1/auth/logout/sso:
     post:
-      summary: 注销本地会话并给出虎符 end_session 地址（统一登出）
+      summary: 注销本地会话并给出Keycloak end_session 地址（统一登出）
       responses:
         "200":
           description: 本地会话已失效；权威不可达时 redirect_url 退回控制台
@@ -873,7 +873,7 @@ paths:
               schema: {$ref: "#/components/schemas/AdminActor"}
   /admin/v1/auth/federation:
     get:
-      summary: 虎符联邦入口可用性（登录页据此渲染入口）
+      summary: Keycloak联邦入口可用性（登录页据此渲染入口）
       responses:
         "200":
           description: 联邦是否已配置
@@ -882,14 +882,14 @@ paths:
               schema: {$ref: "#/components/schemas/FederationInfo"}
   /admin/v1/auth/oidc/start:
     get:
-      summary: 发起虎符 OIDC 授权码 + PKCE 登录（浏览器整页跳转）
+      summary: 发起Keycloak OIDC 授权码 + PKCE 登录（浏览器整页跳转）
       responses:
-        "302": {description: 跳转虎符授权端点，state/nonce 单次有效}
+        "302": {description: 跳转Keycloak授权端点，state/nonce 单次有效}
         "404": {description: 联邦未配置}
-        "502": {description: 虎符权威不可达}
+        "502": {description: Keycloak权威不可达}
   /admin/v1/auth/oidc/callback:
     get:
-      summary: 虎符 OIDC 回调（state 即持有者凭据，验签后按 sub 建取主体并签发本地会话）
+      summary: Keycloak OIDC 回调（state 即持有者凭据，验签并校验 muniu-admin client role 后按 sub 建取主体并签发本地会话）
       responses:
         "302": {description: 回控制台并置会话 cookie；失败带 oidc_error 查询参数}
   /admin/v1/admins:
@@ -911,7 +911,7 @@ paths:
     parameters:
       - {name: subject, in: path, required: true, schema: {type: string}}
     patch:
-      summary: 按虎符 subject 启停管理员主体并授予管理范围
+      summary: 按Keycloak subject 启停管理员主体并授予管理范围
       description: 至少提供一个字段，省略即不修改；tenant_ids 为整包替换，scope=GLOBAL 不允许携带非空绑定。
       requestBody:
         required: true

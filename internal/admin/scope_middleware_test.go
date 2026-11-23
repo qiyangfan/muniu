@@ -22,7 +22,7 @@ func scopeTestEnv(t *testing.T) (http.Handler, Deps, *auth.AdminService) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	svc, err := auth.NewAdminService(context.Background(), db, nil)
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,11 +46,11 @@ func sessionRequest(t *testing.T, method, path, token string) *http.Request {
 func TestScopeMiddleware_路由准入与审计留痕(t *testing.T) {
 	h, d, svc := scopeTestEnv(t)
 	ctx := context.Background()
-	unboundToken, _, err := svc.LoginFederated(ctx, "hufu:unbound", "无绑定")
+	unboundToken, _, err := svc.LoginFederated(ctx, "keycloak:unbound", "无绑定", testAdminRoles)
 	if err != nil {
 		t.Fatal(err)
 	}
-	boundToken, p, err := svc.LoginFederated(ctx, "hufu:bound", "有绑定")
+	boundToken, p, err := svc.LoginFederated(ctx, "keycloak:bound", "有绑定", testAdminRoles)
 	if err != nil {
 		t.Fatal(err)
 	}

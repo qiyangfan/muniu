@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// AdminPrincipal 管理面主体:虎符 sub 即唯一键,不再有本地账密与影子 id。
+// AdminPrincipal 管理面主体:Keycloak sub 即唯一键,不再有本地账密与影子 id。
 // Username 只作展示与审计归因,不参与身份判定(同名主体可并存)。
 // Scope 是显式范围枚举;TenantIDs 仅在 ListAdminPrincipals 填充,
 // 单主体读取需另调 AdminPrincipalTenants(避免登录热路径隐式 N+1)。
@@ -64,13 +64,13 @@ func EnsureNoLocalAdminAccounts(ctx context.Context, db *sql.DB) error {
 	}
 	if len(names) > 0 {
 		return MarkBusiness(fmt.Errorf(
-			"store: admin_users 存在 %d 个本地账密管理员(%s),本地登录已移除,主体以虎符 sub 为准;"+
+			"store: admin_users 存在 %d 个本地账密管理员(%s),本地登录已移除,主体以Keycloak sub 为准;"+
 				"请确认后手工清理这些行再启动", len(names), strings.Join(names, ",")))
 	}
 	return nil
 }
 
-// ResolveAdminPrincipal 按虎符 sub 建/取主体:首次登录建号(active),用户名无唯一约束,
+// ResolveAdminPrincipal 按Keycloak sub 建/取主体:首次登录建号(active),用户名无唯一约束,
 // 同名主体并存不影响身份。并发首登由主键兜底,冲突后回查。
 func ResolveAdminPrincipal(ctx context.Context, db *sql.DB, subject, username, now string) (AdminPrincipal, error) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO admin_principals(subject,username,status,created_at)

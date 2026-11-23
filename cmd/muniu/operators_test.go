@@ -29,26 +29,26 @@ func TestAdminsCLI_主体启停与纯主体挂载(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-	svc, err := auth.NewAdminService(context.Background(), db, nil)
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, _, err := svc.LoginFederated(context.Background(), "hufu-sub-alice", "alice")
+	token, _, err := svc.LoginFederated(context.Background(), "keycloak-sub-alice", "alice", []string{auth.FederatedAdminRole})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out, errout bytes.Buffer
 	if code := adminsMain(cfg, []string{"list"}, &out, &errout); code != 0 ||
-		!strings.Contains(out.String(), "hufu-sub-alice\talice\tactive") {
+		!strings.Contains(out.String(), "keycloak-sub-alice\talice\tactive") {
 		t.Fatalf("list: %d %s %s", code, out.String(), errout.String())
 	}
-	if code := adminsMain(cfg, []string{"disable", "--subject", "hufu-sub-alice"}, &out, &errout); code != 0 {
+	if code := adminsMain(cfg, []string{"disable", "--subject", "keycloak-sub-alice"}, &out, &errout); code != 0 {
 		t.Fatalf("disable: %d %s", code, errout.String())
 	}
 	if _, err := svc.Session(context.Background(), token); err == nil {
 		t.Fatal("CLI 停用必须撤销会话")
 	}
-	if code := adminsMain(cfg, []string{"enable", "--subject", "hufu-sub-alice"}, &out, &errout); code != 0 {
+	if code := adminsMain(cfg, []string{"enable", "--subject", "keycloak-sub-alice"}, &out, &errout); code != 0 {
 		t.Fatalf("enable: %d %s", code, errout.String())
 	}
 	// 本地账密子命令删除后,未知子命令必须以用法错误退出

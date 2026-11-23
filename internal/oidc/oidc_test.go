@@ -313,3 +313,26 @@ func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
 }
+
+// TestIdentityFromClaims_只取本client角色 覆盖 realm roles 与其它 client 角色泄漏。
+func TestIdentityFromClaims_只取本client角色(t *testing.T) {
+	claims := map[string]any{
+		"sub": "s1", "name": "n1",
+		"realm_access": map[string]any{"roles": []any{"muniu-admin"}},
+		"resource_access": map[string]any{
+			"other-client":  map[string]any{"roles": []any{"muniu-admin"}},
+			"muniu-console": map[string]any{"roles": []any{"reader", "muniu-admin"}},
+		},
+	}
+	got := identityFromClaims(claims, "muniu-console")
+	if len(got.ClientRoles) != 2 || got.ClientRoles[0] != "reader" || got.ClientRoles[1] != "muniu-admin" {
+		t.Fatalf("必须只取本 client roles: %#v", got.ClientRoles)
+	}
+	if other := identityFromClaims(claims, "missing"); len(other.ClientRoles) != 0 {
+		t.Fatalf("缺失 client 必须无角色: %#v", other.ClientRoles)
+	}
+	realmOnly := identityFromClaims(map[string]any{"sub": "s2", "realm_access": map[string]any{"roles": []any{"muniu-admin"}}}, "muniu-console")
+	if len(realmOnly.ClientRoles) != 0 {
+		t.Fatalf("realm roles 必须忽略: %#v", realmOnly.ClientRoles)
+	}
+}

@@ -1,5 +1,5 @@
-// Package admin 承载运维面鉴权（虎符 OIDC 联邦会话/共享令牌）与动作审计；
-// 共享令牌、活跃主体与联邦均未配置时整体关闭。本地账密轨已删除，账户权威只在虎符。
+// Package admin 承载运维面鉴权（Keycloak OIDC 联邦会话/共享令牌）与动作审计；
+// 共享令牌、活跃主体与联邦均未配置时整体关闭。本地账密轨已删除，账户权威只在Keycloak。
 // API key 管理接口复用 auth 包的签发与校验逻辑。
 package admin
 
@@ -63,9 +63,8 @@ type Deps struct {
 	Health                 *health.Manager    // 上游健康管理器;nil = 观测未启用,端点返回空态
 	AlertWebhookConfigured bool               // webhook_url 是否配置;false 时投递自监控端点返回关闭态
 	OAuthFlow              *oauth.Flow        // OAuth 授权流;nil = oauth 段未声明,授权端点返回关闭态(账号 CRUD 不依赖)
-	Federated              *oidc.RelyingParty // 虎符 OIDC 联邦;nil = admin_oidc 未声明,联邦入口返回关闭态
-	AdminSubjects          []string           // 允许建立管理主体的虎符 sub 白名单;空 = 不限(仅测试注入)
-	PostLogoutRedirect     string             // 虎符登出后回跳;空则按 redirect_url 同源推导 /console/
+	Federated              *oidc.RelyingParty // Keycloak OIDC 联邦;nil = admin_oidc 未声明,联邦入口返回关闭态
+	PostLogoutRedirect     string             // Keycloak登出后回跳;空则按 redirect_url 同源推导 /console/
 	SecureCookies          bool               // 管理面 cookie 是否带 Secure(反代终止 TLS 时必须显式开启)
 	LoginLimiter           *ratelimit.Limiter // 登录发起/回调按 IP 限流;nil 由 New 装配进程内实现
 
@@ -142,7 +141,7 @@ var adminRouteTable = []adminRouteEntry{
 	{"GET /admin/v1/upstream-health", routeGlobalOnly, upstreamHealth},
 }
 
-// New 按共享令牌、活跃主体或虎符联邦开放管理面，认证装配失败不暴露空壳。
+// New 按共享令牌、活跃主体或Keycloak联邦开放管理面，认证装配失败不暴露空壳。
 func New(ctx context.Context, d Deps) http.Handler {
 	if d.Logger == nil {
 		d.Logger = slog.Default()
@@ -158,7 +157,7 @@ func New(ctx context.Context, d Deps) http.Handler {
 		}
 	}
 	if d.AdminAuth == nil {
-		svc, err := auth.NewAdminService(ctx, d.DB, d.AdminSubjects)
+		svc, err := auth.NewAdminService(ctx, d.DB)
 		if err != nil {
 			d.Logger.Error("管理员认证装配失败", "error_detail", err.Error())
 			return nil

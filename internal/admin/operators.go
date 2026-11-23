@@ -72,15 +72,15 @@ func exemptPaths(r *http.Request) bool {
 	switch r.URL.Path {
 	case "/admin/v1/oauth/callback", // 订阅账号授权流回调
 		"/admin/v1/auth/federation", // 登录页探测联邦入口是否可用
-		"/admin/v1/auth/oidc/start", // 虎符联邦发起(整页跳转)
+		"/admin/v1/auth/oidc/start", // Keycloak联邦发起(整页跳转)
 		"/admin/v1/auth/oidc/callback":
 		return true
 	}
 	return false
 }
 
-// resolveActor 认证管理面身份：虎符联邦会话 cookie、共享令牌；失败已写出响应时 ok=false。
-// 本地账密轨已删除,会话轨只有虎符一条来源,名字即 id_token 展示名。
+// resolveActor 认证管理面身份：Keycloak联邦会话 cookie、共享令牌；失败已写出响应时 ok=false。
+// 本地账密轨已删除,会话轨只有Keycloak一条来源,名字即 id_token 展示名。
 func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) {
 	actor := Actor{}
 	if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
@@ -246,7 +246,7 @@ func adminUsersList(d Deps) http.HandlerFunc {
 	}
 }
 
-// adminUsersPatch 按 sub 启停主体并授予范围;主体只能由虎符首登产生。
+// adminUsersPatch 按 sub 启停主体并授予范围;主体只能由Keycloak首登产生。
 // 省略字段不动,scope/tenant_ids 整包替换;范围授予仅 GLOBAL actor(路由层 global-only)。
 // 合并与落库在 store 单事务内完成,并发补丁与跨字段写入不产生假成功或半生效。
 func adminUsersPatch(d Deps) http.HandlerFunc {
@@ -509,7 +509,7 @@ func auditOperators(d Deps, mux *http.ServeMux, next http.Handler) http.Handler 
 		_ = r.Body.Close()
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		detail, _ = auditSummary(body)
-		// cookie 承载的虎符会话一律过 CSRF;令牌轨不走浏览器凭证
+		// cookie 承载的Keycloak会话一律过 CSRF;令牌轨不走浏览器凭证
 		if actor.Kind == "federated" {
 			if err := csrf.Check(r); err != nil {
 				writeAdminError(aw, r, 403, protocol.TypeAuthFailed, "cross_origin_denied", "不允许跨站管理操作")

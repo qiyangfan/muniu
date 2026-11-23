@@ -18,29 +18,29 @@ func TestMigration0023_新库默认TENANT与绑定约束(t *testing.T) {
 	db := auditDB(t)
 	ctx := context.Background()
 
-	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:new", "新人", "2026-11-23T00:00:00Z"); err != nil {
+	if _, err := ResolveAdminPrincipal(ctx, db, "keycloak:new", "新人", "2026-11-23T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	var scope string
-	if err := db.QueryRowContext(ctx, `SELECT scope FROM admin_principals WHERE subject='hufu:new'`).Scan(&scope); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT scope FROM admin_principals WHERE subject='keycloak:new'`).Scan(&scope); err != nil {
 		t.Fatal(err)
 	}
 	if scope != "TENANT" {
 		t.Fatalf("新主体默认范围应为 TENANT,实际 %q", scope)
 	}
-	if _, err := db.ExecContext(ctx, `UPDATE admin_principals SET scope='BOGUS' WHERE subject='hufu:new'`); err == nil {
+	if _, err := db.ExecContext(ctx, `UPDATE admin_principals SET scope='BOGUS' WHERE subject='keycloak:new'`); err == nil {
 		t.Fatal("未知 scope 必须被 CHECK 拒绝")
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO admin_principal_tenants(subject,tenant_id)
-		VALUES('hufu:new','01900000-0000-7000-8000-000000000001')`); err != nil {
+		VALUES('keycloak:new','01900000-0000-7000-8000-000000000001')`); err != nil {
 		t.Fatalf("绑定 default 租户失败: %v", err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO admin_principal_tenants(subject,tenant_id)
-		VALUES('hufu:new','01900000-0000-7000-8000-000000000001')`); err == nil {
+		VALUES('keycloak:new','01900000-0000-7000-8000-000000000001')`); err == nil {
 		t.Fatal("重复绑定必须被主键拒绝")
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO admin_principal_tenants(subject,tenant_id)
-		VALUES('hufu:new','no-such-tenant')`); err == nil {
+		VALUES('keycloak:new','no-such-tenant')`); err == nil {
 		t.Fatal("未知租户必须被外键拒绝")
 	}
 }
@@ -63,7 +63,7 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 		`CREATE TABLE admin_principals (subject TEXT PRIMARY KEY, username TEXT NOT NULL,
 			status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_login_at TEXT)`,
 		`INSERT INTO admin_principals(subject,username,created_at)
-			VALUES('hufu:old','老管理员','2026-11-20T00:00:00Z')`,
+			VALUES('keycloak:old','老管理员','2026-11-20T00:00:00Z')`,
 	}
 	for v := 1; v <= 22; v++ {
 		stmts = append(stmts, fmt.Sprintf(
@@ -79,17 +79,17 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 		t.Fatalf("v22→v23 升级失败: %v", err)
 	}
 	var scope string
-	if err := db.QueryRowContext(ctx, `SELECT scope FROM admin_principals WHERE subject='hufu:old'`).Scan(&scope); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT scope FROM admin_principals WHERE subject='keycloak:old'`).Scan(&scope); err != nil {
 		t.Fatal(err)
 	}
 	if scope != "GLOBAL" {
 		t.Fatalf("存量主体应 backfill GLOBAL,实际 %q", scope)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO admin_principals(subject,username,created_at)
-		VALUES('hufu:new2','新人2','2026-11-23T00:00:00Z')`); err != nil {
+		VALUES('keycloak:new2','新人2','2026-11-23T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.QueryRowContext(ctx, `SELECT scope FROM admin_principals WHERE subject='hufu:new2'`).Scan(&scope); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT scope FROM admin_principals WHERE subject='keycloak:new2'`).Scan(&scope); err != nil {
 		t.Fatal(err)
 	}
 	if scope != "TENANT" {
@@ -108,7 +108,7 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 func TestSetAdminPrincipalScope_整包替换与校验(t *testing.T) {
 	db := openAdminDB(t)
 	ctx := context.Background()
-	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:s", "张三", "2026-11-23T00:00:00Z"); err != nil {
+	if _, err := ResolveAdminPrincipal(ctx, db, "keycloak:s", "张三", "2026-11-23T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	const defaultTenant = "01900000-0000-7000-8000-000000000001"
@@ -122,49 +122,49 @@ func TestSetAdminPrincipalScope_整包替换与校验(t *testing.T) {
 	}
 
 	// 首登建档默认 TENANT,绑定为空。
-	p, err := GetAdminPrincipal(ctx, db, "hufu:s")
+	p, err := GetAdminPrincipal(ctx, db, "keycloak:s")
 	if err != nil || p.Scope != "TENANT" {
 		t.Fatalf("默认范围应为 TENANT: %+v %v", p, err)
 	}
 
 	// 授予 [default,t2] 后整包替换为 [t3],旧绑定立即不可见。
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:s", "TENANT", []string{defaultTenant, t2}); err != nil {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:s", "TENANT", []string{defaultTenant, t2}); err != nil {
 		t.Fatal(err)
 	}
-	if ids, err := AdminPrincipalTenants(ctx, db, "hufu:s"); err != nil || len(ids) != 2 {
+	if ids, err := AdminPrincipalTenants(ctx, db, "keycloak:s"); err != nil || len(ids) != 2 {
 		t.Fatalf("绑定应为 2 个: %v %v", ids, err)
 	}
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:s", "TENANT", []string{t3}); err != nil {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:s", "TENANT", []string{t3}); err != nil {
 		t.Fatal(err)
 	}
-	if ids, _ := AdminPrincipalTenants(ctx, db, "hufu:s"); len(ids) != 1 || ids[0] != t3 {
+	if ids, _ := AdminPrincipalTenants(ctx, db, "keycloak:s"); len(ids) != 1 || ids[0] != t3 {
 		t.Fatalf("整包替换失败: %v", ids)
 	}
 
 	// 重复 id 去重,空集撤销进入待授权态。
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:s", "TENANT", []string{t3, t3}); err != nil {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:s", "TENANT", []string{t3, t3}); err != nil {
 		t.Fatal(err)
 	}
-	if ids, _ := AdminPrincipalTenants(ctx, db, "hufu:s"); len(ids) != 1 {
+	if ids, _ := AdminPrincipalTenants(ctx, db, "keycloak:s"); len(ids) != 1 {
 		t.Fatalf("重复绑定应去重: %v", ids)
 	}
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:s", "TENANT", nil); err != nil {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:s", "TENANT", nil); err != nil {
 		t.Fatal(err)
 	}
-	if ids, _ := AdminPrincipalTenants(ctx, db, "hufu:s"); len(ids) != 0 {
+	if ids, _ := AdminPrincipalTenants(ctx, db, "keycloak:s"); len(ids) != 0 {
 		t.Fatalf("空集应清空绑定: %v", ids)
 	}
 
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:s", "GLOBAL", []string{t3}); !IsBusiness(err) {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:s", "GLOBAL", []string{t3}); !IsBusiness(err) {
 		t.Fatalf("GLOBAL 带绑定应业务拒绝: %v", err)
 	}
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:s", "BOGUS", nil); !IsBusiness(err) {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:s", "BOGUS", nil); !IsBusiness(err) {
 		t.Fatalf("未知 scope 应业务拒绝: %v", err)
 	}
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:s", "TENANT", []string{"no-such"}); !IsBusiness(err) {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:s", "TENANT", []string{"no-such"}); !IsBusiness(err) {
 		t.Fatalf("未知租户应业务拒绝: %v", err)
 	}
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:none", "TENANT", nil); !errors.Is(err, ErrNotFound) {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:none", "TENANT", nil); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("未知主体应 ErrNotFound: %v", err)
 	}
 }
@@ -173,10 +173,10 @@ func TestSetAdminPrincipalScope_整包替换与校验(t *testing.T) {
 func TestListAdminPrincipals_回显范围与绑定(t *testing.T) {
 	db := openAdminDB(t)
 	ctx := context.Background()
-	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:a", "甲", "2026-11-23T00:00:00Z"); err != nil {
+	if _, err := ResolveAdminPrincipal(ctx, db, "keycloak:a", "甲", "2026-11-23T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:b", "乙", "2026-11-23T00:00:00Z"); err != nil {
+	if _, err := ResolveAdminPrincipal(ctx, db, "keycloak:b", "乙", "2026-11-23T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	const defaultTenant = "01900000-0000-7000-8000-000000000001"
@@ -184,10 +184,10 @@ func TestListAdminPrincipals_回显范围与绑定(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:a", "GLOBAL", nil); err != nil {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:a", "GLOBAL", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetAdminPrincipalScope(ctx, db, "hufu:b", "TENANT", []string{defaultTenant, t2}); err != nil {
+	if err := SetAdminPrincipalScope(ctx, db, "keycloak:b", "TENANT", []string{defaultTenant, t2}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -197,11 +197,11 @@ func TestListAdminPrincipals_回显范围与绑定(t *testing.T) {
 	}
 	for _, p := range principals {
 		switch p.Subject {
-		case "hufu:a":
+		case "keycloak:a":
 			if p.Scope != "GLOBAL" || len(p.TenantIDs) != 0 {
 				t.Fatalf("GLOBAL 主体回显不符: %+v", p)
 			}
-		case "hufu:b":
+		case "keycloak:b":
 			if p.Scope != "TENANT" || len(p.TenantIDs) != 2 {
 				t.Fatalf("TENANT 主体回显不符: %+v", p)
 			}
@@ -235,7 +235,7 @@ func TestListTenantsByIDs_集合收敛(t *testing.T) {
 func TestPatchAdminPrincipalFields_单事务原子性(t *testing.T) {
 	db := openAdminDB(t)
 	ctx := context.Background()
-	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:p", "补丁", "2026-11-23T00:00:00Z"); err != nil {
+	if _, err := ResolveAdminPrincipal(ctx, db, "keycloak:p", "补丁", "2026-11-23T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	t1, err := CreateTenant(ctx, db, "补丁一")
@@ -245,36 +245,36 @@ func TestPatchAdminPrincipalFields_单事务原子性(t *testing.T) {
 	scope := "TENANT"
 	ids := []string{t1}
 	disabled := true
-	if err := PatchAdminPrincipalFields(ctx, db, "hufu:p",
+	if err := PatchAdminPrincipalFields(ctx, db, "keycloak:p",
 		AdminPrincipalPatch{Scope: &scope, TenantIDs: &ids, Disabled: &disabled}); err != nil {
 		t.Fatal(err)
 	}
-	p, err := GetAdminPrincipal(ctx, db, "hufu:p")
+	p, err := GetAdminPrincipal(ctx, db, "keycloak:p")
 	if err != nil || p.Scope != "TENANT" || p.Status != "disabled" {
 		t.Fatalf("三字段应一次生效: %+v %v", p, err)
 	}
-	if got, _ := AdminPrincipalTenants(ctx, db, "hufu:p"); len(got) != 1 || got[0] != t1 {
+	if got, _ := AdminPrincipalTenants(ctx, db, "keycloak:p"); len(got) != 1 || got[0] != t1 {
 		t.Fatalf("绑定应整包落库: %v", got)
 	}
 
 	// 恢复启用后以未知租户触发校验失败:停用与换绑都不得留下半生效。
 	enabled := false
-	if err := PatchAdminPrincipalFields(ctx, db, "hufu:p", AdminPrincipalPatch{Disabled: &enabled}); err != nil {
+	if err := PatchAdminPrincipalFields(ctx, db, "keycloak:p", AdminPrincipalPatch{Disabled: &enabled}); err != nil {
 		t.Fatal(err)
 	}
 	bad := []string{"no-such"}
-	if err := PatchAdminPrincipalFields(ctx, db, "hufu:p",
+	if err := PatchAdminPrincipalFields(ctx, db, "keycloak:p",
 		AdminPrincipalPatch{TenantIDs: &bad, Disabled: &disabled}); !IsBusiness(err) {
 		t.Fatalf("未知租户应业务拒绝: %v", err)
 	}
-	p, _ = GetAdminPrincipal(ctx, db, "hufu:p")
+	p, _ = GetAdminPrincipal(ctx, db, "keycloak:p")
 	if p.Status != "active" {
 		t.Fatalf("校验失败必须整单回滚,停用不得落库: %+v", p)
 	}
-	if got, _ := AdminPrincipalTenants(ctx, db, "hufu:p"); len(got) != 1 || got[0] != t1 {
+	if got, _ := AdminPrincipalTenants(ctx, db, "keycloak:p"); len(got) != 1 || got[0] != t1 {
 		t.Fatalf("校验失败不得改动既有绑定: %v", got)
 	}
-	if err := PatchAdminPrincipalFields(ctx, db, "hufu:none",
+	if err := PatchAdminPrincipalFields(ctx, db, "keycloak:none",
 		AdminPrincipalPatch{Disabled: &disabled}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("未知主体应 ErrNotFound: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestPatchAdminPrincipalFields_单事务原子性(t *testing.T) {
 func TestPatchAdminPrincipalFields_并发不丢更新(t *testing.T) {
 	db := openAdminDB(t)
 	ctx := context.Background()
-	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:race", "并发", "2026-11-23T00:00:00Z"); err != nil {
+	if _, err := ResolveAdminPrincipal(ctx, db, "keycloak:race", "并发", "2026-11-23T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	t2, err := CreateTenant(ctx, db, "并发租户")
@@ -295,7 +295,7 @@ func TestPatchAdminPrincipalFields_并发不丢更新(t *testing.T) {
 	tenant := "TENANT"
 	for i := 0; i < 20; i++ {
 		empty := []string{}
-		if err := PatchAdminPrincipalFields(ctx, db, "hufu:race",
+		if err := PatchAdminPrincipalFields(ctx, db, "keycloak:race",
 			AdminPrincipalPatch{Scope: &tenant, TenantIDs: &empty}); err != nil {
 			t.Fatalf("轮次 %d 重置失败: %v", i, err)
 		}
@@ -305,12 +305,12 @@ func TestPatchAdminPrincipalFields_并发不丢更新(t *testing.T) {
 		var scopeErr, bindErr error
 		go func() {
 			defer wg.Done()
-			scopeErr = PatchAdminPrincipalFields(ctx, db, "hufu:race",
+			scopeErr = PatchAdminPrincipalFields(ctx, db, "keycloak:race",
 				AdminPrincipalPatch{Scope: &global, TenantIDs: &empty})
 		}()
 		go func() {
 			defer wg.Done()
-			bindErr = PatchAdminPrincipalFields(ctx, db, "hufu:race",
+			bindErr = PatchAdminPrincipalFields(ctx, db, "keycloak:race",
 				AdminPrincipalPatch{TenantIDs: &ids})
 		}()
 		wg.Wait()
@@ -319,11 +319,11 @@ func TestPatchAdminPrincipalFields_并发不丢更新(t *testing.T) {
 		}
 		// 绑定补丁先落时会合并出 GLOBAL+绑定,按契约 400 拒绝;后落则绑定被 GLOBAL+[] 覆盖。
 		_ = bindErr
-		p, err := GetAdminPrincipal(ctx, db, "hufu:race")
+		p, err := GetAdminPrincipal(ctx, db, "keycloak:race")
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, _ := AdminPrincipalTenants(ctx, db, "hufu:race")
+		got, _ := AdminPrincipalTenants(ctx, db, "keycloak:race")
 		if p.Scope != "GLOBAL" || len(got) != 0 {
 			t.Fatalf("轮次 %d GLOBAL 意图被并发补丁覆盖: scope=%s bind=%v bindErr=%v",
 				i, p.Scope, got, bindErr)

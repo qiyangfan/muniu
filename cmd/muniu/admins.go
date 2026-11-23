@@ -37,12 +37,12 @@ func runAdmins(path string, args []string) int {
 	return adminsMain(cfg, args, os.Stdout, os.Stderr)
 }
 
-// adminsMain 主体管理 CLI:管理员身份由虎符签发的 sub 决定,本 CLI 只做本地主体投影的
-// 查看与启停,不再提供创建/改密(口令已不是登录凭据)。
+// adminsMain 主体管理 CLI:管理员身份由 Keycloak 签发的 sub 与 client role 决定,本 CLI 只做
+// 本地主体投影的查看与启停,不再提供创建/改密(口令已不是登录凭据)。
 func adminsMain(cfg *config.Config, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr,
-			"用法: muniu admins list | disable <subject> | enable <subject>(管理员由虎符签发 subject 后首次登录自动建档)")
+			"用法: muniu admins list | disable <subject> | enable <subject>(管理员须由 Keycloak 签发 sub 且具备 muniu-admin 角色,首次登录自动建档)")
 		return 2
 	}
 	db, err := store.Open(context.Background(), cfg.Storage.SQLite.Path)
@@ -83,7 +83,7 @@ func adminsList(db *sql.DB, stdout, stderr io.Writer) int {
 func adminsMutate(db *sql.DB, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	subject := fs.String("subject", "", "虎符 subject")
+	subject := fs.String("subject", "", "Keycloak subject")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}

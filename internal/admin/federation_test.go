@@ -26,6 +26,8 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
+var testAdminRoles = []string{auth.FederatedAdminRole}
+
 // testIdP 测试用锦官权威:发现文档 + JWKS + token 端点;nonce/sub/name 由用例回填。
 type testIdP struct {
 	srv   *httptest.Server
@@ -33,6 +35,7 @@ type testIdP struct {
 	nonce string
 	sub   string
 	name  string
+	roles []string
 }
 
 func newTestIdP(t *testing.T) *testIdP {
@@ -41,7 +44,7 @@ func newTestIdP(t *testing.T) *testIdP {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idp := &testIdP{key: key, sub: "jinguan-sub-1", name: "张三"}
+	idp := &testIdP{key: key, sub: "jinguan-sub-1", name: "张三", roles: []string{auth.FederatedAdminRole}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -66,6 +69,7 @@ func newTestIdP(t *testing.T) *testIdP {
 		claims := map[string]any{
 			"iss": idp.srv.URL, "aud": "muniu-console", "sub": idp.sub, "name": idp.name,
 			"exp": time.Now().Add(time.Hour).Unix(), "nonce": idp.nonce,
+			"resource_access": map[string]any{"muniu-console": map[string]any{"roles": idp.roles}},
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": "at", "token_type": "Bearer", "expires_in": 3600,
@@ -99,7 +103,7 @@ func (f *testIdP) rp() *oidc.RelyingParty {
 // newFederatedAdmin 构造带联邦轨的管理面;token 为空时验证「仅联邦也挂载」。
 func newFederatedAdmin(t *testing.T, db *sql.DB, token string, rp *oidc.RelyingParty) (http.Handler, *auth.AdminService) {
 	t.Helper()
-	svc, err := auth.NewAdminService(context.Background(), db, nil)
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +176,7 @@ func send(h http.Handler, method, path string, cookie *http.Cookie, body string)
 	return rec
 }
 
-// TestFederation_双轨并存与归因 覆盖虎符会话轨与共享令牌轨并存、whoami 归因与审计归因;
+// TestFederation_双轨并存与归因 覆盖Keycloak会话轨与共享令牌轨并存、whoami 归因与审计归因;
 // 本地账密登录路由必须不存在(去账号化的外部可观测契约)。
 func TestFederation_双轨并存与联邦归因(t *testing.T) {
 	db := openDB(t)
@@ -193,7 +197,7 @@ func TestFederation_双轨并存与联邦归因(t *testing.T) {
 	rec = send(h, http.MethodGet, "/admin/v1/auth/whoami", cookie, "")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kind":"federated"`) ||
 		!strings.Contains(rec.Body.String(), "张三") {
-		t.Fatalf("虎符会话 whoami 应归因 federated/实名: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("Keycloak会话 whoami 应归因 federated/实名: %d %s", rec.Code, rec.Body.String())
 	}
 
 	// 令牌轨零回归
@@ -277,7 +281,7 @@ func TestFederation_停用账号拒绝登录(t *testing.T) {
 	if rec := send(h, http.MethodGet, "/admin/v1/auth/whoami", cookie, ""); rec.Code != 401 {
 		t.Fatalf("停用后存量会话必须 401: %d %s", rec.Code, rec.Body.String())
 	}
-	if _, _, err := svc.LoginFederated(context.Background(), "jinguan-sub-1", "张三"); err == nil {
+	if _, _, err := svc.LoginFederated(context.Background(), "jinguan-sub-1", "张三", testAdminRoles); err == nil {
 		t.Fatal("停用的主体必须拒绝登录")
 	}
 	rec := send(h, http.MethodGet, "/admin/v1/auth/oidc/start", nil, "")
@@ -339,8 +343,8 @@ func TestFederation_回调缺浏览器绑定cookie被拒(t *testing.T) {
 	}
 }
 
-// TestFederation_SSO登出返回虎符end_session 覆盖本地会话撤销与统一登出交接。
-func TestFederation_SSO登出返回虎符end_session(t *testing.T) {
+// TestFederation_SSO登出返回Keycloakend_session 覆盖本地会话撤销与统一登出交接。
+func TestFederation_SSO登出返回Keycloakend_session(t *testing.T) {
 	db := openDB(t)
 	idp := newTestIdP(t)
 	h, _ := newFederatedAdmin(t, db, "tok", idp.rp())
@@ -351,7 +355,7 @@ func TestFederation_SSO登出返回虎符end_session(t *testing.T) {
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, idp.srv.URL+"/end_session") || !strings.Contains(body, "client_id=muniu-console") {
-		t.Fatalf("应返回虎符 end_session 地址: %s", body)
+		t.Fatalf("应返回Keycloak end_session 地址: %s", body)
 	}
 	if !strings.Contains(body, url.QueryEscape("http://127.0.0.1:8787/console/")) && !strings.Contains(body, "127.0.0.1") {
 		t.Fatalf("应携带登记的回跳地址: %s", body)
@@ -395,11 +399,12 @@ func TestFederation_联邦登录落审计(t *testing.T) {
 	}
 }
 
-// TestFederation_白名单外主体被拒并审计 覆盖 HTTP 全链路拒绝与审计原因码。
-func TestFederation_白名单外主体被拒并审计(t *testing.T) {
+// TestFederation_无管理员角色被拒并审计 覆盖 HTTP 全链路拒绝与审计原因码。
+func TestFederation_无管理员角色被拒并审计(t *testing.T) {
 	db := openDB(t)
 	idp := newTestIdP(t)
-	svc, err := auth.NewAdminService(context.Background(), db, []string{"some-other-sub"})
+	idp.roles = nil
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +426,7 @@ func TestFederation_白名单外主体被拒并审计(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusFound || !strings.Contains(rec.Header().Get("Location"), "oidc_error=") {
-		t.Fatalf("名单外 sub 必须拒绝: %d %s", rec.Code, rec.Header().Get("Location"))
+		t.Fatalf("无管理员角色必须拒绝: %d %s", rec.Code, rec.Header().Get("Location"))
 	}
 	var principals int
 	if err := db.QueryRowContext(context.Background(), `SELECT count(*) FROM admin_principals`).Scan(&principals); err != nil || principals != 0 {
@@ -439,7 +444,7 @@ func TestFederation_白名单外主体被拒并审计(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("白名单拒绝必须带原因码审计: %+v", items)
+		t.Fatalf("角色拒绝必须带原因码审计: %+v", items)
 	}
 }
 
@@ -477,7 +482,7 @@ func TestFederation_登录入口按IP限流(t *testing.T) {
 			t.Fatal("预热限流器失败")
 		}
 	}
-	svc, err := auth.NewAdminService(context.Background(), db, nil)
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +527,7 @@ func TestFederation_过期state在写入时清理(t *testing.T) {
 func TestFederation_SecureCookie跟随部署配置(t *testing.T) {
 	db := openDB(t)
 	idp := newTestIdP(t)
-	svc, err := auth.NewAdminService(context.Background(), db, nil)
+	svc, err := auth.NewAdminService(context.Background(), db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -546,7 +551,7 @@ func TestFederation_SecureCookie跟随部署配置(t *testing.T) {
 	}
 }
 
-// TestFederation_虎符不可达不阻断令牌轨 覆盖控制面失联时数据面照跑、令牌轨零回归。
+// TestFederation_Keycloak不可达不阻断令牌轨 覆盖控制面失联时数据面照跑、令牌轨零回归。
 func TestFederation_锦官不可达不阻断令牌(t *testing.T) {
 	db := openDB(t)
 	dead := httptest.NewServer(http.NotFoundHandler())
@@ -570,7 +575,7 @@ func TestFederation_锦官不可达不阻断令牌(t *testing.T) {
 	recT := httptest.NewRecorder()
 	h.ServeHTTP(recT, req)
 	if recT.Code != 200 || !strings.Contains(recT.Body.String(), `"kind":"token"`) {
-		t.Fatalf("虎符不可达时令牌轨必须照常: %d %s", recT.Code, recT.Body.String())
+		t.Fatalf("Keycloak不可达时令牌轨必须照常: %d %s", recT.Code, recT.Body.String())
 	}
 }
 

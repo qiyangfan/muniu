@@ -2,23 +2,23 @@
 
 ## Purpose
 
-管理面身份与审计契约:管理员主体(虎符 sub 主键)生命周期、双轨鉴权(虎符会话/共享令牌)、管理动作审计归因与查询、虎符失联降级。历史来源:ADR-0017「共享令牌零归因 → 可追责」,本地账密轨已由 ADR-0022 删除,不破坏既有 Bearer token 契约。
+管理面身份与审计契约:管理员主体(Keycloak sub 主键)生命周期、双轨鉴权(Keycloak会话/共享令牌)、管理动作审计归因与查询、Keycloak失联降级。历史来源:ADR-0017「共享令牌零归因 → 可追责」,本地账密轨已由 ADR-0022 删除,不破坏既有 Bearer token 契约。
 
 ## Requirements
 
 ### Requirement: 管理员主体与会话
 
-管理员主体必须 (MUST) 以虎符 sub 为唯一键(`admin_principals.subject` 主键);展示名来自
+管理员主体必须 (MUST) 以Keycloak sub 为唯一键(`admin_principals.subject` 主键);展示名来自
 id_token `name`,必须 (MUST) 不参与身份判定(同名不同 sub 可并存)。系统必须 (MUST NOT)
 接受任何本地口令登录,不得保存 `password_hash` 作为登录凭据。登录成功必须 (MUST) 签发
 HttpOnly 会话 cookie(服务端只存令牌哈希,固定有效期),注销必须 (MUST) 立即失效该会话。
 会话校验必须 (MUST) 逐请求确认主体仍活跃——主体停用后其全部存量会话必须 (MUST) 即时失效
-(下一请求即 401),启用必须 (MUST NOT) 恢复旧会话。主体只能由虎符首登自动建档;管理必须
+(下一请求即 401),启用必须 (MUST NOT) 恢复旧会话。主体只能由Keycloak首登自动建档;管理必须
 (MUST) 提供按 subject 的列表/停用/启用(管理 API 与 `muniu admins` CLI)。
 
 #### Scenario: 登录签发会话
 
-- **WHEN** 活跃主体经虎符 OIDC 授权码 + PKCE 完成登录
+- **WHEN** 活跃主体经Keycloak OIDC 授权码 + PKCE 完成登录
 - **THEN** 返回会话 cookie(HttpOnly)与操作员身份,后续带 cookie 的管理面请求获准
 
 #### Scenario: 本地账密不可用
@@ -55,10 +55,10 @@ HttpOnly 会话 cookie(服务端只存令牌哈希,固定有效期),注销必须
 
 ### Requirement: 管理面鉴权
 
-管理面鉴权必须 (MUST) 接受「虎符 federated 会话 cookie / Bearer 管理令牌」任一;现行
+管理面鉴权必须 (MUST) 接受「Keycloak federated 会话 cookie / Bearer 管理令牌」任一;现行
 `MUNIU_ADMIN_TOKEN` 路径必须 (MUST) 原样保留(CLI/脚本契约零破坏);两条路径请求必须
 (MUST) 均识别为具名 actor(令牌轨保留身份、会话轨 id_token 展示名)。鉴权失败必须 (MUST)
-保持现行 401 信封。管理面挂载条件必须 (MUST) 为「管理令牌已配置或存在活跃主体或虎符联邦
+保持现行 401 信封。管理面挂载条件必须 (MUST) 为「管理令牌已配置或存在活跃主体或Keycloak联邦
 已声明」;皆无时管理面整体不注册。
 
 鉴权成功只确定主体身份;路由是否可达必须 (MUST) 由 scope 与路由分类决定(见
@@ -72,7 +72,7 @@ HttpOnly 会话 cookie(服务端只存令牌哈希,固定有效期),注销必须
 
 #### Scenario: 双轨并存
 
-- **WHEN** 分别以虎符会话 cookie 与 Bearer 令牌调用管理端点
+- **WHEN** 分别以Keycloak会话 cookie 与 Bearer 令牌调用管理端点
 - **THEN** 两者均获准,审计分别归因为展示名与令牌身份
 
 #### Scenario: 皆未配置整体关闭
@@ -98,7 +98,7 @@ scope 拒绝必须 (MUST) 留痕:任意方法(含 GET)的 403 记 denied 并与�
 
 #### Scenario: 主体归因
 
-- **WHEN** 经虎符登录的管理员调用变更端点
+- **WHEN** 经Keycloak登录的管理员调用变更端点
 - **THEN** 审计行 actor_kind=federated、actor=id_token 展示名、目标=subject 或资源标识
 
 #### Scenario: 敏感字段脱敏
@@ -119,18 +119,31 @@ scope 拒绝必须 (MUST) 留痕:任意方法(含 GET)的 403 记 denied 并与�
 
 ### Requirement: 联邦登录与主体投影
 
-console 必须 (MUST) 支持经虎符 OIDC 授权码 + PKCE 登录;同一 sub 必须 (MUST) 恒投影为同一主体,不得生成影子 id;只有 `admin_oidc.admin_subjects` 白名单内的 sub 可以 (MUST) 建号并登录;登录页必须 (MUST) 只展示「统一身份登录」入口(联邦未声明时禁用并提示)与管理令牌入口。
+console 必须 (MUST) 支持经Keycloak OIDC 授权码 + PKCE 登录;同一 sub 必须 (MUST) 恒投影为同一主体,不得生成影子 id;只有 id_token 的 `resource_access[admin_oidc.client_id].roles` 含 `muniu-admin` 的主体可以 (MUST) 建号并登录;必须 (MUST NOT) 以 sub 白名单、email 或 realm roles 作为准入依据。缺失 claim、仅含未知角色或其它 client 角色时拒绝;同时含 `muniu-admin` 时按放行处理。拒绝不得 (MUST NOT) 建主体或签发会话。登录页必须 (MUST) 只展示「统一身份登录」入口(联邦未声明时禁用并提示)与管理令牌入口。
 
 #### Scenario: 统一身份登录
 
+- **GIVEN** Keycloak id_token 的 `resource_access[admin_oidc.client_id].roles` 含 `muniu-admin`
 - **WHEN** 运营者点「统一身份登录」并完成授权码 + PKCE
-- **THEN** 签发本地会话,actor 归因为展示名
+- **THEN** 建/取本地主体并签发会话,actor 归因为展示名
 
-#### Scenario: 白名单外主体被拒
+#### Scenario: 缺管理员角色被拒
 
-- **GIVEN** 白名单未包含某虎符 sub
-- **WHEN** 该 sub 完成上游认证回到回调
+- **GIVEN** 验签通过的 id_token 缺少 `muniu-admin` 角色
+- **WHEN** 该主体完成上游认证回到回调
 - **THEN** 拒绝建号登录并回控制台错误页,不签发会话
+
+#### Scenario: realm role 忽略
+
+- **GIVEN** 仅 `realm_access.roles` 或其它 client 的 roles 含 `muniu-admin`,本 client 不含
+- **WHEN** 该主体完成上游认证回到回调
+- **THEN** 拒绝
+
+#### Scenario: 角色撤销后重新登录收敛
+
+- **GIVEN** 某主体曾在有角色时登录成功
+- **WHEN** Keycloak 撤销其 `muniu-admin` 角色后重新登录
+- **THEN** 本次登录拒绝;恢复角色后重新登录成功
 
 #### Scenario: 回调必须绑定发起浏览器
 
@@ -141,7 +154,7 @@ console 必须 (MUST) 支持经虎符 OIDC 授权码 + PKCE 登录;同一 sub �
 #### Scenario: 统一登出
 
 - **WHEN** 已登录操作员退出
-- **THEN** 删除本地会话并返回虎符 end_session 地址;权威不可达时退回控制台
+- **THEN** 删除本地会话并返回Keycloak end_session 地址;权威不可达时退回控制台
 
 #### Scenario: 联邦登录留痕
 
@@ -169,15 +182,15 @@ console 必须 (MUST) 支持经虎符 OIDC 授权码 + PKCE 登录;同一 sub �
 #### Scenario: sub 稳定投影
 
 - **GIVEN** sub 已建档
-- **WHEN** 同一虎符用户再次登录
+- **WHEN** 同一Keycloak用户再次登录
 - **THEN** 命中既有主体,不重复建号
 
-### Requirement: 虎符失联降级
+### Requirement: Keycloak失联降级
 
-虎符权威不可达时,`MUNIU_ADMIN_TOKEN` 必须 (MUST) 仍可认证,数据面照跑;联邦轨失败必须 (MUST NOT) 阻断令牌轨。
+Keycloak权威不可达时,`MUNIU_ADMIN_TOKEN` 必须 (MUST) 仍可认证,数据面照跑;联邦轨失败必须 (MUST NOT) 阻断令牌轨。
 
-#### Scenario: 虎符不可达仍可用令牌
+#### Scenario: Keycloak不可达仍可用令牌
 
-- **GIVEN** 虎符权威不可达
+- **GIVEN** Keycloak权威不可达
 - **WHEN** 以共享令牌调用管理端点
 - **THEN** 认证成功,管理面可用

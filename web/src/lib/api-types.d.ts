@@ -1748,7 +1748,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** 注销本地会话并给出虎符 end_session 地址（统一登出） */
+        /** 注销本地会话并给出Keycloak end_session 地址（统一登出） */
         post: {
             parameters: {
                 query?: never;
@@ -1820,7 +1820,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 虎符联邦入口可用性（登录页据此渲染入口） */
+        /** Keycloak联邦入口可用性（登录页据此渲染入口） */
         get: {
             parameters: {
                 query?: never;
@@ -1856,7 +1856,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 发起虎符 OIDC 授权码 + PKCE 登录（浏览器整页跳转） */
+        /** 发起Keycloak OIDC 授权码 + PKCE 登录（浏览器整页跳转） */
         get: {
             parameters: {
                 query?: never;
@@ -1866,7 +1866,7 @@ export interface paths {
             };
             requestBody?: never;
             responses: {
-                /** @description 跳转虎符授权端点，state/nonce 单次有效 */
+                /** @description 跳转Keycloak授权端点，state/nonce 单次有效 */
                 302: {
                     headers: {
                         [name: string]: unknown;
@@ -1880,7 +1880,7 @@ export interface paths {
                     };
                     content?: never;
                 };
-                /** @description 虎符权威不可达 */
+                /** @description Keycloak权威不可达 */
                 502: {
                     headers: {
                         [name: string]: unknown;
@@ -1904,7 +1904,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 虎符 OIDC 回调（state 即持有者凭据，验签后按 sub 建取主体并签发本地会话） */
+        /** Keycloak OIDC 回调（state 即持有者凭据，验签并校验 muniu-admin client role 后按 sub 建取主体并签发本地会话） */
         get: {
             parameters: {
                 query?: never;
@@ -1985,7 +1985,7 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * 按虎符 subject 启停管理员主体并授予管理范围
+         * 按Keycloak subject 启停管理员主体并授予管理范围
          * @description 至少提供一个字段，省略即不修改；tenant_ids 为整包替换，scope=GLOBAL 不允许携带非空绑定。
          */
         patch: {
@@ -2083,7 +2083,7 @@ export interface components {
             /** @enum {string} */
             kind: "federated" | "token";
             name: string;
-            /** @description 虎符 subject；共享令牌轨为空串 */
+            /** @description Keycloak subject；共享令牌轨为空串 */
             subject: string;
             /**
              * @description 管理范围；令牌轨恒 GLOBAL
@@ -2097,7 +2097,7 @@ export interface components {
             enabled: boolean;
         };
         AdminUser: {
-            /** @description 虎符 subject，主体唯一键 */
+            /** @description Keycloak subject，主体唯一键 */
             subject: string;
             /** @description 展示名，来自 id_token name，不参与身份判定 */
             username: string;

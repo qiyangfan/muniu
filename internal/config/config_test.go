@@ -1242,20 +1242,9 @@ admin_oidc:
   issuer: "sso.example"
   client_id: muniu-console
   redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
-  admin_subjects: ["sub-ops"]
 `))
 	if err == nil || !strings.Contains(err.Error(), "admin_oidc.issuer 非法") {
 		t.Fatalf("admin_oidc.issuer 非绝对 URL 应拒绝: %v", err)
-	}
-	// 缺白名单拒绝:联邦轨不得让任意虎符主体进入管理面
-	_, err = Load(writeTemp(t, base+`
-admin_oidc:
-  issuer: "https://sso.example"
-  client_id: muniu-console
-  redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
-`))
-	if err == nil || !strings.Contains(err.Error(), "必须成套声明") {
-		t.Fatalf("缺 admin_subjects 应拒绝: %v", err)
 	}
 	// 完整且合法放行
 	cfg, err := Load(writeTemp(t, base+`
@@ -1263,7 +1252,6 @@ admin_oidc:
   issuer: "https://sso.example"
   client_id: muniu-console
   redirect_url: "http://127.0.0.1:8787/admin/v1/auth/oidc/callback"
-  admin_subjects: ["sub-ops"]
   post_logout_redirect_url: "http://127.0.0.1:8787/console/"
 `))
 	if err != nil {

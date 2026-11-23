@@ -116,19 +116,19 @@ func stateCookieMatches(r *http.Request, state string) bool {
 	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) == 1
 }
 
-// adminFederatedCallback 授权码回调:state 单次凭据,换码验签后按虎符 sub 建取主体并签发本地会话。
+// adminFederatedCallback 授权码回调:state 单次凭据,换码验签后按Keycloak sub 建取主体并签发本地会话。
 // 失败一律回控制台登录页并带固定文案,不向浏览器暴露验签/端点细节。
 func adminFederatedCallback(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		subject, name, ok := federatedIdentity(d, w, r)
+		subject, name, roles, ok := federatedIdentity(d, w, r)
 		if !ok {
 			return
 		}
-		token, _, err := d.AdminAuth.LoginFederated(r.Context(), subject, name)
+		token, _, err := d.AdminAuth.LoginFederated(r.Context(), subject, name, roles)
 		if err != nil {
 			if errors.Is(err, auth.ErrAdminCredentials) {
 				auditOIDCLogin(d, r, subject, "denied", "subject_not_allowed_or_disabled")
-				redirectConsole(w, r, "该虎符主体无权登录木牛控制台")
+				redirectConsole(w, r, "该统一身份主体缺少管理员角色或已停用")
 				return
 			}
 			auditOIDCLogin(d, r, subject, "error", "session_issue_failed")
@@ -143,39 +143,39 @@ func adminFederatedCallback(d Deps) http.HandlerFunc {
 }
 
 // federatedIdentity 完成回调前的全部校验与换码;失败已写出响应并返回 ok=false。
-func federatedIdentity(d Deps, w http.ResponseWriter, r *http.Request) (subject, name string, ok bool) {
+func federatedIdentity(d Deps, w http.ResponseWriter, r *http.Request) (subject, name string, roles []string, ok bool) {
 	if d.Federated == nil || d.AdminAuth == nil {
 		redirectConsole(w, r, "统一身份登录未配置")
-		return "", "", false
+		return "", "", nil, false
 	}
 	if rejectFederationRateLimited(d, w, r) {
-		return "", "", false
+		return "", "", nil, false
 	}
 	q := r.URL.Query()
 	clearOIDCStateCookie(w, d.SecureCookies)
 	if q.Get("error") != "" {
 		auditOIDCLogin(d, r, "", "denied", "upstream_error")
 		redirectConsole(w, r, "统一身份登录未完成,请重试")
-		return "", "", false
+		return "", "", nil, false
 	}
 	if q.Get("code") == "" || q.Get("state") == "" {
 		auditOIDCLogin(d, r, "", "denied", "missing_params")
 		redirectConsole(w, r, "统一身份登录回调缺少参数,请重试")
-		return "", "", false
+		return "", "", nil, false
 	}
 	if !stateCookieMatches(r, q.Get("state")) {
 		auditOIDCLogin(d, r, "", "denied", "state_mismatch")
 		redirectConsole(w, r, "统一身份登录校验失败,请使用管理令牌")
-		return "", "", false
+		return "", "", nil, false
 	}
 	identity, err := d.Federated.Complete(r.Context(), q.Get("state"), q.Get("code"))
 	if err != nil {
 		auditOIDCLogin(d, r, "", "denied", "state_or_token_invalid")
 		d.Logger.Warn("统一身份登录回调失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
 		redirectConsole(w, r, "统一身份登录校验失败,请使用管理令牌")
-		return "", "", false
+		return "", "", nil, false
 	}
-	return identity.Subject, identity.Name, true
+	return identity.Subject, identity.Name, identity.ClientRoles, true
 }
 
 // rejectFederationRateLimited 匿名登录入口超限即写 429,调用方直接返回。
@@ -194,9 +194,9 @@ func auditOIDCLogin(d Deps, r *http.Request, subject, outcome, reason string) {
 	}
 	name := subject
 	if name == "" {
-		name = "hufu"
+		name = "keycloak"
 	}
-	detail, _ := json.Marshal(map[string]string{"provider": "hufu", "reason": reason})
+	detail, _ := json.Marshal(map[string]string{"provider": "keycloak", "reason": reason})
 	a := store.AdminAudit{
 		ID:        uuid.NewV7().String(),
 		RequestID: logging.RequestIDFrom(r.Context()),
@@ -222,7 +222,7 @@ func redirectConsole(w http.ResponseWriter, r *http.Request, msg string) {
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// adminLogoutSSO 注销本地会话并给出虎符 end_session 地址;权威不可达时退回控制台,不留半注销态。
+// adminLogoutSSO 注销本地会话并给出Keycloak end_session 地址;权威不可达时退回控制台,不留半注销态。
 func adminLogoutSSO(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
@@ -239,7 +239,7 @@ func adminLogoutSSO(d Deps) http.HandlerFunc {
 				redirect = defaultPostLogoutRedirect(d)
 			}
 			if u, err := d.Federated.EndSessionURL(r.Context(), redirect); err != nil {
-				d.Logger.Warn("虎符登出地址解析失败,退回本地注销", "request_id", logging.RequestIDFrom(r.Context()),
+				d.Logger.Warn("Keycloak登出地址解析失败,退回本地注销", "request_id", logging.RequestIDFrom(r.Context()),
 					"error_detail", err.Error())
 			} else {
 				target = u
@@ -249,7 +249,7 @@ func adminLogoutSSO(d Deps) http.HandlerFunc {
 	}
 }
 
-// defaultPostLogoutRedirect 未显式声明时按 client 同源推导控制台地址;仍需在虎符登记后才被接受。
+// defaultPostLogoutRedirect 未显式声明时按 client 同源推导控制台地址;仍需在Keycloak登记后才被接受。
 func defaultPostLogoutRedirect(d Deps) string {
 	if d.Federated == nil {
 		return ""
