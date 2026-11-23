@@ -24,8 +24,28 @@ type Tenant struct {
 
 // ListTenants 租户列表，创建时间升序。
 func ListTenants(ctx context.Context, db *sql.DB) ([]Tenant, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id, name, status, daily_quota_credits, tpm_limit,
-		semantic_cache_enabled, created_at FROM tenants ORDER BY created_at`)
+	return listTenants(ctx, db, nil)
+}
+
+// ListTenantsByIDs 按 id 集合收敛的租户列表；空集合返回空集而非全量（失败关闭）。
+func ListTenantsByIDs(ctx context.Context, db *sql.DB, ids []string) ([]Tenant, error) {
+	if len(ids) == 0 {
+		return []Tenant{}, nil
+	}
+	return listTenants(ctx, db, ids)
+}
+
+func listTenants(ctx context.Context, db *sql.DB, ids []string) ([]Tenant, error) {
+	q := `SELECT id, name, status, daily_quota_credits, tpm_limit,
+		semantic_cache_enabled, created_at FROM tenants`
+	var args []any
+	if len(ids) > 0 {
+		//nolint:gosec // 占位符数量按切片长度生成,租户 id 全部经参数绑定
+		q += ` WHERE id IN (` + placeholders(len(ids)) + `)`
+		args = anyArgs(ids)
+	}
+	q += ` ORDER BY created_at`
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: 列出租户: %w", err)
 	}
@@ -106,6 +126,39 @@ func UpdateTenant(ctx context.Context, db *sql.DB, id string, p UpdateTenantPatc
 	return n > 0, nil
 }
 
+// APIKeyTenantByID 按 key id 查归属租户,管理面资源级范围判定用;不存在归 ErrNotFound。
+func APIKeyTenantByID(ctx context.Context, db *sql.DB, id string) (string, error) {
+	var tenantID string
+	err := db.QueryRowContext(ctx, `SELECT tenant_id FROM api_keys WHERE id=?`, id).Scan(&tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: 查 key 租户: %w", err)
+	}
+	return tenantID, nil
+}
+
+// ActiveAPIKeyTenantsByPrefix 按 prefix 查 active key 的租户集合(去重升序);
+// 吊销是多行操作,范围判定必须覆盖所有命中行,任一越界即整体拒绝。
+func ActiveAPIKeyTenantsByPrefix(ctx context.Context, db *sql.DB, prefix string) ([]string, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT DISTINCT tenant_id FROM api_keys WHERE prefix=? AND status='active' ORDER BY tenant_id`, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("store: 查 prefix 租户: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := []string{}
+	for rows.Next() {
+		var tenantID string
+		if err := rows.Scan(&tenantID); err != nil {
+			return nil, err
+		}
+		out = append(out, tenantID)
+	}
+	return out, rows.Err()
+}
+
 // UsageDim 聚合维度。
 type UsageDim string
 
@@ -149,6 +202,20 @@ type UsagePoint struct {
 // from/to 为 RFC3339 UTC；estimated 行不参与成本口径，但计入请求数。
 func UsageAggregate(ctx context.Context, db *sql.DB, dim UsageDim,
 	from, to, tenantID, keyID string) ([]UsagePoint, error) {
+	return usageAggregate(ctx, db, dim, from, to, tenantID, keyID, nil)
+}
+
+// UsageAggregateByTenants 绑定租户集内的聚合；空集合返回空集而非全量（失败关闭）。
+func UsageAggregateByTenants(ctx context.Context, db *sql.DB, dim UsageDim,
+	from, to string, tenantIDs []string, keyID string) ([]UsagePoint, error) {
+	if len(tenantIDs) == 0 {
+		return []UsagePoint{}, nil
+	}
+	return usageAggregate(ctx, db, dim, from, to, "", keyID, tenantIDs)
+}
+
+func usageAggregate(ctx context.Context, db *sql.DB, dim UsageDim,
+	from, to, tenantID, keyID string, tenantIDs []string) ([]UsagePoint, error) {
 	expr, err := usageDimExpr(dim)
 	if err != nil {
 		return nil, err
@@ -165,6 +232,10 @@ func UsageAggregate(ctx context.Context, db *sql.DB, dim UsageDim,
 	if tenantID != "" {
 		q += ` AND tenant_id = ?`
 		args = append(args, tenantID)
+	}
+	if len(tenantIDs) > 0 {
+		q += ` AND tenant_id IN (` + placeholders(len(tenantIDs)) + `)`
+		args = append(args, anyArgs(tenantIDs)...)
 	}
 	if keyID != "" {
 		q += ` AND api_key_id = ?`

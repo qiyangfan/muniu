@@ -1984,7 +1984,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 按虎符 subject 启停管理员主体 */
+        /**
+         * 按虎符 subject 启停管理员主体并授予管理范围
+         * @description 至少提供一个字段，省略即不修改；tenant_ids 为整包替换，scope=GLOBAL 不允许携带非空绑定。
+         */
         patch: {
             parameters: {
                 query?: never;
@@ -1997,13 +2000,23 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        disabled: boolean;
+                        disabled?: boolean;
+                        /** @enum {string} */
+                        scope?: "GLOBAL" | "TENANT";
+                        tenant_ids?: string[];
                     };
                 };
             };
             responses: {
                 /** @description 已更新，停用即时注销该主体全部会话 */
                 200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description 未知 scope、未知租户或 GLOBAL 携带绑定 */
+                400: {
                     headers: {
                         [name: string]: unknown;
                     };
@@ -2070,6 +2083,15 @@ export interface components {
             /** @enum {string} */
             kind: "federated" | "token";
             name: string;
+            /** @description 虎符 subject；共享令牌轨为空串 */
+            subject: string;
+            /**
+             * @description 管理范围；令牌轨恒 GLOBAL
+             * @enum {string}
+             */
+            scope: "GLOBAL" | "TENANT";
+            /** @description TENANT 范围的绑定租户 id（GLOBAL 为空数组） */
+            tenant_ids: string[];
         };
         FederationInfo: {
             enabled: boolean;
@@ -2081,6 +2103,13 @@ export interface components {
             username: string;
             /** @enum {string} */
             status: "active" | "disabled";
+            /**
+             * @description 管理范围
+             * @enum {string}
+             */
+            scope: "GLOBAL" | "TENANT";
+            /** @description TENANT 范围的绑定租户 id；GLOBAL 为空数组 */
+            tenant_ids: string[];
             created_at: string;
             last_login_at?: string | null;
         };

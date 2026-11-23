@@ -373,9 +373,41 @@ func RevokeKeyByPrefix(ctx context.Context, db *sql.DB, prefix string) (int64, e
 
 // ListKeys 列出 key，管理命令读侧，不含哈希明文，按签发时间升序。
 func ListKeys(ctx context.Context, db *sql.DB) ([]KeyRecord, error) {
-	rows, err := db.QueryContext(ctx, `SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
+	return listKeys(ctx, db, nil)
+}
+
+// ListKeysByTenants 绑定租户集内的 key 列表；空集合返回空集而非全量（失败关闭）。
+func ListKeysByTenants(ctx context.Context, db *sql.DB, tenantIDs []string) ([]KeyRecord, error) {
+	if len(tenantIDs) == 0 {
+		return []KeyRecord{}, nil
+	}
+	return listKeys(ctx, db, tenantIDs)
+}
+
+// sqlPlaceholders 生成 n 个逗号分隔的 ? 占位符。
+func sqlPlaceholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+// listKeysSQL 组装读侧查询;IN 占位符数量按切片长度生成,值全部参数绑定。
+func listKeysSQL(tenantIDs []string) (string, []any) {
+	q := `SELECT id, tenant_id, name, prefix, rpm_limit, tpm_limit, daily_quota_credits,
 		expires_at, status, disabled_at, max_request_cost_credits, allowed_models
-		FROM api_keys ORDER BY created_at`)
+		FROM api_keys`
+	var args []any
+	if len(tenantIDs) > 0 {
+		//nolint:gosec // 占位符数量按切片长度生成,租户 id 全部经参数绑定
+		q += ` WHERE tenant_id IN (` + sqlPlaceholders(len(tenantIDs)) + `)`
+		for _, id := range tenantIDs {
+			args = append(args, id)
+		}
+	}
+	return q + ` ORDER BY created_at`, args
+}
+
+func listKeys(ctx context.Context, db *sql.DB, tenantIDs []string) ([]KeyRecord, error) {
+	q, args := listKeysSQL(tenantIDs)
+	rows, err := db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("auth: 列出 api_key: %w", err)
 	}

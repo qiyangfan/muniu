@@ -8,6 +8,19 @@ import { api, type KeyRecord } from "../lib/api";
 vi.mock("../lib/api", () => ({
   api: {
     listKeys: vi.fn(),
+    listTenants: vi.fn().mockResolvedValue({
+      tenants: [
+        {
+          id: "t-default",
+          name: "default",
+          status: "active",
+          daily_quota_credits: 0,
+          tpm_limit: 0,
+          semantic_cache_enabled: false,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    }),
     createKey: vi.fn(),
     patchKey: vi.fn(),
     revokeKey: vi.fn(),

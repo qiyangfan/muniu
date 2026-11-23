@@ -8,10 +8,13 @@ components:
   schemas:
     AdminActor:
       type: object
-      required: [kind, name]
+      required: [kind, name, subject, scope, tenant_ids]
       properties:
         kind: {type: string, enum: [federated, token]}
         name: {type: string}
+        subject: {type: string, description: 虎符 subject；共享令牌轨为空串}
+        scope: {type: string, enum: [GLOBAL, TENANT], description: 管理范围；令牌轨恒 GLOBAL}
+        tenant_ids: {type: array, items: {type: string}, description: TENANT 范围的绑定租户 id（GLOBAL 为空数组）}
     FederationInfo:
       type: object
       required: [enabled]
@@ -19,11 +22,13 @@ components:
         enabled: {type: boolean}
     AdminUser:
       type: object
-      required: [subject, username, status, created_at]
+      required: [subject, username, status, scope, tenant_ids, created_at]
       properties:
         subject: {type: string, description: 虎符 subject，主体唯一键}
         username: {type: string, description: 展示名，来自 id_token name，不参与身份判定}
         status: {type: string, enum: [active, disabled]}
+        scope: {type: string, enum: [GLOBAL, TENANT], description: 管理范围}
+        tenant_ids: {type: array, items: {type: string}, description: TENANT 范围的绑定租户 id；GLOBAL 为空数组}
         created_at: {type: string}
         last_login_at: {type: string, nullable: true}
     AdminAudit:
@@ -906,18 +911,21 @@ paths:
     parameters:
       - {name: subject, in: path, required: true, schema: {type: string}}
     patch:
-      summary: 按虎符 subject 启停管理员主体
+      summary: 按虎符 subject 启停管理员主体并授予管理范围
+      description: 至少提供一个字段，省略即不修改；tenant_ids 为整包替换，scope=GLOBAL 不允许携带非空绑定。
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [disabled]
               properties:
                 disabled: {type: boolean}
+                scope: {type: string, enum: [GLOBAL, TENANT]}
+                tenant_ids: {type: array, items: {type: string}}
       responses:
         "200": {description: 已更新，停用即时注销该主体全部会话}
+        "400": {description: 未知 scope、未知租户或 GLOBAL 携带绑定}
         "404": {description: 主体不存在}
   /admin/v1/audit:
     get:

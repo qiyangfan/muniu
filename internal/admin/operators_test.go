@@ -18,9 +18,13 @@ import (
 )
 
 // loginCookie 经联邦轨签出一枚真实会话 cookie,审计用例据此走已认证变更路径。
+// 首登默认 TENANT 空绑定(失败关闭);审计/管理面生命周期用例模拟存量全局管理员。
 func loginCookie(t *testing.T, db *sql.DB, h http.Handler, idp *testIdP) *http.Cookie {
 	t.Helper()
 	cookie, _ := federatedLogin(t, h, idp)
+	if err := store.SetAdminPrincipalScope(context.Background(), db, "jinguan-sub-1", "GLOBAL", nil); err != nil {
+		t.Fatal(err)
+	}
 	return cookie
 }
 

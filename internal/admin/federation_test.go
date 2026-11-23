@@ -186,6 +186,10 @@ func TestFederation_双轨并存与联邦归因(t *testing.T) {
 	}
 
 	cookie, _ := federatedLogin(t, h, idp)
+	// 首登默认 TENANT 空绑定;本用例模拟存量全局管理员,验证双轨归因与审计。
+	if err := store.SetAdminPrincipalScope(context.Background(), db, "jinguan-sub-1", "GLOBAL", nil); err != nil {
+		t.Fatal(err)
+	}
 	rec = send(h, http.MethodGet, "/admin/v1/auth/whoami", cookie, "")
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"kind":"federated"`) ||
 		!strings.Contains(rec.Body.String(), "张三") {

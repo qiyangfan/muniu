@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api, ApiError, setToken, type AdminActor } from "./lib/api";
+import { Badge } from "./components/ui/badge";
 import { useTheme } from "./lib/theme";
 import { cn, errorMessage } from "./lib/utils";
 import { Button } from "./components/ui/button";
@@ -185,11 +186,14 @@ export default function App() {
     };
   }, []);
   const [tab, setTab] = useState<TabKey>("overview");
+  const isTenant = actor?.scope === "TENANT";
+  // 范围外页签不可达:TENANT 主体落地用量页,GLOBAL 保持总览默认。
+  const activeTab: TabKey = isTenant && tab !== "keys" && tab !== "usage" ? "usage" : tab;
   const { theme, toggle } = useTheme();
   // 切换页签时回到页面顶部。
   useEffect(() => {
     window.scrollTo(0, 0);
-  }, [tab]);
+  }, [activeTab]);
   if (checking)
     return (
       <div className="p-6 text-sm text-muted-foreground" role="status">
@@ -204,6 +208,9 @@ export default function App() {
       </div>
     );
   if (!actor) return <Login onOk={setActor} />;
+
+  // 导航与操作按管理范围过滤;执行侧 403/404 才是授权事实,这里只是体验。
+  const visibleTabs = isTenant ? TABS.filter((t) => t.key === "keys" || t.key === "usage") : TABS;
 
   const themeToggle = (
     <Button
@@ -256,12 +263,12 @@ export default function App() {
       <header className="sticky top-0 z-40 flex h-14 items-center gap-4 border-b border-border bg-card px-4 md:px-6">
         <span className="shrink-0 font-semibold text-primary">木牛 muniu</span>
         <nav className="hidden items-center gap-1 md:flex" aria-label="主导航">
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <Button
               key={t.key}
               size="sm"
-              variant={tab === t.key ? "default" : "ghost"}
-              aria-current={tab === t.key ? "page" : undefined}
+              variant={activeTab === t.key ? "default" : "ghost"}
+              aria-current={activeTab === t.key ? "page" : undefined}
               onClick={() => setTab(t.key)}
             >
               <span className="hidden lg:inline">{t.label}</span>
@@ -270,32 +277,38 @@ export default function App() {
           ))}
         </nav>
         <div className="ml-auto flex items-center gap-1">
-          <span className="max-w-24 truncate text-xs text-muted-foreground">
+          <span className="max-w-16 truncate text-xs text-muted-foreground sm:max-w-24">
             {actor.kind === "token" ? "共享管理令牌" : actor.name}
           </span>
+          <Badge variant={isTenant ? "secondary" : "outline"}>{isTenant ? "租户" : "全局"}</Badge>
           {themeToggle}
           {logout}
         </div>
       </header>
       <main className="mx-auto w-full max-w-6xl p-4 pb-24 md:p-6 md:pb-6">
-        {tab === "overview" && <Overview />}
-        {tab === "keys" && <Keys />}
-        {tab === "usage" && <Usage />}
-        {tab === "providers" && <Providers />}
-        {tab === "oauth" && <OAuthAccounts />}
-        {tab === "balances" && <Balances />}
-        {tab === "pricing" && <Pricing />}
-        {tab === "audit" && <Audit />}
+        {activeTab === "overview" && <Overview />}
+        {activeTab === "keys" && <Keys />}
+        {activeTab === "usage" && <Usage />}
+        {activeTab === "providers" && <Providers />}
+        {activeTab === "oauth" && <OAuthAccounts />}
+        {activeTab === "balances" && <Balances />}
+        {activeTab === "pricing" && <Pricing />}
+        {activeTab === "audit" && <Audit />}
       </main>
       {/* 移动端使用底部导航，并为 iOS 安全区留出空间。 */}
       <nav
         className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-card md:hidden"
         aria-label="主导航"
       >
-        {/* 网格列数需与 TABS.length 一致(8 页签靠窄内距+小字阶在 375 档单排放下)。 */}
-        <div className="grid grid-cols-8 pb-[env(safe-area-inset-bottom)]">
-          {TABS.map((t) => {
-            const active = tab === t.key;
+        {/* 网格列数随可见页签:8 页签靠窄内距+小字阶在 375 档单排放下,TENANT 两页签各半宽。 */}
+        <div
+          className={cn(
+            "grid pb-[env(safe-area-inset-bottom)]",
+            isTenant ? "grid-cols-2" : "grid-cols-8",
+          )}
+        >
+          {visibleTabs.map((t) => {
+            const active = activeTab === t.key;
             return (
               <Button
                 key={t.key}

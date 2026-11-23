@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   whoami: vi.fn(),
   logoutSso: vi.fn(),
   federationInfo: vi.fn(),
+  usage: vi.fn(),
+  listKeys: vi.fn(),
   setToken: vi.fn(),
 }));
 vi.mock("./lib/api", async () => {
@@ -17,6 +19,8 @@ vi.mock("./lib/api", async () => {
       whoami: mocks.whoami,
       logoutSso: mocks.logoutSso,
       federationInfo: mocks.federationInfo,
+      usage: mocks.usage,
+      listKeys: mocks.listKeys,
     },
     setToken: mocks.setToken,
   };
@@ -29,6 +33,8 @@ beforeEach(() => {
     .mockReturnValue({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() });
   mocks.logoutSso.mockResolvedValue({ redirect_url: "/console/" });
   mocks.federationInfo.mockResolvedValue({ enabled: false });
+  mocks.usage.mockResolvedValue({ points: [], from: "", to: "", group_by: "day" });
+  mocks.listKeys.mockResolvedValue({ keys: [] });
 });
 afterEach(cleanup);
 
@@ -129,5 +135,37 @@ describe("虎符统一身份登录", () => {
     await screen.findByText("总览内容");
     expect(screen.getByText("张三")).toBeTruthy();
     expect(screen.queryByText("共享管理令牌")).toBeNull();
+  });
+});
+
+describe("管理范围适配", () => {
+  it("TENANT 主体只见用量与密钥页并落地用量", async () => {
+    mocks.whoami.mockResolvedValue({
+      kind: "federated",
+      name: "张三",
+      subject: "hufu:1",
+      scope: "TENANT",
+      tenant_ids: ["t1"],
+    });
+    render(<App />);
+    await screen.findByText("暂无用量数据");
+    // Usage 页自身的"按供应商"维度不是导航;以审计页签为导航断言锚点。
+    expect(screen.queryByRole("button", { name: /审计/ })).toBeNull();
+    expect(screen.queryByText("总览内容")).toBeNull();
+    expect(screen.getByText("租户")).toBeTruthy();
+  });
+  it("GLOBAL 主体保持全部导航与总览落地", async () => {
+    mocks.whoami.mockResolvedValue({
+      kind: "token",
+      name: "management-token",
+      subject: "",
+      scope: "GLOBAL",
+      tenant_ids: [],
+    });
+    render(<App />);
+    await screen.findByText("总览内容");
+    // 桌面与底部导航各渲染一份,jsdom 不做 CSS 布局,按存在性断言。
+    expect(screen.getAllByRole("button", { name: /供应商/ }).length).toBeGreaterThan(0);
+    expect(screen.getByText("全局")).toBeTruthy();
   });
 });

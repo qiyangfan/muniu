@@ -72,54 +72,74 @@ type Deps struct {
 	Logger *slog.Logger
 }
 
+// routeClass 管理面路由的范围分类。零值是漏分类哨兵:执行期按 global-only 兜底
+// (对 scoped 主体拒绝),分类断言测试要求逐条显式标注,新增路由无法静默放行。
+type routeClass int
+
+const (
+	routeUnclassified routeClass = iota
+	routeExempt                  // 认证入口与 whoami/logout:主题未确定前也必须可达
+	routeGlobalOnly              // 全局运行面:仅 GLOBAL actor
+	routeTenantScoped            // 租户资源面:按绑定集收敛,资源级判定在处理器内
+)
+
 // adminRouteEntry 管理面路由表条目。
 type adminRouteEntry struct {
 	Pattern string
+	Class   routeClass
 	Handler func(Deps) http.HandlerFunc
+}
+
+// effectiveClass 漏分类按 global-only 执行,与"未分类默认拒绝 scoped"的失败关闭一致。
+func (e adminRouteEntry) effectiveClass() routeClass {
+	if e.Class == routeUnclassified {
+		return routeGlobalOnly
+	}
+	return e.Class
 }
 
 // adminRouteTable 管理面路由单一事实源：New 据此注册，Routes() 据此回报，漂移门禁消费同一份。
 // 两处手写必然漂移，模式只在这里声明一次。
 var adminRouteTable = []adminRouteEntry{
-	{"POST /admin/v1/auth/logout", adminLogout},
-	{"POST /admin/v1/auth/logout/sso", adminLogoutSSO},
-	{"GET /admin/v1/auth/whoami", adminWhoami},
-	{"GET /admin/v1/auth/federation", adminFederationInfo},
-	{"GET /admin/v1/auth/oidc/start", adminFederatedStart},
-	{"GET /admin/v1/auth/oidc/callback", adminFederatedCallback},
-	{"GET /admin/v1/admins", adminUsersList},
-	{"PATCH /admin/v1/admins/{subject}", adminUsersPatch},
-	{"GET /admin/v1/audit", adminAuditList},
-	{"GET /admin/v1/image-pricing", imagePricingList},
-	{"PUT /admin/v1/image-pricing/{alias}", imagePricingPut},
-	{"DELETE /admin/v1/image-pricing/{alias}", imagePricingDelete},
-	{"GET /admin/v1/tenants", listTenants},
-	{"POST /admin/v1/tenants", createTenant},
-	{"PATCH /admin/v1/tenants/{id}", patchTenant},
-	{"GET /admin/v1/keys", listKeys},
-	{"POST /admin/v1/keys", createKey},
-	{"PATCH /admin/v1/keys/{id}", patchKey},
-	{"DELETE /admin/v1/keys/{prefix}", revokeKey},
-	{"GET /admin/v1/usage", usage},
-	{"GET /admin/v1/providers", providers},
-	{"GET /admin/v1/provider-presets", providerPresets},
-	{"GET /admin/v1/cache/stats", cacheStats},
-	{"GET /admin/v1/pricing", pricingList},
-	{"PUT /admin/v1/pricing/{alias}", pricingPut},
-	{"DELETE /admin/v1/pricing/{alias}", pricingDelete},
-	{"GET /admin/v1/plugins", pluginsList},
-	{"PUT /admin/v1/plugins/{name}", pluginPut},
-	{"PATCH /admin/v1/plugins/{name}", pluginPatch},
-	{"GET /admin/v1/balances", balancesOverview},
-	{"POST /admin/v1/balances/{provider}/manual", balanceManual},
-	{"POST /admin/v1/balances/{provider}/refresh", balanceRefresh},
-	{"GET /admin/v1/oauth/accounts", oauthAccountsList},
-	{"POST /admin/v1/oauth/accounts", oauthAccountsCreate},
-	{"DELETE /admin/v1/oauth/accounts/{id}", oauthAccountDelete},
-	{"POST /admin/v1/oauth/authorize", oauthAuthorize},
-	{"GET /admin/v1/oauth/callback", oauthCallback},
-	{"GET /admin/v1/alerts/delivery-status", alertDeliveryStatus},
-	{"GET /admin/v1/upstream-health", upstreamHealth},
+	{"POST /admin/v1/auth/logout", routeExempt, adminLogout},
+	{"POST /admin/v1/auth/logout/sso", routeExempt, adminLogoutSSO},
+	{"GET /admin/v1/auth/whoami", routeExempt, adminWhoami},
+	{"GET /admin/v1/auth/federation", routeExempt, adminFederationInfo},
+	{"GET /admin/v1/auth/oidc/start", routeExempt, adminFederatedStart},
+	{"GET /admin/v1/auth/oidc/callback", routeExempt, adminFederatedCallback},
+	{"GET /admin/v1/admins", routeGlobalOnly, adminUsersList},
+	{"PATCH /admin/v1/admins/{subject}", routeGlobalOnly, adminUsersPatch},
+	{"GET /admin/v1/audit", routeGlobalOnly, adminAuditList},
+	{"GET /admin/v1/image-pricing", routeGlobalOnly, imagePricingList},
+	{"PUT /admin/v1/image-pricing/{alias}", routeGlobalOnly, imagePricingPut},
+	{"DELETE /admin/v1/image-pricing/{alias}", routeGlobalOnly, imagePricingDelete},
+	{"GET /admin/v1/tenants", routeTenantScoped, listTenants},
+	{"POST /admin/v1/tenants", routeGlobalOnly, createTenant},
+	{"PATCH /admin/v1/tenants/{id}", routeGlobalOnly, patchTenant},
+	{"GET /admin/v1/keys", routeTenantScoped, listKeys},
+	{"POST /admin/v1/keys", routeTenantScoped, createKey},
+	{"PATCH /admin/v1/keys/{id}", routeTenantScoped, patchKey},
+	{"DELETE /admin/v1/keys/{prefix}", routeTenantScoped, revokeKey},
+	{"GET /admin/v1/usage", routeTenantScoped, usage},
+	{"GET /admin/v1/providers", routeGlobalOnly, providers},
+	{"GET /admin/v1/provider-presets", routeGlobalOnly, providerPresets},
+	{"GET /admin/v1/cache/stats", routeGlobalOnly, cacheStats},
+	{"GET /admin/v1/pricing", routeGlobalOnly, pricingList},
+	{"PUT /admin/v1/pricing/{alias}", routeGlobalOnly, pricingPut},
+	{"DELETE /admin/v1/pricing/{alias}", routeGlobalOnly, pricingDelete},
+	{"GET /admin/v1/plugins", routeGlobalOnly, pluginsList},
+	{"PUT /admin/v1/plugins/{name}", routeGlobalOnly, pluginPut},
+	{"PATCH /admin/v1/plugins/{name}", routeGlobalOnly, pluginPatch},
+	{"GET /admin/v1/balances", routeGlobalOnly, balancesOverview},
+	{"POST /admin/v1/balances/{provider}/manual", routeGlobalOnly, balanceManual},
+	{"POST /admin/v1/balances/{provider}/refresh", routeGlobalOnly, balanceRefresh},
+	{"GET /admin/v1/oauth/accounts", routeGlobalOnly, oauthAccountsList},
+	{"POST /admin/v1/oauth/accounts", routeGlobalOnly, oauthAccountsCreate},
+	{"DELETE /admin/v1/oauth/accounts/{id}", routeGlobalOnly, oauthAccountDelete},
+	{"POST /admin/v1/oauth/authorize", routeGlobalOnly, oauthAuthorize},
+	{"GET /admin/v1/oauth/callback", routeExempt, oauthCallback},
+	{"GET /admin/v1/alerts/delivery-status", routeGlobalOnly, alertDeliveryStatus},
+	{"GET /admin/v1/upstream-health", routeGlobalOnly, upstreamHealth},
 }
 
 // New 按共享令牌、活跃主体或虎符联邦开放管理面，认证装配失败不暴露空壳。
@@ -150,7 +170,7 @@ func New(ctx context.Context, d Deps) http.Handler {
 	for _, e := range adminRouteTable {
 		mux.Handle(e.Pattern, e.Handler(d))
 	}
-	return authOperators(d, auditOperators(d, mux))
+	return authOperators(d, auditOperators(d, mux, scopeOperators(mux)))
 }
 
 // initLoginLimiter 联邦入口默认进程内每 IP 限流;装配层可注入共享/测试实现。
@@ -210,7 +230,16 @@ func decode(r *http.Request, v any) error {
 
 func listTenants(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tenants, err := store.ListTenants(r.Context(), d.DB)
+		actor := ActorFrom(r.Context())
+		var (
+			tenants []store.Tenant
+			err     error
+		)
+		if actor.Scope == "GLOBAL" {
+			tenants, err = store.ListTenants(r.Context(), d.DB)
+		} else {
+			tenants, err = store.ListTenantsByIDs(r.Context(), d.DB, actor.TenantIDs)
+		}
 		if err != nil {
 			// 内部错误细节只进日志，对外统一归一 message
 			d.Logger.Error("列出租户失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
@@ -283,7 +312,16 @@ func patchTenant(d Deps) http.HandlerFunc {
 
 func listKeys(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		keys, err := auth.ListKeys(r.Context(), d.DB)
+		actor := ActorFrom(r.Context())
+		var (
+			keys []auth.KeyRecord
+			err  error
+		)
+		if actor.Scope == "GLOBAL" {
+			keys, err = auth.ListKeys(r.Context(), d.DB)
+		} else {
+			keys, err = auth.ListKeysByTenants(r.Context(), d.DB, actor.TenantIDs)
+		}
 		if err != nil {
 			d.Logger.Error("列出 key 失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "内部错误")
@@ -312,6 +350,13 @@ func createKey(d Deps) http.HandlerFunc {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
 			return
 		}
+		tenantName := strings.TrimSpace(req.Tenant)
+		if tenantName == "" {
+			tenantName = "default"
+		}
+		if !authorizeTenantName(d, w, r, tenantName) {
+			return
+		}
 		if req.MaxRequestCostCredits < 0 {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "max_request_cost_credits 不可为负")
 			return
@@ -335,7 +380,7 @@ func createKey(d Deps) http.HandlerFunc {
 			}
 			opts.ExpiresAt = &t
 		}
-		plaintext, rec, err := auth.CreateKey(r.Context(), d.DB, req.Tenant, req.Name, req.RPMLimit, opts)
+		plaintext, rec, err := auth.CreateKey(r.Context(), d.DB, tenantName, req.Name, req.RPMLimit, opts)
 		if err != nil {
 			respondErr(d, w, r, err, "key_create_failed")
 			return
@@ -406,6 +451,9 @@ func applyExpiresAt(raw json.RawMessage, patch *auth.LimitsPatch) (string, bool)
 // 写后 Invalidate：限额是 DB 可变状态，须走吊销同款失效协议，下一请求即新限额。
 func patchKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !authorizeKeyID(d, w, r, r.PathValue("id")) {
+			return
+		}
 		var req keyPatchRequest
 		if err := decode(r, &req); err != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "请求体非法")
@@ -446,6 +494,9 @@ func patchKey(d Deps) http.HandlerFunc {
 func revokeKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		prefix := r.PathValue("prefix")
+		if !authorizeKeyPrefix(d, w, r, prefix) {
+			return
+		}
 		n, err := auth.RevokeKeyByPrefix(r.Context(), d.DB, prefix)
 		if err != nil {
 			d.Logger.Error("吊销 key 失败", "request_id", logging.RequestIDFrom(r.Context()), "error_detail", err.Error())
@@ -519,8 +570,29 @@ func usage(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		pts, err := store.UsageAggregate(r.Context(), d.DB, store.UsageDim(groupBy), from, to,
-			q.Get("tenant_id"), q.Get("key_id"))
+		actor := ActorFrom(r.Context())
+		tenantParam := q.Get("tenant_id")
+		var (
+			pts []store.UsagePoint
+			err error
+		)
+		if actor.Scope == "GLOBAL" {
+			pts, err = store.UsageAggregate(r.Context(), d.DB, store.UsageDim(groupBy), from, to,
+				tenantParam, q.Get("key_id"))
+		} else {
+			// 显式参数必须是绑定子集;越界按不存在处理,缺省取绑定并集一次 IN 聚合。
+			if tenantParam != "" && !AuthorizeScope(actor, routeTenantScoped, tenantParam) {
+				denyResourceScope(w, r, http.StatusNotFound, protocol.TypeNotFound,
+					"not_found", "资源不存在", "tenant_out_of_scope", tenantParam)
+				return
+			}
+			scopeIDs := actor.TenantIDs
+			if tenantParam != "" {
+				scopeIDs = []string{tenantParam}
+			}
+			pts, err = store.UsageAggregateByTenants(r.Context(), d.DB, store.UsageDim(groupBy), from, to,
+				scopeIDs, q.Get("key_id"))
+		}
 		if err != nil {
 			respondErr(d, w, r, err, "bad_request")
 			return
@@ -595,4 +667,79 @@ func Routes() []string {
 		out = append(out, e.Pattern)
 	}
 	return out
+}
+
+// authorizeTenantName TENANT actor 的签发租户判定:名字解析为 id 后必须在绑定集内;
+// 不存在与范围外统一 404,不披露范围外租户存在性。GLOBAL 不受约束(保持既有 400 语义)。
+func authorizeTenantName(d Deps, w http.ResponseWriter, r *http.Request, name string) bool {
+	actor := ActorFrom(r.Context())
+	if actor.Scope == "GLOBAL" {
+		return true
+	}
+	id, err := store.TenantIDByName(r.Context(), d.DB, name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			denyResourceScope(w, r, http.StatusNotFound, protocol.TypeNotFound,
+				"tenant_not_found", "租户不存在", "tenant_out_of_scope", name)
+			return false
+		}
+		respondErr(d, w, r, err, "bad_request")
+		return false
+	}
+	if !AuthorizeScope(actor, routeTenantScoped, id) {
+		denyResourceScope(w, r, http.StatusNotFound, protocol.TypeNotFound,
+			"tenant_not_found", "租户不存在", "tenant_out_of_scope", id)
+		return false
+	}
+	return true
+}
+
+// authorizeKeyID TENANT actor 的按 id 操作判定:目标 key 必须属于绑定租户;
+// 不存在与越界统一 404。GLOBAL 不做额外查询(零回归)。
+func authorizeKeyID(d Deps, w http.ResponseWriter, r *http.Request, id string) bool {
+	actor := ActorFrom(r.Context())
+	if actor.Scope == "GLOBAL" {
+		return true
+	}
+	tenantID, err := store.APIKeyTenantByID(r.Context(), d.DB, id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeAdminError(w, r, http.StatusNotFound, protocol.TypeNotFound, "key_not_found", "key 不存在")
+			return false
+		}
+		respondErr(d, w, r, err, "bad_request")
+		return false
+	}
+	if !AuthorizeScope(actor, routeTenantScoped, tenantID) {
+		denyResourceScope(w, r, http.StatusNotFound, protocol.TypeNotFound,
+			"not_found", "资源不存在", "tenant_out_of_scope", tenantID)
+		return false
+	}
+	return true
+}
+
+// authorizeKeyPrefix TENANT actor 的吊销判定:prefix 命中的所有 active key
+// 必须都在绑定集内,任一越界整体拒绝且不写库。
+func authorizeKeyPrefix(d Deps, w http.ResponseWriter, r *http.Request, prefix string) bool {
+	actor := ActorFrom(r.Context())
+	if actor.Scope == "GLOBAL" {
+		return true
+	}
+	tenants, err := store.ActiveAPIKeyTenantsByPrefix(r.Context(), d.DB, prefix)
+	if err != nil {
+		respondErr(d, w, r, err, "bad_request")
+		return false
+	}
+	if len(tenants) == 0 {
+		writeAdminError(w, r, http.StatusNotFound, protocol.TypeNotFound, "key_not_found", "key 不存在")
+		return false
+	}
+	for _, tenantID := range tenants {
+		if !AuthorizeScope(actor, routeTenantScoped, tenantID) {
+			denyResourceScope(w, r, http.StatusNotFound, protocol.TypeNotFound,
+				"not_found", "资源不存在", "tenant_out_of_scope", tenantID)
+			return false
+		}
+	}
+	return true
 }

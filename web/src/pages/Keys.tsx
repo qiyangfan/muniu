@@ -1,10 +1,17 @@
 // 密钥管理:列表/签发(明文仅此一次)/吊销。
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound } from "lucide-react";
-import { api, type KeyRecord } from "../lib/api";
+import { api, type KeyRecord, type Tenant } from "../lib/api";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { ErrorAlert } from "../components/error-alert";
 import { NoticeBanner } from "../components/notice-banner";
 import {
@@ -73,7 +80,9 @@ export default function Keys() {
   const [issued, setIssued] = useState<{ key: string; id: string } | null>(null);
   const [err, setErr] = useState("");
   const [name, setName] = useState("");
-  const [tenant, setTenant] = useState("default");
+  // 租户选择来自 GET /tenants:后端已按管理范围收敛,TENANT 主体天然只能选绑定租户。
+  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenant, setTenant] = useState("");
   const [rpm, setRpm] = useState(60);
   const [tpm, setTpm] = useState(0);
   const [quota, setQuota] = useState(0);
@@ -107,6 +116,16 @@ export default function Keys() {
       });
   }, []);
   useEffect(refresh, [refresh]);
+  useEffect(() => {
+    api
+      .listTenants()
+      .then((r) => {
+        setTenants(r.tenants);
+        // 默认选中首个可管理租户,消除手输不存在的租户名。
+        setTenant((cur) => cur || (r.tenants[0]?.name ?? ""));
+      })
+      .catch((e) => setErr(errorMessage(e)));
+  }, []);
 
   const revoke = async (prefix: string) => {
     try {
@@ -311,6 +330,10 @@ export default function Keys() {
   ];
 
   const submitKey = async () => {
+    if (!tenant) {
+      setErr("请选择租户");
+      return;
+    }
     setBusy(true);
     try {
       const r = await api.createKey(tenant, name, rpm, {
@@ -352,12 +375,20 @@ export default function Keys() {
           }}
         >
           <FormRow label="租户" htmlFor="key-tenant">
-            <Input
-              id="key-tenant"
-              placeholder="租户"
-              value={tenant}
-              onChange={(e) => setTenant(e.target.value)}
-            />
+            <Select value={tenant} onValueChange={setTenant}>
+              <SelectTrigger id="key-tenant" className="w-full" aria-label="选择租户">
+                <SelectValue placeholder="选择租户" />
+              </SelectTrigger>
+              <SelectContent>
+                {tenants.map((t) =>
+                  t.name ? (
+                    <SelectItem key={t.name} value={t.name}>
+                      {t.name}
+                    </SelectItem>
+                  ) : null,
+                )}
+              </SelectContent>
+            </Select>
           </FormRow>
           <FormRow label="key 名称" htmlFor="key-name">
             <Input

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,10 +25,36 @@ const adminCookie = "muniu_admin_session"
 
 type actorKey struct{}
 
-// Actor 身份沿 request context 传播；共享令牌保留具名但不冒认个人归因。
+// Actor 身份与范围沿 request context 传播；共享令牌保留具名但不冒认个人归因。
+// TenantIDs 是 TENANT 范围的绑定集,令牌轨恒 GLOBAL 且为空数组。
 type Actor struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
+	Kind      string   `json:"kind"`
+	Name      string   `json:"name"`
+	Subject   string   `json:"subject"`
+	Scope     string   `json:"scope"`
+	TenantIDs []string `json:"tenant_ids"`
+}
+
+// AuthorizeScope 管理面范围判定的唯一决策函数:auth(audit(scope(mux))) 的路由级
+// 准入与处理器内的资源级判定都经此。未知范围、空绑定与 global-only 对 scoped
+// 主体一律拒绝(失败关闭);列表类路由(resourceTenant 为空)放行后由处理器按绑定集过滤。
+func AuthorizeScope(actor Actor, class routeClass, resourceTenant string) bool {
+	if class == routeExempt {
+		return true
+	}
+	if actor.Scope == "GLOBAL" {
+		return true
+	}
+	if actor.Scope != "TENANT" || len(actor.TenantIDs) == 0 {
+		return false
+	}
+	if class != routeTenantScoped {
+		return false
+	}
+	if resourceTenant == "" {
+		return true
+	}
+	return slices.Contains(actor.TenantIDs, resourceTenant)
 }
 
 // ActorFrom 返回当前运维身份，数据面 API key 不进入本上下文。
@@ -59,7 +86,14 @@ func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) 
 	if cookie, err := r.Cookie(adminCookie); err == nil && d.AdminAuth != nil {
 		p, err := d.AdminAuth.Session(r.Context(), cookie.Value)
 		if err == nil {
-			actor = Actor{Kind: "federated", Name: p.Username}
+			actor = Actor{Kind: "federated", Name: p.Username, Subject: p.Subject, Scope: p.Scope}
+			// 范围解析随请求读一次绑定;管理面基数极小,不引入缓存层。
+			ids, err := store.AdminPrincipalTenants(r.Context(), d.DB, p.Subject)
+			if err != nil {
+				respondErr(d, w, r, err, "auth_failed")
+				return actor, false
+			}
+			actor.TenantIDs = ids
 		} else if !errors.Is(err, auth.ErrAdminCredentials) {
 			respondErr(d, w, r, err, "auth_failed")
 			return actor, false
@@ -67,7 +101,7 @@ func resolveActor(d Deps, w http.ResponseWriter, r *http.Request) (Actor, bool) 
 	}
 	if actor.Kind == "" && d.Token != "" &&
 		secureEqual(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), d.Token) {
-		actor = Actor{Kind: "token", Name: "management-token"}
+		actor = Actor{Kind: "token", Name: "management-token", Scope: "GLOBAL", TenantIDs: []string{}}
 	}
 	if actor.Kind == "" {
 		d.Logger.Warn("管理面鉴权失败", "request_id", logging.RequestIDFrom(r.Context()))
@@ -106,7 +140,82 @@ func optionalSessionActor(d Deps, r *http.Request) Actor {
 	if err != nil {
 		return Actor{}
 	}
-	return Actor{Kind: "federated", Name: p.Username}
+	actor := Actor{Kind: "federated", Name: p.Username, Subject: p.Subject, Scope: p.Scope, TenantIDs: []string{}}
+	if ids, err := store.AdminPrincipalTenants(r.Context(), d.DB, p.Subject); err == nil {
+		actor.TenantIDs = ids
+	}
+	return actor
+}
+
+// scopeDenial 请求级拒绝原因持有者:scope 中间件与资源处理器写入,
+// 审计收尾统一落 denied(含 GET),拒绝可追责且不产生重复行。
+type scopeDenial struct {
+	reason string
+	target string
+}
+
+type scopeDenialKey struct{}
+
+func withScopeDenial(r *http.Request) (*http.Request, *scopeDenial) {
+	h := &scopeDenial{}
+	return r.WithContext(context.WithValue(r.Context(), scopeDenialKey{}, h)), h
+}
+
+// markScopeDenied 记录拒绝原因;无持有者(单元直调处理器)时静默跳过。
+func markScopeDenied(r *http.Request, reason, target string) {
+	if h, _ := r.Context().Value(scopeDenialKey{}).(*scopeDenial); h != nil {
+		h.reason, h.target = reason, target
+	}
+}
+
+// denyScope 路由类准入拒绝:403 + 固定原因码,审计由外层统一落 denied。
+func denyScope(w http.ResponseWriter, r *http.Request, actor Actor, class routeClass) {
+	reason := "scope_denied"
+	switch {
+	case actor.Scope != "GLOBAL" && actor.Scope != "TENANT":
+		reason = "scope_unknown"
+	case actor.Scope == "TENANT" && len(actor.TenantIDs) == 0:
+		reason = "scope_unbound"
+	case class != routeTenantScoped:
+		reason = "scope_global_only"
+	}
+	markScopeDenied(r, reason, "")
+	writeAdminError(w, r, 403, protocol.TypeForbidden, "scope_denied", "管理范围不足")
+}
+
+// denyResourceScope 资源级越界拒绝:按不存在处理(404),不披露范围外资源,
+// 原因码与目标值进审计 denied。
+func denyResourceScope(w http.ResponseWriter, r *http.Request, status int, typ, code, msg, reason, target string) {
+	markScopeDenied(r, reason, target)
+	writeAdminError(w, r, status, typ, code, msg)
+}
+
+// scopeOperators 路由类准入中间件,串在审计内侧:认证只确定身份,
+// 能否触达路由由 AuthorizeScope 单点决定;资源级判定复用同一函数。
+func scopeOperators(mux *http.ServeMux) http.Handler {
+	classes := make(map[string]routeClass, len(adminRouteTable))
+	for _, e := range adminRouteTable {
+		classes[e.Pattern] = e.effectiveClass()
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pattern := mux.Handler(r)
+		r.Pattern = pattern
+		class, ok := classes[pattern]
+		if !ok {
+			// 未匹配路径按 global-only 兜底,scoped 主体不得探测未知路由。
+			class = routeGlobalOnly
+		}
+		if class == routeExempt {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		actor := ActorFrom(r.Context())
+		if !AuthorizeScope(actor, class, "") {
+			denyScope(w, r, actor, class)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func adminLogout(d Deps) http.HandlerFunc {
@@ -137,27 +246,81 @@ func adminUsersList(d Deps) http.HandlerFunc {
 	}
 }
 
-// adminUsersPatch 按 sub 启停主体;主体只能由虎符首登产生(不再提供本地创建/改密)。
+// adminUsersPatch 按 sub 启停主体并授予范围;主体只能由虎符首登产生。
+// 省略字段不动,scope/tenant_ids 整包替换;范围授予仅 GLOBAL actor(路由层 global-only)。
 func adminUsersPatch(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
-			Disabled *bool `json:"disabled"`
+			Disabled  *bool     `json:"disabled"`
+			Scope     *string   `json:"scope"`
+			TenantIDs *[]string `json:"tenant_ids"`
 		}
-		if err := decode(r, &in); err != nil || in.Disabled == nil {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "须提供 disabled")
+		if err := decode(r, &in); err != nil ||
+			(in.Disabled == nil && in.Scope == nil && in.TenantIDs == nil) {
+			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
+				"须提供 disabled/scope/tenant_ids 之一")
 			return
 		}
-		err := d.AdminAuth.Patch(r.Context(), r.PathValue("subject"), *in.Disabled)
-		if errors.Is(err, store.ErrNotFound) {
-			writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
-			return
+		subject := r.PathValue("subject")
+		if in.Scope != nil || in.TenantIDs != nil {
+			if !patchAdminScope(d, w, r, subject, in.Scope, in.TenantIDs) {
+				return
+			}
 		}
-		if err != nil {
-			respondErr(d, w, r, err, "bad_request")
+		if in.Disabled != nil && !patchAdminDisabled(d, w, r, subject, *in.Disabled) {
 			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}
+}
+
+// patchAdminDisabled 启停主体;停用即撤销该主体全部本地会话。
+func patchAdminDisabled(d Deps, w http.ResponseWriter, r *http.Request, subject string, disabled bool) bool {
+	err := d.AdminAuth.Patch(r.Context(), subject, disabled)
+	if errors.Is(err, store.ErrNotFound) {
+		writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
+		return false
+	}
+	if err != nil {
+		respondErr(d, w, r, err, "bad_request")
+		return false
+	}
+	return true
+}
+
+// patchAdminScope 合并省略字段后整包落库;先完成全部校验再写,写失败不产生部分生效。
+func patchAdminScope(d Deps, w http.ResponseWriter, r *http.Request, subject string,
+	scope *string, tenantIDs *[]string) bool {
+	p, err := store.GetAdminPrincipal(r.Context(), d.DB, subject)
+	if errors.Is(err, store.ErrNotFound) {
+		writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
+		return false
+	}
+	if err != nil {
+		respondErr(d, w, r, err, "bad_request")
+		return false
+	}
+	nextScope := p.Scope
+	if scope != nil {
+		nextScope = *scope
+	}
+	nextTenants, err := store.AdminPrincipalTenants(r.Context(), d.DB, subject)
+	if err != nil {
+		respondErr(d, w, r, err, "bad_request")
+		return false
+	}
+	if tenantIDs != nil {
+		nextTenants = *tenantIDs
+	}
+	if err := store.SetAdminPrincipalScope(r.Context(), d.DB, subject, nextScope, nextTenants); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
+			return false
+		}
+		respondErr(d, w, r, err, "bad_request")
+		return false
+	}
+	return true
 }
 
 func adminAuditList(d Deps) http.HandlerFunc {
@@ -178,6 +341,22 @@ func adminAuditList(d Deps) http.HandlerFunc {
 		}
 		writeJSON(w, 200, map[string]any{"items": items, "next_cursor": next})
 	}
+}
+
+// scopeAuditResult scope 拒绝(路由级或资源级)改写结局/目标/detail;
+// 非拒绝保持既有 outcome 映射与调用方摘要。
+func scopeAuditResult(status int, target, detail string, denial *scopeDenial) (string, string, string) {
+	outcome := auditOutcome(status)
+	if denial == nil || denial.reason == "" || status < 400 {
+		return outcome, target, detail
+	}
+	if denial.target != "" {
+		target = denial.target
+	}
+	if b, err := json.Marshal(map[string]string{"reason": denial.reason}); err == nil {
+		detail = string(b)
+	}
+	return "denied", target, detail
 }
 
 type auditWriter struct {
@@ -334,23 +513,28 @@ func runAudited(aw *auditWriter, r *http.Request, next http.Handler) {
 	next.ServeHTTP(aw, r)
 }
 
-// auditOperators 非 GET 变更请求的审计中间件：读体会留下安全摘要，收尾按实际路由与状态落审计行。
-func auditOperators(d Deps, next *http.ServeMux) http.Handler {
+// auditOperators 管理面审计中间件：非 GET 变更一律留痕；GET 仅在 scope 拒绝时
+// 留 denied 行。读体会留下安全摘要，收尾按实际路由与状态落审计行。
+func auditOperators(d Deps, mux *http.ServeMux, next http.Handler) http.Handler {
 	csrf := http.NewCrossOriginProtection()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
-			next.ServeHTTP(w, r)
-			return
-		}
-		_, pattern := next.Handler(r)
+		_, pattern := mux.Handler(r)
 		r.Pattern = pattern
 		fillPathValues(r, pattern)
+		r, denial := withScopeDenial(r)
 		actor := ActorFrom(r.Context())
-		detail := "{}"
 		aw := &auditWriter{ResponseWriter: w}
+		if r.Method == http.MethodGet {
+			next.ServeHTTP(aw, r)
+			if denial.reason != "" && aw.status >= 400 {
+				aw.finishAudit(d, r, actor, "{}", denial)
+			}
+			return
+		}
+		detail := "{}"
 		// 已认证变更与鉴权拒绝共用收尾，读取失败也留下安全摘要。
 		defer func() {
-			aw.finishAudit(d, r, actor, detail)
+			aw.finishAudit(d, r, actor, detail, denial)
 		}()
 		body, err := io.ReadAll(http.MaxBytesReader(aw, r.Body, 1<<20))
 		if err != nil {
@@ -372,7 +556,8 @@ func auditOperators(d Deps, next *http.ServeMux) http.Handler {
 }
 
 // finishAudit 收尾落审计行；panic 场景由调用方置 500 由本函数如实记录。
-func (aw *auditWriter) finishAudit(d Deps, r *http.Request, actor Actor, detail string) {
+// scope 拒绝(路由级或资源级)统一 outcome=denied,detail 只留固定原因码与目标值。
+func (aw *auditWriter) finishAudit(d Deps, r *http.Request, actor Actor, detail string, denial *scopeDenial) {
 	panicValue := recover()
 	if panicValue != nil {
 		defer func() { panic(panicValue) }()
@@ -388,6 +573,7 @@ func (aw *auditWriter) finishAudit(d Deps, r *http.Request, actor Actor, detail 
 	if status == 0 {
 		status = 200
 	}
+	outcome, target, detail := scopeAuditResult(status, auditTarget(r), detail, denial)
 	action := auditAction(r.Pattern, r.Method)
 	a := store.AdminAudit{
 		ID:        uuid.NewV7().String(),
@@ -395,8 +581,8 @@ func (aw *auditWriter) finishAudit(d Deps, r *http.Request, actor Actor, detail 
 		ActorKind: actor.Kind,
 		ActorName: actor.Name,
 		Action:    action,
-		TargetID:  auditTarget(r),
-		Outcome:   auditOutcome(status),
+		TargetID:  target,
+		Outcome:   outcome,
 		Detail:    detail,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
