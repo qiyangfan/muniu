@@ -30,6 +30,6 @@
 
 ## 5. 联调与收口
 
-- [ ] 5.1 与 IdP 联调:授权码 + PKCE 全链、审计实名归因【阻塞:独立 IdP 项目尚未立项交付(无 issuer/JWKS/授权码端点);建成后经 muniu.yaml admin_oidc 段联调】
+- [x] 5.1 与 IdP 联调:授权码 + PKCE 全链、审计实名归因【2026-11-23 复核:Keycloak 已交付;muniu pilot 运行时验收 7/7(登录/登出、JWKS 轮换、角色闸、禁用、break-glass);审计事件 `login/auth.oidc.login/denied` 有记录】
 - [x] 5.2 spec deltas sync 进 specs/;聚合层 HANDOFF 回写
-- [ ] 5.3 make check 全绿 + 归档【门禁分步实测全绿(唯一例外=依赖提交态的 api-types git-diff 漂移检查,生成幂等已证);归档待 git 提交/PR 授权且 CI 绿后执行(外部 CI 未绿保持 active)】
+- [x] 5.3 make check 全绿 + 归档【2026-11-23 复核:change 已在 archive/;当日 make check EXIT=0(重跑与归档记录见 HANDOFF)】

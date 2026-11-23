@@ -1,15 +1,15 @@
 # 木牛管理面接入 Keycloak(OIDC RP)runbook
 
-> 配套 `../../platform/docs/INTEGRATION-PLAN.md` §1 与 `../../platform/docs/spikes/2026-11-keycloak-light-theme.md`
-> (相对本文件位于 `muniu/docs/`;跨仓文档在 platform 仓或 longzhong 聚合层)。
+> 配套 `../../fujie/docs/INTEGRATION-PLAN.md` §1 与 `../../fujie/docs/spikes/2026-11-keycloak-light-theme.md`
+> (相对本文件位于 `muniu/docs/`;跨仓文档在符节仓或 longzhong 聚合层)。
 > 本仓只做标准 OIDC RP;IdP 为自托管 Keycloak(realm `longzhong`)。本地账密已删除,不恢复。
 
 ## 0 前置
 
-- Keycloak + PostgreSQL 栈:`cd ../../platform && podman compose up -d`
+- Keycloak + PostgreSQL 栈:`cd ../../fujie && podman compose up -d`
   (VM 内存紧张,Keycloak 必须限堆,见 spike 决策记录"运行约束")。
 - realm `longzhong`、client `muniu-admin`(confidential、PKCE S256、redirect 已登记)、
-  演示用户:`bash ../../platform/scripts/setup-realm.sh`(幂等)。
+  演示用户:`bash ../../fujie/scripts/setup-realm.sh`(幂等)。
 - 取 client secret:
 
 ```bash
