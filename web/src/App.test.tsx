@@ -94,7 +94,7 @@ describe("管理令牌登录", () => {
   });
 });
 
-describe("虎符统一身份登录", () => {
+describe("Keycloak 统一身份登录", () => {
   it("入口可用时出现，回调失败提示回显并清除查询参数", async () => {
     const { ApiError } = await import("./lib/api");
     mocks.whoami.mockRejectedValue(new ApiError(401, "登录已过期", "401"));
@@ -143,7 +143,7 @@ describe("管理范围适配", () => {
     mocks.whoami.mockResolvedValue({
       kind: "federated",
       name: "张三",
-      subject: "hufu:1",
+      subject: "keycloak:1",
       scope: "TENANT",
       tenant_ids: ["t1"],
     });

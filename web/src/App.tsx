@@ -44,7 +44,7 @@ function stripOidcError(): void {
   window.history.replaceState(null, "", `${window.location.pathname}${qs ? `?${qs}` : ""}`);
 }
 
-// 登录入口:身份统一由虎符(唯一账户权威)签发,控制台只保留「统一身份登录」整页跳转与
+// 登录入口:身份统一由 Keycloak(唯一账户权威)签发,控制台只保留「统一身份登录」整页跳转与
 // 运维共享令牌两条;账密表单已随木牛去账号化删除。会话凭据由 HttpOnly cookie 保存,
 // OIDC 授权码 + PKCE 失败回带 oidc_error 查询参数(首渲染即读,避免 effect 内 setState)。
 function Login({ onOk }: { onOk: (actor: AdminActor) => void }) {
