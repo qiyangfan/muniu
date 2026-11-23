@@ -224,6 +224,20 @@ func TestTenantScope_Admins授予契约(t *testing.T) {
 	if len(ids) != 2 {
 		t.Fatalf("授予后绑定应为 2: %v", ids)
 	}
+	audits, _, err := store.ListAdminAudit(ctx, d.DB, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	granted := false
+	for _, a := range audits {
+		if a.Action == "admins.patch" && a.Outcome == "ok" && a.TargetID == p.Subject &&
+			strings.Contains(a.Detail, `"scope":"TENANT"`) && strings.Contains(a.Detail, t1) {
+			granted = true
+		}
+	}
+	if !granted {
+		t.Fatalf("授予审计必须记录 scope 与 tenant_ids: %+v", audits)
+	}
 
 	if rr = serve(h, bearerRequest(http.MethodPatch, opPath, `{"scope":"GLOBAL"}`, "test-token")); rr.Code != 400 {
 		t.Fatalf("GLOBAL 携带既有绑定必须 400: %d %s", rr.Code, rr.Body.String())

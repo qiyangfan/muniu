@@ -139,8 +139,20 @@ func attachTenantBindings(ctx context.Context, db *sql.DB, principals []AdminPri
 	return nil
 }
 
+// patchExecutor 事务与连接共用的查询面:BEGIN IMMEDIATE 事务跑在 *sql.Conn 上,
+// 校验与写回 helper 据此复用,sql.Tx 与 sql.Conn 都可传入。
+type patchExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 // AdminPrincipalTenants 单主体绑定租户,租户 id 升序;空集合返回空切片而非 nil。
 func AdminPrincipalTenants(ctx context.Context, db *sql.DB, subject string) ([]string, error) {
+	return adminPrincipalTenants(ctx, db, subject)
+}
+
+func adminPrincipalTenants(ctx context.Context, db patchExecutor, subject string) ([]string, error) {
 	rows, err := db.QueryContext(ctx,
 		`SELECT tenant_id FROM admin_principal_tenants WHERE subject=? ORDER BY tenant_id`, subject)
 	if err != nil {
@@ -158,34 +170,117 @@ func AdminPrincipalTenants(ctx context.Context, db *sql.DB, subject string) ([]s
 	return out, rows.Err()
 }
 
-// SetAdminPrincipalScope 整包替换主体的范围与绑定:先校验入参与租户存在性,
-// 再同事务改 scope、清旧绑定、写新绑定。主体不存在返回 ErrNotFound。
+// AdminPrincipalPatch 管理主体补丁:字段为 nil 表示不动;TenantIDs 非 nil 时整包替换。
+type AdminPrincipalPatch struct {
+	Disabled  *bool
+	Scope     *string
+	TenantIDs *[]string
+}
+
+// SetAdminPrincipalScope 整包替换主体的范围与绑定。主体不存在返回 ErrNotFound。
 func SetAdminPrincipalScope(ctx context.Context, db *sql.DB, subject, scope string, tenantIDs []string) error {
-	ids := dedupeTenantIDs(tenantIDs)
-	if err := validateScope(scope, ids); err != nil {
-		return err
-	}
-	tx, err := db.BeginTx(ctx, nil)
+	return PatchAdminPrincipalFields(ctx, db, subject,
+		AdminPrincipalPatch{Scope: &scope, TenantIDs: &tenantIDs})
+}
+
+// PatchAdminPrincipalFields 单事务应用主体补丁:范围/绑定/停用一次落库,任一步校验失败整单回滚。
+// 事务以 BEGIN IMMEDIATE 先取写锁:deferred 事务里的「读当前值→合并→写回」在并发补丁间
+// 会双双成功却互相覆盖(一方意图静默丢失),控制面写路径不允许这种假成功。
+func PatchAdminPrincipalFields(ctx context.Context, db *sql.DB, subject string, p AdminPrincipalPatch) error {
+	return withImmediateTx(ctx, db, func(conn *sql.Conn) error {
+		var curScope string
+		if err := conn.QueryRowContext(ctx,
+			`SELECT scope FROM admin_principals WHERE subject=?`, subject).Scan(&curScope); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if p.Scope != nil || p.TenantIDs != nil {
+			if err := patchScopeAndBindings(ctx, conn, subject, curScope, p); err != nil {
+				return err
+			}
+		}
+		if p.Disabled != nil {
+			return patchDisabled(ctx, conn, subject, *p.Disabled)
+		}
+		return nil
+	})
+}
+
+// withImmediateTx 在专用连接上以 BEGIN IMMEDIATE 执行写事务:deferred 事务里的
+// 「读当前值→合并→写回」在并发补丁间会双双成功却互相覆盖(一方意图静默丢失),
+// 写锁从语句开始即持有才能让后到者读到前者的提交结果。
+func withImmediateTx(ctx context.Context, db *sql.DB, fn func(*sql.Conn) error) error {
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	if err := ensureTenantsExist(ctx, tx, ids); err != nil {
+	defer func() { _ = conn.Close() }()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE admin_principals SET scope=? WHERE subject=?`, scope, subject)
-	if err != nil {
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
+		}
+	}()
+	if err := fn(conn); err != nil {
 		return err
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		return ErrNotFound
-	}
-	if err := replaceTenantBindings(ctx, tx, subject, ids); err != nil {
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	committed = true
+	return nil
+}
+
+// patchScopeAndBindings 合并省略字段后校验并写回范围与绑定(调用方事务内)。
+func patchScopeAndBindings(ctx context.Context, db patchExecutor, subject, curScope string,
+	p AdminPrincipalPatch) error {
+	nextScope := curScope
+	if p.Scope != nil {
+		nextScope = *p.Scope
+	}
+	var nextTenants []string
+	if p.TenantIDs != nil {
+		nextTenants = dedupeTenantIDs(*p.TenantIDs)
+	} else {
+		var err error
+		nextTenants, err = adminPrincipalTenants(ctx, db, subject)
+		if err != nil {
+			return err
+		}
+	}
+	if err := validateScope(nextScope, nextTenants); err != nil {
+		return err
+	}
+	if err := ensureTenantsExist(ctx, db, nextTenants); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE admin_principals SET scope=? WHERE subject=?`, nextScope, subject); err != nil {
+		return err
+	}
+	return replaceTenantBindings(ctx, db, subject, nextTenants)
+}
+
+// patchDisabled 写主体状态;停用即删该主体全部会话(调用方事务内)。
+func patchDisabled(ctx context.Context, db patchExecutor, subject string, disabled bool) error {
+	status := "active"
+	if disabled {
+		status = "disabled"
+	}
+	if _, err := db.ExecContext(ctx,
+		`UPDATE admin_principals SET status=? WHERE subject=?`, status, subject); err != nil {
+		return err
+	}
+	if !disabled {
+		return nil
+	}
+	_, err := db.ExecContext(ctx, `DELETE FROM admin_sessions WHERE subject=?`, subject)
+	return err
 }
 
 // validateScope 范围写入的输入契约:值域、GLOBAL 不得带绑定、租户 id 非空。
@@ -205,13 +300,13 @@ func validateScope(scope string, ids []string) error {
 }
 
 // ensureTenantsExist 事务内校验全部绑定租户存在,未知租户整单拒绝。
-func ensureTenantsExist(ctx context.Context, tx *sql.Tx, ids []string) error {
+func ensureTenantsExist(ctx context.Context, db patchExecutor, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	exist := map[string]bool{}
 	//nolint:gosec // 占位符数量按切片长度生成,租户 id 全部经参数绑定
-	rows, err := tx.QueryContext(ctx,
+	rows, err := db.QueryContext(ctx,
 		`SELECT id FROM tenants WHERE id IN (`+placeholders(len(ids))+`)`, anyArgs(ids)...)
 	if err != nil {
 		return err
@@ -236,12 +331,12 @@ func ensureTenantsExist(ctx context.Context, tx *sql.Tx, ids []string) error {
 }
 
 // replaceTenantBindings 清空旧绑定后写入新集合(整包替换)。
-func replaceTenantBindings(ctx context.Context, tx *sql.Tx, subject string, ids []string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM admin_principal_tenants WHERE subject=?`, subject); err != nil {
+func replaceTenantBindings(ctx context.Context, db patchExecutor, subject string, ids []string) error {
+	if _, err := db.ExecContext(ctx, `DELETE FROM admin_principal_tenants WHERE subject=?`, subject); err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx,
+		if _, err := db.ExecContext(ctx,
 			`INSERT INTO admin_principal_tenants(subject,tenant_id) VALUES(?,?)`, subject, id); err != nil {
 			return err
 		}
@@ -285,32 +380,7 @@ func HasActiveAdminPrincipals(ctx context.Context, db *sql.DB) (bool, error) {
 
 // PatchAdminPrincipal 启停主体;停用与删除存量会话同事务,无「停用后旧会话仍可用」窗口。
 func PatchAdminPrincipal(ctx context.Context, db *sql.DB, subject string, disabled bool) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	status := "active"
-	if disabled {
-		status = "disabled"
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE admin_principals SET status=? WHERE subject=?`, status, subject)
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrNotFound
-	}
-	if disabled {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM admin_sessions WHERE subject=?`, subject); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
+	return PatchAdminPrincipalFields(ctx, db, subject, AdminPrincipalPatch{Disabled: &disabled})
 }
 
 // CreateAdminSession 条件插入:签发与登录之间主体被停用时拒绝,不签发过时凭据。

@@ -248,6 +248,7 @@ func adminUsersList(d Deps) http.HandlerFunc {
 
 // adminUsersPatch 按 sub 启停主体并授予范围;主体只能由虎符首登产生。
 // 省略字段不动,scope/tenant_ids 整包替换;范围授予仅 GLOBAL actor(路由层 global-only)。
+// 合并与落库在 store 单事务内完成,并发补丁与跨字段写入不产生假成功或半生效。
 func adminUsersPatch(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -261,66 +262,18 @@ func adminUsersPatch(d Deps) http.HandlerFunc {
 				"须提供 disabled/scope/tenant_ids 之一")
 			return
 		}
-		subject := r.PathValue("subject")
-		if in.Scope != nil || in.TenantIDs != nil {
-			if !patchAdminScope(d, w, r, subject, in.Scope, in.TenantIDs) {
-				return
-			}
+		err := store.PatchAdminPrincipalFields(r.Context(), d.DB, r.PathValue("subject"),
+			store.AdminPrincipalPatch{Disabled: in.Disabled, Scope: in.Scope, TenantIDs: in.TenantIDs})
+		if errors.Is(err, store.ErrNotFound) {
+			writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
+			return
 		}
-		if in.Disabled != nil && !patchAdminDisabled(d, w, r, subject, *in.Disabled) {
+		if err != nil {
+			respondErr(d, w, r, err, "bad_request")
 			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	}
-}
-
-// patchAdminDisabled 启停主体;停用即撤销该主体全部本地会话。
-func patchAdminDisabled(d Deps, w http.ResponseWriter, r *http.Request, subject string, disabled bool) bool {
-	err := d.AdminAuth.Patch(r.Context(), subject, disabled)
-	if errors.Is(err, store.ErrNotFound) {
-		writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
-		return false
-	}
-	if err != nil {
-		respondErr(d, w, r, err, "bad_request")
-		return false
-	}
-	return true
-}
-
-// patchAdminScope 合并省略字段后整包落库;先完成全部校验再写,写失败不产生部分生效。
-func patchAdminScope(d Deps, w http.ResponseWriter, r *http.Request, subject string,
-	scope *string, tenantIDs *[]string) bool {
-	p, err := store.GetAdminPrincipal(r.Context(), d.DB, subject)
-	if errors.Is(err, store.ErrNotFound) {
-		writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
-		return false
-	}
-	if err != nil {
-		respondErr(d, w, r, err, "bad_request")
-		return false
-	}
-	nextScope := p.Scope
-	if scope != nil {
-		nextScope = *scope
-	}
-	nextTenants, err := store.AdminPrincipalTenants(r.Context(), d.DB, subject)
-	if err != nil {
-		respondErr(d, w, r, err, "bad_request")
-		return false
-	}
-	if tenantIDs != nil {
-		nextTenants = *tenantIDs
-	}
-	if err := store.SetAdminPrincipalScope(r.Context(), d.DB, subject, nextScope, nextTenants); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			writeAdminError(w, r, 404, protocol.TypeNotFound, "admin_not_found", "管理员不存在")
-			return false
-		}
-		respondErr(d, w, r, err, "bad_request")
-		return false
-	}
-	return true
 }
 
 func adminAuditList(d Deps) http.HandlerFunc {
@@ -385,6 +338,7 @@ var auditAllowedKeys = map[string]bool{
 	"default": true, "input": true, "output": true, "cached_input": true,
 	"timezone": true, "rpm_limit": true, "tpm_limit": true,
 	"daily_quota_credits": true, "max_request_cost_credits": true, "expires_at": true,
+	"scope": true, "tenant_ids": true,
 }
 
 // auditSummaryValue 单字段的审计摘要值：敏感键脱敏，白名单标量原样，其余省略。
@@ -396,9 +350,20 @@ func auditSummaryValue(key string, v any) any {
 	if !auditAllowedKeys[lower] {
 		return "<omitted>"
 	}
-	switch v.(type) {
+	switch typed := v.(type) {
 	case string, json.Number, bool, nil:
 		return v
+	case []any:
+		// 仅白名单键能走到这里;字符串数组按序连接,含非字符串元素时整键省略。
+		parts := make([]string, 0, len(typed))
+		for _, item := range typed {
+			s, ok := item.(string)
+			if !ok {
+				return "<omitted>"
+			}
+			parts = append(parts, s)
+		}
+		return strings.Join(parts, ",")
 	default:
 		return "<omitted>"
 	}

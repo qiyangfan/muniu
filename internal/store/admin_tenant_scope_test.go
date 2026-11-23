@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 	"uuid"
@@ -227,6 +228,106 @@ func TestListTenantsByIDs_集合收敛(t *testing.T) {
 	}
 	if ts, err := ListTenantsByIDs(ctx, db, []string{defaultTenant, t2}); err != nil || len(ts) != 2 {
 		t.Fatalf("多租户并集不符: %v %v", ts, err)
+	}
+}
+
+// 单事务补丁:范围/绑定/停用一次落库;任一步校验失败整单回滚(停用不得半生效)。
+func TestPatchAdminPrincipalFields_单事务原子性(t *testing.T) {
+	db := openAdminDB(t)
+	ctx := context.Background()
+	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:p", "补丁", "2026-11-23T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	t1, err := CreateTenant(ctx, db, "补丁一")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := "TENANT"
+	ids := []string{t1}
+	disabled := true
+	if err := PatchAdminPrincipalFields(ctx, db, "hufu:p",
+		AdminPrincipalPatch{Scope: &scope, TenantIDs: &ids, Disabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := GetAdminPrincipal(ctx, db, "hufu:p")
+	if err != nil || p.Scope != "TENANT" || p.Status != "disabled" {
+		t.Fatalf("三字段应一次生效: %+v %v", p, err)
+	}
+	if got, _ := AdminPrincipalTenants(ctx, db, "hufu:p"); len(got) != 1 || got[0] != t1 {
+		t.Fatalf("绑定应整包落库: %v", got)
+	}
+
+	// 恢复启用后以未知租户触发校验失败:停用与换绑都不得留下半生效。
+	enabled := false
+	if err := PatchAdminPrincipalFields(ctx, db, "hufu:p", AdminPrincipalPatch{Disabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+	bad := []string{"no-such"}
+	if err := PatchAdminPrincipalFields(ctx, db, "hufu:p",
+		AdminPrincipalPatch{TenantIDs: &bad, Disabled: &disabled}); !IsBusiness(err) {
+		t.Fatalf("未知租户应业务拒绝: %v", err)
+	}
+	p, _ = GetAdminPrincipal(ctx, db, "hufu:p")
+	if p.Status != "active" {
+		t.Fatalf("校验失败必须整单回滚,停用不得落库: %+v", p)
+	}
+	if got, _ := AdminPrincipalTenants(ctx, db, "hufu:p"); len(got) != 1 || got[0] != t1 {
+		t.Fatalf("校验失败不得改动既有绑定: %v", got)
+	}
+	if err := PatchAdminPrincipalFields(ctx, db, "hufu:none",
+		AdminPrincipalPatch{Disabled: &disabled}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("未知主体应 ErrNotFound: %v", err)
+	}
+}
+
+// 并发补丁串行化:提升 GLOBAL 与整包换绑并发时,后者不得以陈旧 scope 覆盖前者。
+func TestPatchAdminPrincipalFields_并发不丢更新(t *testing.T) {
+	db := openAdminDB(t)
+	ctx := context.Background()
+	if _, err := ResolveAdminPrincipal(ctx, db, "hufu:race", "并发", "2026-11-23T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	t2, err := CreateTenant(ctx, db, "并发租户")
+	if err != nil {
+		t.Fatal(err)
+	}
+	global := "GLOBAL"
+	tenant := "TENANT"
+	for i := 0; i < 20; i++ {
+		empty := []string{}
+		if err := PatchAdminPrincipalFields(ctx, db, "hufu:race",
+			AdminPrincipalPatch{Scope: &tenant, TenantIDs: &empty}); err != nil {
+			t.Fatalf("轮次 %d 重置失败: %v", i, err)
+		}
+		ids := []string{t2}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		var scopeErr, bindErr error
+		go func() {
+			defer wg.Done()
+			scopeErr = PatchAdminPrincipalFields(ctx, db, "hufu:race",
+				AdminPrincipalPatch{Scope: &global, TenantIDs: &empty})
+		}()
+		go func() {
+			defer wg.Done()
+			bindErr = PatchAdminPrincipalFields(ctx, db, "hufu:race",
+				AdminPrincipalPatch{TenantIDs: &ids})
+		}()
+		wg.Wait()
+		if scopeErr != nil {
+			t.Fatalf("轮次 %d 提升 GLOBAL 失败: %v", i, scopeErr)
+		}
+		// 绑定补丁先落时会合并出 GLOBAL+绑定,按契约 400 拒绝;后落则绑定被 GLOBAL+[] 覆盖。
+		_ = bindErr
+		p, err := GetAdminPrincipal(ctx, db, "hufu:race")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := AdminPrincipalTenants(ctx, db, "hufu:race")
+		if p.Scope != "GLOBAL" || len(got) != 0 {
+			t.Fatalf("轮次 %d GLOBAL 意图被并发补丁覆盖: scope=%s bind=%v bindErr=%v",
+				i, p.Scope, got, bindErr)
+		}
 	}
 }
 
