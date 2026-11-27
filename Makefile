@@ -78,10 +78,16 @@ test:
 	$(GO) test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
 	GO=$(GO) ./scripts/covercheck.sh coverage.out
 
-## build: 纯静态单二进制(CGO_ENABLED=0),版本号由 git tag 注入
+## build: 纯静态单二进制(CGO_ENABLED=0),版本号由 git tag 注入;同时产出 break-glass 修复 CLI
 .PHONY: build
 build:
 	CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X $(PKG)/internal/version.Version=$$(git describe --tags --always 2>/dev/null || echo dev)" -o $(BIN)/muniu ./cmd/muniu
+	CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X $(PKG)/internal/version.Version=$$(git describe --tags --always 2>/dev/null || echo dev)" -o $(BIN)/muniu-breakglass ./cmd/muniu-breakglass
+
+## breakglass: 仅构建独立运行时修复 CLI(不嵌入网关/控制台)
+.PHONY: breakglass
+breakglass:
+	CGO_ENABLED=0 $(GO) build -ldflags "-s -w -X $(PKG)/internal/version.Version=$$(git describe --tags --always 2>/dev/null || echo dev)" -o $(BIN)/muniu-breakglass ./cmd/muniu-breakglass
 
 ## run: 构建并启动(读取工作目录 muniu.yaml,示例见 muniu.example.yaml)
 .PHONY: run

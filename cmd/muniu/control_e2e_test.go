@@ -128,6 +128,10 @@ func managedSnapshot(t *testing.T, upstreamURL string) []byte {
 				"alias": "alias-a", "currency": "CNY", "input": "2.00", "cached_input": "",
 				"vision_input": "", "output": "8.00", "timezone": "UTC", "time_windows": []any{},
 			}},
+			"image_pricing": []map[string]any{{
+				"alias": "img-a", "currency": "CNY", "default": "0.50",
+				"tiers": map[string]string{"1024x1024|standard": "1.00"},
+			}},
 			"topology": map[string]any{
 				"providers": []map[string]any{{
 					"name": "openai", "adapter": "openai", "base_url": upstreamURL,
@@ -307,6 +311,10 @@ func TestManagedE2E_快照注册用量命令与只读面(t *testing.T) {
 	if code, _ := adminCall(t, ts.URL, "PUT", "/admin/v1/image-pricing/gpt-image", "admin-token",
 		`{"currency":"CNY","default":"0.1","tiers":{}}`); code != 403 {
 		t.Fatalf("managed 图片价目写必须 403: %d", code)
+	}
+	if code, body := adminCall(t, ts.URL, "GET", "/admin/v1/image-pricing", "admin-token", ""); code != 200 ||
+		!strings.Contains(body, `"alias":"img-a"`) || !strings.Contains(body, `"source":"db"`) {
+		t.Fatalf("控制面图片价目应投影为只读行: %d %s", code, body)
 	}
 	if code, _ := adminCall(t, ts.URL, "POST", "/admin/v1/keys", "admin-token",
 		`{"tenant":"ghost","name":"k","rpm_limit":1}`); code != 400 {

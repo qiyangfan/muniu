@@ -360,6 +360,17 @@ func listKeys(d Deps) http.HandlerFunc {
 	}
 }
 
+// managedCreateKeyTenant managed 签发前的目录闸：快照就绪且租户 active，否则已写信封。
+func managedCreateKeyTenant(d Deps, w http.ResponseWriter, r *http.Request, tenantName string) bool {
+	// 目录权威在控制面：从未获得有效快照/last-known 时禁止签发，避免绑定本地种子租户。
+	if d.Runtime == nil || !d.Runtime.SnapshotStatus().Ready {
+		writeAdminError(w, r, 503, protocol.TypeUnavailable, "tenant_directory_unavailable",
+			"控制面租户目录尚未就绪,暂不可签发 key")
+		return false
+	}
+	return managedTenantActive(d, w, r, tenantName)
+}
+
 // managedTenantActive managed 下 key 绑定租户必须命中快照目录且为 active。
 func managedTenantActive(d Deps, w http.ResponseWriter, r *http.Request, tenantName string) bool {
 	status, err := store.TenantStatusByName(r.Context(), d.DB, tenantName)
@@ -420,7 +431,7 @@ func parseCreateKey(d Deps, w http.ResponseWriter, r *http.Request) (
 	if !authorizeTenantName(d, w, r, tenantName) {
 		return req, auth.KeyOpts{}, "", false
 	}
-	if d.Managed && !managedTenantActive(d, w, r, tenantName) {
+	if d.Managed && !managedCreateKeyTenant(d, w, r, tenantName) {
 		return req, auth.KeyOpts{}, "", false
 	}
 	if req.MaxRequestCostCredits < 0 {

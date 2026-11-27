@@ -191,10 +191,10 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 	quotas, quotaSource := managedQuotas(cfg)
 	verifier, entries := newVerifierAndRoutes(ctx, cfg, db, logger, chatProxy, tpm, sharedBackend, quotaSource)
 
-	controlRuntime, err := buildControlRuntime(ctx, controlAssembly{
+	controlRuntime, err := buildControlRuntime(ctx, controlWiring{
 		cfg: cfg, cfgPath: cfgPath, db: db, logger: logger,
 		client: controlClient, publicKey: controlPublicKey, px: chatProxy, buildPool: buildPool,
-		pricingDir: pricingDir, settlement: settlement, fxMilli: pricing.fxMilli,
+		pricingDir: pricingDir, imageDir: imageDir, settlement: settlement, fxMilli: pricing.fxMilli,
 		verifier: verifier, quotas: quotas, cache: cacheInst, startedAt: startedAt,
 	})
 	if err != nil {

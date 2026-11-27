@@ -164,7 +164,8 @@ func TestSnapshot_验签应用版本单调与lastKnown(t *testing.T) {
 
 	// v2 应用
 	version.Store(2)
-	body.Store(snapshotBody(t, 2))
+	v2 := snapshotBody(t, 2)
+	body.Store(v2)
 	c.fetchOnce(context.Background())
 	if applier.count() != 2 || c.Status().Version != 2 {
 		t.Fatalf("v2 应被应用: applied=%d status=%+v", applier.count(), c.Status())
@@ -188,6 +189,13 @@ func TestSnapshot_验签应用版本单调与lastKnown(t *testing.T) {
 	c.fetchOnce(context.Background())
 	if applier.count() != 2 || c.Status().Version != 2 {
 		t.Fatal("缺吊销名单的安全快照必须拒绝")
+	}
+
+	// 控制面恢复 304：last_error 必须清除，否则诊断页长期显示已恢复的错误
+	body.Store(v2)
+	c.fetchOnce(context.Background())
+	if got := c.Status().LastError; got != "" {
+		t.Fatalf("304 后应清除 last_error: %q", got)
 	}
 
 	// last-known 应用与篡改拒绝
@@ -324,6 +332,100 @@ func TestRegistrar_退避与恢复补报(t *testing.T) {
 	}
 }
 
+// probeTargets 在执行瞬间回读台账，证明 pending 先于执行落库。
+type probeTargets struct {
+	db    *sql.DB
+	seen  atomic.Value
+	execs atomic.Int64
+}
+
+func (p *probeTargets) PurgeCache(ctx context.Context, _ string, _ bool) (int, error) {
+	p.execs.Add(1)
+	var status string
+	if err := p.db.QueryRowContext(ctx, `SELECT status FROM control_commands WHERE id='c-pending'`).
+		Scan(&status); err != nil {
+		return 0, err
+	}
+	p.seen.Store(status)
+	return 2, nil
+}
+
+func (p *probeTargets) ReloadTopology(context.Context) error { return nil }
+
+func TestCommandExecutor_执行前先落pending(t *testing.T) {
+	db := testDB(t)
+	var claims atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/control/v1/commands/claim":
+			if claims.Add(1) > 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{}})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{
+				map[string]any{"id": "c-pending", "action": "cache_purge", "action_schema_version": 1,
+					"params": map[string]any{"all": true}, "idempotency_key": "k1"},
+			}})
+		case strings.HasSuffix(r.URL.Path, "/ack"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	targets := &probeTargets{db: db}
+	client := NewClient(srv.URL, StaticToken("token-0123456789abcdef"), time.Second)
+	exec := NewCommandExecutor(db, client, "inst-1", targets, nil, time.Minute, testLogger())
+	if err := exec.ClaimOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if targets.execs.Load() != 1 {
+		t.Fatalf("合法命令应执行一次: %d", targets.execs.Load())
+	}
+	if got, _ := targets.seen.Load().(string); got != "pending" {
+		t.Fatalf("执行时台账必须为 pending,实际 %q", got)
+	}
+	var status string
+	if err := db.QueryRowContext(context.Background(),
+		`SELECT status FROM control_commands WHERE id='c-pending'`).Scan(&status); err != nil || status != "acked" {
+		t.Fatalf("执行后台账应更新为 acked: status=%q err=%v", status, err)
+	}
+}
+
+// 心跳持续失败时退避不得被“注册成功”反复复位，否则形成 1s 级紧循环并刷审计。
+func TestRegistrar_心跳失败保持指数退避(t *testing.T) {
+	var registers, heartbeats atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/control/v1/registry/instances":
+			registers.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			heartbeats.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL, StaticToken("token-0123456789abcdef"), time.Second)
+	reg := NewRegistrar(client, Identity{ServiceID: ServiceID, InstanceID: "inst-hb",
+		Version: "test", StartedAt: time.Now()}, time.Hour, nil, testLogger())
+	reg.Backoff = 20 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { reg.Run(ctx); close(done) }()
+	time.Sleep(280 * time.Millisecond)
+	cancel()
+	<-done
+	// 20→40→80→160ms 退避下约 4 轮；旧实现会以 20ms 间隔跑十余轮。
+	if got := registers.Load(); got < 2 || got > 7 {
+		t.Fatalf("心跳持续失败时注册次数应随退避收敛,实际 %d(心跳 %d)", got, heartbeats.Load())
+	}
+}
+
 func TestClientCredentials_缓存与刷新(t *testing.T) {
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -444,6 +546,11 @@ func TestCommandExecutor_幂等未知拒绝与本地命令(t *testing.T) {
 	cmds, err := exec.Commands(context.Background(), 20)
 	if err != nil || len(cmds) < 5 {
 		t.Fatalf("台账应保留命令: %d err=%v", len(cmds), err)
+	}
+	for _, c := range cmds {
+		if c.ID == "c2" && !strings.Contains(c.Result, "未注册的 action") {
+			t.Fatalf("失败行须落错误原因供控制台展示: %+v", c)
+		}
 	}
 }
 

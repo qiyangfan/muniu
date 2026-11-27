@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -112,7 +113,7 @@ func Run(ctx context.Context, opts Options) (Report, error) {
 	if opts.Confirm == nil {
 		return Report{}, errors.New("缺少二次确认")
 	}
-	okConfirm, err := opts.Confirm(op.Name, op.Description)
+	okConfirm, err := opts.Confirm(op.Name, confirmSummary(op, opts.Params))
 	if err != nil {
 		return Report{}, err
 	}
@@ -203,9 +204,23 @@ func normalizeMaxRows(v, hard int) (int, error) {
 	return v, nil
 }
 
-// execute 单事务修复 + 审计。
+// confirmSummary 确认摘要：破坏性操作不能只确认操作名，参数必须可见。
+func confirmSummary(op Operation, params map[string]any) string {
+	summary := op.Description
+	if len(params) > 0 {
+		if raw, err := json.Marshal(params); err == nil {
+			summary += "；参数 " + string(raw)
+		}
+	}
+	return summary
+}
+
+// execute 单事务修复 + 审计；存储必须已存在，路径笔误不得静默新建空库。
 func execute(ctx context.Context, dbPath string, op Operation, params map[string]any,
 	reason string, maxRows int, now time.Time) (Report, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return Report{}, fmt.Errorf("运行时存储不存在或不可访问: %w", err)
+	}
 	db, err := store.Open(ctx, dbPath)
 	if err != nil {
 		return Report{}, fmt.Errorf("打开运行时存储: %w", err)
@@ -294,14 +309,14 @@ func oidcArgs(params map[string]any, maxRows int, now time.Time) ([]any, error) 
 	return []any{cutoff, maxRows}, nil
 }
 
-// bufferArgs 计量缓冲毒丸行参数。
+// bufferArgs 计量缓冲毒丸行参数；seq 是行身份，小数/越界必须拒绝而非截断。
 func bufferArgs(params map[string]any) ([]any, error) {
 	raw, ok := params["seq"]
 	if !ok {
 		return nil, errors.New("drop-buffered-usage 需要 seq")
 	}
 	f, ok := raw.(float64)
-	if !ok || f < 1 {
+	if !ok || f != math.Trunc(f) || f < 1 || f > 1e18 {
 		return nil, errors.New("seq 须为正整数")
 	}
 	return []any{int64(f)}, nil

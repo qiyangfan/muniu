@@ -132,35 +132,54 @@ func (e *CommandExecutor) ClaimOnce(ctx context.Context) error {
 	return nil
 }
 
-// handle 单条命令：先校验后执行；幂等键命中已终态时不重复执行。
+// handle 单条命令：先校验后执行；同一命令 ID 命中已终态时不重复执行。
+// claim 后先落 pending 再执行：执行中可见、崩溃后重投可恢复；更新终态失败不回执。
 func (e *CommandExecutor) handle(ctx context.Context, cmd WireCommand) {
-	if existing, err := store.GetControlCommand(ctx, e.DB, cmd.ID); err == nil {
+	existing, err := store.GetControlCommand(ctx, e.DB, cmd.ID)
+	switch {
+	case err == nil:
 		if existing.Status == "acked" || existing.Status == "failed" {
 			_ = e.ack(ctx, cmd.ID, existing.Status, existing.Result, "")
 			return
 		}
-	} else if !errors.Is(err, store.ErrNotFound) {
+		// pending 遗留：上次执行中断，继续执行并覆盖终态。
+	case errors.Is(err, store.ErrNotFound):
+		if !e.insertPending(ctx, cmd) {
+			return
+		}
+	default:
 		e.Logger.Error("运行时命令台账读取失败", "id", cmd.ID, "error_detail", err.Error())
 		return
 	}
 	status, result, errMsg := e.execute(ctx, cmd.Action, cmd.ActionSchemaVersion, cmd.Params)
-	row := store.ControlCommandRow{
-		ID: cmd.ID, Action: cmd.Action, ActionSchemaVersion: cmd.ActionSchemaVersion,
-		Params: string(cmd.Params), Source: "control", Status: status, Result: result,
-		IdempotencyKey: cmd.IdempotencyKey, Actor: cmd.Actor, Reason: cmd.Reason,
-		CreatedAt: e.nowRFC(), CompletedAt: e.nowRFC(),
-	}
-	if _, err := store.InsertControlCommand(ctx, e.DB, row); err != nil {
-		e.Logger.Error("运行时命令台账写入失败", "id", cmd.ID, "error_detail", err.Error())
+	if err := store.UpdateControlCommandResult(ctx, e.DB, cmd.ID, status,
+		ledgerResult(status, result, errMsg), e.nowRFC()); err != nil {
+		e.Logger.Error("运行时命令台账更新失败,不回执等待重投", "id", cmd.ID, "error_detail", err.Error())
 		return
-	}
-	if err := store.UpdateControlCommandResult(ctx, e.DB, cmd.ID, status, result, e.nowRFC()); err != nil {
-		e.Logger.Error("运行时命令台账更新失败", "id", cmd.ID, "error_detail", err.Error())
 	}
 	e.audit(ctx, cmd.Actor, cmd.Action, cmd.ID, status, errMsg)
 	if err := e.ack(ctx, cmd.ID, status, result, errMsg); err != nil {
 		e.retryAck(ctx, cmd.ID, status, result, errMsg)
 	}
+}
+
+// insertPending 执行前占台；已存在(并发实例认领)则放弃执行。
+func (e *CommandExecutor) insertPending(ctx context.Context, cmd WireCommand) bool {
+	row := store.ControlCommandRow{
+		ID: cmd.ID, Action: cmd.Action, ActionSchemaVersion: cmd.ActionSchemaVersion,
+		Params: string(cmd.Params), Source: "control", Status: "pending",
+		IdempotencyKey: cmd.IdempotencyKey, Actor: cmd.Actor, Reason: cmd.Reason,
+		CreatedAt: e.nowRFC(),
+	}
+	inserted, err := store.InsertControlCommand(ctx, e.DB, row)
+	if err != nil {
+		e.Logger.Error("运行时命令台账写入失败", "id", cmd.ID, "error_detail", err.Error())
+		return false
+	}
+	if !inserted {
+		e.Logger.Warn("运行时命令已被其他实例认领,跳过执行", "id", cmd.ID)
+	}
+	return inserted
 }
 
 // retryAck ack 失败重试；上限后保留本地终态，等待下一次 claim 或人工排查。
@@ -287,8 +306,8 @@ func (e *CommandExecutor) ExecuteLocal(ctx context.Context, actor, reason, actio
 	}
 	row := store.ControlCommandRow{
 		ID: id, Action: action, ActionSchemaVersion: actionSchemaVersion, Params: string(params),
-		Source: "local", Status: status, Result: result, Actor: actor, Reason: reason,
-		CreatedAt: e.nowRFC(), CompletedAt: e.nowRFC(),
+		Source: "local", Status: status, Result: ledgerResult(status, result, errMsg),
+		Actor: actor, Reason: reason, CreatedAt: e.nowRFC(), CompletedAt: e.nowRFC(),
 	}
 	if _, err := store.InsertControlCommand(ctx, e.DB, row); err != nil {
 		return CommandView{}, err
@@ -342,6 +361,14 @@ func (e *CommandExecutor) nowRFC() string {
 		t = e.Now()
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// ledgerResult 失败行以错误原因落 result，控制台才看得到失败原因。
+func ledgerResult(status, result, errMsg string) string {
+	if status == "failed" && result == "" {
+		return errMsg
+	}
+	return result
 }
 
 // truncate 审计/回执字段截断，避免异常长文本撑爆台账。

@@ -29,6 +29,7 @@ fail-fast:任一变量缺注入,副本都会拒绝启动。
 
 跨仓 wire schema 由 X-01(`2026-11-26-add-control-contract-harness`)冻结;当前锦官新端点
 未实施,本仓按 [docs/design/control-plane-client.md](../../docs/design/control-plane-client.md)
+与机器可校验副本 [contracts/control-plane-wire.v1.yaml](../../contracts/control-plane-wire.v1.yaml)
 实现并以本地契约测试证明,跨仓契约测试标记阻塞。
 
 | 管子 | 端点 | muniu 侧配置 | 认证 |

@@ -134,6 +134,29 @@ func TestBreakGlass_无凭证不创建数据库(t *testing.T) {
 	}
 }
 
+func TestBreakGlass_存储不存在不新建(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "missing.db")
+	credPath := filepath.Join(dir, "cred.json")
+	now := time.Now().UTC()
+	sum := sha256.Sum256([]byte(testToken))
+	raw, _ := json.Marshal(Credential{
+		TokenSHA256: hex.EncodeToString(sum[:]),
+		NotBefore:   now.Add(-time.Hour).Format(time.RFC3339),
+		NotAfter:    now.Add(time.Hour).Format(time.RFC3339),
+	})
+	if err := os.WriteFile(credPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := baseOpts(dbPath, credPath, now)
+	if _, err := Run(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "不存在") {
+		t.Fatalf("存储缺失必须拒绝: %v", err)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatal("break-glass 不得新建存储")
+	}
+}
+
 func TestBreakGlass_清理过期缓存与审计(t *testing.T) {
 	dbPath, credPath, now := setup(t)
 	insertCache(t, dbPath, "expired-1", now.Add(-time.Hour).Format(time.RFC3339))
@@ -199,6 +222,21 @@ func TestBreakGlass_取消不执行(t *testing.T) {
 	}
 }
 
+func TestBreakGlass_确认摘要携带参数(t *testing.T) {
+	dbPath, credPath, now := setup(t)
+	opts := baseOpts(dbPath, credPath, now)
+	opts.Op = "drop-buffered-usage"
+	opts.Params = map[string]any{"seq": float64(7)}
+	var summary string
+	opts.Confirm = func(_, s string) (bool, error) { summary = s; return false, nil }
+	if _, err := Run(context.Background(), opts); err == nil {
+		t.Fatal("取消必须终止")
+	}
+	if !strings.Contains(summary, "seq") || !strings.Contains(summary, "7") {
+		t.Fatalf("确认摘要必须展示参数: %q", summary)
+	}
+}
+
 func TestBreakGlass_审计失败整体回滚(t *testing.T) {
 	dbPath, credPath, now := setup(t)
 	insertCache(t, dbPath, "e1", now.Add(-time.Hour).Format(time.RFC3339))
@@ -229,6 +267,13 @@ func TestBreakGlass_操作白名单与参数(t *testing.T) {
 	opts.Op = "drop-buffered-usage"
 	if _, err := Run(context.Background(), opts); err == nil {
 		t.Fatal("缺 seq 必须拒绝")
+	}
+	// seq 是行身份：小数必须拒绝，禁止截断后误删相邻行
+	opts = baseOpts(dbPath, credPath, now)
+	opts.Op = "drop-buffered-usage"
+	opts.Params = map[string]any{"seq": 1.9}
+	if _, err := Run(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "正整数") {
+		t.Fatalf("小数 seq 必须拒绝: %v", err)
 	}
 	ops := Operations()
 	if len(ops) != 4 {

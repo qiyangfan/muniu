@@ -34,6 +34,7 @@ func newServiceSummary(db *sql.DB, rt *control.Runtime, cfg *config.Config, plug
 		if cfg.ControlPlane.Managed() {
 			mode = "managed"
 		}
+		snapStatus := rt.SnapshotStatus()
 		out := map[string]any{
 			"source": "muniu", "service_id": control.ServiceID, "mode": mode,
 			"version": version.Version, "instance_id": rt.InstanceID(),
@@ -44,20 +45,23 @@ func newServiceSummary(db *sql.DB, rt *control.Runtime, cfg *config.Config, plug
 			"domain": map[string]any{
 				"tenants": tenants, "api_keys": keys, "oauth_accounts": oauthAccounts,
 				"plugins": len(plugins.List()), "semantic_cache_entries": cacheEntries,
-				"providers": len(providers), "model_routes": routeCount(cfg),
+				"providers": len(providers), "model_routes": effectiveRouteCount(cfg, rt.LastSnapshot()),
 			},
 			"control": map[string]any{
-				"snapshot": rt.SnapshotStatus(), "registration": rt.RegistrationStatus(),
+				"snapshot": snapStatus, "registration": rt.RegistrationStatus(),
 				"commands": commandStats(ctx, rt),
 			},
-			"stale": rt.SnapshotStatus().Stale,
+			"stale": snapStatus.Stale,
 		}
 		return out, nil
 	}
 }
 
-// routeCount 路由别名数（本地配置；managed 拓扑投影可从快照覆盖）。
-func routeCount(cfg *config.Config) int {
+// effectiveRouteCount 运行态路由别名数：managed 以最近快照为准，standalone 用本地配置。
+func effectiveRouteCount(cfg *config.Config, snap *control.SnapshotEnvelope) int {
+	if snap != nil && snap.Payload.Topology != nil {
+		return len(snap.Payload.Topology.ModelRoutes)
+	}
 	return len(cfg.ModelRoutes)
 }
 

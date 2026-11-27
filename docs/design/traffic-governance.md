@@ -28,6 +28,7 @@
 任一超限即拒(402 日配额 / 429 RPM·TPM)。租户先于 key 判定,避免租户上限被 key 上限掩盖。
 
 - 快照未就绪 / 租户不在目录:安全类 fail-closed(503 / 403),不回落为不限。
+- 租户状态非 `active`:配额闸统一 403 `tenant_disabled`;该判定不依赖鉴权缓存,平台 key 同样生效。
 - standalone:沿用本地 `tenants.tpm_limit` 与 `daily_quota_credits`;RPM 无租户列即不启用。
 - 拒绝可追责:`muniu_quota_denials_total{scope,reason}` + 带 request_id/tenant/key 的结构化日志。
 - 计数与 key 同后端:inmem 进程内环形窗;redis 共享视图使用 `t:<tenant_id>` 前缀键。

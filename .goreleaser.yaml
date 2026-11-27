@@ -1,7 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/muniu  # goreleaser 默认找仓库根,main 实际在 cmd/muniu(与 make build 一致)
+  - id: muniu
+    main: ./cmd/muniu  # goreleaser 默认找仓库根,main 实际在 cmd/muniu(与 make build 一致)
     env:
       - CGO_ENABLED=0
     goos:
@@ -11,6 +12,20 @@ builds:
       - amd64
       - arm64
     binary: muniu
+    ldflags:
+      - -s -w -X github.com/solvela/muniu/internal/version.Version={{.Version}}
+  # 独立运行时修复通道:与网关分开分发,不嵌入控制台
+  - id: muniu-breakglass
+    main: ./cmd/muniu-breakglass
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    binary: muniu-breakglass
     ldflags:
       - -s -w -X github.com/solvela/muniu/internal/version.Version={{.Version}}
 

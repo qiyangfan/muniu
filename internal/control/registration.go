@@ -81,7 +81,6 @@ func (r *Registrar) Run(ctx context.Context) {
 			backoff = nextBackoff(backoff)
 			continue
 		}
-		backoff = time.Second
 		if err := r.heartbeat(ctx); err != nil {
 			r.setFailure(ctx, err)
 			r.Logger.Warn("服务心跳失败,重新注册后重试", "error_detail", err.Error())
@@ -91,6 +90,8 @@ func (r *Registrar) Run(ctx context.Context) {
 			backoff = nextBackoff(backoff)
 			continue
 		}
+		// 注册与心跳都成功才复位退避：心跳单独故障时不得回到 1s 紧循环。
+		backoff = r.Backoff
 		if !sleepCtx(ctx, r.Interval) {
 			return
 		}

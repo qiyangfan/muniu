@@ -22,11 +22,13 @@ var ErrQuotaUnavailable = errors.New("ratelimit: 租户配额快照不可用")
 // ErrTenantUnknown 快照已就绪但租户不在目录：按未知租户拒绝，不回落为不限。
 var ErrTenantUnknown = errors.New("ratelimit: 租户不在控制面租户目录")
 
-// TenantQuota 租户级限额；0=不限。
+// TenantQuota 租户级限额；0=不限。Status 为空表示来源未提供状态（standalone），
+// managed 快照必须带 active|disabled，disabled 在 Gate 统一拒绝（不依赖鉴权缓存收敛）。
 type TenantQuota struct {
 	RPM               int64
 	TPM               int64
 	DailyQuotaCredits int64
+	Status            string
 }
 
 // TenantQuotaSource 控制面租户配额来源；Ready=false 时 Gate 拒绝全部已鉴权请求。

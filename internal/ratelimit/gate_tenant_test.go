@@ -76,6 +76,17 @@ func TestGate_租户TPM(t *testing.T) {
 	}
 }
 
+func TestGate_禁用租户统一拒绝(t *testing.T) {
+	g, _ := gateWithQuotas(map[string]TenantQuota{"t1": {Status: "disabled", RPM: 100}}, true)
+	if code := doGate(t, g, auth.KeyInfo{ID: "k1", TenantID: "t1", RPMLimit: 100}); code != 403 {
+		t.Fatalf("禁用租户应 403(平台 key 不查库也必须拒绝): %d", code)
+	}
+	g2, _ := gateWithQuotas(map[string]TenantQuota{"t1": {Status: "active", RPM: 100}}, true)
+	if code := doGate(t, g2, auth.KeyInfo{ID: "k1", TenantID: "t1", RPMLimit: 100}); code != 200 {
+		t.Fatalf("active 租户应放行: %d", code)
+	}
+}
+
 func TestGate_快照缺失与租户未知failClosed(t *testing.T) {
 	g, _ := gateWithQuotas(nil, false)
 	if code := doGate(t, g, auth.KeyInfo{ID: "k1", TenantID: "t1"}); code != 503 {

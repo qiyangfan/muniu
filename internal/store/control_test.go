@@ -6,9 +6,12 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+const seedDefaultTenantID = "01900000-0000-7000-8000-000000000001"
 
 // openControl 以真实 sql.DB 打开临时库。
 func openControl(t *testing.T) *sql.DB {
@@ -82,6 +85,96 @@ func TestControlState_原子投影与版本单调(t *testing.T) {
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM model_pricing`).Scan(&pricingN); err != nil || pricingN != 0 {
 		t.Fatalf("显式空价目未清空: %d %v", pricingN, err)
+	}
+}
+
+func TestControlState_同名不同ID无引用自动对账(t *testing.T) {
+	db := openControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
+	st := ControlState{
+		Snapshot: ControlSnapshotRecord{
+			ServiceID: "muniu", Version: 1, ObservedAt: now,
+			Signature: "sig", Payload: []byte(`{"version":1}`), UpdatedAt: now,
+		},
+		Tenants: []ControlTenantRecord{{
+			ID: "t-control", Name: "default", Status: "active", DailyQuotaCredits: 1, TPMLimit: 1,
+		}},
+	}
+	if err := ApplyControlState(ctx, db, st); err != nil {
+		t.Fatalf("无引用的同名种子应可对账删除: %v", err)
+	}
+	var id string
+	if err := db.QueryRowContext(ctx, `SELECT id FROM tenants WHERE name='default'`).Scan(&id); err != nil || id != "t-control" {
+		t.Fatalf("default 应归属控制面 ID: %q %v", id, err)
+	}
+	var n int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tenants WHERE id=?`, seedDefaultTenantID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("本地种子残留应删除: %d %v", n, err)
+	}
+}
+
+func TestControlState_同名不同ID有引用显式拒绝(t *testing.T) {
+	db := openControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.ExecContext(ctx, `INSERT INTO api_keys
+		(id, tenant_id, name, key_hash, prefix, created_at) VALUES (?,?,?,?,?,?)`,
+		"k-local", seedDefaultTenantID, "local-key", "hash-local", "mk-local0001", now); err != nil {
+		t.Fatal(err)
+	}
+	st := ControlState{
+		Snapshot: ControlSnapshotRecord{
+			ServiceID: "muniu", Version: 2, ObservedAt: now,
+			Signature: "sig", Payload: []byte(`{"version":2}`), UpdatedAt: now,
+		},
+		Tenants: []ControlTenantRecord{{ID: "t-control", Name: "default", Status: "active"}},
+	}
+	err := ApplyControlState(ctx, db, st)
+	if err == nil || !strings.Contains(err.Error(), "租户身份冲突") {
+		t.Fatalf("有引用的同名租户必须显式拒绝: %v", err)
+	}
+	if _, err := LoadControlSnapshot(ctx, db, "muniu"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("冲突时快照必须整体回滚: %v", err)
+	}
+	var local int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tenants WHERE id=?`, seedDefaultTenantID).Scan(&local); err != nil || local != 1 {
+		t.Fatalf("本地租户不得被删除: %d %v", local, err)
+	}
+}
+
+func TestControlState_图片价目整表替换(t *testing.T) {
+	db := openControl(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339)
+	st := ControlState{
+		Snapshot: ControlSnapshotRecord{
+			ServiceID: "muniu", Version: 1, ObservedAt: now,
+			Signature: "sig", Payload: []byte(`{"version":1}`), UpdatedAt: now,
+		},
+		ReplaceImagePricing: true,
+		ImagePricing: []ImagePricingRecord{{
+			Alias: "img-a", Currency: "CNY", DefaultCredits: 1,
+			Tiers: map[string]int64{"1024x1024|standard": 2}, UpdatedAt: now,
+		}},
+	}
+	if err := ApplyControlState(ctx, db, st); err != nil {
+		t.Fatal(err)
+	}
+	var cur string
+	var def int64
+	if err := db.QueryRowContext(ctx,
+		`SELECT currency, default_credits FROM image_pricing WHERE alias='img-a'`).Scan(&cur, &def); err != nil || cur != "CNY" || def != 1 {
+		t.Fatalf("图片价目投影不符: %s %d %v", cur, def, err)
+	}
+	st.Snapshot.Version = 2
+	st.ImagePricing = nil
+	if err := ApplyControlState(ctx, db, st); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM image_pricing`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("显式空图片价目应清空: %d %v", n, err)
 	}
 }
 

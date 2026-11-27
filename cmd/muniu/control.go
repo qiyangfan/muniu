@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"uuid"
@@ -39,6 +40,7 @@ type controlWiring struct {
 	px         *proxy.Proxy
 	buildPool  func(config.Provider) (*keypool.Pool, adapter.Adapter, error)
 	pricingDir *metering.PricingDirectory
+	imageDir   *metering.ImagePriceDirectory
 	settlement string
 	fxMilli    int64
 	verifier   *auth.Verifier
@@ -80,28 +82,9 @@ func defaultInstanceID() string {
 	return fmt.Sprintf("%s-%d", host, os.Getpid())
 }
 
-// controlAssembly 装配层传入的控制运行时输入（字段较多，单独收口便于 assemble 保持精简）。
-type controlAssembly struct {
-	cfg        *config.Config
-	cfgPath    string
-	db         *sql.DB
-	logger     *slog.Logger
-	client     *control.Client
-	publicKey  *rsa.PublicKey
-	px         *proxy.Proxy
-	buildPool  func(config.Provider) (*keypool.Pool, adapter.Adapter, error)
-	pricingDir *metering.PricingDirectory
-	settlement string
-	fxMilli    int64
-	verifier   *auth.Verifier
-	quotas     *ratelimit.MemoryTenantQuotas
-	cache      *semantic.Cache
-	startedAt  time.Time
-}
-
 // buildControlRuntime 由装配输入构造控制运行时。
-func buildControlRuntime(ctx context.Context, a controlAssembly) (*control.Runtime, error) {
-	return newControlRuntime(ctx, controlWiring(a))
+func buildControlRuntime(ctx context.Context, w controlWiring) (*control.Runtime, error) {
+	return newControlRuntime(ctx, w)
 }
 
 // newControlRuntime 构造控制面运行时；standalone 只装配本地命令执行器。
@@ -159,8 +142,15 @@ func (a *snapshotApplier) ApplySnapshot(ctx context.Context, in control.ApplyInp
 	if err := control.ValidatePayload(p); err != nil {
 		return err
 	}
+	if err := a.checkRevocationRollback(p); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
-	records, tables, replacePricing, err := a.pricingRecords(p.Pricing, now)
+	records, pricingTables, replacePricing, err := a.pricingRecords(p.Pricing, now)
+	if err != nil {
+		return err
+	}
+	imageRecords, imageTables, replaceImages, err := a.imagePricingRecords(p.ImagePricing, now)
 	if err != nil {
 		return err
 	}
@@ -175,16 +165,45 @@ func (a *snapshotApplier) ApplySnapshot(ctx context.Context, in control.ApplyInp
 			ObservedAt: in.ObservedAt.UTC().Format(time.RFC3339), Signature: in.Signature,
 			Payload: in.Raw, UpdatedAt: now.Format(time.RFC3339),
 		},
-		ReplacePricing: replacePricing, Pricing: records, Tenants: tenants,
-		Audit: a.auditRow(in, len(records), len(tenants), prep != nil),
+		ReplacePricing: replacePricing, Pricing: records,
+		ReplaceImagePricing: replaceImages, ImagePricing: imageRecords,
+		Tenants: tenants,
+		Audit:   a.auditRow(in, len(records), len(imageRecords), len(tenants), prep != nil),
 	}
 	if err := store.ApplyControlState(ctx, a.wiring.db, state); err != nil {
 		a.wiring.px.DiscardTopology(prep)
 		return err
 	}
+	a.applyRuntime(p, prep, pricingTables, replacePricing, imageTables, replaceImages, quotas)
+	a.wiring.logger.Info("共享控制快照已应用", "version", in.Version,
+		"pricing", len(records), "image_pricing", len(imageRecords),
+		"tenants", len(tenants), "topology", prep != nil)
+	return nil
+}
+
+// checkRevocationRollback 吊销版本回退必须整包拒绝：内存虽拒绝旧名单，但快照会落 last-known，
+// 重启后旧名单会被重新应用，等于复活已吊销 key。
+func (a *snapshotApplier) checkRevocationRollback(p control.SnapshotPayload) error {
+	if a.wiring.verifier == nil {
+		return nil
+	}
+	if cur := a.wiring.verifier.RevocationsVersion(); p.Revocations.Version < cur {
+		return fmt.Errorf("control: 快照吊销版本回退 %d < %d", p.Revocations.Version, cur)
+	}
+	return nil
+}
+
+// applyRuntime 数据库提交成功后切换内存目录；任一目录缺失即跳过（装配期防御）。
+func (a *snapshotApplier) applyRuntime(p control.SnapshotPayload, prep *proxy.PreparedTopology,
+	pricingTables map[string]*metering.PricingTable, replacePricing bool,
+	imageTables map[string]metering.ImagePrice, replaceImages bool,
+	quotas map[string]ratelimit.TenantQuota) {
 	a.wiring.px.CommitTopology(prep)
 	if replacePricing {
-		a.wiring.pricingDir.Replace(tables)
+		a.wiring.pricingDir.Replace(pricingTables)
+	}
+	if replaceImages && a.wiring.imageDir != nil {
+		a.wiring.imageDir.Replace(imageTables)
 	}
 	if a.wiring.verifier != nil {
 		a.wiring.verifier.ApplyRevocations(p.Revocations.Version, p.Revocations.Revoked)
@@ -192,9 +211,6 @@ func (a *snapshotApplier) ApplySnapshot(ctx context.Context, in control.ApplyInp
 	if a.wiring.quotas != nil {
 		a.wiring.quotas.Replace(quotas)
 	}
-	a.wiring.logger.Info("共享控制快照已应用", "version", in.Version,
-		"pricing", len(records), "tenants", len(tenants), "topology", prep != nil)
-	return nil
 }
 
 // pricingRecords 价目投影：nil=缺席（保留现状），空数组=显式空。先建表后落库。
@@ -233,6 +249,38 @@ func pricingWindowsView(windows []control.PricingWindow) []admin.PricingWindowVi
 		out = append(out, admin.PricingWindowView{Window: w.Window, Multiplier: w.Multiplier})
 	}
 	return out
+}
+
+// imagePricingRecords 图片价目投影：nil=缺席（保留现状），空数组=显式清空。
+// 金额与档位在此解析并换算本位币，任何一条非法即整包拒绝。
+func (a *snapshotApplier) imagePricingRecords(entries []control.ImagePricingEntry, now time.Time) (
+	[]store.ImagePricingRecord, map[string]metering.ImagePrice, bool, error,
+) {
+	if entries == nil {
+		return nil, nil, false, nil
+	}
+	records := make([]store.ImagePricingRecord, 0, len(entries))
+	tables := make(map[string]metering.ImagePrice, len(entries))
+	for _, e := range entries {
+		alias := strings.TrimSpace(e.Alias)
+		if alias == "" || len(alias) > 128 {
+			return nil, nil, false, errors.New("图片价目 alias 非法")
+		}
+		price, err := metering.ParseImagePrice(e.Currency, e.Default, e.Tiers)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("图片价目 %s 非法: %w", alias, err)
+		}
+		settled, err := metering.SettleImagePrice(price, a.wiring.settlement, a.wiring.fxMilli)
+		if err != nil {
+			return nil, nil, false, fmt.Errorf("图片价目 %s 换算: %w", alias, err)
+		}
+		records = append(records, store.ImagePricingRecord{
+			Alias: alias, Currency: price.Currency, DefaultCredits: price.DefaultCredits,
+			Tiers: price.Tiers, UpdatedAt: now.Format(time.RFC3339),
+		})
+		tables[alias] = settled
+	}
+	return records, tables, true, nil
 }
 
 // prepareTopology 构建候选拓扑；nil=缺席保留现状。
@@ -279,6 +327,7 @@ func tenantProjection(tenants []control.Tenant) (map[string]ratelimit.TenantQuot
 	for _, t := range tenants {
 		quotas[t.ID] = ratelimit.TenantQuota{
 			RPM: t.RPMLimit, TPM: t.TPMLimit, DailyQuotaCredits: t.DailyQuotaCredits,
+			Status: t.Status,
 		}
 		rows = append(rows, store.ControlTenantRecord{
 			ID: t.ID, Name: t.Name, Status: t.Status,
@@ -289,12 +338,14 @@ func tenantProjection(tenants []control.Tenant) (map[string]ratelimit.TenantQuot
 }
 
 // auditRow 快照应用审计，与投影同事务落库。
-func (a *snapshotApplier) auditRow(in control.ApplyInput, pricing, tenants int, topology bool) *store.AdminAudit {
+func (a *snapshotApplier) auditRow(in control.ApplyInput, pricing, images, tenants int,
+	topology bool) *store.AdminAudit {
 	id := uuid.NewV7().String()
 	return &store.AdminAudit{
 		ID: id, RequestID: id, ActorKind: "system", ActorName: "control-snapshot",
 		Action: "snapshot.apply", TargetID: fmt.Sprintf("v%d", in.Version), Outcome: "ok",
-		Detail:    fmt.Sprintf("pricing=%d tenants=%d topology=%t", pricing, tenants, topology),
+		Detail: fmt.Sprintf("pricing=%d image_pricing=%d tenants=%d topology=%t",
+			pricing, images, tenants, topology),
 		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 }

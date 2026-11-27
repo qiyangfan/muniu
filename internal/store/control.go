@@ -47,11 +47,13 @@ type ControlTenantRecord struct {
 
 // ControlState 一次控制快照应用需要原子写入的本地投影。
 type ControlState struct {
-	Snapshot       ControlSnapshotRecord
-	ReplacePricing bool
-	Pricing        []PricingRecord
-	Tenants        []ControlTenantRecord
-	Audit          *AdminAudit
+	Snapshot            ControlSnapshotRecord
+	ReplacePricing      bool
+	Pricing             []PricingRecord
+	ReplaceImagePricing bool
+	ImagePricing        []ImagePricingRecord
+	Tenants             []ControlTenantRecord
+	Audit               *AdminAudit
 }
 
 // ApplyControlState 单事务应用快照投影：价目整表替换、租户 upsert 且缺席者停用、快照 upsert、审计。
@@ -62,10 +64,8 @@ func ApplyControlState(ctx context.Context, db *sql.DB, st ControlState) error {
 		return fmt.Errorf("store: 开控制快照事务: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if st.ReplacePricing {
-		if err := replacePricingTx(ctx, tx, st.Pricing); err != nil {
-			return err
-		}
+	if err := applyPriceProjections(ctx, tx, st); err != nil {
+		return err
 	}
 	if err := replaceTenantsTx(ctx, tx, st.Tenants, st.Snapshot.UpdatedAt); err != nil {
 		return err
@@ -80,6 +80,21 @@ func ApplyControlState(ctx context.Context, db *sql.DB, st ControlState) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: 提交控制快照事务: %w", err)
+	}
+	return nil
+}
+
+// applyPriceProjections token 与图片价目按各自的替换开关整表投影。
+func applyPriceProjections(ctx context.Context, tx *sql.Tx, st ControlState) error {
+	if st.ReplacePricing {
+		if err := replacePricingTx(ctx, tx, st.Pricing); err != nil {
+			return err
+		}
+	}
+	if st.ReplaceImagePricing {
+		if err := replaceImagePricingTx(ctx, tx, st.ImagePricing); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -106,10 +121,38 @@ func replacePricingTx(ctx context.Context, tx *sql.Tx, rows []PricingRecord) err
 	return nil
 }
 
+// replaceImagePricingTx 运行态图片价目整表替换为快照投影。
+func replaceImagePricingTx(ctx context.Context, tx *sql.Tx, rows []ImagePricingRecord) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM image_pricing`); err != nil {
+		return fmt.Errorf("store: 清空控制面图片价目: %w", err)
+	}
+	for _, r := range rows {
+		tiers := r.Tiers
+		if tiers == nil {
+			tiers = map[string]int64{}
+		}
+		raw, err := json.Marshal(tiers)
+		if err != nil {
+			return fmt.Errorf("store: 序列化图片档位 %s: %w", r.Alias, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO image_pricing
+			(alias, currency, default_credits, tiers, updated_at)
+			VALUES (?,?,?,?,?)`,
+			r.Alias, r.Currency, r.DefaultCredits, string(raw), r.UpdatedAt); err != nil {
+			return fmt.Errorf("store: 写控制面图片价目 %s: %w", r.Alias, err)
+		}
+	}
+	return nil
+}
+
 // replaceTenantsTx 租户投影 upsert；快照缺席的本地租户停用而非删除（key 外键仍可读历史）。
+// 同名不同 ID 的本地残留先对账：无引用则删除，有引用则显式冲突拒绝，禁止无限重试锁死。
 func replaceTenantsTx(ctx context.Context, tx *sql.Tx, rows []ControlTenantRecord, now string) error {
 	ids := make([]any, 0, len(rows))
 	for _, r := range rows {
+		if err := reconcileTenantConflict(ctx, tx, r); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO tenants
 			(id, name, status, created_at, daily_quota_credits, tpm_limit)
 			VALUES (?,?,?,?,?,?)
@@ -131,6 +174,54 @@ func replaceTenantsTx(ctx context.Context, tx *sql.Tx, rows []ControlTenantRecor
 		return fmt.Errorf("store: 停用快照缺席租户: %w", err)
 	}
 	return nil
+}
+
+// reconcileTenantConflict 处理本地同名不同 ID 的租户占用：无引用可安全删除，
+// 有引用说明本地历史归属无法静默改写，整包拒绝并给出对账明细。
+func reconcileTenantConflict(ctx context.Context, tx *sql.Tx, r ControlTenantRecord) error {
+	var localID string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM tenants WHERE name = ? AND id <> ?`,
+		r.Name, r.ID).Scan(&localID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: 查租户同名冲突: %w", err)
+	}
+	refs, err := tenantRefCounts(ctx, tx, localID)
+	if err != nil {
+		return err
+	}
+	if refs.apiKeys > 0 || refs.semanticCache > 0 || refs.principalBindings > 0 {
+		return fmt.Errorf("store: tenant_identity_conflict 租户身份冲突 name=%s local_id=%s control_id=%s "+
+			"引用 api_keys=%d semantic_cache=%d principal_bindings=%d",
+			r.Name, localID, r.ID, refs.apiKeys, refs.semanticCache, refs.principalBindings)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tenants WHERE id = ?`, localID); err != nil {
+		return fmt.Errorf("store: 删除同名租户残留 %s: %w", localID, err)
+	}
+	return nil
+}
+
+// tenantRefs 本地租户被引用计数，删除前必须为零。
+type tenantRefs struct {
+	apiKeys           int64
+	semanticCache     int64
+	principalBindings int64
+}
+
+func tenantRefCounts(ctx context.Context, tx *sql.Tx, tenantID string) (tenantRefs, error) {
+	var r tenantRefs
+	err := tx.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM api_keys WHERE tenant_id = ?),
+		(SELECT COUNT(*) FROM semantic_cache WHERE tenant_id = ?),
+		(SELECT COUNT(*) FROM admin_principal_tenants WHERE tenant_id = ?)`,
+		tenantID, tenantID, tenantID).
+		Scan(&r.apiKeys, &r.semanticCache, &r.principalBindings)
+	if err != nil {
+		return tenantRefs{}, fmt.Errorf("store: 统计租户引用 %s: %w", tenantID, err)
+	}
+	return r, nil
 }
 
 // upsertSnapshotTx 快照落库；版本单调，旧版本不得覆盖新版本。

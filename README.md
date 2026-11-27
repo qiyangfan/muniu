@@ -181,6 +181,7 @@ token 数,muniu 的取舍是「宁可记账精确、偶发小额超限」,不做
 | [docs/benchmarks/](docs/benchmarks/) | 压测报告(口径、方法、全量数据) |
 | [docs/articles/](docs/articles/) | 设计复盘系列(可对外发的工程文章) |
 | [docs/conventions.md](docs/conventions.md) | 工程约定(代码/测试/错误/日志/迁移) |
+| [docs/runbook-break-glass.md](docs/runbook-break-glass.md) | 运行时存储 break-glass 修复(独立凭证/限时/审计) |
 | [AGENTS.md](AGENTS.md) | AI 执行者工作契约(铁律在此) |
 
 ## 设计复盘系列

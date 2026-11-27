@@ -203,11 +203,12 @@ func (c *SnapshotConsumer) commit(env *SnapshotEnvelope, etag string) {
 	c.last = env
 }
 
-// touch 304：控制面可达，刷新接触时间并消 stale。
+// touch 304：控制面可达，刷新接触时间、清错误并消 stale。
 func (c *SnapshotConsumer) touch() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.state.LastContact = c.now()
+	c.state.LastError = ""
 	if c.state.Ready {
 		c.state.Stale = false
 	}

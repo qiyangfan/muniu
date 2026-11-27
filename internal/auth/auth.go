@@ -546,6 +546,13 @@ func (v *Verifier) RevocationsReady() bool {
 	return v.revApplied
 }
 
+// RevocationsVersion 已应用的吊销名单版本；快照应用据此拒绝回退，防止旧名单被持久化为 last-known。
+func (v *Verifier) RevocationsVersion() int64 {
+	v.revMu.RLock()
+	defer v.revMu.RUnlock()
+	return v.revVersion
+}
+
 // revokedContains 平台 key 吊销判定；无快照表示未启用同步，视作不吊销。
 func (v *Verifier) revokedContains(keyID string) bool {
 	v.revMu.RLock()

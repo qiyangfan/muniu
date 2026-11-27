@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -48,12 +49,22 @@ type SnapshotEnvelope struct {
 }
 
 // SnapshotPayload 共享控制投影。安全类（吊销/租户）缺失即整包拒绝（fail-closed）。
+// ImagePricing 可选：nil=保持现状，非 nil（含空数组）=整表替换，与 token 价目同语义。
 type SnapshotPayload struct {
-	Pricing     []PricingEntry `json:"pricing"`
-	Topology    *Topology      `json:"topology"`
-	Revocations *Revocations   `json:"revocations"`
-	Tenants     []Tenant       `json:"tenants"`
-	Policies    any            `json:"policies,omitempty"`
+	Pricing      []PricingEntry      `json:"pricing"`
+	ImagePricing []ImagePricingEntry `json:"image_pricing"`
+	Topology     *Topology           `json:"topology"`
+	Revocations  *Revocations        `json:"revocations"`
+	Tenants      []Tenant            `json:"tenants"`
+	Policies     any                 `json:"policies,omitempty"`
+}
+
+// ImagePricingEntry 图片价目快照条目；金额十进制字符串，档位键形如 "size|quality"。
+type ImagePricingEntry struct {
+	Alias    string            `json:"alias"`
+	Currency string            `json:"currency"`
+	Default  string            `json:"default"`
+	Tiers    map[string]string `json:"tiers"`
 }
 
 // PricingEntry 价目快照条目；金额为 credit 十进制字符串（与 muniu ParsePrice 同口径）。
@@ -148,6 +159,9 @@ func ValidatePayload(p SnapshotPayload) error {
 	if err := validateTenants(p.Tenants); err != nil {
 		return err
 	}
+	if err := validateImagePricing(p.ImagePricing); err != nil {
+		return err
+	}
 	return validatePricing(p.Pricing)
 }
 
@@ -193,6 +207,22 @@ func validatePricing(entries []PricingEntry) error {
 			return fmt.Errorf("价目别名重复: %s", pe.Alias)
 		}
 		seenAlias[pe.Alias] = true
+	}
+	return nil
+}
+
+// validateImagePricing 图片价目别名必填且唯一；金额与档位由装配层解析校验。
+func validateImagePricing(entries []ImagePricingEntry) error {
+	seenAlias := map[string]bool{}
+	for i, pe := range entries {
+		alias := strings.TrimSpace(pe.Alias)
+		if alias == "" || len(alias) > 128 {
+			return fmt.Errorf("图片价目[%d] alias 非法", i)
+		}
+		if seenAlias[alias] {
+			return fmt.Errorf("图片价目别名重复: %s", alias)
+		}
+		seenAlias[alias] = true
 	}
 	return nil
 }

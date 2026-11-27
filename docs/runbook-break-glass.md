@@ -7,7 +7,8 @@
 
 1. 先尝试常规路径:管理 API / 本地控制台命令(`cache_purge`/`topology_reload`)/ 锦官命令队列。
 2. **备份优先**:`./bin/muniu backup`(在线一致快照)或停实例后复制 `muniu.db`。
-3. 独立凭证文件(`0600`),内容:
+3. 构建独立 CLI:`make breakglass`(或 `make build`,同时产出 `bin/muniu` 与 `bin/muniu-breakglass`)。
+4. 独立凭证文件(`0600`),内容:
 
 ```json
 {

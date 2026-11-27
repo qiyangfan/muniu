@@ -115,6 +115,12 @@ func (g *Gate) tenantLimits(w http.ResponseWriter, r *http.Request, info *auth.K
 	}
 	limits, err := g.Quota.limits(r.Context(), info.TenantID)
 	if err == nil {
+		if limits.Status == "disabled" {
+			g.observe("tenant", "disabled", r, info)
+			g.writeDeny(w, r, http.StatusForbidden, protocol.TypeForbidden,
+				"tenant_disabled", "租户已被控制面禁用")
+			return TenantQuota{}, false
+		}
 		return limits, true
 	}
 	g.observe("tenant", "unavailable", r, info)
