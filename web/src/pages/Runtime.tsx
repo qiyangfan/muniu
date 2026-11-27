@@ -53,6 +53,14 @@ const CMD_META: StatusMeta = {
   failed: { label: "失败", variant: "destructive" },
 };
 
+// attrsLine 日志附加值单行化：error_detail 等诊断字段只在 attrs 里，不能丢。
+function attrsLine(attrs?: Record<string, string>): string {
+  if (!attrs) return "";
+  return Object.entries(attrs)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(" ");
+}
+
 type Projection = {
   available?: boolean;
   version?: number;
@@ -154,10 +162,15 @@ export default function Runtime() {
           模式：租户/价目/拓扑/配额/共享策略由锦官管理，本地只读；服务域配置（密钥、供应商、插件、OAuth、余额）仍在本控制台写。
         </NoticeBanner>
       )}
-      {snapshot?.stale && (
+      {snapshot?.stale && snapshot.ready && (
         <NoticeBanner>
           共享控制快照已陈旧{snapshot.last_error ? `（${snapshot.last_error}）` : ""}
           ，网关按 last-known 继续运行。
+        </NoticeBanner>
+      )}
+      {status?.managed && snapshot && !snapshot.ready && (
+        <NoticeBanner>
+          尚无有效控制快照：租户配额未就绪，数据面已鉴权请求将按 fail-closed 拒绝。
         </NoticeBanner>
       )}
 
@@ -165,6 +178,9 @@ export default function Runtime() {
         <span>注册状态</span>
         <StatusBadge meta={REG_META} value={registration?.state} />
         {status?.instance_id && <span className="break-all">实例 {status.instance_id}</span>}
+        <Button variant="outline" size="sm" className="ml-auto" onClick={() => void load()}>
+          刷新
+        </Button>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="运行模式" value={status?.mode ?? "—"} />
@@ -212,7 +228,9 @@ export default function Runtime() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="cache_purge">清空语义缓存</SelectItem>
-                  <SelectItem value="topology_reload">重载配置拓扑（仅 standalone）</SelectItem>
+                  {!status?.managed && (
+                    <SelectItem value="topology_reload">重载配置拓扑（仅 standalone）</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </FormRow>
@@ -288,7 +306,12 @@ export default function Runtime() {
                     {formatDateTime(e.time ?? "")}
                   </span>
                   <span className="shrink-0 uppercase text-muted-foreground">{e.level}</span>
-                  <span className="break-all">{e.message}</span>
+                  <span className="min-w-0 break-all">
+                    {e.message}
+                    {attrsLine(e.attrs) && (
+                      <span className="block text-muted-foreground">{attrsLine(e.attrs)}</span>
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>

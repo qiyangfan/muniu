@@ -52,7 +52,14 @@ beforeEach(() => {
     stats: { pending: 0, acked: 1, failed: 0 },
   });
   vi.mocked(api.runtimeLogs).mockResolvedValue({
-    entries: [{ time: "2026-01-01T00:00:00Z", level: "info", message: "started" }],
+    entries: [
+      {
+        time: "2026-01-01T00:00:00Z",
+        level: "warn",
+        message: "控制快照拉取失败,保持 last-known",
+        attrs: { request_id: "r1", error_detail: "connection refused" },
+      },
+    ],
   });
   vi.mocked(api.runtimeExecuteCommand).mockResolvedValue({
     id: "c2",
@@ -72,6 +79,23 @@ it("展示 managed 只读提示与共享控制投影", async () => {
   await screen.findByText(/managed 模式：租户\/价目\/拓扑/);
   expect(screen.getByText("快照版本")).toBeTruthy();
   expect(screen.getAllByText("已回执").length).toBeGreaterThan(0);
+  // 诊断字段在 attrs 中，必须随日志展示
+  expect(await screen.findByText(/error_detail=connection refused/)).toBeTruthy();
+});
+
+it("managed 无有效快照时提示数据面 fail-closed", async () => {
+  vi.mocked(api.runtimeStatus).mockResolvedValue({
+    ...status,
+    snapshot: { version: 0, stale: false, ready: false },
+    registration: { state: "starting", last_attempt: "", last_success: "", attempts: 0 },
+  });
+  vi.mocked(api.runtimeSharedControl).mockResolvedValue({
+    managed: true,
+    snapshot: { version: 0, stale: false, ready: false },
+    shared: { available: false },
+  });
+  render(<Runtime />);
+  expect(await screen.findByText(/尚无有效控制快照/)).toBeTruthy();
 });
 
 it("本地命令经二次确认后执行", async () => {
