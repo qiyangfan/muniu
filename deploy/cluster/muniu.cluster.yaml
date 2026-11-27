@@ -21,21 +21,28 @@ metering:
   flush_batch: 256
   settlement: CNY
   fx_usd_cny_milli: 7200
-  sink: ingest                                            # 计量推控制面;失败落本地缓冲,恢复按序续传
-  ingest_url: "http://control-plane:8090/ingest/usage"
-  ingest_token: "${JINGUAN_INGEST_TOKEN}"
+  sink: control                                           # 双写本地 + 锦官;失败落本地缓冲,恢复按序续传
   buffer_capacity: 1000000
 
 auth:
   platform_key_secrets:                                   # base64 HMAC 密钥,建议环境变量注入后展开
     - "${MUNIU_PLATFORM_KEY_SECRET}"
-  revocations_url: "http://control-plane:8090/control/v1/key-revocations"
-  revocations_interval_sec: 60                            # 吊销收敛窗口 = 本值,有界可配
 
 control_plane:
-  pricing_url: "http://control-plane:8090/control/v1/pricing"
-  topology_url: "http://control-plane:8090/control/v1/topology"
+  mode: managed
+  base_url: "http://control-plane:8090"
+  # instance_id 缺省 hostname-pid(容器/pod 名天然区分副本)
+  token_url: "http://keycloak:8080/realms/longzhong/protocol/openid-connect/token"
+  client_id: "muniu-control"
+  client_secret: "${MUNIU_CONTROL_CLIENT_SECRET}"
+  snapshot_public_key_file: "/etc/muniu/control-signing.pem"
   poll_interval_sec: 60
+  heartbeat_interval_sec: 30
+  command_poll_interval_sec: 15
+  request_timeout_sec: 10
+
+service_api:
+  token: "${MUNIU_SERVICE_READ_TOKEN}"                    # 供锦官只读投影
 
 ratelimit:
   backend: redis                        # 共享视图(cluster 形态,ADR-0008 修订):×N 消除
@@ -44,9 +51,8 @@ ratelimit:
 metrics:
   enabled: true
 
-# ── 以下静态拓扑为启动兜底(控制面不可达时副本以它起服;首个拉取周期即被锦官拓扑
-#    热替换)。topology_url 就绪后日常拓扑运营走锦官 PUT /admin/topology,本段可精简;
-#    价目(pricing)同理为控制面拉取失败时的兜底。上游 key 走环境变量(全副本同源注入)。
+# ── 以下静态拓扑为启动兜底(控制面缺席时副本以它起服;首个快照周期即被锦官拓扑
+#    热替换)。managed 下日常拓扑/价目运营走锦官,本段仅作启动兜底;上游 key 走环境变量。
 providers:
   - name: deepseek
     adapter: deepseek

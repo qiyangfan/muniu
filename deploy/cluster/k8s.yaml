@@ -1,6 +1,6 @@
 # muniu cluster 形态 Kubernetes 参考部署(等价形态,节选级样例)
 # 与 compose 形态同构:2 副本 Deployment + Service;配置走 ConfigMap(muniu.cluster.yaml);
-# 敏感值(upstream key / admin token / ingest token / 平台 key 密钥)走 Secret。
+# 敏感值(upstream key / admin token / 平台 key 密钥 / 控制面 client secret / 服务只读 token / 验签公钥)走 Secret。
 # SSE 同样要求 LB/Ingress 侧 proxy_buffering off(nginx ingress 默认已关;自建网关自行确认)。
 apiVersion: apps/v1
 kind: Deployment
@@ -23,15 +23,21 @@ spec:
               valueFrom: {secretKeyRef: {name: muniu-upstream, key: deepseek-1}}
             - name: MUNIU_ADMIN_TOKEN
               valueFrom: {secretKeyRef: {name: muniu-upstream, key: admin-token}}
-            - name: JINGUAN_INGEST_TOKEN
-              valueFrom: {secretKeyRef: {name: muniu-upstream, key: ingest-token}}
             - name: MUNIU_PLATFORM_KEY_SECRET
               valueFrom: {secretKeyRef: {name: muniu-upstream, key: platform-key-secret}}
-          volumeMounts: [{name: conf, mountPath: /muniu.yaml, subPath: muniu.yaml}]
+            - name: MUNIU_CONTROL_CLIENT_SECRET
+              valueFrom: {secretKeyRef: {name: muniu-upstream, key: control-client-secret}}
+            - name: MUNIU_SERVICE_READ_TOKEN
+              valueFrom: {secretKeyRef: {name: muniu-upstream, key: service-read-token}}
+          volumeMounts:
+            - {name: conf, mountPath: /muniu.yaml, subPath: muniu.yaml}
+            - {name: control-key, mountPath: /etc/muniu/control-signing.pem, subPath: control-signing.pem}
           readinessProbe: {tcpSocket: {port: 8787}, periodSeconds: 5}
       volumes:
         - name: conf
           configMap: {name: muniu-conf}           # kubectl create configmap muniu-conf --from-file=muniu.cluster.yaml
+        - name: control-key
+          secret: {secretName: muniu-control-signing}   # kubectl create secret generic muniu-control-signing --from-file=control-signing.pem
 ---
 apiVersion: v1
 kind: Service

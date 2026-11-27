@@ -90,7 +90,7 @@ muniu 版本、迁移版本、key/usage 行数与 sha256(恢复侧校验 + 月�
 muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:
 
 - **standalone(缺省,一等公民)**:单二进制 + 内嵌 SQLite,上面的快速开始即此形态;租户/key/价目为运营态(管理面在线改),拓扑走 YAML。
-- **cluster(无状态副本)**:多副本 + LB,SQLite 降级本地缓冲;租户/key/价目/拓扑经控制面拉取(`metering.pricing_url` / `auth.revocations_url` / `control_plane.topology_url`,ETag 条件请求、损坏拒绝应用、失联保持降级),计量经 `metering.sink: ingest` 推送控制面(失败落本地缓冲,恢复按序续传,ADR-0007);限流为实例级自治 + 控制面全局预算(ADR-0008)。每实例本地状态盘点与集群口径见 `docs/design/cluster-semantics.md`。
+- **managed(无状态副本)**:多副本 + LB,SQLite 降级本地缓冲;价目/拓扑/吊销/租户配额经**统一控制快照**下发(ETag 条件请求、RSA 验签、版本单调、last-known/fail-closed),注册心跳/跨服务命令/用量上报全部走服务身份;计量双写本地 + 锦官(失败落本地缓冲,恢复按序续传,ADR-0007);限流为实例级自治 + 控制面全局预算(ADR-0008)。每实例本地状态盘点与集群口径见 `docs/design/cluster-semantics.md`,客户端契约见 `docs/design/control-plane-client.md`。
 
 本位币与 credit(计量计费):`cost_credits`/`daily_quota_credits` 均为 credit 整数,1 credit = 本位币(`metering.settlement`,CNY|USD)的十亿分之一;异币种报价经 `metering.fx_usd_cny_milli` 加载期一次换算。
 
@@ -103,6 +103,8 @@ muniu 是 LLM 网关**数据面**,两种部署形态,同一二进制:
 | ![控制台总览](docs/screenshots/console-overview.png) | ![密钥管理](docs/screenshots/console-keys.png) | ![用量明细](docs/screenshots/console-usage.png) | ![供应商健康](docs/screenshots/console-providers.png) |
 
 **语义缓存**(`semantic:` 配置,租户级开关默认关):同义问题直接返回缓存的参考答案,省 token 降延迟。
+
+控制台另有「运行时」页:控制面快照/注册状态、共享控制只读投影、本地清缓存/重载命令与最近日志;managed 下共享控制只读,本地运行命令不经锦官队列。
 采用「宁缺勿错」保守策略:temperature ≤ 0.3、`finish_reason=stop`、无工具调用、输入 ≤8K tokens 才准入;
 相似度阈值 0.97、TTL 24h、LRU 容量上限;**缓存的是相似问题的一次参考答案**,不做主动失效。
 命中行照记 `usage_logs`(`provider=semantic-cache`,cost 0),命中率进控制台首屏。
@@ -165,9 +167,9 @@ token 数,muniu 的取舍是「宁可记账精确、偶发小额超限」,不做
 ## 双形态部署
 
 - **standalone(缺省,一等公民)**:`muniu` 一条命令起服——单二进制 + 内嵌 SQLite,`muniu.yaml` 静态拓扑/价目,零外部依赖。
-- **cluster(无状态副本)**:多副本 + LB + 控制面(价目/拓扑/吊销下发,计量 ingest 回推)。参考部署样例与控制面对接契约见 [deploy/cluster/](deploy/cluster/README.md);每实例分片语义与集群口径见 [docs/design/cluster-semantics.md](docs/design/cluster-semantics.md)。
+- **managed(无状态副本)**:多副本 + LB + 控制面(统一快照/注册/命令/usage 上报)。参考部署样例与控制面对接契约见 [deploy/cluster/](deploy/cluster/README.md);每实例分片语义与集群口径见 [docs/design/cluster-semantics.md](docs/design/cluster-semantics.md)。
 
-配置开关:`control_plane.topology_url` / `pricing_url` / `auth.revocations_url` / `metering.sink: ingest`——全部缺省关闭,standalone 行为零回归。
+配置开关:`control_plane.mode: managed`(统一快照/注册/命令/上报,需服务身份 + 验签公钥)、`service_api.token`(服务只读 API)——缺省 standalone,行为零回归。
 
 ## 文档地图
 

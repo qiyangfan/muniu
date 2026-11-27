@@ -1,7 +1,7 @@
 # muniu cluster 形态参考部署(6.1)——参考样例而非生产清单
 # 两副本 muniu(无状态)+ nginx 轮询 LB + 控制面(锦官)。
-# 用法:本目录放好 .env(DEEPSEEK_API_KEY_1 / MUNIU_ADMIN_TOKEN / JINGUAN_INGEST_TOKEN /
-# MUNIU_PLATFORM_KEY_SECRET)后
+# 用法:本目录放好 .env(DEEPSEEK_API_KEY_1 / MUNIU_ADMIN_TOKEN / MUNIU_PLATFORM_KEY_SECRET /
+# MUNIU_CONTROL_CLIENT_SECRET / MUNIU_SERVICE_READ_TOKEN)与 control-signing.pem 后
 #   podman compose -f docker-compose.cluster.yml up -d
 # 镜像:ghcr 路径为占位——以两仓实际发布渠道为准;本地构建用根 Containerfile
 # (muniu:podman build -t muniu .;锦官:见其 delivery-pipeline 的 Dockerfile)。
@@ -23,10 +23,12 @@ services:
     environment:
       - DEEPSEEK_API_KEY_1=${DEEPSEEK_API_KEY_1}    # 上游 key 全副本同源,健康度各自独立观测
       - MUNIU_ADMIN_TOKEN=${MUNIU_ADMIN_TOKEN}
-      - JINGUAN_INGEST_TOKEN=${JINGUAN_INGEST_TOKEN}
       - MUNIU_PLATFORM_KEY_SECRET=${MUNIU_PLATFORM_KEY_SECRET}  # yaml ${VAR} 展开引用,缺失即 fail-fast 拒启
+      - MUNIU_CONTROL_CLIENT_SECRET=${MUNIU_CONTROL_CLIENT_SECRET}
+      - MUNIU_SERVICE_READ_TOKEN=${MUNIU_SERVICE_READ_TOKEN}
     volumes:
       - ./muniu.cluster.yaml:/muniu.yaml:ro         # 控制面 URL 全指向锦官(见本文件)
+      - ./control-signing.pem:/etc/muniu/control-signing.pem:ro   # 锦官快照验签公钥
     depends_on: [redis]
     # 副本本地 SQLite 仅承载计量缓冲(可重放可丢弃);生产建议挂本地盘而非共享卷
   muniu-b:
@@ -36,5 +38,4 @@ services:
     image: ghcr.io/qiyangfan/jinguan:latest         # 占位:本地构建或替换为实际发布镜像
     ports:
       - "8090:8090"
-    environment:
-      - JINGUAN_INGEST_TOKEN=${JINGUAN_INGEST_TOKEN}
+    environment: []   # 服务身份由 Keycloak(fujie realm client muniu-control)提供

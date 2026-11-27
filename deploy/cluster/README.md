@@ -13,32 +13,39 @@
 | --- | --- |
 | [docker-compose.cluster.yml](docker-compose.cluster.yml) | compose/podman compose 一键起 LB + 双副本 + 锦官 |
 | [nginx.conf](nginx.conf) | LB 配置(SSE 三件套:清 Connection 头 / 关 buffering / 长读超时) |
-| [muniu.cluster.yaml](muniu.cluster.yaml) | cluster 形态 muniu 配置(三管子指向锦官真实端点) |
+| [muniu.cluster.yaml](muniu.cluster.yaml) | managed 形态 muniu 配置(统一快照/注册/命令/上报指向锦官) |
 | [k8s.yaml](k8s.yaml) | Kubernetes 等价形态(Deployment + Service,配置走 ConfigMap) |
 
 compose 用法:本目录放 `.env`(`DEEPSEEK_API_KEY_1` / `MUNIU_ADMIN_TOKEN` /
-`JINGUAN_INGEST_TOKEN` / `MUNIU_PLATFORM_KEY_SECRET`,base64 解码后 ≥16 字节)后
-`podman compose -f docker-compose.cluster.yml up -d`。注意 muniu 对配置内 `${VAR}`
-缺失是 fail-fast:四个变量任一缺注入,副本都会拒绝启动。
+`MUNIU_PLATFORM_KEY_SECRET` / `MUNIU_CONTROL_CLIENT_SECRET` / `MUNIU_SERVICE_READ_TOKEN`)
+与锦官快照验签公钥 `control-signing.pem` 后
+`podman compose -f docker-compose.cluster.yml up -d`。muniu 对配置内 `${VAR}` 缺失是
+fail-fast:任一变量缺注入,副本都会拒绝启动。
 
-## 控制面对接契约(锦官已实现端点;联调实录 2026-09-13)
+服务身份前置:Keycloak realm 需有机器 client `muniu-control`(fujie 仓创建,当前阻塞);
+本地演练可在 loopback 控制面用 `control_plane.service_token` pre-shared。
 
-| 管子 | 端点(锦官) | muniu 侧配置 | 认证 |
+## 控制面对接契约
+
+跨仓 wire schema 由 X-01(`2026-11-26-add-control-contract-harness`)冻结;当前锦官新端点
+未实施,本仓按 [docs/design/control-plane-client.md](../../docs/design/control-plane-client.md)
+实现并以本地契约测试证明,跨仓契约测试标记阻塞。
+
+| 管子 | 端点 | muniu 侧配置 | 认证 |
 | --- | --- | --- | --- |
-| 价目下发 | `GET /control/v1/pricing` | `control_plane.pricing_url` | 无认证头(部署网络隔离保护,现实契约;拉取认证为双方演进项) |
-| key 吊销 | `GET /control/v1/key-revocations` | `auth.revocations_url` | 同上 |
-| 计量 ingest | `POST /ingest/usage` | `metering.sink: ingest` + `ingest_url` | Bearer 独立静态 token(`${VAR}` 展开) |
-| 拓扑下发 | `GET /control/v1/topology` | `control_plane.topology_url` | 无认证头(同价目/吊销);录入走锦官 `PUT /admin/topology`(ADMIN) |
+| 控制快照 | `GET /control/v1/snapshot` | `control_plane.mode: managed` | 服务身份 + RSA 验签 |
+| 服务注册/心跳 | `POST /control/v1/registry/instances[/{id}/heartbeat]` | managed 自动启用 | 服务身份 |
+| 用量/健康 | `POST /ingest/usage` / health 事件 | `metering.sink: control` | 服务身份 |
+| 跨服务命令 | `POST /control/v1/commands/claim` + `/{id}/ack` | managed 自动启用 | 服务身份 |
+| 服务只读 API | `GET /service/v1/summary`(muniu 提供) | `service_api.token` | 服务身份 Bearer |
 
-拓扑管子联调实录(独立实例,`poll_interval_sec=2`):首拉热替换 `reused=0/created=1/removed=1`;
-变更轮新增 alias 后 `reused=1/created=0/removed=0`(provider 配置未变,池运行态无损保留);
-锦官停机后 WARN `控制面拓扑拉取失败,保持当前快照`,数据面持续存活——ETag 条件请求、
-变更热替换、失联保持三语义均实证。
+收敛与失败:快照 `poll_interval_sec`、心跳 `heartbeat_interval_sec`、命令
+`command_poll_interval_sec` 均可配;安全类缺失 fail-closed,非安全类 last-known + stale。
 
 ## ⚠ 注意事项
 
 1. LB 必须 `proxy_buffering off`(SSE 逐事件透传),自建 Ingress 同理;
 2. 上游 key 全副本同源,各实例 key 池健康度独立观测(语义见
    [docs/design/cluster-semantics.md](../../docs/design/cluster-semantics.md));
-3. 副本本地 SQLite 仅承载计量缓冲,可重放可丢弃,生产建议挂本地盘而非共享卷;
-4. 拓扑/价目/吊销的收敛窗口 = `poll_interval_sec` / `revocations_interval_sec`,有界可配。
+3. 副本本地 SQLite 承载计量与缓冲,生产建议挂本地盘而非共享卷;
+4. managed 下共享控制写入口本地只读;拓扑/价目/租户变更走锦官。

@@ -23,24 +23,35 @@ metering:
   # 1 credit = 本位币的 10^-9。
   settlement: CNY           # 本位币:CNY(缺省)|USD;价目币种 ≠ 本位币时必须配汇率
   fx_usd_cny_milli: 7200    # 1 USD = 7.200 CNY(毫单位整数);USD 报价加载期一次换算
-  # local 写入本地 SQLite；ingest 推送到控制面，失败时缓冲并在恢复后续传。
-  # sink: ingest
-  # ingest_url: "http://control-plane:8080/internal/metering/ingest"
-  # ingest_token: "..."            # 可选 Bearer,支持环境变量引用展开
+  # local(缺省)写本地 SQLite；control 双写本地 + 锦官(managed 缺省)，失败时缓冲并在恢复后续传。
+  # sink: control
   # buffer_capacity: 1000000       # 本地缓冲上限(行),超限阻塞并告警
 
 # 可选的平台 key 配置；未设置时禁用平台 key。
+# 吊销名单随控制快照下发；managed 下未收到有效快照前平台 key 一律拒绝（安全类 fail-closed）。
 # auth:
 #   platform_key_secrets:          # base64 HMAC 密钥(解码后 ≥16 字节),多把支持轮换
 #     - "<base64 密钥,建议经环境变量注入后展开>"
-#   revocations_url: "http://control-plane:8080/internal/keys/revocations"
-#   revocations_interval_sec: 60   # 吊销收敛窗口
 
-# 可选的控制面价目与拓扑拉取；下发内容覆盖本地静态配置。
+# 共享控制面（managed）：统一快照/注册心跳/命令/用量上报，全部走服务身份。
+# standalone 不声明本段；声明即要求 base_url + 服务身份 + 快照验签公钥。
 # control_plane:
-#   pricing_url: "http://control-plane:8080/internal/pricing/list"
-#   topology_url: "http://control-plane:8080/internal/topology"   # 拓扑热替换(providers/model_routes/能力目录)
+#   mode: managed
+#   base_url: "https://jinguan.example.com"
+#   instance_id: "muniu-1"                       # 缺省 hostname-pid；重启稳定可显式配置
+#   token_url: "https://keycloak.example.com/realms/longzhong/protocol/openid-connect/token"
+#   client_id: "muniu-control"
+#   client_secret: "<MUNIU_CONTROL_CLIENT_SECRET>"
+#   snapshot_public_key_file: "/etc/muniu/control-signing.pem"
 #   poll_interval_sec: 60
+#   heartbeat_interval_sec: 30
+#   command_poll_interval_sec: 15
+#   request_timeout_sec: 10
+#   # 本地演练可用 pre-shared（仅 loopback）：service_token: "<MUNIU_CONTROL_TOKEN>"
+
+# 服务只读 API（供锦官只读投影）：独立 Bearer，空即关闭；不返回凭据。
+# service_api:
+#   token: "<MUNIU_SERVICE_READ_TOKEN>"
 
 # inmem 按实例计数；redis 共享限流计数，故障时降级为实例计数并告警。
 # ratelimit:

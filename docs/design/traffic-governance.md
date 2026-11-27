@@ -24,6 +24,14 @@
 | TPM 滑动窗口 | 60×1s 环形桶,计数**已完成请求的 token 数** | 硬闸:窗口总量 ≥ tpm_limit 时拒绝新请求(Phase 3)。固有近似:在途请求 token 未计,误差 ≤ 单窗口并发量,如实写进文档不做伪精确 |
 | 日配额 | 已耗成本(credit,1 credit = 本位币 1e-9,见 metering)≥ daily_quota_credits → 402 | 见下「一致性声明」 |
 
+**租户级配额(managed 快照)**:租户 RPM/TPM/日配额随控制快照下发,与 key 级配额**叠加判定**,
+任一超限即拒(402 日配额 / 429 RPM·TPM)。租户先于 key 判定,避免租户上限被 key 上限掩盖。
+
+- 快照未就绪 / 租户不在目录:安全类 fail-closed(503 / 403),不回落为不限。
+- standalone:沿用本地 `tenants.tpm_limit` 与 `daily_quota_credits`;RPM 无租户列即不启用。
+- 拒绝可追责:`muniu_quota_denials_total{scope,reason}` + 带 request_id/tenant/key 的结构化日志。
+- 计数与 key 同后端:inmem 进程内环形窗;redis 共享视图使用 `t:<tenant_id>` 前缀键。
+
 **配额一致性声明(契约)**:配额/TPM 均为**事后记账**模型——请求进行时无法预知最终 token 数,因此存在「同刻并发小幅超限」窗口。muniu 的取舍:**宁可记账精确、偶发小额超限,不做预留式伪精确**(预留模型复杂度不成比例,且 token 上限本就未知)。该取舍写入 README FAQ,面试可直接讲。
 
 分布式形态(Redis lua 原子窗口)在 backlog,单二进制优先;演进路径:限流器抽 `Limiter` 接口,Redis 实现作为同接口的另一实现接入,请求路径零改动。
