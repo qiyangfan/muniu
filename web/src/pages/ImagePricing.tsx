@@ -26,7 +26,7 @@ import {
   AlertDialogAction,
 } from "../components/ui/alert-dialog";
 
-export default function ImagePricing() {
+export default function ImagePricing({ readOnly = false }: { readOnly?: boolean }) {
   const version = useRef(0);
   const [rows, setRows] = useState<ImagePricingEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,6 +64,7 @@ export default function ImagePricing() {
     void fetchAll();
   }, [fetchAll]);
   const edit = (r?: ImagePricingEntry) => {
+    if (readOnly) return;
     setEditing(r?.alias ?? "");
     setCurrency(r?.currency ?? "CNY");
     setDef(r?.default ?? "");
@@ -91,22 +92,25 @@ export default function ImagePricing() {
       key: "actions",
       label: "操作",
       actions: true,
-      render: (r, mobile) => (
-        <>
-          <Button size={mobile ? "sm" : "xs"} variant="outline" onClick={() => edit(r)}>
-            编辑
-          </Button>
-          {r.source === "db" && (
-            <Button
-              size={mobile ? "sm" : "xs"}
-              variant="ghost-destructive"
-              onClick={() => setRemove(r.alias)}
-            >
-              撤销覆盖
+      render: (r, mobile) => {
+        if (readOnly) return "只读";
+        return (
+          <>
+            <Button size={mobile ? "sm" : "xs"} variant="outline" onClick={() => edit(r)}>
+              编辑
             </Button>
-          )}
-        </>
-      ),
+            {r.source === "db" && (
+              <Button
+                size={mobile ? "sm" : "xs"}
+                variant="ghost-destructive"
+                onClick={() => setRemove(r.alias)}
+              >
+                撤销覆盖
+              </Button>
+            )}
+          </>
+        );
+      },
     },
   ];
 
@@ -148,10 +152,12 @@ export default function ImagePricing() {
           按张计价，size|quality 档位未命中时使用兜底单价。
         </p>
         {err && <ErrorAlert text={err} />}
-        <Button size="sm" variant="outline" onClick={() => edit()}>
-          新增图片价目
-        </Button>
-        {editing !== null && (
+        {!readOnly && (
+          <Button size="sm" variant="outline" onClick={() => edit()}>
+            新增图片价目
+          </Button>
+        )}
+        {!readOnly && editing !== null && (
           <form
             className="grid grid-cols-1 gap-4 sm:grid-cols-2"
             onSubmit={(e) => {

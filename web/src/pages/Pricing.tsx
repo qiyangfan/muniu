@@ -17,6 +17,7 @@ import {
 import { StatusBadge } from "../components/status-badge";
 import { Card } from "../components/ui/card";
 import { ErrorAlert } from "../components/error-alert";
+import { NoticeBanner } from "../components/notice-banner";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -88,6 +89,7 @@ export default function Pricing() {
   const [winRows, setWinRows] = useState<WinRow[]>([]);
   const [busy, setBusy] = useState(false); // 保存防重复
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  const [managed, setManaged] = useState(false);
 
   const refresh = useCallback(() => {
     api
@@ -99,6 +101,13 @@ export default function Pricing() {
       .catch((e) => setErr(errorMessage(e)));
   }, []);
   useEffect(refresh, [refresh]);
+  // managed 下共享控制只读：隐藏本地写入口，服务端仍兜底拒绝。
+  useEffect(() => {
+    api
+      .runtimeStatus()
+      .then((s) => setManaged(s.mode === "managed"))
+      .catch(() => setManaged(false));
+  }, []);
 
   const startEdit = (e: PricingEntry) => {
     setEditing(e.alias ?? "");
@@ -248,26 +257,29 @@ export default function Pricing() {
       key: "actions",
       label: <span className="sr-only">操作</span>,
       actions: true,
-      render: (p, mobile) => (
-        <>
-          <Button
-            variant="ghost"
-            size={mobile ? "sm" : "xs"}
-            onClick={() => p.alias && startEdit({ ...p, alias: p.alias })}
-          >
-            编辑
-          </Button>
-          {p.source === "db" && (
+      render: (p, mobile) => {
+        if (managed) return "只读";
+        return (
+          <>
             <Button
-              variant="ghost-destructive"
+              variant="ghost"
               size={mobile ? "sm" : "xs"}
-              onClick={() => p.alias && setRemoveTarget(p.alias)}
+              onClick={() => p.alias && startEdit({ ...p, alias: p.alias })}
             >
-              撤销覆盖
+              编辑
             </Button>
-          )}
-        </>
-      ),
+            {p.source === "db" && (
+              <Button
+                variant="ghost-destructive"
+                size={mobile ? "sm" : "xs"}
+                onClick={() => p.alias && setRemoveTarget(p.alias)}
+              >
+                撤销覆盖
+              </Button>
+            )}
+          </>
+        );
+      },
     },
   ];
 
@@ -472,14 +484,17 @@ export default function Pricing() {
   return (
     <div className="space-y-4">
       {err && <ErrorAlert text={`错误:${err}`} />}
-      <div className="flex sm:justify-end">
-        <Button onClick={startNew} className="w-full sm:w-auto">
-          新增价目
-        </Button>
-      </div>
+      {managed && <NoticeBanner>managed 模式下价目由锦官统一下发，本地价目只读。</NoticeBanner>}
+      {!managed && (
+        <div className="flex sm:justify-end">
+          <Button onClick={startNew} className="w-full sm:w-auto">
+            新增价目
+          </Button>
+        </div>
+      )}
       <DataList columns={columns} rows={entries} rowKey={(p) => p.alias ?? ""} empty="暂无价目" />
 
-      <ImagePricing />
+      <ImagePricing readOnly={managed} />
       <AlertDialog
         open={removeTarget !== null}
         onOpenChange={(o) => {

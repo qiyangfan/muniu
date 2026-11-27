@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  Activity,
   ClipboardList,
   ChartColumn,
   KeyRound,
@@ -29,6 +30,7 @@ import Pricing from "./pages/Pricing";
 import Balances from "./pages/Balances";
 import OAuthAccounts from "./pages/OAuthAccounts";
 import Audit from "./pages/Audit";
+import Runtime from "./pages/Runtime";
 
 // readOidcError 读取联邦回调失败文案(首渲染即用,避免 effect 内 setState)。
 function readOidcError(): string {
@@ -153,10 +155,19 @@ const TABS: { key: TabKey; label: string; shortLabel: string; icon: LucideIcon }
   { key: "balances", label: "余额告警", shortLabel: "余额", icon: Wallet },
   { key: "pricing", label: "价目管理", shortLabel: "价目", icon: Tags },
   { key: "audit", label: "操作审计", shortLabel: "审计", icon: ClipboardList },
+  { key: "runtime", label: "运行时", shortLabel: "运行时", icon: Activity },
 ];
 
 type TabKey =
-  "overview" | "keys" | "usage" | "providers" | "oauth" | "balances" | "pricing" | "audit";
+  | "overview"
+  | "keys"
+  | "usage"
+  | "providers"
+  | "oauth"
+  | "balances"
+  | "pricing"
+  | "audit"
+  | "runtime";
 
 export default function App() {
   const [actor, setActor] = useState<AdminActor | null>(null);
@@ -294,6 +305,7 @@ export default function App() {
         {activeTab === "balances" && <Balances />}
         {activeTab === "pricing" && <Pricing />}
         {activeTab === "audit" && <Audit />}
+        {activeTab === "runtime" && <Runtime />}
       </main>
       {/* 移动端使用底部导航，并为 iOS 安全区留出空间。 */}
       <nav

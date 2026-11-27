@@ -2075,6 +2075,228 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/v1/runtime/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 控制面消费状态（模式/快照/注册/命令计数） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 运行时状态 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RuntimeStatusResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/runtime/shared-control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 共享控制只读投影（计数，不含配置明细与凭据） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 共享控制投影 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SharedControlResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/runtime/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 运行时命令台账（跨服务 + 本地） */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 命令列表与状态计数 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RuntimeCommandListResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** 本地运行命令直接执行（不经锦官队列） */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RuntimeCommandRequest"];
+                };
+            };
+            responses: {
+                /** @description 执行结果 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RuntimeCommandView"];
+                    };
+                };
+                /** @description 参数非法或执行失败 */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/v1/runtime/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 最近进程日志（已脱敏） */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 日志条目 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RuntimeLogsResponse"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/service/v1/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 服务只读摘要（供锦官只读投影；服务身份认证，不含凭据） */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 脱敏摘要 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ServiceSummaryResponse"];
+                    };
+                };
+                /** @description 服务身份无效 */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2574,6 +2796,112 @@ export interface components {
             amount: string;
             /** @description 币种(CNY|USD),须与渠道配置声明一致 */
             currency: string;
+        };
+        RuntimeSnapshotStatus: {
+            version?: number;
+            etag?: string;
+            observed_at?: string;
+            applied_at?: string;
+            last_contact?: string;
+            stale?: boolean;
+            ready?: boolean;
+            last_error?: string;
+        };
+        RuntimeRegistrationStatus: {
+            /** @description starting|ok|degraded|disabled */
+            state?: string;
+            last_attempt?: string;
+            last_success?: string;
+            attempts?: number;
+            last_error?: string;
+        };
+        RuntimeStatusResponse: {
+            /** @enum {string} */
+            mode: "standalone" | "managed";
+            managed: boolean;
+            service_id: string;
+            instance_id?: string;
+            version: string;
+            started_at?: string;
+            observed_at?: string;
+            service_api_enabled?: boolean;
+            snapshot: components["schemas"]["RuntimeSnapshotStatus"];
+            registration: components["schemas"]["RuntimeRegistrationStatus"];
+            commands: {
+                [key: string]: number;
+            };
+        };
+        RuntimeCommandView: {
+            id: string;
+            action: string;
+            action_schema_version: number;
+            params?: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            source: "control" | "local";
+            /** @enum {string} */
+            status: "pending" | "acked" | "failed";
+            result?: string;
+            attempts: number;
+            idempotency_key?: string;
+            actor?: string;
+            reason?: string;
+            created_at: string;
+            completed_at?: string;
+        };
+        RuntimeCommandRequest: {
+            /** @description cache_purge|topology_reload */
+            action: string;
+            params?: {
+                [key: string]: unknown;
+            };
+            reason?: string;
+        };
+        RuntimeCommandListResponse: {
+            enabled: boolean;
+            commands: components["schemas"]["RuntimeCommandView"][];
+            stats: {
+                [key: string]: number;
+            };
+        };
+        RuntimeLogEntry: {
+            time?: string;
+            level?: string;
+            message?: string;
+            attrs?: {
+                [key: string]: string;
+            };
+        };
+        RuntimeLogsResponse: {
+            entries: components["schemas"]["RuntimeLogEntry"][];
+        };
+        SharedControlResponse: {
+            managed?: boolean;
+            snapshot?: components["schemas"]["RuntimeSnapshotStatus"];
+            shared?: {
+                [key: string]: unknown;
+            };
+        };
+        ServiceSummaryResponse: {
+            /** @enum {string} */
+            source: "muniu";
+            service_id: string;
+            /** @enum {string} */
+            mode: "standalone" | "managed";
+            version: string;
+            instance_id: string;
+            observed_at?: string;
+            stale: boolean;
+            runtime?: {
+                [key: string]: unknown;
+            };
+            domain: {
+                [key: string]: unknown;
+            };
+            control: {
+                [key: string]: unknown;
+            };
         };
     };
     responses: never;

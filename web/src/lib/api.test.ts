@@ -35,3 +35,32 @@ it("旧登录态的迟到401不能清除新登录态", async () => {
     window.removeEventListener("muniu-session-expired", expired);
   }
 });
+
+it("运行时 API 路径与方法正确", async () => {
+  setToken("tok");
+  const calls: { url: string; init?: RequestInit }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input.toString();
+      calls.push({ url, init });
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    }),
+  );
+  await api.runtimeStatus();
+  await api.runtimeSharedControl();
+  await api.runtimeCommands();
+  await api.runtimeLogs(25);
+  await api.runtimeExecuteCommand({ action: "cache_purge", params: { all: true }, reason: "r" });
+  expect(calls.map((c) => c.url)).toEqual([
+    "/admin/v1/runtime/status",
+    "/admin/v1/runtime/shared-control",
+    "/admin/v1/runtime/commands",
+    "/admin/v1/runtime/logs?limit=25",
+    "/admin/v1/runtime/commands",
+  ]);
+  expect(calls[4].init?.method).toBe("POST");
+  expect(calls[4].init?.body).toBe(
+    JSON.stringify({ action: "cache_purge", params: { all: true }, reason: "r" }),
+  );
+});

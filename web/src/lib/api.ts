@@ -26,6 +26,13 @@ export type OAuthAccountsResponse = components["schemas"]["OAuthAccountsResponse
 export type OAuthAccountCreateRequest = components["schemas"]["OAuthAccountCreateRequest"];
 export type OAuthAuthorizeResponse = components["schemas"]["OAuthAuthorizeResponse"];
 
+export type RuntimeStatus = components["schemas"]["RuntimeStatusResponse"];
+export type RuntimeCommand = components["schemas"]["RuntimeCommandView"];
+export type RuntimeCommandList = components["schemas"]["RuntimeCommandListResponse"];
+export type RuntimeCommandRequest = components["schemas"]["RuntimeCommandRequest"];
+export type RuntimeLogs = components["schemas"]["RuntimeLogsResponse"];
+export type SharedControl = components["schemas"]["SharedControlResponse"];
+
 const TOKEN_KEY = "muniu-admin-token";
 let authRevision = 0;
 
@@ -198,6 +205,12 @@ export const api = {
     }),
   alertDeliveryStatus: () => call<AlertDeliveryStatus>("GET", "/admin/v1/alerts/delivery-status"),
   upstreamHealth: () => call<UpstreamHealthResponse>("GET", "/admin/v1/upstream-health"),
+  runtimeStatus: () => call<RuntimeStatus>("GET", "/admin/v1/runtime/status"),
+  runtimeSharedControl: () => call<SharedControl>("GET", "/admin/v1/runtime/shared-control"),
+  runtimeCommands: () => call<RuntimeCommandList>("GET", "/admin/v1/runtime/commands"),
+  runtimeExecuteCommand: (body: RuntimeCommandRequest) =>
+    call<RuntimeCommand>("POST", "/admin/v1/runtime/commands", body),
+  runtimeLogs: (limit = 100) => call<RuntimeLogs>("GET", `/admin/v1/runtime/logs?limit=${limit}`),
   putPricing: (alias: string, body: PricingEntry) =>
     call<{ ok: boolean }>("PUT", `/admin/v1/pricing/${encodeURIComponent(alias)}`, body),
   deletePricing: (alias: string) =>
