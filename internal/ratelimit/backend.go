@@ -7,10 +7,7 @@
 package ratelimit
 
 import (
-	"net/http"
 	"time"
-
-	"github.com/solvela/muniu/internal/auth"
 )
 
 // SharedBackend 共享计数后端（redis 形态）；inmem 现状即 Gate 直引的 Limiter/TPM，无需适配。
@@ -32,33 +29,27 @@ type TPMRecorder interface {
 	Record(keyID string, tokens int64, now time.Time)
 }
 
-// sharedMiddleware 共享后端路径：链序不变（quota → RPM → TPM）；quota 闸维持本地判定
-// （日配额由控制面聚合 ingest 纠正），RPM/TPM 两闸走共享视图。
-func (g *Gate) sharedMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		info := auth.KeyFrom(r.Context())
-		if info == nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-		// 1) 日配额（key 级 + 租户聚合，本地）
-		if g.Quota != nil && g.Quota.exceeded(r.Context(), keyInfoFrom(r.Context()), timeNow()) {
-			g.denyQuota(w, r)
-			return
-		}
-		now := timeNow()
-		// 2) RPM 令牌桶（共享视图）
-		if info.RPMLimit > 0 {
-			if ok, retry := g.Shared.AllowRPM(info.ID, info.RPMLimit, now); !ok {
-				g.deny429(w, r, retry)
-				return
-			}
-		}
-		// 3) TPM 滑动窗口（共享视图）
-		if info.TPMLimit > 0 && !g.Shared.AllowTPM(info.ID, info.TPMLimit, now) {
-			g.deny429(w, r, time.Second) // TPM 无 Retry-After 依据，给 1s
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// TenantTPMRecorder 租户聚合记账接口；proxy 检测到实现时同时回填租户窗口。
+type TenantTPMRecorder interface {
+	RecordTenant(tenantID string, tokens int64, now time.Time)
+}
+
+// CompositeRecorder 同时回填 key 与租户窗口；两项均可为 nil（零行为）。
+type CompositeRecorder struct {
+	Key    TPMRecorder
+	Tenant TenantTPMRecorder
+}
+
+// Record key 级记账。
+func (c CompositeRecorder) Record(keyID string, tokens int64, now time.Time) {
+	if c.Key != nil {
+		c.Key.Record(keyID, tokens, now)
+	}
+}
+
+// RecordTenant 租户级聚合记账。
+func (c CompositeRecorder) RecordTenant(tenantID string, tokens int64, now time.Time) {
+	if c.Tenant != nil {
+		c.Tenant.RecordTenant(tenantID, tokens, now)
+	}
 }

@@ -15,6 +15,11 @@ type ctxKey struct{}
 // New 按配置装配 slog Logger，level 取 debug|info|warn|error，format 取 json|text。
 // 非法值已在 config 校验拦截，此处按 info/json 兜底，不 panic。
 func New(level, format string) *slog.Logger {
+	return NewWithRing(level, format, nil)
+}
+
+// NewWithRing 同 New，并可选把日志同时写入运行时环形缓冲。
+func NewWithRing(level, format string, ring *Ring) *slog.Logger {
 	var lv slog.Level
 	switch strings.ToLower(level) {
 	case "debug":
@@ -33,7 +38,7 @@ func New(level, format string) *slog.Logger {
 	} else {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	}
-	return slog.New(handler)
+	return slog.New(NewTeeHandler(handler, ring))
 }
 
 // WithRequestID 把 request_id 写入 context，请求入口签发后全程携带。

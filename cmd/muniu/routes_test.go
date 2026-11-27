@@ -53,6 +53,8 @@ func TestRoutes_与OpenAPI契约无漂移(t *testing.T) {
 	cfgContent := `
 health:
   enabled: false
+service_api:
+  token: "read-token-0123456789abcdef"
 providers:
   - name: openai
     adapter: openai

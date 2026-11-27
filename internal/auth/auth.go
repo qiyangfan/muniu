@@ -441,15 +441,14 @@ func listKeys(ctx context.Context, db *sql.DB, tenantIDs []string) ([]KeyRecord,
 // ---- 校验中间件 ----
 
 // Options 校验缓存参数，零值取默认：TTL 10s、容量 10k。
-// 平台 key 三项可选：Secrets 空即未启用，mk2- 一律拒绝；RevocationsURL 空则不做吊销同步，
-// 平台 key 仅受有效期约束，高危场景应配置。
+// 平台 key：Secrets 空即未启用，mk2- 一律拒绝；RevocationsRequired=true（managed）时
+// 未收到过有效吊销快照前平台 key 一律拒绝（安全类 fail-closed）。
 type Options struct {
 	TTL      time.Duration
 	Capacity int
 
-	PlatformSecrets     [][]byte      // HMAC 验签密钥，任一通过即有效，支持轮换。
-	RevocationsURL      string        // 吊销名单端点，格式 {"version":N,"revoked":["key_id",...]}。
-	RevocationsInterval time.Duration // 拉取间隔即吊销收敛窗口，零值取 60s。
+	PlatformSecrets     [][]byte // HMAC 验签密钥，任一通过即有效，支持轮换。
+	RevocationsRequired bool     // managed 下必须由控制快照下发吊销名单后才放行平台 key。
 }
 
 // Verifier Bearer key 校验器，中间件持有，进程内单例。
@@ -465,9 +464,8 @@ type Verifier struct {
 	revMu       sync.RWMutex
 	revoked     map[string]struct{}
 	revVersion  int64
-	revStop     chan struct{}
-	revStopOnce sync.Once
-	revClient   *http.Client
+	revApplied  bool
+	revRequired bool
 }
 
 // errKeyExpired 过期哨兵，Middleware 据此给出已过期 message，与无效、吊销可区分。
@@ -501,8 +499,8 @@ type KeyInfo struct {
 
 type ctxKey struct{}
 
-// NewVerifier 构造校验器；配置了吊销端点时启动拉取循环，Close 退出。
-func NewVerifier(ctx context.Context, db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
+// NewVerifier 构造校验器；吊销名单由控制快照经 ApplyRevocations 推送。
+func NewVerifier(_ context.Context, db *sql.DB, opts Options, logger *slog.Logger) *Verifier {
 	if opts.TTL <= 0 {
 		opts.TTL = 10 * time.Second
 	}
@@ -512,114 +510,40 @@ func NewVerifier(ctx context.Context, db *sql.DB, opts Options, logger *slog.Log
 	if logger == nil {
 		logger = slog.Default()
 	}
-	// 缺省修正必须在构造副本前完成，零值 interval 会使 NewTicker panic
-	if opts.RevocationsInterval <= 0 {
-		opts.RevocationsInterval = 60 * time.Second
-	}
-	v := &Verifier{
+	return &Verifier{
 		db: db, opts: opts, logger: logger, now: time.Now,
-		cache:     map[string]cacheEntry{},
-		revClient: &http.Client{Timeout: 5 * time.Second},
-	}
-	if opts.RevocationsURL != "" {
-		v.revoked = map[string]struct{}{}
-		v.revStop = make(chan struct{})
-		go v.revocationLoop(ctx) // 启动即拉一次，不等首个周期，重启后吊销立即收敛
-	}
-	return v
-}
-
-// Close 停止吊销同步循环，供进程退出与测试收尾，并发安全。
-func (v *Verifier) Close() {
-	if v.revStop == nil {
-		return
-	}
-	v.revStopOnce.Do(func() { close(v.revStop) })
-}
-
-// revocationLoop 吊销名单拉取循环：启动即拉，失败保持上一次快照并告警；
-// 版本单调，仅应用 version >= 本地版本的快照以防旧快照回退；Close 经 ctx 立即中断在途请求。
-func (v *Verifier) revocationLoop(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	go func() {
-		<-v.revStop
-		cancel()
-	}()
-	fetch := func() { v.fetchRevocations(ctx) }
-	fetch()
-	ticker := time.NewTicker(v.opts.RevocationsInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-v.revStop:
-			return
-		case <-ticker.C:
-			fetch()
-		}
+		cache:       map[string]cacheEntry{},
+		revoked:     map[string]struct{}{},
+		revRequired: opts.RevocationsRequired,
 	}
 }
 
-// revocationSnapshot 吊销名单快照形态(控制面下发)。
-type revocationSnapshot struct {
-	Version int64    `json:"version"`
-	Revoked []string `json:"revoked"`
-}
+// Close 保留生命周期接口；吊销名单改由控制快照推送，无独立轮询需要停止。
+func (v *Verifier) Close() {}
 
-// fetchRevocations 单轮拉取；任何失败只告警并保留旧快照。
-func (v *Verifier) fetchRevocations(ctx context.Context) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, v.opts.RevocationsURL, nil)
-	if err != nil {
-		v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
-		return
-	}
-	resp, err := v.revClient.Do(req)
-	if err != nil {
-		// Close 触发的中断不是故障,不告警(其余失败照常留痕)
-		select {
-		case <-v.revStop:
-			return
-		default:
-		}
-		v.logger.Warn("吊销名单拉取失败", "error_detail", err.Error())
-		return
-	}
-	body, ok := decodeRevocations(v, resp)
-	if !ok {
-		return
-	}
-	v.applyRevocations(body)
-}
-
-// decodeRevocations 读取状态码与响应体;非 200 或解析失败告警并返回 false。
-func decodeRevocations(v *Verifier, resp *http.Response) (revocationSnapshot, bool) {
-	var body revocationSnapshot
-	// 先解码再关体:状态码判定与解析结论互不掩盖,两者各自独立告警
-	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		v.logger.Warn("吊销名单拉取失败", "status", resp.StatusCode)
-		return body, false
-	}
-	if decodeErr != nil {
-		v.logger.Warn("吊销名单响应非法", "error_detail", decodeErr.Error())
-		return body, false
-	}
-	return body, true
-}
-
-// applyRevocations 版本单调落快照：乱序或滞后的旧快照不得洗白已吊销 key。
-func (v *Verifier) applyRevocations(body revocationSnapshot) {
-	set := make(map[string]struct{}, len(body.Revoked))
-	for _, id := range body.Revoked {
+// ApplyRevocations 应用快照下发的全量吊销名单；版本单调，旧版本忽略。
+// 返回是否被应用（版本不小于当前即替换，空名单也是合法快照）。
+func (v *Verifier) ApplyRevocations(version int64, revoked []string) bool {
+	set := make(map[string]struct{}, len(revoked))
+	for _, id := range revoked {
 		set[id] = struct{}{}
 	}
 	v.revMu.Lock()
-	if body.Version >= v.revVersion {
-		v.revoked = set
-		v.revVersion = body.Version
+	defer v.revMu.Unlock()
+	if version < v.revVersion {
+		return false
 	}
-	v.revMu.Unlock()
+	v.revoked = set
+	v.revVersion = version
+	v.revApplied = true
+	return true
+}
+
+// RevocationsReady 是否已收到过有效吊销快照；managed 下未就绪时平台 key fail-closed。
+func (v *Verifier) RevocationsReady() bool {
+	v.revMu.RLock()
+	defer v.revMu.RUnlock()
+	return v.revApplied
 }
 
 // revokedContains 平台 key 吊销判定；无快照表示未启用同步，视作不吊销。
@@ -687,6 +611,9 @@ func (v *Verifier) verify(r *http.Request) (*KeyInfo, error) {
 func (v *Verifier) verifyPlatform(raw string) (*KeyInfo, error) {
 	if len(v.opts.PlatformSecrets) == 0 {
 		return nil, errors.New("平台 key 未启用")
+	}
+	if v.revRequired && !v.RevocationsReady() {
+		return nil, errors.New("managed 模式尚未收到有效吊销快照，平台 key 拒绝")
 	}
 	claims, err := ParsePlatformKey(raw, v.opts.PlatformSecrets, time.Now())
 	if err != nil {

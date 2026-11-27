@@ -64,6 +64,11 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 			status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL, last_login_at TEXT)`,
 		`INSERT INTO admin_principals(subject,username,created_at)
 			VALUES('keycloak:old','老管理员','2026-11-20T00:00:00Z')`,
+		`CREATE TABLE admin_audit_log (
+			id TEXT PRIMARY KEY, request_id TEXT NOT NULL,
+			actor_kind TEXT NOT NULL CHECK(actor_kind IN ('session','token','login','federated')),
+			actor_name TEXT NOT NULL, action TEXT NOT NULL, target_id TEXT,
+			outcome TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL)`,
 	}
 	for v := 1; v <= 22; v++ {
 		stmts = append(stmts, fmt.Sprintf(
@@ -76,7 +81,7 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 	}
 
 	if err := migrate(ctx, db); err != nil {
-		t.Fatalf("v22→v23 升级失败: %v", err)
+		t.Fatalf("v22→v24 升级失败: %v", err)
 	}
 	var scope string
 	if err := db.QueryRowContext(ctx, `SELECT scope FROM admin_principals WHERE subject='keycloak:old'`).Scan(&scope); err != nil {
@@ -99,8 +104,8 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil {
 		t.Fatal(err)
 	}
-	if maxVersion != 23 {
-		t.Fatalf("迁移账应推进到 23,实际 %d", maxVersion)
+	if maxVersion != 24 {
+		t.Fatalf("迁移账应推进到 24,实际 %d", maxVersion)
 	}
 }
 

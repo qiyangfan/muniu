@@ -27,6 +27,7 @@ import (
 	"github.com/solvela/muniu/internal/auth"
 	"github.com/solvela/muniu/internal/balance"
 	"github.com/solvela/muniu/internal/config"
+	"github.com/solvela/muniu/internal/control"
 	"github.com/solvela/muniu/internal/health"
 	"github.com/solvela/muniu/internal/keypool"
 	"github.com/solvela/muniu/internal/logging"
@@ -40,6 +41,7 @@ import (
 	"github.com/solvela/muniu/internal/ratelimit"
 	"github.com/solvela/muniu/internal/semantic"
 	"github.com/solvela/muniu/internal/server"
+	"github.com/solvela/muniu/internal/serviceapi"
 	"github.com/solvela/muniu/internal/store"
 	"github.com/solvela/muniu/internal/version"
 	"github.com/solvela/muniu/web"
@@ -126,11 +128,20 @@ type routeEntry struct {
 }
 
 // assemble 装配 HTTP 处理链并注册路由；返回的 cleanup 会在退出前排干计量管道。
+//
+//nolint:funlen // 装配顺序即阅读顺序；各子系统构造均已下沉到独立函数。
 func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *slog.Logger) (
 	http.Handler, []string, func(), error,
 ) {
+	startedAt := time.Now()
+	ring := logging.NewRing(200)
+	logger = slog.New(logging.NewTeeHandler(logger.Handler(), ring))
+	controlClient, controlPublicKey, err := newControlClient(cfg, logger)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	// SQLite 运行态库（api_keys/usage_logs），迁移随打开执行。
-	deps, err := newRuntimeDeps(ctx, cfg, logger)
+	deps, err := newRuntimeDeps(ctx, cfg, logger, controlClient)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -177,7 +188,18 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		return nil, nil, nil, err
 	}
 
-	verifier, entries := newVerifierAndRoutes(ctx, cfg, db, logger, chatProxy, tpm, sharedBackend)
+	quotas, quotaSource := managedQuotas(cfg)
+	verifier, entries := newVerifierAndRoutes(ctx, cfg, db, logger, chatProxy, tpm, sharedBackend, quotaSource)
+
+	controlRuntime, err := buildControlRuntime(ctx, controlAssembly{
+		cfg: cfg, cfgPath: cfgPath, db: db, logger: logger,
+		client: controlClient, publicKey: controlPublicKey, px: chatProxy, buildPool: buildPool,
+		pricingDir: pricingDir, settlement: settlement, fxMilli: pricing.fxMilli,
+		verifier: verifier, quotas: quotas, cache: cacheInst, startedAt: startedAt,
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
 
 	// 未配置管理 token、没有启用管理员账号且未声明联邦时关闭管理面。
 	adminHandler, adminToken, refreshPricing, err := adminSurface(ctx, adminWiring{
@@ -185,24 +207,51 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		balanceSvc: balanceSvc, healthMgr: healthMgr, px: chatProxy, pricingDir: pricingDir,
 		staticImages: staticImages, updateImages: updateImages, staticHuman: staticHuman,
 		pluginReg: pluginReg, oauthFlow: oauthFlow,
+		runtime: controlRuntime, logs: ring, managed: cfg.ControlPlane.Managed(),
+		serviceAPIEnabled: cfg.ServiceAPI.Token != "",
 	}, rebuildPricing, cacheInst)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
+	serviceHandler := newServiceHandler(cfg, db, controlRuntime, pluginReg, chatProxy, startedAt, logger)
+
 	root, declared, cleanup := finishAssembly(ctx, cfg, logger, db, pipeline, chatProxy, entries,
 		adminHandler, adminToken, refreshPricing, cacheInst, late, embedKey,
-		pluginReg, balanceSvc, healthMgr, oauthCancel, verifier)
+		pluginReg, balanceSvc, healthMgr, oauthCancel, verifier, controlRuntime, serviceHandler)
 	return root, declared, cleanup, nil
+}
+
+// newServiceHandler 服务只读 API；未配置 token 即返回 nil（不挂载）。
+func newServiceHandler(cfg *config.Config, db *sql.DB, rt *control.Runtime, plugins *plugin.Registry,
+	px *proxy.Proxy, startedAt time.Time, logger *slog.Logger) http.Handler {
+	if cfg.ServiceAPI.Token == "" {
+		return nil
+	}
+	return serviceapi.New(serviceapi.Deps{
+		Token:   cfg.ServiceAPI.Token,
+		Summary: newServiceSummary(db, rt, cfg, plugins, px, startedAt),
+		Logger:  logger,
+	})
+}
+
+// managedQuotas managed 下的租户配额快照源；standalone 返回双 nil。
+func managedQuotas(cfg *config.Config) (*ratelimit.MemoryTenantQuotas, ratelimit.TenantQuotaSource) {
+	if !cfg.ControlPlane.Managed() {
+		return nil, nil
+	}
+	q := ratelimit.NewMemoryTenantQuotas()
+	return q, q
 }
 
 // newVerifierAndRoutes 构造鉴权器并装配路由表。
 func newVerifierAndRoutes(
 	ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger,
 	chatProxy *proxy.Proxy, tpm *ratelimit.TPM, shared ratelimit.SharedBackend,
+	quotaSource ratelimit.TenantQuotaSource,
 ) (*auth.Verifier, []routeEntry) {
 	verifier := newVerifier(ctx, cfg, db, logger)
-	gate := newGate(tpm, db, logger, shared)
+	gate := newGate(tpm, db, logger, shared, quotaSource)
 	return verifier, buildRoutes(chatProxy, verifier, gate, logger)
 }
 
@@ -228,28 +277,36 @@ func adminSurface(ctx context.Context, w adminWiring,
 
 // adminWiring 管理面依赖装配输入。
 type adminWiring struct {
-	cfg            *config.Config
-	db             *sql.DB
-	token          string
-	adminSvc       *auth.AdminService
-	pools          map[string]*keypool.Pool
-	verifier       *auth.Verifier
-	logger         *slog.Logger
-	balanceSvc     *balance.Service
-	healthMgr      *health.Manager
-	px             *proxy.Proxy
-	pricingDir     *metering.PricingDirectory
-	staticImages   map[string]metering.ImagePrice
-	updateImages   func(context.Context, string, *store.ImagePricingRecord) error
-	staticHuman    map[string]admin.StaticEntry
-	refreshPricing func() error
-	pluginReg      *plugin.Registry
-	oauthFlow      *oauth.Flow
-	federated      *oidc.RelyingParty
+	cfg               *config.Config
+	db                *sql.DB
+	token             string
+	adminSvc          *auth.AdminService
+	pools             map[string]*keypool.Pool
+	verifier          *auth.Verifier
+	logger            *slog.Logger
+	balanceSvc        *balance.Service
+	healthMgr         *health.Manager
+	px                *proxy.Proxy
+	pricingDir        *metering.PricingDirectory
+	staticImages      map[string]metering.ImagePrice
+	updateImages      func(context.Context, string, *store.ImagePricingRecord) error
+	staticHuman       map[string]admin.StaticEntry
+	refreshPricing    func() error
+	pluginReg         *plugin.Registry
+	oauthFlow         *oauth.Flow
+	federated         *oidc.RelyingParty
+	runtime           *control.Runtime
+	logs              *logging.Ring
+	managed           bool
+	serviceAPIEnabled bool
 }
 
 // buildAdminDeps 组装管理面依赖。
 func buildAdminDeps(w adminWiring) admin.Deps {
+	var logs func(limit int) []logging.Entry
+	if w.logs != nil {
+		logs = w.logs.Recent
+	}
 	return admin.Deps{
 		DB: w.db, Token: w.token, AdminAuth: w.adminSvc, Providers: w.cfg.Providers, Pools: w.pools,
 		Verifier: w.verifier, Logger: w.logger, Balance: w.balanceSvc,
@@ -266,28 +323,35 @@ func buildAdminDeps(w adminWiring) admin.Deps {
 		Federated:              w.federated, // nil = admin_oidc 未声明,联邦入口返回关闭态
 		PostLogoutRedirect:     w.cfg.AdminOIDC.PostLogoutRedirectURL,
 		SecureCookies:          w.cfg.AdminCookiesSecure(),
+		Managed:                w.managed,
+		Runtime:                w.runtime, // *control.Runtime 满足 RuntimeProvider
+		Logs:                   logs,
+		ServiceAPIEnabled:      w.serviceAPIEnabled,
 	}
 }
 
-// finishAssembly 完成可观测挂载、价目轮询、嵌入绑定与退出清理。
+// finishAssembly 完成可观测挂载、控制面循环启动、嵌入绑定与退出清理。
 func finishAssembly(ctx context.Context, cfg *config.Config, logger *slog.Logger,
 	db *sql.DB, pipeline *metering.Pipeline,
 	px *proxy.Proxy, entries []routeEntry, adminHandler http.Handler, adminToken string,
 	refreshPricing func() error, cacheInst *semantic.Cache, late *lateEmbedder, embedKey string,
 	pluginReg *plugin.Registry, balanceSvc *balance.Service, healthMgr *health.Manager,
-	oauthCancel func(), verifier *auth.Verifier) (http.Handler, []string, func()) {
+	oauthCancel func(), verifier *auth.Verifier, controlRuntime *control.Runtime,
+	serviceHandler http.Handler) (http.Handler, []string, func()) {
 	// 可观测：启用且管理 token 已配置时暴露 /metrics；token 门禁恒时比较防时序侧信道，
 	// Recover 防仪表函数 panic 裸断连接。无 token 不挂载。
 	metricsEnabled := newMetrics(ctx, cfg, adminToken, db, pipeline, px, logger)
-	root, declared := mountRoutes(entries, adminHandler, metricsEnabled, adminToken, logger)
-	// 控制面价目拉取：响应形态与管理 API 一致，覆盖写入后刷新目录。
-	// 全量期望语义仅 upsert，撤销覆盖仍走管理面 DELETE；失败保持原目录，下轮重试。
-	startPricingPoll(ctx, cfg, logger, db, refreshPricing)
+	root, declared := mountRoutes(entries, adminHandler, metricsEnabled, adminToken, serviceHandler, logger)
+	// 控制面循环：快照/注册心跳/命令 claim；失败只告警，数据面不受影响。
+	if controlRuntime != nil {
+		controlRuntime.Start(ctx)
+	}
 	// 嵌入通道绑定：HTTP 链就绪后进程内自调用 /v1/embeddings。
 	if cacheInst != nil {
 		bindEmbedder(late, root, embedKey)
 	}
-	return root, declared, newCleanup(late, pluginReg, balanceSvc, healthMgr, oauthCancel, verifier, pipeline)
+	return root, declared, newCleanup(late, pluginReg, balanceSvc, healthMgr, oauthCancel, verifier,
+		pipeline, controlRuntime)
 }
 
 // refreshPricingDirectory 重建价目表并原子替换运行目录。
@@ -359,13 +423,13 @@ func startHealth(mgr *health.Manager) {
 // /console/ 静态资源不计入 declared 模式集。
 func mountRoutes(
 	entries []routeEntry, adminHandler http.Handler, metricsEnabled bool,
-	adminToken string, logger *slog.Logger,
+	adminToken string, serviceHandler http.Handler, logger *slog.Logger,
 ) (http.Handler, []string) {
 	root := http.NewServeMux()
 	for _, e := range entries {
 		root.Handle(e.Pattern, e.Handler)
 	}
-	declared := make([]string, 0, len(entries)+len(admin.Routes())+1)
+	declared := make([]string, 0, len(entries)+len(admin.Routes())+2)
 	for _, e := range entries {
 		declared = append(declared, e.Pattern)
 	}
@@ -373,6 +437,10 @@ func mountRoutes(
 		root.Handle("/admin/v1/", server.Chain(adminHandler, server.RequestID, server.Recover(logger)))
 		root.Handle("GET /console/", web.Handler())
 		declared = append(declared, admin.Routes()...)
+	}
+	if serviceHandler != nil {
+		root.Handle("/service/v1/", server.Chain(serviceHandler, server.RequestID, server.Recover(logger)))
+		declared = append(declared, "GET /service/v1/summary")
 	}
 	if metricsEnabled {
 		root.Handle("GET /metrics", server.Recover(logger)(metricsHandler(adminToken)))
@@ -399,11 +467,15 @@ func metricsHandler(adminToken string) http.Handler {
 
 // newCleanup 退出前排干计量存量并停环；os.Exit 不执行 defer，故显式返回闭包。
 func newCleanup(late *lateEmbedder, plugins *plugin.Registry, balanceSvc *balance.Service,
-	healthMgr *health.Manager, oauthCancel func(), verifier *auth.Verifier, pipeline *metering.Pipeline) func() {
+	healthMgr *health.Manager, oauthCancel func(), verifier *auth.Verifier, pipeline *metering.Pipeline,
+	controlRuntime *control.Runtime) func() {
 	return func() {
 		late.set(func(context.Context, string, string) ([]float32, error) {
 			return nil, errors.New("已关闭")
 		})
+		if controlRuntime != nil {
+			controlRuntime.Close() // 停控制面循环，先于计量排干（不再产生上报）
+		}
 		if plugins != nil {
 			plugins.Close() // 等待在途插件调用完成后关停，与热替换同一语义
 		}
@@ -492,14 +564,15 @@ type runtimeDeps struct {
 }
 
 // newRuntimeDeps 打开存储并装配基础件；buildPool 同时用于启动装配和拓扑热替换。
-func newRuntimeDeps(ctx context.Context, cfg *config.Config, logger *slog.Logger) (runtimeDeps, error) {
+func newRuntimeDeps(ctx context.Context, cfg *config.Config, logger *slog.Logger,
+	controlClient *control.Client) (runtimeDeps, error) {
 	// SQLite 运行态库（api_keys/usage_logs），迁移随打开执行。
 	db, err := store.Open(ctx, cfg.Storage.SQLite.Path)
 	if err != nil {
 		return runtimeDeps{}, fmt.Errorf("打开存储: %w", err)
 	}
 	alerts := newAlerting(ctx, cfg, db, logger)
-	pipeline := newMeteringPipeline(ctx, cfg, db, alerts, logger)
+	pipeline := newMeteringPipeline(ctx, cfg, db, alerts, logger, controlClient)
 	tpm, recorder, shared, err := newRateLimit(cfg, logger)
 	if err != nil {
 		return runtimeDeps{}, err
@@ -574,8 +647,7 @@ func newProxyRuntime(ctx context.Context, a proxyAssembly) (*proxy.Proxy, *healt
 	// oauth 刷新器同序启动(oauth 段未声明时零开销零 goroutine);flow 交管理面授权端点,
 	// cancel 挂 cleanup 随退出停环。
 	oauthFlow, oauthCancel := startOAuthRefresher(ctx, a.cfg, a.db, px, a.logger)
-	startTopologyPoll(ctx, a.cfg, a.logger, px, a.buildPool)
-	startSighupReload(a.cfgPath, a.logger, px, a.buildPool)
+	startSighupReload(a.cfgPath, a.cfg.ControlPlane.Managed(), a.logger, px, a.buildPool)
 	return px, healthMgr, oauthFlow, oauthCancel
 }
 
@@ -602,9 +674,10 @@ func newAlerting(ctx context.Context, cfg *config.Config, db *sql.DB, logger *sl
 }
 
 // newMeteringPipeline 接线刷盘参数（缺省值已在 config.validate 兜底）。
-// sink=ingest 时为远端汇加本地缓冲：投递失败整批落缓冲，恢复后按序续传。
+// sink=control 时为「本地 + 锦官」双写：本地计量始终保留，远端失败整批落缓冲续传。
 func newMeteringPipeline(
-	ctx context.Context, cfg *config.Config, db *sql.DB, alerts *alerting.Notifier, logger *slog.Logger,
+	ctx context.Context, cfg *config.Config, db *sql.DB, alerts *alerting.Notifier,
+	logger *slog.Logger, controlClient *control.Client,
 ) *metering.Pipeline {
 	opts := metering.Options{
 		Interval: time.Duration(cfg.Metering.FlushIntervalMs) * time.Millisecond,
@@ -614,12 +687,12 @@ func newMeteringPipeline(
 				fmt.Sprintf("计量远端汇 %s 投递失败,%d 行落本地缓冲", sink, rows))
 		},
 	}
-	if cfg.Metering.Sink == "ingest" {
+	if cfg.Metering.Sink == "control" {
 		bufferCap := cfg.Metering.BufferCapacity
 		if bufferCap <= 0 {
 			bufferCap = 1_000_000
 		}
-		opts.Remote = &metering.IngestSink{Ctx: ctx, URL: cfg.Metering.IngestURL, Token: cfg.Metering.IngestToken}
+		opts.Remote = control.NewUsageSink(ctx, db, controlClient)
 		opts.Buffer = metering.NewBufferStore(ctx, db, bufferCap)
 	}
 	return metering.NewPipeline(ctx, db, opts, logger)
@@ -632,6 +705,7 @@ func newRateLimit(cfg *config.Config, logger *slog.Logger) (
 	tpm := ratelimit.NewTPM()
 	var sharedBackend ratelimit.SharedBackend
 	var recorder ratelimit.TPMRecorder = tpm
+	var tenantRecorder ratelimit.TenantTPMRecorder = tpm
 	switch cfg.RateLimit.Backend {
 	case "", "inmem":
 	case "redis":
@@ -641,11 +715,12 @@ func newRateLimit(cfg *config.Config, logger *slog.Logger) (
 		shared := ratelimit.NewRedisBackend(cfg.RateLimit.RedisAddr, logger)
 		sharedBackend = shared
 		recorder = shared
+		tenantRecorder = shared
 		logger.Info("限流共享视图启用(redis)", "addr", cfg.RateLimit.RedisAddr)
 	default:
 		return nil, nil, nil, fmt.Errorf("ratelimit.backend 须为 inmem|redis,got %s", cfg.RateLimit.Backend)
 	}
-	return tpm, recorder, sharedBackend, nil
+	return tpm, ratelimit.CompositeRecorder{Key: recorder, Tenant: tenantRecorder}, sharedBackend, nil
 }
 
 // newPoolBuilder 构造池装配闭包：启动装配与拓扑热替换共用同一份解析/注册逻辑。
@@ -1066,92 +1141,35 @@ func healthEmitter(alerts *alerting.Notifier) func(health.Event) {
 	}
 }
 
-// pollInterval 控制面轮询周期：<=0 按 60s 兜底。
-func pollInterval(seconds int) time.Duration {
-	interval := time.Duration(seconds) * time.Second
-	if interval <= 0 {
-		interval = 60 * time.Second
-	}
-	return interval
-}
-
-// startTopologyPoll 控制面拓扑热替换轮询：启动即拉，ETag 条件请求（304 跳过），
-// 失败或损坏保持当前快照并告警降级；池构建复用启动闭包（env 解析与 adapter 注册）。
-func startTopologyPoll(
-	ctx context.Context,
-	cfg *config.Config, logger *slog.Logger, px *proxy.Proxy,
-	build func(config.Provider) (*keypool.Pool, adapter.Adapter, error),
-) {
-	if cfg.ControlPlane.TopologyURL == "" {
-		return
-	}
-	interval := pollInterval(cfg.ControlPlane.PollIntervalSec)
-	go func() {
-		client := &http.Client{Timeout: 10 * time.Second}
-		var etag string
-		sync := func() { etag = syncTopologyOnce(ctx, client, cfg.ControlPlane.TopologyURL, etag, logger, px, build) }
-		sync() // 启动即拉，不等首个周期
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for range ticker.C {
-			sync()
-		}
-	}()
-}
-
-// syncTopologyOnce 拉取一次控制面拓扑并原子替换；返回下次条件请求的 ETag。
-func syncTopologyOnce(
-	ctx context.Context, client *http.Client, url, etag string, logger *slog.Logger, px *proxy.Proxy,
-	build func(config.Provider) (*keypool.Pool, adapter.Adapter, error),
-) string {
-	payload, newETag, notModified, err := config.FetchTopology(ctx, client, url, etag)
-	if err != nil {
-		logger.Warn("控制面拓扑拉取失败,保持当前快照", "error_detail", err.Error())
-		return etag
-	}
-	if notModified {
-		return etag
-	}
-	providers, routes, models := payload.ToTopology()
-	stats, err := px.ReplaceTopology(proxy.Config{
-		Providers:    providers,
-		Routes:       routes,
-		Capabilities: models,
-		InheritProxy: true, // 控制面载荷无 proxy_url 字段:沿用旧声明(评审 R1)
-	}, build)
-	if err != nil {
-		logger.Warn("拓扑替换被拒绝,保持当前快照", "error_detail", err.Error())
-		return etag
-	}
-	logger.Info("控制面拓扑已热替换", "reused", stats.Reused,
-		"created", stats.Created, "removed", stats.Removed)
-	return newETag
-}
-
 // startSighupReload 监听 SIGHUP 重读配置。只有拓扑域热更；auth/metrics/刷盘参数/
-// 管理面/静态价目/告警/日志与超时变更需重启。
+// 管理面/静态价目/告警/日志与超时变更需重启。managed 下拓扑归控制面快照，忽略 SIGHUP。
 func startSighupReload(
-	cfgPath string, logger *slog.Logger, px *proxy.Proxy,
+	cfgPath string, managed bool, logger *slog.Logger, px *proxy.Proxy,
 	build func(config.Provider) (*keypool.Pool, adapter.Adapter, error),
 ) {
 	sighup := make(chan os.Signal, 1)
 	signal.Notify(sighup, syscall.SIGHUP)
 	go func() {
 		for range sighup {
-			reloadTopology(cfgPath, logger, px, build)
+			if managed {
+				logger.Warn("managed 模式下拓扑由控制面快照管理,忽略 SIGHUP 拓扑重载")
+				continue
+			}
+			if err := reloadTopology(cfgPath, logger, px, build); err != nil {
+				logger.Warn("SIGHUP 拓扑重载失败,保持当前快照", "error_detail", err.Error())
+			}
 		}
 	}()
 }
 
-// reloadTopology 重读配置并替换拓扑；校验或替换失败保持旧态并告警。
+// reloadTopology 重读配置并替换拓扑；校验或替换失败保持旧态并返回错误。
 func reloadTopology(
 	cfgPath string, logger *slog.Logger, px *proxy.Proxy,
 	build func(config.Provider) (*keypool.Pool, adapter.Adapter, error),
-) {
+) error {
 	newCfg, err := config.Load(cfgPath)
 	if err != nil {
-		logger.Warn("SIGHUP 重载失败,保持当前配置", "error_detail", err.Error())
-		return
+		return fmt.Errorf("重载配置: %w", err)
 	}
 	stats, err := px.ReplaceTopology(proxy.Config{
 		Providers:    append([]config.Provider(nil), newCfg.Providers...),
@@ -1159,11 +1177,11 @@ func reloadTopology(
 		Capabilities: newCfg.Models,
 	}, build)
 	if err != nil {
-		logger.Warn("SIGHUP 拓扑替换被拒绝,保持当前快照", "error_detail", err.Error())
-		return
+		return err
 	}
 	logger.Info("SIGHUP 配置已热加载", "reused", stats.Reused,
 		"created", stats.Created, "removed", stats.Removed)
+	return nil
 }
 
 // newBalanceService 构造并启动余额观测；未声明任何余额源时返回 nil。
@@ -1339,12 +1357,11 @@ func balanceSnapshot(
 	return binding, true
 }
 
-// newVerifier 构造业务鉴权器（平台 key 解析 + 撤销列表拉取）。
+// newVerifier 构造业务鉴权器（平台 key 解析 + 控制快照吊销名单）。
 func newVerifier(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logger) *auth.Verifier {
 	return auth.NewVerifier(ctx, db, auth.Options{
 		PlatformSecrets:     decodePlatformSecrets(cfg.Auth.PlatformKeySecrets),
-		RevocationsURL:      cfg.Auth.RevocationsURL,
-		RevocationsInterval: time.Duration(cfg.Auth.RevocationsIntervalSec) * time.Second,
+		RevocationsRequired: cfg.ControlPlane.Managed(),
 	}, logger)
 }
 
@@ -1359,14 +1376,17 @@ func decodePlatformSecrets(secrets []string) [][]byte {
 	return out
 }
 
-// newGate 业务配额与限流闸。
-func newGate(tpm *ratelimit.TPM, db *sql.DB, logger *slog.Logger, shared ratelimit.SharedBackend) *ratelimit.Gate {
+// newGate 业务配额与限流闸；quotaSource 非 nil 即 managed 快照来源。
+func newGate(tpm *ratelimit.TPM, db *sql.DB, logger *slog.Logger, shared ratelimit.SharedBackend,
+	quotaSource ratelimit.TenantQuotaSource) *ratelimit.Gate {
 	return &ratelimit.Gate{
-		RPM:    ratelimit.New(),
-		TPM:    tpm,
-		Quota:  ratelimit.NewQuota(db, ratelimit.Options{}, logger),
-		Logger: logger,
-		Shared: shared,
+		RPM:       ratelimit.New(),
+		TPM:       tpm,
+		TenantRPM: ratelimit.New(),
+		TenantTPM: tpm,
+		Quota:     ratelimit.NewQuota(db, ratelimit.Options{Source: quotaSource}, logger),
+		Logger:    logger,
+		Shared:    shared,
 	}
 }
 
@@ -1427,108 +1447,6 @@ func withInboundMW(
 func healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version.Version})
-}
-
-// startPricingPoll 控制面价目轮询：启动即拉，失败保持原目录，下轮重试。
-func startPricingPoll(ctx context.Context, cfg *config.Config, logger *slog.Logger, db *sql.DB, refresh func() error) {
-	if cfg.ControlPlane.PricingURL == "" {
-		return
-	}
-	interval := pollInterval(cfg.ControlPlane.PollIntervalSec)
-	go func() {
-		client := &http.Client{Timeout: 10 * time.Second}
-		pending := false // 上轮刷新失败的待重试标记，比对跳过不得短路刷新
-		sync := func() {
-			pending = syncPricingOnce(ctx, client, cfg.ControlPlane.PricingURL, db, logger, refresh, pending)
-		}
-		sync() // 启动即拉，不等首个周期
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for range ticker.C {
-			sync()
-		}
-	}()
-}
-
-// syncPricingOnce 拉取一轮价目并返回更新后的待重试标记。
-func syncPricingOnce(
-	ctx context.Context, client *http.Client, url string, db *sql.DB,
-	logger *slog.Logger, refresh func() error, pending bool,
-) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		logger.Warn("构造价目拉取请求失败")
-		return pending
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		logger.Warn("控制面价目拉取失败", "error_detail", err.Error())
-		return pending
-	}
-	var body struct {
-		Pricing []admin.PricingView `json:"pricing"`
-	}
-	err = json.NewDecoder(resp.Body).Decode(&body)
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || err != nil {
-		logger.Warn("控制面价目响应非法", "status", resp.StatusCode)
-		return pending
-	}
-	changed := applyPricingItems(ctx, db, body.Pricing, time.Now(), logger)
-	if !changed && !pending {
-		return false
-	}
-	if err := refresh(); err != nil {
-		logger.Warn("控制面价目刷新失败(下轮重试)", "error_detail", err.Error())
-		return true
-	}
-	logger.Info("控制面价目已同步生效", "entries", len(body.Pricing))
-	return false
-}
-
-// applyPricingItems 逐条 upsert 价目，返回是否有任何落库变更。
-func applyPricingItems(ctx context.Context, db *sql.DB, items []admin.PricingView,
-	now time.Time, logger *slog.Logger) bool {
-	changed := false
-	for _, item := range items {
-		if applyPricingItem(ctx, db, item, now, logger) {
-			changed = true
-		}
-	}
-	return changed
-}
-
-// applyPricingItem 落库单条价目；空别名/非法条目/写失败跳过并留痕。
-func applyPricingItem(ctx context.Context, db *sql.DB, item admin.PricingView,
-	now time.Time, logger *slog.Logger) bool {
-	if item.Alias == "" {
-		return false
-	}
-	rec, err := admin.ParsePricingRecord(item.Alias, item, now)
-	if err != nil {
-		logger.Warn("控制面价目条目非法,跳过", "alias", item.Alias, "error_detail", err.Error())
-		return false
-	}
-	// 内容未变化则跳过，避免 updated_at 失去最后真实变更语义并产生无谓写放大
-	if existing, err := store.GetPricing(ctx, db, rec.Alias); err == nil && pricingRecordEqual(existing, rec) {
-		return false
-	}
-	if err := store.UpsertPricing(ctx, db, rec); err != nil {
-		logger.Warn("控制面价目落库失败", "alias", item.Alias, "error_detail", err.Error())
-		return false
-	}
-	return true
-}
-
-// pricingRecordEqual 价目内容比对（不含 updated_at）。
-func pricingRecordEqual(a *store.PricingRecord, b store.PricingRecord) bool {
-	return a.Currency == b.Currency &&
-		a.InputCredits == b.InputCredits &&
-		a.CachedInputCredits == b.CachedInputCredits &&
-		a.VisionInputCredits == b.VisionInputCredits &&
-		a.OutputCredits == b.OutputCredits &&
-		a.Timezone == b.Timezone &&
-		windowsEqual(a.Windows, b.Windows)
 }
 
 // newMetrics 按开关与管理 token 启停 /metrics 并注册仪表。

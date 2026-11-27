@@ -45,13 +45,13 @@ func TestQuota_key级边界恰差1微单位(t *testing.T) {
 
 	// 已耗 99μ：放行
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 99, now)
-	if exceeded := q.exceeded(context.Background(), info, now); exceeded {
+	if exceeded := quotaExceeded(t, q, info, now); exceeded {
 		t.Fatal("99/100 应放行")
 	}
 	// 已耗 100μ：拒绝（恰差 1μ 边界）
 	insertUsage(t, q, "k-2", quotaTenant, "key-1", 1, now)
 	time.Sleep(2 * time.Millisecond) // 等缓存过期
-	if exceeded := q.exceeded(context.Background(), info, now.Add(5*time.Millisecond)); !exceeded {
+	if exceeded := quotaExceeded(t, q, info, now.Add(5*time.Millisecond)); !exceeded {
 		t.Fatal("100/100 应拒绝(边界恰差 1μ)")
 	}
 }
@@ -61,16 +61,16 @@ func TestQuota_缓存30秒过期后生效(t *testing.T) {
 	now := time.Now()
 	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaCredits: 100}
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 100, now)
-	if exceeded := q.exceeded(context.Background(), info, now); !exceeded {
+	if exceeded := quotaExceeded(t, q, info, now); !exceeded {
 		t.Fatal("100/100 应拒绝")
 	}
 	// TTL 内（缓存未过期）：清空 usage 也不影响判定
 	q.clearUsage()
-	if exceeded := q.exceeded(context.Background(), info, now.Add(time.Second)); !exceeded {
+	if exceeded := quotaExceeded(t, q, info, now.Add(time.Second)); !exceeded {
 		t.Fatal("缓存 TTL 内应仍拒绝(一致性窗口语义)")
 	}
 	// TTL 过期：缓存失效 → 重新聚合 → 放行
-	if exceeded := q.exceeded(context.Background(), info, now.Add(31*time.Second)); exceeded {
+	if exceeded := quotaExceeded(t, q, info, now.Add(31*time.Second)); exceeded {
 		t.Fatal("缓存过期后应重新聚合并放行")
 	}
 }
@@ -82,7 +82,7 @@ func TestQuota_租户聚合第二道闸(t *testing.T) {
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 30, now)
 	insertUsage(t, q, "k-2", quotaTenant, "key-2", 25, now)
 	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaCredits: 100}
-	if exceeded := q.exceeded(context.Background(), info, now); !exceeded {
+	if exceeded := quotaExceeded(t, q, info, now); !exceeded {
 		t.Fatal("租户聚合 55/50 超限应拒绝(key 未超)")
 	}
 }
@@ -92,9 +92,19 @@ func TestQuota_quota0不限(t *testing.T) {
 	now := time.Now()
 	insertUsage(t, q, "k-1", quotaTenant, "key-1", 1_000_000, now)
 	info := &KeyInfoLite{ID: "key-1", TenantID: quotaTenant, DailyQuotaCredits: 0}
-	if exceeded := q.exceeded(context.Background(), info, now); exceeded {
+	if exceeded := quotaExceeded(t, q, info, now); exceeded {
 		t.Fatal("quota=0 视为不限")
 	}
+}
+
+// quotaExceeded 测试包装：错误即失败。
+func quotaExceeded(t *testing.T, q *Quota, info *KeyInfoLite, now time.Time) bool {
+	t.Helper()
+	exceeded, err := q.exceeded(context.Background(), info, now)
+	if err != nil {
+		t.Fatalf("配额判定错误: %v", err)
+	}
+	return exceeded
 }
 
 // ---- 测试辅助 ----

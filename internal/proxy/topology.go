@@ -45,19 +45,27 @@ func (p *Proxy) Topology() ([]config.Provider, map[string]*keypool.Pool) {
 	return s.providers, s.pools
 }
 
-// ReplaceTopology 校验并原子替换拓扑。cfg 必须包含 Providers、Routes 和 Capabilities。
-// buildPool 只为新增或已变更的 provider 调用；任何校验或构建错误都会保留旧快照。
-func (p *Proxy) ReplaceTopology(cfg Config,
-	buildPool func(config.Provider) (*keypool.Pool, adapter.Adapter, error)) (TopologyStats, error) {
+// PreparedTopology 已校验并构建完毕、尚未切换的拓扑快照。
+// 控制快照应用先 Prepare 再落库，全部成功才 Commit，避免半途失败出现新旧目录混用。
+type PreparedTopology struct {
+	snap           *topologySnapshot
+	stats          TopologyStats
+	removedClients []*http.Client
+	newClients     []*http.Client
+}
+
+// PrepareTopology 校验并构建拓扑，不切换现行快照；失败时新池不生效且可安全丢弃。
+func (p *Proxy) PrepareTopology(cfg Config,
+	buildPool func(config.Provider) (*keypool.Pool, adapter.Adapter, error)) (*PreparedTopology, error) {
 	if len(cfg.Routes) == 0 {
-		return TopologyStats{}, errors.New("拓扑替换被拒绝: model_routes 为空(下线全部路由不合法)")
+		return nil, errors.New("拓扑替换被拒绝: model_routes 为空(下线全部路由不合法)")
 	}
 	if buildPool == nil {
-		return TopologyStats{}, errors.New("拓扑替换被拒绝: 池构建回调缺失")
+		return nil, errors.New("拓扑替换被拒绝: 池构建回调缺失")
 	}
 	old := p.topo.Load()
 	if err := p.validateTopology(cfg); err != nil {
-		return TopologyStats{}, err
+		return nil, err
 	}
 
 	// 旧声明代理 URL 表:控制面拓扑载荷不含 proxy_url 字段(表达力缺口),InheritProxy=true
@@ -78,17 +86,18 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 	}
 	providersOut, err := b.buildProviders(cfg, &stats)
 	if err != nil {
-		return TopologyStats{}, err
+		return nil, err
 	}
 	// 旧有新无：池与适配器随旧快照释放，在途请求持旧池完成
 	stats.Removed = len(oldByName)
+	prep := &PreparedTopology{stats: stats}
 	for name, oc := range old.clients {
 		if _, gone := oldByName[name]; gone {
-			oc.CloseIdleConnections() // 拓扑中消失的渠道代理 client：关空闲连接防泄漏
+			prep.removedClients = append(prep.removedClients, oc)
 		}
 	}
-
-	p.topo.Store(&topologySnapshot{
+	prep.newClients = newClientsOnly(old.clients, b.clients())
+	prep.snap = &topologySnapshot{
 		providers:   providersOut,
 		routes:      sortRoutes(cfg.Routes),
 		pools:       b.pools(),
@@ -98,8 +107,52 @@ func (p *Proxy) ReplaceTopology(cfg Config,
 		nativeResps: buildNativeResps(cfg.Providers),
 		authModes:   buildAuthModes(cfg.Providers),
 		loadedAt:    time.Now(),
-	})
-	return stats, nil
+	}
+	return prep, nil
+}
+
+// CommitTopology 原子切换快照，并关闭已移除旧渠道的空闲连接；本身不会失败。
+func (p *Proxy) CommitTopology(prep *PreparedTopology) TopologyStats {
+	if prep == nil {
+		return TopologyStats{}
+	}
+	p.topo.Store(prep.snap)
+	for _, oc := range prep.removedClients {
+		oc.CloseIdleConnections()
+	}
+	return prep.stats
+}
+
+// DiscardTopology 丢弃未提交的候选拓扑，释放其新建出站 client 的空闲连接。
+func (p *Proxy) DiscardTopology(prep *PreparedTopology) {
+	if prep == nil {
+		return
+	}
+	for _, c := range prep.newClients {
+		c.CloseIdleConnections()
+	}
+}
+
+// newClientsOnly 新快照独有、旧快照没有的 client，丢弃时需要关闭。
+func newClientsOnly(old, next map[string]*http.Client) []*http.Client {
+	out := []*http.Client{}
+	for name, c := range next {
+		if old[name] != c {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ReplaceTopology 校验并原子替换拓扑。cfg 必须包含 Providers、Routes 和 Capabilities。
+// buildPool 只为新增或已变更的 provider 调用；任何校验或构建错误都会保留旧快照。
+func (p *Proxy) ReplaceTopology(cfg Config,
+	buildPool func(config.Provider) (*keypool.Pool, adapter.Adapter, error)) (TopologyStats, error) {
+	prep, err := p.PrepareTopology(cfg, buildPool)
+	if err != nil {
+		return TopologyStats{}, err
+	}
+	return p.CommitTopology(prep), nil
 }
 
 // validateTopology 拓扑校验：auth 声明共享校验、渠道 URL/权重/优先级与路由数值域、池覆盖。

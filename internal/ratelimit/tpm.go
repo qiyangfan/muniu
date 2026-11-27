@@ -53,6 +53,11 @@ func (t *TPM) Record(keyID string, tokens int64, now time.Time) {
 	r.add(now.Unix(), tokens)
 }
 
+// RecordTenant 租户聚合记账；键空间前缀隔离，避免与 key id 撞名。
+func (t *TPM) RecordTenant(tenantID string, tokens int64, now time.Time) {
+	t.Record("t:"+tenantID, tokens, now)
+}
+
 // windowTotal 窗口总 token（观测/测试用）。
 func (t *TPM) windowTotal(keyID string, now time.Time) int64 {
 	t.mu.Lock()

@@ -100,6 +100,22 @@ func DeleteExpiredCache(ctx context.Context, db *sql.DB, now time.Time) (int64, 
 	return n, nil
 }
 
+// DeleteCacheByTenant 清空指定租户缓存，返回删除行数；tenant 为空时清空整表。
+func DeleteCacheByTenant(ctx context.Context, db *sql.DB, tenant string) (int64, error) {
+	query := `DELETE FROM semantic_cache`
+	args := []any(nil)
+	if tenant != "" {
+		query += ` WHERE tenant_id = ?`
+		args = append(args, tenant)
+	}
+	res, err := db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("store: 清空语义缓存: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // LoadCacheRows 启动加载全部未过期条目，索引内存态重启后由此重建。
 func LoadCacheRows(ctx context.Context, db *sql.DB) ([]CacheRow, error) {
 	rows, err := db.QueryContext(ctx, `SELECT `+cacheCols+`

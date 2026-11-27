@@ -88,6 +88,9 @@ func pricingList(d Deps) http.HandlerFunc {
 // 三步任一失败即整单失败；刷新失败时持久化已生效，待下次启动或刷新收敛。
 func pricingPut(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectManaged(d, w, r) {
+			return
+		}
 		alias := strings.TrimSpace(r.PathValue("alias"))
 		if alias == "" {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "alias 必填")
@@ -137,6 +140,9 @@ func pricingPut(d Deps) http.HandlerFunc {
 // pricingDelete DELETE /admin/v1/pricing/{alias}：撤销运行态覆盖，该别名回落 YAML 静态兜底。
 func pricingDelete(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectManaged(d, w, r) {
+			return
+		}
 		alias := r.PathValue("alias")
 		n, err := store.DeletePricing(r.Context(), d.DB, alias)
 		if err != nil {

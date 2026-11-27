@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -234,10 +235,33 @@ type SemanticCfg struct {
 }
 
 // AuthCfg 平台 key 配置，全部可选；Secrets 空即平台 key 未启用。
+// 吊销名单不再单独拉取，统一由控制快照下发（managed 下缺失即 fail-closed）。
 type AuthCfg struct {
-	PlatformKeySecrets     []string `yaml:"platform_key_secrets"`     // base64 编码的 HMAC 密钥，解码后 ≥16 字节，支持多把轮换。
-	RevocationsURL         string   `yaml:"revocations_url"`          // 吊销名单端点，可选。
-	RevocationsIntervalSec int      `yaml:"revocations_interval_sec"` // 吊销收敛窗口，缺省 60s。
+	PlatformKeySecrets []string `yaml:"platform_key_secrets"` // base64 编码的 HMAC 密钥，解码后 ≥16 字节，支持多把轮换。
+}
+
+// ControlPlaneCfg 共享控制面消费配置：standalone 完全关闭；managed 统一走快照/注册/命令/上报。
+type ControlPlaneCfg struct {
+	Mode                   string `yaml:"mode"`                      // standalone（缺省）| managed
+	BaseURL                string `yaml:"base_url"`                  // 锦官控制 API 根地址，managed 必填
+	InstanceID             string `yaml:"instance_id"`               // 实例标识，缺省 hostname-pid；重启需稳定可显式配置
+	ServiceToken           string `yaml:"service_token"`             // 本地 pre-shared 服务令牌，仅限 loopback
+	TokenURL               string `yaml:"token_url"`                 // Keycloak client credentials 令牌端点
+	ClientID               string `yaml:"client_id"`                 // 机器 client id
+	ClientSecret           string `yaml:"client_secret"`             // 机器 client secret，支持 ${VAR}
+	SnapshotPublicKeyFile  string `yaml:"snapshot_public_key_file"`  // 快照验签 RSA 公钥 PEM，managed 必填
+	PollIntervalSec        int    `yaml:"poll_interval_sec"`         // 快照轮询间隔，缺省 60
+	HeartbeatIntervalSec   int    `yaml:"heartbeat_interval_sec"`    // 注册心跳间隔，缺省 30
+	CommandPollIntervalSec int    `yaml:"command_poll_interval_sec"` // 命令 claim 间隔，缺省 15
+	RequestTimeoutSec      int    `yaml:"request_timeout_sec"`       // 控制面单请求超时，缺省 10
+}
+
+// Managed 是否以控制面托管模式运行。
+func (c ControlPlaneCfg) Managed() bool { return c.Mode == "managed" }
+
+// ServiceAPICfg 服务只读 API（供锦官只读投影），空 token 即关闭。
+type ServiceAPICfg struct {
+	Token string `yaml:"token"` // 服务身份 Bearer，pre-shared；≥16 字符
 }
 
 // ModelCapability 模型能力声明：(provider, model) 二元组必填、零通配、零内置。
@@ -279,10 +303,8 @@ type Config struct {
 	Metering struct {
 		FlushIntervalMs int    `yaml:"flush_interval_ms"`
 		FlushBatch      int    `yaml:"flush_batch"`
-		Sink            string `yaml:"sink"`             // local 或 ingest，缺省 local
-		IngestURL       string `yaml:"ingest_url"`       // sink=ingest 必填
-		IngestToken     string `yaml:"ingest_token"`     // 可选 Bearer，支持 ${VAR} 展开
-		BufferCapacity  int    `yaml:"buffer_capacity"`  // ingest 失败的本地缓冲行数上限，缺省 1_000_000
+		Sink            string `yaml:"sink"`             // local 或 control，缺省 local；managed 缺省 control
+		BufferCapacity  int    `yaml:"buffer_capacity"`  // control 投递失败的本地缓冲行数上限，缺省 1_000_000
 		Settlement      string `yaml:"settlement"`       // 本位币 CNY 或 USD，缺省 CNY；credit 锚定本位币，1 credit = 1e-9 本位币
 		FXUSDCNYMilli   int64  `yaml:"fx_usd_cny_milli"` // 汇率，1 USD = fx/1000 CNY，如 7.200 即 7200；仅异币种价目需要
 	} `yaml:"metering"`
@@ -290,14 +312,11 @@ type Config struct {
 		WebhookURL     string `yaml:"webhook_url"`      // 告警 webhook 端点；空为告警关闭，零开销
 		DedupWindowSec int    `yaml:"dedup_window_sec"` // 同事件键静默窗口，缺省 300s
 	} `yaml:"alerts"`
-	Balance      BalanceCfg `yaml:"balance"`
-	Health       HealthCfg  `yaml:"health"`
-	ControlPlane struct {
-		PricingURL      string `yaml:"pricing_url"`       // 控制面价目列表端点；空为不拉取(standalone)
-		TopologyURL     string `yaml:"topology_url"`      // 控制面拓扑端点；空为文件源
-		PollIntervalSec int    `yaml:"poll_interval_sec"` // 拉取间隔，缺省 60s
-	} `yaml:"control_plane"`
-	RateLimit struct {
+	Balance      BalanceCfg      `yaml:"balance"`
+	Health       HealthCfg       `yaml:"health"`
+	ControlPlane ControlPlaneCfg `yaml:"control_plane"`
+	ServiceAPI   ServiceAPICfg   `yaml:"service_api"`
+	RateLimit    struct {
 		Backend   string `yaml:"backend"`    // inmem 缺省，实例自治；redis 为共享视图的集群形态
 		RedisAddr string `yaml:"redis_addr"` // backend=redis 必填，形如 host:port
 	} `yaml:"ratelimit"`
@@ -351,6 +370,44 @@ var varPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 // envNamePattern 凭证环境变量引用名形态(与 keys[].env 同纪律:存名不存值)。
 var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// rejectRetiredKeys 拒绝已退役的分散控制拉取/ingest 配置键，避免被 YAML 解码静默忽略后
+// 实例看起来仍走旧管子。greenfield 迁移：统一用 control_plane.mode=managed + 快照消费。
+func rejectRetiredKeys(raw []byte) error {
+	var doc map[string]any
+	_ = yaml.Unmarshal(raw, &doc) // 语法错误交给后续强类型解码统一报
+	if doc == nil {
+		return nil
+	}
+	retired := []struct {
+		section, key, replacement string
+	}{
+		{"control_plane", "pricing_url", "control_plane.mode: managed + base_url（统一快照）"},
+		{"control_plane", "topology_url", "control_plane.mode: managed + base_url（统一快照）"},
+		{"auth", "revocations_url", "control_plane.mode: managed（吊销随快照下发）"},
+		{"auth", "revocations_interval_sec", "control_plane.mode: managed（吊销随快照下发）"},
+		{"metering", "ingest_url", "metering.sink: control + control_plane.base_url"},
+		{"metering", "ingest_token", "control_plane 服务身份（service_token 或 client credentials）"},
+	}
+	for _, r := range retired {
+		if _, ok := sectionMap(doc, r.section)[r.key]; ok {
+			return fmt.Errorf("配置键 %s.%s 已退役，改用 %s", r.section, r.key, r.replacement)
+		}
+	}
+	if sink, ok := sectionMap(doc, "metering")["sink"].(string); ok && sink == "ingest" {
+		return fmt.Errorf("metering.sink=ingest 已退役，改用 metering.sink: control（服务身份推送）")
+	}
+	return nil
+}
+
+// sectionMap 取顶层段为 map；缺失或类型异常返回空表。
+func sectionMap(doc map[string]any, name string) map[string]any {
+	section, _ := doc[name].(map[string]any)
+	if section == nil {
+		return map[string]any{}
+	}
+	return section
+}
+
 // Load 定位(-c > MUNIU_CONFIG > ./muniu.yaml)、展开、解析、校验，任何一步失败立即返回 error；
 // 校验错误一次性列全。
 func Load(pathFlag string) (*Config, error) {
@@ -367,6 +424,9 @@ func Load(pathFlag string) (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
+	if err := rejectRetiredKeys(expanded); err != nil {
+		return nil, fmt.Errorf("解析 YAML %s: %w", path, err)
+	}
 	if err := yaml.Unmarshal(expanded, &cfg); err != nil {
 		return nil, fmt.Errorf("解析 YAML %s: %w", path, err)
 	}
@@ -440,9 +500,11 @@ func (c *Config) validateCore(add problemAdder) {
 	if c.Storage.SQLite.Path == "" {
 		c.Storage.SQLite.Path = "data/muniu.db"
 	}
+	c.validateControlPlane(add) // 先定型 managed/standalone，计量 sink 缺省依赖模式
 	c.validateMetering(add)
 	c.validateAuth(add)
 	c.validateAlerts(add)
+	c.validateServiceAPI(add)
 }
 
 // validateServer 监听地址缺省与三层超时:0 为未配置取缺省,负数为配错拒绝启动。
@@ -496,42 +558,48 @@ func (c *Config) validateMetering(add problemAdder) {
 	if m.FlushIntervalMs < 0 || m.FlushBatch < 0 {
 		add("metering 配置非法(flush_interval_ms/flush_batch 不可为负)")
 	}
-	validateMeteringSink(m.Sink, m.IngestURL, m.BufferCapacity, m.FlushBatch, add)
 	if m.BufferCapacity < 0 {
 		add("metering.buffer_capacity 不可为负")
 	}
+	validateMeteringSink(c.ControlPlane.Managed(), m.Sink, m.BufferCapacity, m.FlushBatch, add)
+	if m.Sink == "" { // 缺省随模式物化：managed 必报锦官，standalone 本地
+		if c.ControlPlane.Managed() {
+			m.Sink = "control"
+		} else {
+			m.Sink = "local"
+		}
+	}
 }
 
-// validateMeteringSink sink 取值与 ingest 形态下的必填/容量约束。
-func validateMeteringSink(sink, ingestURL string, bufferCapacity, flushBatch int, add problemAdder) {
+// validateMeteringSink sink 取值与 control 形态下的容量约束。
+func validateMeteringSink(managed bool, sink string, bufferCapacity, flushBatch int, add problemAdder) {
 	switch sink {
-	case "", "local":
-	case "ingest":
-		if ingestURL == "" {
-			add("metering.sink=ingest 时 ingest_url 必填")
+	case "":
+		return // 后续按模式物化
+	case "local":
+		if managed {
+			add("control_plane.mode=managed 时 metering.sink 必须为 control(LLM 用量只由本服务上报)")
+		}
+	case "control":
+		if !managed {
+			add("metering.sink=control 需要 control_plane.mode=managed")
 		}
 		// 缓冲容量须 ≥ 攒批量，否则单批永远装不进缓冲，续传死锁
 		if bufferCapacity != 0 && bufferCapacity < flushBatch {
 			add("metering.buffer_capacity(%d) 不可小于 flush_batch(%d)", bufferCapacity, flushBatch)
 		}
 	default:
-		add("metering.sink 非法 %q(允许 local|ingest)", sink)
+		add("metering.sink 非法 %q(允许 local|control)", sink)
 	}
 }
 
-// validateAuth 平台 key 密钥与吊销同步参数。
+// validateAuth 平台 key 密钥。
 func (c *Config) validateAuth(add problemAdder) {
 	for i, sec := range c.Auth.PlatformKeySecrets {
 		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(sec))
 		if err != nil || len(raw) < 16 {
 			add("auth.platform_key_secrets[%d] 非法(须 base64,解码后 ≥16 字节)", i)
 		}
-	}
-	if c.Auth.RevocationsURL != "" && len(c.Auth.PlatformKeySecrets) == 0 {
-		add("配置了 revocations_url 但未启用 platform_key_secrets(吊销同步无对象)")
-	}
-	if c.Auth.RevocationsIntervalSec < 0 {
-		add("auth.revocations_interval_sec 不可为负")
 	}
 }
 
@@ -640,8 +708,6 @@ func (c *Config) validateHealth(add problemAdder) {
 			add("providers[%d](%s) 声明 health.probe_model 但 keys 为空(无 key 渠道探针无从发起)", i, p.Name)
 		}
 	}
-	validateControlPlane(c.ControlPlane.PollIntervalSec, c.ControlPlane.PricingURL,
-		c.ControlPlane.TopologyURL, add)
 }
 
 // validateHealthNumeric 健康观测正整数参数逐项负值闸(报错含字段名)。
@@ -657,17 +723,121 @@ func validateHealthNumeric(h *HealthCfg, add problemAdder) {
 	}
 }
 
-// validateControlPlane 控制面轮询间隔与价目/拓扑端点形态。
-func validateControlPlane(pollSec int, pricingURL, topologyURL string, add problemAdder) {
-	if pollSec < 0 {
-		add("control_plane.poll_interval_sec 不可为负")
+// validateControlPlane 控制面模式与身份/验签配置：managed 缺身份或验签即拒绝启动（卖不过失败关闭）。
+func (c *Config) validateControlPlane(add problemAdder) {
+	cp := &c.ControlPlane
+	if cp.Mode == "" {
+		cp.Mode = "standalone"
 	}
-	if pricingURL != "" && !isAbsoluteHTTPURL(pricingURL) {
-		add("control_plane.pricing_url 非法: %q", pricingURL)
+	if cp.Mode != "standalone" && cp.Mode != "managed" {
+		add("control_plane.mode 非法 %q(允许 standalone|managed)", cp.Mode)
+		return
 	}
-	if topologyURL != "" && !isAbsoluteHTTPURL(topologyURL) {
-		add("control_plane.topology_url 非法: %q", topologyURL)
+	if !cp.Managed() {
+		rejectStandaloneControlFields(*cp, add)
+		return
 	}
+	validateControlIntervals(cp, add)
+	validateManagedEndpoint(*cp, add)
+	validateManagedIdentity(*cp, add)
+	if strings.TrimSpace(cp.SnapshotPublicKeyFile) == "" {
+		add("control_plane.mode=managed 时 snapshot_public_key_file 必填(快照验签)")
+	}
+}
+
+// validateControlIntervals 物化缺省并校验控制面循环参数。
+func validateControlIntervals(cp *ControlPlaneCfg, add problemAdder) {
+	cp.PollIntervalSec = zeroTo(cp.PollIntervalSec, 60)
+	cp.HeartbeatIntervalSec = zeroTo(cp.HeartbeatIntervalSec, 30)
+	cp.CommandPollIntervalSec = zeroTo(cp.CommandPollIntervalSec, 15)
+	cp.RequestTimeoutSec = zeroTo(cp.RequestTimeoutSec, 10)
+	if cp.PollIntervalSec < 0 || cp.HeartbeatIntervalSec < 0 ||
+		cp.CommandPollIntervalSec < 0 || cp.RequestTimeoutSec <= 0 {
+		add("control_plane 轮询/心跳/命令/超时参数非法(间隔非负、request_timeout_sec 为正)")
+	}
+}
+
+// rejectStandaloneControlFields standalone 下任何控制面字段都是误导性残留，拒绝启动。
+func rejectStandaloneControlFields(cp ControlPlaneCfg, add problemAdder) {
+	if cp.BaseURL != "" || cp.ServiceToken != "" || cp.TokenURL != "" || cp.ClientID != "" ||
+		cp.ClientSecret != "" || cp.SnapshotPublicKeyFile != "" {
+		add("control_plane.mode=standalone 时不得声明 base_url/服务身份/验签公钥(要接入控制面请显式设 managed)")
+	}
+}
+
+// validateManagedEndpoint managed 控制面地址必须为绝对 http(s) URL。
+func validateManagedEndpoint(cp ControlPlaneCfg, add problemAdder) {
+	if cp.BaseURL == "" {
+		add("control_plane.mode=managed 时 base_url 必填")
+		return
+	}
+	if !isAbsoluteHTTPURL(cp.BaseURL) {
+		add("control_plane.base_url 非法: %q(须为 http(s) 绝对 URL)", cp.BaseURL)
+	}
+}
+
+// validateManagedIdentity 身份形态：client credentials 或 loopback pre-shared 二选一，不可混用。
+func validateManagedIdentity(cp ControlPlaneCfg, add problemAdder) {
+	hasStatic := strings.TrimSpace(cp.ServiceToken) != ""
+	hasClient := cp.TokenURL != "" || cp.ClientID != "" || cp.ClientSecret != ""
+	if hasStatic && hasClient {
+		add("control_plane 服务身份形态互斥：service_token 与 token_url/client_id/client_secret 只能声明一组")
+		return
+	}
+	if !hasStatic && !hasClient {
+		add("control_plane.mode=managed 需要服务身份(service_token 或 client credentials)")
+		return
+	}
+	if hasClient {
+		validateClientCredentials(cp, add)
+		return
+	}
+	validateStaticIdentity(cp, add)
+}
+
+// validateClientCredentials 机器身份三件套齐全且 token_url 为绝对 http(s)。
+func validateClientCredentials(cp ControlPlaneCfg, add problemAdder) {
+	if cp.TokenURL == "" || cp.ClientID == "" || cp.ClientSecret == "" {
+		add("control_plane client credentials 须 token_url/client_id/client_secret 成套声明")
+		return
+	}
+	if !isAbsoluteHTTPURL(cp.TokenURL) {
+		add("control_plane.token_url 非法: %q(须为 http(s) 绝对 URL)", cp.TokenURL)
+	}
+}
+
+// validateStaticIdentity pre-shared 仅限 loopback 且 token 足够长。
+func validateStaticIdentity(cp ControlPlaneCfg, add problemAdder) {
+	if len(cp.ServiceToken) < 16 {
+		add("control_plane.service_token 过短(≥16 字符)")
+	}
+	if cp.BaseURL != "" && !isLoopbackURL(cp.BaseURL) {
+		add("control_plane.service_token(pre-shared) 仅限 loopback；非本机控制面请用 client credentials")
+	}
+}
+
+// validateServiceAPI 服务只读 API 令牌：空即关闭；设置时须足够长。
+func (c *Config) validateServiceAPI(add problemAdder) {
+	if c.ServiceAPI.Token == "" {
+		return
+	}
+	if len(c.ServiceAPI.Token) < 16 {
+		add("service_api.token 过短(≥16 字符)")
+	}
+}
+
+// isLoopbackURL URL 主机是否为 loopback/localhost。
+func isLoopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // isAbsoluteHTTPURL http(s) 绝对 URL(有 host);解析失败同判非法。

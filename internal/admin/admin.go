@@ -43,6 +43,7 @@ type StaticEntry struct {
 // Deps 管理面依赖。Verifier 用于吊销 key、变更租户后即时清空鉴权缓存；不注入则只能等 TTL 收敛。
 // PricingDir 是转发热路径消费的计价目录，StaticPricing 供 GET 列表展示 YAML 兜底价，
 // RefreshPricing 由装配层注入，在改价持久化成功后重建目录并原子替换。
+// Runtime 为控制面消费侧聚合；Managed 下共享控制本地写入口一律拒绝。
 type Deps struct {
 	DB         *sql.DB
 	AdminAuth  *auth.AdminService
@@ -52,6 +53,11 @@ type Deps struct {
 	CacheStats CacheStatsProvider
 	Topology   func() ([]config.Provider, map[string]*keypool.Pool)
 	Verifier   *auth.Verifier
+	Managed    bool
+	Runtime    RuntimeProvider
+	Logs       func(limit int) []logging.Entry
+	// ServiceAPIEnabled 服务只读 API 是否已配置（供状态页诊断）。
+	ServiceAPIEnabled bool
 
 	StaticImagePricing     map[string]metering.ImagePrice
 	UpdateImagePricing     func(context.Context, string, *store.ImagePricingRecord) error
@@ -139,6 +145,11 @@ var adminRouteTable = []adminRouteEntry{
 	{"GET /admin/v1/oauth/callback", routeExempt, oauthCallback},
 	{"GET /admin/v1/alerts/delivery-status", routeGlobalOnly, alertDeliveryStatus},
 	{"GET /admin/v1/upstream-health", routeGlobalOnly, upstreamHealth},
+	{"GET /admin/v1/runtime/status", routeGlobalOnly, runtimeStatus},
+	{"GET /admin/v1/runtime/shared-control", routeGlobalOnly, runtimeSharedControl},
+	{"GET /admin/v1/runtime/commands", routeGlobalOnly, runtimeCommands},
+	{"POST /admin/v1/runtime/commands", routeGlobalOnly, runtimeCommandExecute},
+	{"GET /admin/v1/runtime/logs", routeGlobalOnly, runtimeLogs},
 }
 
 // New 按共享令牌、活跃主体或Keycloak联邦开放管理面，认证装配失败不暴露空壳。
@@ -227,6 +238,16 @@ func decode(r *http.Request, v any) error {
 
 // ---- tenants ----
 
+// rejectManaged managed 下共享控制本地只读：价目/租户/拓扑写入口一律拒绝（第二写者闸）。
+func rejectManaged(d Deps, w http.ResponseWriter, r *http.Request) bool {
+	if !d.Managed {
+		return false
+	}
+	writeAdminError(w, r, 403, protocol.TypeForbidden, "shared_control_read_only",
+		"managed 模式下共享控制只读,请由锦官修改")
+	return true
+}
+
 func listTenants(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor := ActorFrom(r.Context())
@@ -251,6 +272,9 @@ func listTenants(d Deps) http.HandlerFunc {
 
 func createTenant(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectManaged(d, w, r) {
+			return
+		}
 		var req struct {
 			Name string `json:"name"`
 		}
@@ -269,6 +293,9 @@ func createTenant(d Deps) http.HandlerFunc {
 
 func patchTenant(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectManaged(d, w, r) {
+			return
+		}
 		id := r.PathValue("id")
 		var req struct {
 			Status              *string `json:"status"`
@@ -333,51 +360,34 @@ func listKeys(d Deps) http.HandlerFunc {
 	}
 }
 
+// managedTenantActive managed 下 key 绑定租户必须命中快照目录且为 active。
+func managedTenantActive(d Deps, w http.ResponseWriter, r *http.Request, tenantName string) bool {
+	status, err := store.TenantStatusByName(r.Context(), d.DB, tenantName)
+	if err != nil || status != "active" {
+		writeAdminError(w, r, 400, protocol.TypeBadRequest, "tenant_unavailable",
+			"租户不在控制面租户目录或已禁用")
+		return false
+	}
+	return true
+}
+
+// createKeyRequest 签发请求体。
+type createKeyRequest struct {
+	Tenant                string   `json:"tenant"`
+	Name                  string   `json:"name"`
+	RPMLimit              int64    `json:"rpm_limit"`
+	TPMLimit              int64    `json:"tpm_limit"`
+	DailyQuotaCredits     int64    `json:"daily_quota_credits"`
+	MaxRequestCostCredits int64    `json:"max_request_cost_credits"`
+	AllowedModels         []string `json:"allowed_models"` // 缺省或空 = 不限；空白条目整单拒绝
+	ExpiresAt             string   `json:"expires_at"`     // 可空，RFC3339；空 = 永不过期
+}
+
 func createKey(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Tenant                string   `json:"tenant"`
-			Name                  string   `json:"name"`
-			RPMLimit              int64    `json:"rpm_limit"`
-			TPMLimit              int64    `json:"tpm_limit"`
-			DailyQuotaCredits     int64    `json:"daily_quota_credits"`
-			MaxRequestCostCredits int64    `json:"max_request_cost_credits"`
-			AllowedModels         []string `json:"allowed_models"` // 缺省或空 = 不限；空白条目整单拒绝
-			ExpiresAt             string   `json:"expires_at"`     // 可空，RFC3339；空 = 永不过期
-		}
-		if err := decode(r, &req); err != nil || req.Name == "" {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
+		req, opts, tenantName, ok := parseCreateKey(d, w, r)
+		if !ok {
 			return
-		}
-		tenantName := strings.TrimSpace(req.Tenant)
-		if tenantName == "" {
-			tenantName = "default"
-		}
-		if !authorizeTenantName(d, w, r, tenantName) {
-			return
-		}
-		if req.MaxRequestCostCredits < 0 {
-			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "max_request_cost_credits 不可为负")
-			return
-		}
-		opts := auth.KeyOpts{
-			TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
-			MaxRequestCostCredits: req.MaxRequestCostCredits, AllowedModels: req.AllowedModels,
-		}
-		if req.ExpiresAt != "" {
-			t, err := time.Parse(time.RFC3339, req.ExpiresAt)
-			if err != nil {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 形态")
-				return
-			}
-			// 创建期拒绝过去时刻：静默接受只会产出看似正常、实际已过期的 key，
-			// 立即失效语义归 PATCH
-			if t.Before(time.Now()) {
-				writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
-					"expires_at 不可早于当前时刻(立即失效请经 PATCH 置过去时刻)")
-				return
-			}
-			opts.ExpiresAt = &t
 		}
 		plaintext, rec, err := auth.CreateKey(r.Context(), d.DB, tenantName, req.Name, req.RPMLimit, opts)
 		if err != nil {
@@ -394,18 +404,58 @@ func createKey(d Deps) http.HandlerFunc {
 	}
 }
 
-// keyPatchRequest PATCH /admin/v1/keys/{id} 请求体；raw 字段需区分「缺省/显式 null/设定值」三态。
-type keyPatchRequest struct {
-	RPMLimit              *int64          `json:"rpm_limit"`
-	TPMLimit              *int64          `json:"tpm_limit"`
-	DailyQuotaCredits     *int64          `json:"daily_quota_credits"`
-	ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动；null=清除；"RFC3339"=设定
-	Disabled              *bool           `json:"disabled"`                 // 缺省=不动；true=停用，false=恢复
-	MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动；0=不限
-	AllowedModels         json.RawMessage `json:"allowed_models"`           // 缺省=不动；null=清除即不限；数组=整体设定
+// parseCreateKey 解析并校验签发请求；失败已写信封。
+func parseCreateKey(d Deps, w http.ResponseWriter, r *http.Request) (
+	createKeyRequest, auth.KeyOpts, string, bool,
+) {
+	var req createKeyRequest
+	if err := decode(r, &req); err != nil || req.Name == "" {
+		writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "name 必填")
+		return req, auth.KeyOpts{}, "", false
+	}
+	tenantName := strings.TrimSpace(req.Tenant)
+	if tenantName == "" {
+		tenantName = "default"
+	}
+	if !authorizeTenantName(d, w, r, tenantName) {
+		return req, auth.KeyOpts{}, "", false
+	}
+	if d.Managed && !managedTenantActive(d, w, r, tenantName) {
+		return req, auth.KeyOpts{}, "", false
+	}
+	if req.MaxRequestCostCredits < 0 {
+		writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "max_request_cost_credits 不可为负")
+		return req, auth.KeyOpts{}, "", false
+	}
+	opts := auth.KeyOpts{
+		TPMLimit: req.TPMLimit, DailyQuotaCredits: req.DailyQuotaCredits,
+		MaxRequestCostCredits: req.MaxRequestCostCredits, AllowedModels: req.AllowedModels,
+	}
+	if !applyKeyExpiry(w, r, req.ExpiresAt, &opts) {
+		return req, auth.KeyOpts{}, "", false
+	}
+	return req, opts, tenantName, true
 }
 
-// applyAllowModels 把白名单字段折进补丁：缺省不动、null 清除、数组整体设定。
+// applyKeyExpiry 解析创建期过期时刻；为空即永不过期，过去时刻拒绝。
+func applyKeyExpiry(w http.ResponseWriter, r *http.Request, raw string, opts *auth.KeyOpts) bool {
+	if raw == "" {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "expires_at 须为 RFC3339 形态")
+		return false
+	}
+	if t.Before(time.Now()) {
+		writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request",
+			"expires_at 不可早于当前时刻(立即失效请经 PATCH 置过去时刻)")
+		return false
+	}
+	opts.ExpiresAt = &t
+	return true
+}
+
 func applyAllowModels(raw json.RawMessage, patch *auth.LimitsPatch) (string, bool) {
 	switch {
 	case len(raw) == 0: // 字段缺省：不动
@@ -444,6 +494,16 @@ func applyExpiresAt(raw json.RawMessage, patch *auth.LimitsPatch) (string, bool)
 		patch.ExpiresAt = &t
 		return "", true
 	}
+}
+
+type keyPatchRequest struct {
+	RPMLimit              *int64          `json:"rpm_limit"`
+	TPMLimit              *int64          `json:"tpm_limit"`
+	DailyQuotaCredits     *int64          `json:"daily_quota_credits"`
+	ExpiresAt             json.RawMessage `json:"expires_at"`               // 缺省=不动；null=清除；"RFC3339"=设定
+	Disabled              *bool           `json:"disabled"`                 // 缺省=不动；true=停用，false=恢复
+	MaxRequestCostCredits *int64          `json:"max_request_cost_credits"` // 缺省=不动；0=不限
+	AllowedModels         json.RawMessage `json:"allowed_models"`           // 缺省=不动；null=清除即不限；数组=整体设定
 }
 
 // patchKey 局部更新 key 运行态限额：省略字段不动，expires_at 显式 null 表示清除。

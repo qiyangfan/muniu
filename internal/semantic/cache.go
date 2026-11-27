@@ -239,6 +239,28 @@ func (c *Cache) ixAdd(id, tenantID, fp string, vec []float32) {
 	c.lruKeys[fp+"\x00"+tenantID] = e
 }
 
+// Clear 清空指定租户缓存（tenant 为空 = 全量），返回删除的持久行数。
+// 先删库再清内存：并发写入窗口内的新条目最多残留到下次重启/过期，召回仍受 TTL 过滤。
+func (c *Cache) Clear(ctx context.Context, tenant string) (int64, error) {
+	n, err := store.DeleteCacheByTenant(ctx, c.db, tenant)
+	if err != nil {
+		return 0, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for e := c.lru.Front(); e != nil; {
+		next := e.Next()
+		entry := e.Value.(*lruxEntry)
+		if tenant == "" || entry.tenant == tenant {
+			c.ix.Remove(entry.id)
+			c.lru.Remove(e)
+			delete(c.lruKeys, entry.fp+"\x00"+entry.tenant)
+		}
+		e = next
+	}
+	return n, nil
+}
+
 // Stats 管理面统计：条数、累计命中、容量、阈值。
 func (c *Cache) Stats(ctx context.Context) map[string]any {
 	s, _ := store.CacheStatsRowGet(ctx, c.db)

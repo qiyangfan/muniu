@@ -283,7 +283,7 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	}
 	// 密钥轮换：新旧两把验签密钥并存
 	oldKey := key
-	v2 := NewVerifier(context.Background(), nil, Options{PlatformSecrets: [][]byte{[]byte("new-secret-0123456789abcdef"), secret}, RevocationsURL: ""}, testLogger())
+	v2 := NewVerifier(context.Background(), nil, Options{PlatformSecrets: [][]byte{[]byte("new-secret-0123456789abcdef"), secret}}, testLogger())
 	t.Cleanup(v2.Close)
 	r := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 	r.Header.Set("Authorization", "Bearer "+oldKey)
@@ -313,50 +313,47 @@ func TestPlatformKey_验真与负面(t *testing.T) {
 	}
 }
 
-// 吊销同步循环：interval 缺省不 panic、启动即拉、版本单调防回退、Close 幂等。
-func TestRevocationLoop_收敛与单调(t *testing.T) {
-	version := int64(1)
-	revoked := []string{"k-1"}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"version": version, "revoked": revoked})
-	}))
-	t.Cleanup(srv.Close)
-
-	// interval 缺省时应使用安全默认值，不能将 0 传给 NewTicker。
-	v := NewVerifier(context.Background(), nil, Options{
-		PlatformSecrets:     [][]byte{[]byte("0123456789abcdef0123456789abcdef")},
-		RevocationsURL:      srv.URL,
-		RevocationsInterval: 30 * time.Millisecond,
-	}, testLogger())
-	t.Cleanup(v.Close)
-
-	key, err := FormatPlatformKey(PlatformClaims{TenantID: "t", KeyID: "k-1", ExpiresUnix: time.Now().Add(time.Hour).Unix()},
-		[]byte("0123456789abcdef0123456789abcdef"))
+// 吊销名单快照由控制面推送：版本单调、命中拒绝、managed 未就绪 fail-closed。
+func TestApplyRevocations_单调与failClosed(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	key, err := FormatPlatformKey(PlatformClaims{TenantID: "t", KeyID: "k-1", ExpiresUnix: time.Now().Add(time.Hour).Unix()}, secret)
 	if err != nil {
 		t.Fatal(err)
 	}
-	verifyKey := func() bool {
+	verify := func(v *Verifier) error {
 		r := httptest.NewRequestWithContext(context.Background(), "POST", "/x", nil)
 		r.Header.Set("Authorization", "Bearer "+key)
 		_, verr := v.verify(r)
-		return verr == nil
+		return verr
 	}
-	// 启动即拉：快照生效后 k-1 必须拒绝，轮询至多几十 ms
-	deadline := time.Now().Add(2 * time.Second)
-	for verifyKey() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	managed := NewVerifier(context.Background(), nil, Options{
+		PlatformSecrets: [][]byte{secret}, RevocationsRequired: true,
+	}, testLogger())
+	t.Cleanup(managed.Close)
+	if err := verify(managed); err == nil {
+		t.Fatal("managed 未见吊销快照时平台 key 必须拒绝")
 	}
-	if verifyKey() {
-		t.Fatal("吊销快照生效后必须拒绝")
+	if !managed.ApplyRevocations(1, []string{"k-1"}) {
+		t.Fatal("首个快照应被应用")
 	}
-	// 版本单调：旧快照(version 0)不得洗白
-	func() {
-		v.revMu.Lock()
-		defer v.revMu.Unlock()
-		if v.revVersion < 1 {
-			t.Fatal("快照版本应已递增")
-		}
-	}()
-	v.Close()
-	v.Close() // 并发/重复 Close 不得 panic
+	if err := verify(managed); err == nil {
+		t.Fatal("吊销命中必须拒绝")
+	}
+	if managed.ApplyRevocations(0, nil) {
+		t.Fatal("旧版本快照必须被拒绝")
+	}
+	if err := verify(managed); err == nil {
+		t.Fatal("旧版本快照不得洗白吊销")
+	}
+	if !managed.ApplyRevocations(2, nil) {
+		t.Fatal("新版本空名单应被应用")
+	}
+	if err := verify(managed); err != nil {
+		t.Fatalf("新版本空名单应放行: %v", err)
+	}
+	standalone := NewVerifier(context.Background(), nil, Options{PlatformSecrets: [][]byte{secret}}, testLogger())
+	t.Cleanup(standalone.Close)
+	if err := verify(standalone); err != nil {
+		t.Fatalf("standalone 不应被吊销快照阻塞: %v", err)
+	}
 }

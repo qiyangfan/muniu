@@ -394,6 +394,121 @@ components:
       properties:
         amount: { type: string, description: "余额金额十进制串(≤9 位小数,不接受符号;首尾空白会被剥离),须为正数" }
         currency: { type: string, description: "币种(CNY|USD),须与渠道配置声明一致" }
+    RuntimeSnapshotStatus:
+      type: object
+      properties:
+        version: { type: integer }
+        etag: { type: string }
+        observed_at: { type: string }
+        applied_at: { type: string }
+        last_contact: { type: string }
+        stale: { type: boolean }
+        ready: { type: boolean }
+        last_error: { type: string }
+    RuntimeRegistrationStatus:
+      type: object
+      properties:
+        state: { type: string, description: "starting|ok|degraded|disabled" }
+        last_attempt: { type: string }
+        last_success: { type: string }
+        attempts: { type: integer }
+        last_error: { type: string }
+    RuntimeStatusResponse:
+      type: object
+      required: [mode, managed, service_id, version, snapshot, registration, commands]
+      properties:
+        mode: { type: string, enum: [standalone, managed] }
+        managed: { type: boolean }
+        service_id: { type: string }
+        instance_id: { type: string }
+        version: { type: string }
+        started_at: { type: string }
+        observed_at: { type: string }
+        service_api_enabled: { type: boolean }
+        snapshot: { $ref: "#/components/schemas/RuntimeSnapshotStatus" }
+        registration: { $ref: "#/components/schemas/RuntimeRegistrationStatus" }
+        commands:
+          type: object
+          additionalProperties: { type: integer }
+    RuntimeCommandView:
+      type: object
+      required: [id, action, action_schema_version, source, status, attempts, created_at]
+      properties:
+        id: { type: string }
+        action: { type: string }
+        action_schema_version: { type: integer }
+        params: { type: object, additionalProperties: true }
+        source: { type: string, enum: [control, local] }
+        status: { type: string, enum: [pending, acked, failed] }
+        result: { type: string }
+        attempts: { type: integer }
+        idempotency_key: { type: string }
+        actor: { type: string }
+        reason: { type: string }
+        created_at: { type: string }
+        completed_at: { type: string }
+    RuntimeCommandRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, description: "cache_purge|topology_reload" }
+        params: { type: object, additionalProperties: true }
+        reason: { type: string }
+    RuntimeCommandListResponse:
+      type: object
+      required: [enabled, commands, stats]
+      properties:
+        enabled: { type: boolean }
+        commands:
+          type: array
+          items: { $ref: "#/components/schemas/RuntimeCommandView" }
+        stats:
+          type: object
+          additionalProperties: { type: integer }
+    RuntimeLogEntry:
+      type: object
+      properties:
+        time: { type: string }
+        level: { type: string }
+        message: { type: string }
+        attrs:
+          type: object
+          additionalProperties: { type: string }
+    RuntimeLogsResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/RuntimeLogEntry" }
+    SharedControlResponse:
+      type: object
+      properties:
+        managed: { type: boolean }
+        snapshot: { $ref: "#/components/schemas/RuntimeSnapshotStatus" }
+        shared:
+          type: object
+          additionalProperties: true
+    ServiceSummaryResponse:
+      type: object
+      required: [source, service_id, mode, version, instance_id, domain, control, stale]
+      properties:
+        source: { type: string, enum: [muniu] }
+        service_id: { type: string }
+        mode: { type: string, enum: [standalone, managed] }
+        version: { type: string }
+        instance_id: { type: string }
+        observed_at: { type: string }
+        stale: { type: boolean }
+        runtime:
+          type: object
+          additionalProperties: true
+        domain:
+          type: object
+          additionalProperties: true
+        control:
+          type: object
+          additionalProperties: true
 paths:
   /healthz:
     get:
@@ -946,3 +1061,67 @@ paths:
                     type: array
                     items: {$ref: "#/components/schemas/AdminAudit"}
                   next_cursor: {type: string}
+  /admin/v1/runtime/status:
+    get:
+      summary: 控制面消费状态（模式/快照/注册/命令计数）
+      responses:
+        "200":
+          description: 运行时状态
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuntimeStatusResponse"}
+  /admin/v1/runtime/shared-control:
+    get:
+      summary: 共享控制只读投影（计数，不含配置明细与凭据）
+      responses:
+        "200":
+          description: 共享控制投影
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SharedControlResponse"}
+  /admin/v1/runtime/commands:
+    get:
+      summary: 运行时命令台账（跨服务 + 本地）
+      responses:
+        "200":
+          description: 命令列表与状态计数
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuntimeCommandListResponse"}
+    post:
+      summary: 本地运行命令直接执行（不经锦官队列）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RuntimeCommandRequest"}
+      responses:
+        "200":
+          description: 执行结果
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuntimeCommandView"}
+        "400": {description: 参数非法或执行失败}
+  /admin/v1/runtime/logs:
+    get:
+      summary: 最近进程日志（已脱敏）
+      parameters:
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 200, default: 100}}
+      responses:
+        "200":
+          description: 日志条目
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/RuntimeLogsResponse"}
+  /service/v1/summary:
+    get:
+      summary: 服务只读摘要（供锦官只读投影；服务身份认证，不含凭据）
+      parameters:
+        - {name: Authorization, in: header, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: 脱敏摘要
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ServiceSummaryResponse"}
+        "401": {description: 服务身份无效}

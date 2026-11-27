@@ -230,6 +230,19 @@ func TenantIDByName(ctx context.Context, db *sql.DB, name string) (string, error
 	return id, nil
 }
 
+// TenantStatusByName 按名称取租户状态；managed 下 key 签发必须命中快照目录且为 active。
+func TenantStatusByName(ctx context.Context, db *sql.DB, name string) (string, error) {
+	var status string
+	err := db.QueryRowContext(ctx, `SELECT status FROM tenants WHERE name = ?`, name).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("store: 查租户状态: %w", err)
+	}
+	return status, nil
+}
+
 // GetAPIKeyByHash 按 sha256 hex 查 key；吊销行也返回，启用与否由调用方按 Status/TenantStatus 判定。
 // expires_at 列损坏即非 RFC3339 时按查询错误返回，宁可拒绝该 key，不放行时间语义不明的凭据。
 func GetAPIKeyByHash(ctx context.Context, db *sql.DB, hash string) (*APIKey, error) {

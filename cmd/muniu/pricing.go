@@ -125,16 +125,3 @@ func formatClockMinutes(m int) string {
 	}
 	return fmt.Sprintf("%02d:%02d", m/60, m%60)
 }
-
-// windowsEqual 时段窗逐条相等；顺序敏感，先声明先匹配是匹配语义的一部分。
-func windowsEqual(a, b []store.PricingWindowRecord) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}

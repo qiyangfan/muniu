@@ -48,6 +48,9 @@ type IngestSink struct {
 	Ctx   context.Context
 	URL   string
 	Token string
+	// Source/SchemaVersion 控制面来源信封；空 Source 保持旧 {"rows"} 形态。
+	Source        string
+	SchemaVersion int
 	// Client 可注入以便测试；nil 用共享默认超时客户端。
 	Client *http.Client
 }
@@ -57,7 +60,12 @@ func (s *IngestSink) Name() string { return "control-plane-ingest" }
 
 // Write 批量投递。
 func (s *IngestSink) Write(batch []store.UsageRow) error {
-	body, err := json.Marshal(map[string]any{"rows": batch})
+	envelope := map[string]any{"rows": batch}
+	if s.Source != "" {
+		envelope["source"] = s.Source
+		envelope["schema_version"] = s.SchemaVersion
+	}
+	body, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("metering: 序列化投递批次: %w", err)
 	}

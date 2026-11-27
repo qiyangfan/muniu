@@ -61,6 +61,9 @@ func imagePricingList(d Deps) http.HandlerFunc {
 
 func imagePricingPut(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectManaged(d, w, r) {
+			return
+		}
 		var v ImagePricingView
 		if err := decode(r, &v); err != nil {
 			writeAdminError(w, r, 400, protocol.TypeBadRequest, "bad_request", "价目请求非法")
@@ -90,6 +93,9 @@ func imagePricingPut(d Deps) http.HandlerFunc {
 
 func imagePricingDelete(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if rejectManaged(d, w, r) {
+			return
+		}
 		if d.UpdateImagePricing == nil {
 			writeAdminError(w, r, 500, protocol.TypeInternal, "internal", "价目目录未装配")
 			return

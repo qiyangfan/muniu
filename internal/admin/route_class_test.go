@@ -44,6 +44,11 @@ func TestAdminRouteTable_分类覆全且显式(t *testing.T) {
 		"GET /admin/v1/oauth/callback":               routeExempt,
 		"GET /admin/v1/alerts/delivery-status":       routeGlobalOnly,
 		"GET /admin/v1/upstream-health":              routeGlobalOnly,
+		"GET /admin/v1/runtime/status":               routeGlobalOnly,
+		"GET /admin/v1/runtime/shared-control":       routeGlobalOnly,
+		"GET /admin/v1/runtime/commands":             routeGlobalOnly,
+		"POST /admin/v1/runtime/commands":            routeGlobalOnly,
+		"GET /admin/v1/runtime/logs":                 routeGlobalOnly,
 	}
 	if len(want) != len(adminRouteTable) {
 		t.Fatalf("分类期望表 %d 条,路由表 %d 条:新增/删除路由必须同步登记分类", len(want), len(adminRouteTable))

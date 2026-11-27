@@ -220,3 +220,31 @@ func cosineVector(base []float32, target float64) []float32 {
 	}
 	return out
 }
+
+func TestCache_Clear租户与全量(t *testing.T) {
+	emb := &stubEmbedder{vec: []float32{1, 0, 0, 0}}
+	c, _ := newTestCache(t, emb)
+	resp := []byte(`{"choices":[{"message":{"role":"assistant","content":"x"},"finish_reason":"stop"}]}`)
+	for _, tc := range []struct{ tenant, fp string }{{"t1", "fp-1"}, {"t2", "fp-2"}} {
+		if err := c.Store(context.Background(), tc.tenant, tc.fp, "alias-a", []float32{1, 0, 0, 0}, resp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := c.Clear(context.Background(), "t1")
+	if err != nil || n != 1 {
+		t.Fatalf("按租户清理应删 1 行: %d %v", n, err)
+	}
+	if _, hit := c.Lookup(context.Background(), "t1", "fp-1", []float32{1, 0, 0, 0}); hit {
+		t.Fatal("t1 清理后不得命中")
+	}
+	if _, hit := c.Lookup(context.Background(), "t2", "fp-2", []float32{1, 0, 0, 0}); !hit {
+		t.Fatal("t2 不应受影响")
+	}
+	n, err = c.Clear(context.Background(), "")
+	if err != nil || n != 1 {
+		t.Fatalf("全量清理应删剩余 1 行: %d %v", n, err)
+	}
+	if _, hit := c.Lookup(context.Background(), "t2", "fp-2", []float32{1, 0, 0, 0}); hit {
+		t.Fatal("全量清理后不得命中")
+	}
+}

@@ -206,3 +206,8 @@ func (b *RedisBackend) maybeProbe() {
 func (b *RedisBackend) Record(keyID string, tokens int64, now time.Time) {
 	b.RecordTPM(keyID, tokens, now)
 }
+
+// RecordTenant 租户聚合记账；键空间前缀与 Gate 判定一致。
+func (b *RedisBackend) RecordTenant(tenantID string, tokens int64, now time.Time) {
+	b.RecordTPM("t:"+tenantID, tokens, now)
+}

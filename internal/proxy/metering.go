@@ -18,6 +18,7 @@ import (
 	"github.com/solvela/muniu/internal/metering"
 	"github.com/solvela/muniu/internal/metrics"
 	"github.com/solvela/muniu/internal/protocol"
+	"github.com/solvela/muniu/internal/ratelimit"
 )
 
 // costBudgetExceededCode 请求级成本预算超限的错误码，归入 402 quota_exceeded 类型族，
@@ -246,13 +247,18 @@ func (m *meterState) pricingSnapshot(dir *metering.PricingDirectory, modelAlias 
 	return nil
 }
 
-// recordTPM TPM 记账：请求完成后按实际 token 计入滑动窗口。
+// recordTPM TPM 记账：请求完成后按实际 token 计入 key 与租户聚合滑动窗口。
 func (p *Proxy) recordTPM(r *http.Request, usage protocol.Usage) {
 	if p.tpm == nil {
 		return
 	}
 	if info := auth.KeyFrom(r.Context()); info != nil {
-		p.tpm.Record(info.ID, usage.PromptTokens+usage.CompletionTokens, time.Now())
+		tokens := usage.PromptTokens + usage.CompletionTokens
+		now := time.Now()
+		p.tpm.Record(info.ID, tokens, now)
+		if tenantRec, ok := p.tpm.(ratelimit.TenantTPMRecorder); ok {
+			tenantRec.RecordTenant(info.TenantID, tokens, now)
+		}
 	}
 }
 
