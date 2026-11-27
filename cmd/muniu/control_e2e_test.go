@@ -39,6 +39,7 @@ type controlPlaneServer struct {
 	etag        string
 	registers   atomic.Int64
 	heartbeats  atomic.Int64
+	healths     atomic.Int64
 	usage       atomic.Value
 	claims      atomic.Int64
 	acks        atomic.Value
@@ -82,13 +83,16 @@ func (c *controlPlaneServer) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("ETag", c.etag)
-		w.Header().Set("X-Control-Signature", c.sign(c.snapshot))
+		w.Header().Set("X-Jinguan-Signature", c.sign(c.snapshot))
 		_, _ = w.Write(c.snapshot)
-	case r.URL.Path == "/control/v1/registry/instances":
+	case r.URL.Path == "/control/v1/registry/register":
 		c.registers.Add(1)
 		w.WriteHeader(http.StatusNoContent)
-	case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+	case r.URL.Path == "/control/v1/registry/heartbeat":
 		c.heartbeats.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	case r.URL.Path == "/ingest/health":
+		c.healths.Add(1)
 		w.WriteHeader(http.StatusNoContent)
 	case r.URL.Path == "/ingest/usage":
 		raw, _ := io.ReadAll(r.Body)
@@ -96,14 +100,15 @@ func (c *controlPlaneServer) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case r.URL.Path == "/control/v1/commands/claim":
 		if c.claims.Add(1) == 1 {
-			_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{
-				map[string]any{"id": "cmd-1", "action": "cache_purge", "action_schema_version": 1,
-					"params": map[string]any{"all": true}, "idempotency_key": "idem-1",
-					"actor": "ops", "reason": "routine"},
-			}})
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"id": "cmd-1", "serviceId": "muniu", "action": "cache_purge",
+					"actionSchemaVersion": 1, "params": map[string]any{"all": true},
+					"actor": "ops", "reason": "routine", "status": "CLAIMED", "attempts": 1,
+					"maxAttempts": 3, "createdAt": time.Now().UTC(), "updatedAt": time.Now().UTC()},
+			})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{}})
+		_ = json.NewEncoder(w).Encode([]any{})
 	case strings.HasSuffix(r.URL.Path, "/ack"):
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -118,20 +123,39 @@ func (c *controlPlaneServer) handle(w http.ResponseWriter, r *http.Request) {
 func managedSnapshot(t *testing.T, upstreamURL string) []byte {
 	t.Helper()
 	env := struct {
-		Version    int64     `json:"version"`
-		ObservedAt time.Time `json:"observed_at"`
-		Payload    any       `json:"payload"`
+		Version          int64     `json:"version"`
+		ObservedAt       time.Time `json:"observed_at"`
+		ServiceID        string    `json:"service_id"`
+		ETag             string    `json:"etag"`
+		SecuritySections []string  `json:"security_sections"`
+		Sections         any       `json:"sections"`
 	}{
-		Version: 1, ObservedAt: time.Now().UTC(),
-		Payload: map[string]any{
-			"pricing": []map[string]any{{
+		Version: 1, ObservedAt: time.Now().UTC(), ServiceID: "muniu", ETag: `"v1"`,
+		SecuritySections: []string{"tenant_directory", "entitlements", "policy_packages", "key_revocations"},
+		Sections: map[string]any{
+			"tenant_directory": map[string]any{
+				"tenantCount": 1,
+				"tenants": []map[string]any{{
+					"id": "01900000-0000-7000-8000-000000000001", "tenantKey": "default",
+					"name": "default", "status": "ACTIVE", "members": []any{},
+				}},
+			},
+			"entitlements": map[string]any{
+				"tenantCount": 1,
+				"tenants": []map[string]any{{
+					"tenantKey": "default", "planKey": "pro", "quotas": []any{},
+					"entitlementKeys": []string{},
+				}},
+			},
+			"policy_packages": map[string]any{"packageCount": 0, "packages": []any{}},
+			"pricing": map[string]any{"pricing": []map[string]any{{
 				"alias": "alias-a", "currency": "CNY", "input": "2.00", "cached_input": "",
 				"vision_input": "", "output": "8.00", "timezone": "UTC", "time_windows": []any{},
-			}},
-			"image_pricing": []map[string]any{{
+			}}},
+			"image_pricing": map[string]any{"entries": []map[string]any{{
 				"alias": "img-a", "currency": "CNY", "default": "0.50",
 				"tiers": map[string]string{"1024x1024|standard": "1.00"},
-			}},
+			}}},
 			"topology": map[string]any{
 				"providers": []map[string]any{{
 					"name": "openai", "adapter": "openai", "base_url": upstreamURL,
@@ -142,11 +166,7 @@ func managedSnapshot(t *testing.T, upstreamURL string) []byte {
 				},
 				"models": []any{},
 			},
-			"revocations": map[string]any{"version": 1, "revoked": []string{}},
-			"tenants": []map[string]any{{
-				"id": "01900000-0000-7000-8000-000000000001", "name": "default",
-				"status": "active", "rpm_limit": 0, "tpm_limit": 0, "daily_quota_credits": 0,
-			}},
+			"key_revocations": map[string]any{"version": 1, "revoked": []string{}},
 		},
 	}
 	raw, err := json.Marshal(env)
@@ -188,6 +208,7 @@ metering:
 control_plane:
   mode: managed
   base_url: "` + controlURL + `"
+  environment: "local"
   service_token: "` + managedServiceToken + `"
   snapshot_public_key_file: "` + pubPath + `"
   poll_interval_sec: 1
@@ -270,8 +291,9 @@ func TestManagedE2E_快照注册用量命令与只读面(t *testing.T) {
 		t.Fatalf("managed 装配失败: %v", err)
 	}
 	t.Cleanup(cleanup)
-	if !containsRoute(routes, "GET /service/v1/summary") {
-		t.Fatal("service_api 配置后必须注册只读路由")
+	if !containsRoute(routes, "GET /service/v1/summary") ||
+		!containsRoute(routes, "GET /service/v1/read-projection") {
+		t.Fatalf("service_api 配置后必须注册只读路由: %v", routes)
 	}
 	ts := httptest.NewServer(handler)
 	t.Cleanup(ts.Close)
@@ -293,8 +315,9 @@ func TestManagedE2E_快照注册用量命令与只读面(t *testing.T) {
 	if !waitUsage(cp, "alias-a") {
 		t.Fatal("用量必须上报锦官且 source=muniu")
 	}
-	if cp.registers.Load() == 0 || cp.heartbeats.Load() == 0 {
-		t.Fatalf("注册/心跳未上报: reg=%d hb=%d", cp.registers.Load(), cp.heartbeats.Load())
+	if cp.registers.Load() == 0 || cp.heartbeats.Load() == 0 || cp.healths.Load() == 0 {
+		t.Fatalf("注册/心跳/健康未上报: reg=%d hb=%d health=%d",
+			cp.registers.Load(), cp.heartbeats.Load(), cp.healths.Load())
 	}
 	if cp.authMissing.Load() {
 		t.Fatal("控制面调用必须携带服务身份")
@@ -355,6 +378,11 @@ func TestManagedE2E_快照注册用量命令与只读面(t *testing.T) {
 	code, body = adminCall(t, ts.URL, "GET", "/service/v1/summary", managedReadToken, "")
 	if code != 200 || !strings.Contains(body, `"source":"muniu"`) {
 		t.Fatalf("服务只读摘要不符: %d %s", code, body)
+	}
+	code, body = adminCall(t, ts.URL, "GET", "/service/v1/read-projection", managedReadToken, "")
+	if code != 200 || !strings.Contains(body, `"service_id":"muniu"`) ||
+		!strings.Contains(body, `"sections"`) {
+		t.Fatalf("服务只读投影不符: %d %s", code, body)
 	}
 	for _, forbidden := range []string{"service_token", "client_secret", "Authorization", "password"} {
 		if strings.Contains(body, forbidden) {

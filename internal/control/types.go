@@ -28,11 +28,6 @@ func Capabilities() []string {
 	}
 }
 
-// EntitlementKeys 本服务执行/上报的权益键；LLM token/费用只由 muniu 产生。
-func EntitlementKeys() []string {
-	return []string{"llm.tokens", "llm.requests", "llm.images", "cache.semantic"}
-}
-
 // AdminAPIs 服务 admin API 能力，供控制面投影与诊断。
 func AdminAPIs() []string {
 	return []string{

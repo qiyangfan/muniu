@@ -244,12 +244,14 @@ type AuthCfg struct {
 type ControlPlaneCfg struct {
 	Mode                   string `yaml:"mode"`                      // standalone（缺省）| managed
 	BaseURL                string `yaml:"base_url"`                  // 锦官控制 API 根地址，managed 必填
+	Environment            string `yaml:"environment"`               // 注册环境标识，缺省 local
 	InstanceID             string `yaml:"instance_id"`               // 实例标识，缺省 hostname-pid；重启需稳定可显式配置
 	ServiceToken           string `yaml:"service_token"`             // 本地 pre-shared 服务令牌，仅限 loopback
 	TokenURL               string `yaml:"token_url"`                 // Keycloak client credentials 令牌端点
 	ClientID               string `yaml:"client_id"`                 // 机器 client id
 	ClientSecret           string `yaml:"client_secret"`             // 机器 client secret，支持 ${VAR}
-	SnapshotPublicKeyFile  string `yaml:"snapshot_public_key_file"`  // 快照验签 RSA 公钥 PEM，managed 必填
+	SnapshotPublicKeyFile  string `yaml:"snapshot_public_key_file"`  // 可选静态 pin；空=走 JWKS
+	SnapshotJWKSURL        string `yaml:"snapshot_jwks_url"`         // 空=由 base_url + /.well-known/jwks.json 派生
 	PollIntervalSec        int    `yaml:"poll_interval_sec"`         // 快照轮询间隔，缺省 60
 	HeartbeatIntervalSec   int    `yaml:"heartbeat_interval_sec"`    // 注册心跳间隔，缺省 30
 	CommandPollIntervalSec int    `yaml:"command_poll_interval_sec"` // 命令 claim 间隔，缺省 15
@@ -259,10 +261,24 @@ type ControlPlaneCfg struct {
 // Managed 是否以控制面托管模式运行。
 func (c ControlPlaneCfg) Managed() bool { return c.Mode == "managed" }
 
-// ServiceAPICfg 服务只读 API（供锦官只读投影），空 token 即关闭。
+// ServiceAPICfg 服务只读 API（供锦官只读投影）；未声明任何身份即关闭。
+// 本地 pre-shared 仅接受回环来源；managed 生产走 Keycloak 服务 token。
 type ServiceAPICfg struct {
-	Token string `yaml:"token"` // 服务身份 Bearer，pre-shared；≥16 字符
+	Token         string   `yaml:"token"`          // 本地 pre-shared Bearer，仅回环；≥16 字符
+	Issuer        string   `yaml:"issuer"`         // Keycloak realm issuer；声明即启用服务 token 校验
+	Audience      string   `yaml:"audience"`       // 目标受众，缺省 muniu
+	Clients       []string `yaml:"clients"`        // azp 白名单，如 jinguan-read-muniu
+	RequiredScope string   `yaml:"required_scope"` // 必含 scope，缺省 service:read
 }
+
+// Enabled 是否配置了任一身份校验。
+func (c ServiceAPICfg) Enabled() bool {
+	return c.Token != "" || c.Issuer != "" || c.Audience != "" ||
+		len(c.Clients) > 0 || c.RequiredScope != ""
+}
+
+// Keycloak 是否声明 Keycloak 服务 token 校验。
+func (c ServiceAPICfg) Keycloak() bool { return c.Issuer != "" }
 
 // ModelCapability 模型能力声明：(provider, model) 二元组必填、零通配、零内置。
 // 声明了约束才干预，未声明即零干预透传。
@@ -737,12 +753,12 @@ func (c *Config) validateControlPlane(add problemAdder) {
 		rejectStandaloneControlFields(*cp, add)
 		return
 	}
+	if strings.TrimSpace(cp.Environment) == "" {
+		cp.Environment = "local"
+	}
 	validateControlIntervals(cp, add)
 	validateManagedEndpoint(*cp, add)
 	validateManagedIdentity(*cp, add)
-	if strings.TrimSpace(cp.SnapshotPublicKeyFile) == "" {
-		add("control_plane.mode=managed 时 snapshot_public_key_file 必填(快照验签)")
-	}
 }
 
 // validateControlIntervals 物化缺省并校验控制面循环参数。
@@ -759,9 +775,10 @@ func validateControlIntervals(cp *ControlPlaneCfg, add problemAdder) {
 
 // rejectStandaloneControlFields standalone 下任何控制面字段都是误导性残留，拒绝启动。
 func rejectStandaloneControlFields(cp ControlPlaneCfg, add problemAdder) {
-	if cp.BaseURL != "" || cp.ServiceToken != "" || cp.TokenURL != "" || cp.ClientID != "" ||
-		cp.ClientSecret != "" || cp.SnapshotPublicKeyFile != "" {
-		add("control_plane.mode=standalone 时不得声明 base_url/服务身份/验签公钥(要接入控制面请显式设 managed)")
+	if cp.BaseURL != "" || cp.Environment != "" || cp.ServiceToken != "" || cp.TokenURL != "" ||
+		cp.ClientID != "" || cp.ClientSecret != "" || cp.SnapshotPublicKeyFile != "" ||
+		cp.SnapshotJWKSURL != "" {
+		add("control_plane.mode=standalone 时不得声明 base_url/environment/服务身份/验签来源(要接入控制面请显式设 managed)")
 	}
 }
 
@@ -773,6 +790,9 @@ func validateManagedEndpoint(cp ControlPlaneCfg, add problemAdder) {
 	}
 	if !isAbsoluteHTTPURL(cp.BaseURL) {
 		add("control_plane.base_url 非法: %q(须为 http(s) 绝对 URL)", cp.BaseURL)
+	}
+	if cp.SnapshotJWKSURL != "" && !isAbsoluteHTTPURL(cp.SnapshotJWKSURL) {
+		add("control_plane.snapshot_jwks_url 非法: %q(须为 http(s) 绝对 URL)", cp.SnapshotJWKSURL)
 	}
 }
 
@@ -816,13 +836,41 @@ func validateStaticIdentity(cp ControlPlaneCfg, add problemAdder) {
 	}
 }
 
-// validateServiceAPI 服务只读 API 令牌：空即关闭；设置时须足够长。
+// validateServiceAPI 服务只读 API 身份：本地令牌须足够长；Keycloak 段须成套声明。
 func (c *Config) validateServiceAPI(add problemAdder) {
-	if c.ServiceAPI.Token == "" {
+	s := &c.ServiceAPI
+	if s.Token != "" && len(s.Token) < 16 {
+		add("service_api.token 过短(≥16 字符)")
+	}
+	if s.Issuer == "" {
+		if s.Audience != "" || len(s.Clients) > 0 || s.RequiredScope != "" {
+			add("service_api 的 audience/clients/required_scope 须与 issuer 成套声明")
+		}
 		return
 	}
-	if len(c.ServiceAPI.Token) < 16 {
-		add("service_api.token 过短(≥16 字符)")
+	c.validateServiceAPIKeycloak(add)
+}
+
+// validateServiceAPIKeycloak Keycloak 段值域与缺省物化。
+func (c *Config) validateServiceAPIKeycloak(add problemAdder) {
+	s := &c.ServiceAPI
+	if !isAbsoluteHTTPURL(s.Issuer) {
+		add("service_api.issuer 非法: %q(须为 http(s) 绝对 URL)", s.Issuer)
+	}
+	if len(s.Clients) == 0 {
+		add("service_api.issuer 声明时必须配置 clients 白名单")
+	}
+	for _, client := range s.Clients {
+		if strings.TrimSpace(client) == "" {
+			add("service_api.clients 不可包含空值")
+			break
+		}
+	}
+	if s.Audience == "" {
+		s.Audience = "muniu"
+	}
+	if s.RequiredScope == "" {
+		s.RequiredScope = "service:read"
 	}
 }
 

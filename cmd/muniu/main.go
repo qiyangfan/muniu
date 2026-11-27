@@ -136,7 +136,7 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 	startedAt := time.Now()
 	ring := logging.NewRing(200)
 	logger = slog.New(logging.NewTeeHandler(logger.Handler(), ring))
-	controlClient, controlPublicKey, err := newControlClient(cfg, logger)
+	controlClient, controlKeys, err := newControlClient(cfg, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -193,7 +193,7 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 
 	controlRuntime, err := buildControlRuntime(ctx, controlWiring{
 		cfg: cfg, cfgPath: cfgPath, db: db, logger: logger,
-		client: controlClient, publicKey: controlPublicKey, px: chatProxy, buildPool: buildPool,
+		client: controlClient, keys: controlKeys, px: chatProxy, buildPool: buildPool,
 		pricingDir: pricingDir, imageDir: imageDir, settlement: settlement, fxMilli: pricing.fxMilli,
 		verifier: verifier, quotas: quotas, cache: cacheInst, startedAt: startedAt,
 	})
@@ -208,7 +208,7 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 		staticImages: staticImages, updateImages: updateImages, staticHuman: staticHuman,
 		pluginReg: pluginReg, oauthFlow: oauthFlow,
 		runtime: controlRuntime, logs: ring, managed: cfg.ControlPlane.Managed(),
-		serviceAPIEnabled: cfg.ServiceAPI.Token != "",
+		serviceAPIEnabled: cfg.ServiceAPI.Enabled(),
 	}, rebuildPricing, cacheInst)
 	if err != nil {
 		return nil, nil, nil, err
@@ -222,17 +222,26 @@ func assemble(ctx context.Context, cfg *config.Config, cfgPath string, logger *s
 	return root, declared, cleanup, nil
 }
 
-// newServiceHandler 服务只读 API；未配置 token 即返回 nil（不挂载）。
+// newServiceHandler 服务只读 API；未配置任何身份即返回 nil（不挂载）。
 func newServiceHandler(cfg *config.Config, db *sql.DB, rt *control.Runtime, plugins *plugin.Registry,
 	px *proxy.Proxy, startedAt time.Time, logger *slog.Logger) http.Handler {
-	if cfg.ServiceAPI.Token == "" {
+	if !cfg.ServiceAPI.Enabled() {
 		return nil
 	}
-	return serviceapi.New(serviceapi.Deps{
+	deps := serviceapi.Deps{
 		Token:   cfg.ServiceAPI.Token,
 		Summary: newServiceSummary(db, rt, cfg, plugins, px, startedAt),
 		Logger:  logger,
-	})
+	}
+	if cfg.ServiceAPI.Keycloak() {
+		deps.Verifier = oidc.NewServiceVerifier(oidc.ServiceTokenConfig{
+			Issuer:         cfg.ServiceAPI.Issuer,
+			Audience:       cfg.ServiceAPI.Audience,
+			AllowedClients: cfg.ServiceAPI.Clients,
+			RequiredScope:  cfg.ServiceAPI.RequiredScope,
+		}, nil)
+	}
+	return serviceapi.New(deps)
 }
 
 // managedQuotas managed 下的租户配额快照源；standalone 返回双 nil。
@@ -440,7 +449,7 @@ func mountRoutes(
 	}
 	if serviceHandler != nil {
 		root.Handle("/service/v1/", server.Chain(serviceHandler, server.RequestID, server.Recover(logger)))
-		declared = append(declared, "GET /service/v1/summary")
+		declared = append(declared, "GET /service/v1/summary", "GET /service/v1/read-projection")
 	}
 	if metricsEnabled {
 		root.Handle("GET /metrics", server.Recover(logger)(metricsHandler(adminToken)))

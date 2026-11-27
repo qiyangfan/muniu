@@ -35,14 +35,18 @@ control_plane:
   token_url: "http://keycloak:8080/realms/longzhong/protocol/openid-connect/token"
   client_id: "muniu-control"
   client_secret: "${MUNIU_CONTROL_CLIENT_SECRET}"
-  snapshot_public_key_file: "/etc/muniu/control-signing.pem"
+  snapshot_jwks_url: "http://jinguan:8090/.well-known/jwks.json"  # 空=由 base_url 派生
+  # 可选离线 pin（配置后不跟随锦官轮换）：snapshot_public_key_file: "/etc/muniu/control-signing.pem"
   poll_interval_sec: 60
   heartbeat_interval_sec: 30
   command_poll_interval_sec: 15
   request_timeout_sec: 10
 
 service_api:
-  token: "${MUNIU_SERVICE_READ_TOKEN}"                    # 供锦官只读投影
+  issuer: "http://keycloak:8080/realms/longzhong"         # 供锦官只读投影
+  clients: ["jinguan-read-muniu"]
+  # 本地回环演练才用 token；生产不配置 pre-shared
+  # token: "${MUNIU_SERVICE_READ_TOKEN}"
 
 ratelimit:
   backend: redis                        # 共享视图(cluster 形态,ADR-0008 修订):×N 消除

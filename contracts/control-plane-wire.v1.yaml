@@ -1,16 +1,17 @@
-# 锦官控制面 wire 契约提案 v1（muniu 消费侧）
-# 状态：本仓冻结的提案，X-01 关闭前不构成跨仓已成约事实；锦官实现须逐项对拍。
-# owner: longzhong/muniu；变更纪律见 docs/design/control-plane-client.md。
+# longzhong 控制面 wire v1（X-01 冻结版，muniu 消费档案）
+# 状态：以锦官 src/main/resources/contracts/control-plane 为单一来源；本文件只登记
+# muniu 消费的端点、信封与必填字段，不再另立第二套提案。字段/方向变化先改锦官契约。
+# 变更纪律见 docs/design/control-plane-client.md。
 openapi: 3.1.0
 info:
-  title: longzhong control-plane wire (muniu consumer)
+  title: longzhong control-plane wire (muniu consumer profile)
   version: "1"
   description: |
-    muniu 作为数据面消费锦官控制面所需的最小 wire 契约：服务身份、统一快照、
-    注册心跳、跨服务命令与用量上报。所有时间均为 RFC3339 UTC 字符串。
+    muniu 作为数据面消费锦官共享控制所需的最小 wire 契约。所有时间均为 RFC3339 UTC。
+    快照签名是响应体裸签名，算法 RSA-SHA256 PKCS#1 v1.5，签名在响应头。
 x-service-id: muniu
-x-proposal-status: pending-jinguan-implementation
-x-signature-header: X-Control-Signature
+x-proposal-status: frozen-jinguan-x01
+x-signature-header: X-Jinguan-Signature
 x-signature:
   algorithm: RSA-SHA256
   padding: PKCS1v15
@@ -29,15 +30,16 @@ paths:
           description: 新快照；响应体整体签名
           headers:
             ETag: {schema: {type: string}}
-            X-Control-Signature: {schema: {type: string}}
+            X-Jinguan-Signature: {schema: {type: string}}
+            X-Jinguan-Key-Id: {schema: {type: string}}
           content:
             application/json:
               schema: {$ref: "#/components/schemas/SnapshotEnvelope"}
         "304":
           description: 未变更；视为控制面可达
-  /control/v1/registry/instances:
+  /control/v1/registry/register:
     post:
-      summary: 幂等注册实例
+      summary: 幂等注册实例（不含 endpoint/凭据）
       requestBody:
         required: true
         content:
@@ -45,11 +47,9 @@ paths:
             schema: {$ref: "#/components/schemas/RegistrationRequest"}
       responses:
         "2XX": {description: 已注册}
-  /control/v1/registry/instances/{instance_id}/heartbeat:
+  /control/v1/registry/heartbeat:
     post:
-      summary: 心跳（携带真实健康事件）
-      parameters:
-        - {name: instance_id, in: path, required: true, schema: {type: string}}
+      summary: 心跳；只刷新实例 last_seen
       requestBody:
         required: true
         content:
@@ -57,30 +57,42 @@ paths:
             schema: {$ref: "#/components/schemas/HeartbeatRequest"}
       responses:
         "2XX": {description: 已接收}
+  /ingest/health:
+    post:
+      summary: 健康事件；真实探针状态，不伪造 UP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/HealthEvent"}
+      responses:
+        "2XX": {description: 已接收}
   /ingest/usage:
     post:
-      summary: 用量批量上报（双写本地后的远端汇）
+      summary: muniu LLM 用量批量上报（历史已登记管子，行主键幂等）
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: "#/components/schemas/UsageIngest"}
       responses:
-        "2XX": {description: 已接收；行主键幂等}
+        "2XX": {description: 已接收}
   /control/v1/commands/claim:
     post:
       summary: 认领跨服务命令（有限动作枚举）
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema: {$ref: "#/components/schemas/ClaimRequest"}
       responses:
         "200":
-          description: 一批命令
+          description: command-envelope 数组
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/ClaimResponse"}
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/WireCommand"}
   /control/v1/commands/{command_id}/ack:
     post:
       summary: 命令终态回执
@@ -102,234 +114,87 @@ components:
   schemas:
     SnapshotEnvelope:
       type: object
-      required: [version, observed_at, payload]
+      required: [version, observed_at, service_id, etag, security_sections, sections]
       properties:
         version: {type: integer, minimum: 1}
         observed_at: {type: string, format: date-time}
-        payload: {$ref: "#/components/schemas/SnapshotPayload"}
-    SnapshotPayload:
-      type: object
-      required: [revocations, tenants]
-      properties:
-        pricing:
-          type: array
-          items: {$ref: "#/components/schemas/PricingEntry"}
-        image_pricing:
-          type: array
-          items: {$ref: "#/components/schemas/ImagePricingEntry"}
-        topology: {$ref: "#/components/schemas/Topology"}
-        revocations: {$ref: "#/components/schemas/Revocations"}
-        tenants:
-          type: array
-          items: {$ref: "#/components/schemas/Tenant"}
-        policies: {description: 只做投影与计数，不进入转发热路径}
-    PricingEntry:
-      type: object
-      required: [alias, currency, input, cached_input, vision_input, output, timezone, time_windows]
-      properties:
-        alias: {type: string, maxLength: 128}
-        currency: {type: string, enum: [CNY, USD]}
-        input: {type: string}
-        cached_input: {type: string}
-        vision_input: {type: string}
-        output: {type: string}
-        timezone: {type: string}
-        time_windows:
-          type: array
-          items:
-            type: object
-            required: [window, multiplier]
-            properties:
-              window: {type: string}
-              multiplier: {type: string}
-        updated_at: {type: string}
-    ImagePricingEntry:
-      type: object
-      required: [alias, currency, default, tiers]
-      properties:
-        alias: {type: string, maxLength: 128}
-        currency: {type: string, enum: [CNY, USD]}
-        default: {type: string}
-        tiers:
-          type: object
-          additionalProperties: {type: string}
-    Topology:
-      type: object
-      required: [providers, model_routes, models]
-      properties:
-        providers:
-          type: array
-          items: {$ref: "#/components/schemas/Provider"}
-        model_routes:
-          type: object
-          additionalProperties:
-            type: array
-            items: {$ref: "#/components/schemas/Route"}
-        models:
-          type: array
-          items: {$ref: "#/components/schemas/ModelCapability"}
-    Provider:
-      type: object
-      required: [name, adapter, base_url, keys]
-      properties:
-        name: {type: string}
-        adapter: {type: string}
-        base_url: {type: string}
-        auth: {type: string}
-        native_multimodal_embeddings_url: {type: string}
-        keys:
-          type: array
-          items: {$ref: "#/components/schemas/KeyRef"}
-        weight: {type: integer}
-        priority: {type: integer}
-    KeyRef:
-      type: object
-      properties:
-        env: {type: string}
-        account: {type: string}
-        weight: {type: integer}
-    Route:
-      type: object
-      required: [provider, model]
-      properties:
-        provider: {type: string}
-        model: {type: string}
-        priority: {type: integer}
-        weight: {type: integer}
-    ModelCapability:
-      type: object
-      required: [provider, model]
-      properties:
-        provider: {type: string}
-        model: {type: string}
-        drop_params:
+        service_id: {type: string, enum: [kongming, muniu]}
+        etag: {type: string}
+        security_sections:
           type: array
           items: {type: string}
-        thinking_lock: {type: boolean}
-        max_output_tokens: {type: integer}
-    Revocations:
+        sections: {type: object}
+    SnapshotSections:
       type: object
-      required: [version, revoked]
+      required: [tenant_directory, entitlements, policy_packages, key_revocations]
       properties:
-        version: {type: integer, minimum: 0}
-        revoked:
-          type: array
-          items: {type: string}
-    Tenant:
-      type: object
-      required: [id, name, status]
-      properties:
-        id: {type: string}
-        name: {type: string}
-        status: {type: string, enum: [active, disabled]}
-        rpm_limit: {type: integer, minimum: 0}
-        tpm_limit: {type: integer, minimum: 0}
-        daily_quota_credits: {type: integer, minimum: 0}
+        tenant_directory: {type: object}
+        entitlements: {type: object}
+        policy_packages: {type: object}
+        pricing: {type: object}
+        topology: {type: object}
+        key_revocations: {type: object}
     RegistrationRequest:
       type: object
-      required: [service_id, instance_id, version, capabilities, entitlement_keys, admin_api, started_at]
+      required: [serviceId, instanceId, environment, version]
       properties:
-        service_id: {type: string}
-        instance_id: {type: string}
+        serviceId: {type: string, enum: [kongming, muniu]}
+        instanceId: {type: string}
+        environment: {type: string}
         version: {type: string}
-        capabilities:
-          type: array
-          items: {type: string}
-        entitlement_keys:
-          type: array
-          items: {type: string}
-        admin_api:
-          type: array
-          items: {type: string}
-        started_at: {type: string, format: date-time}
+        capabilities: {type: array, items: {type: string}}
+        adminCapabilities: {type: array, items: {type: string}}
     HeartbeatRequest:
       type: object
-      required: [observed_at, version, capabilities, health]
+      required: [serviceId, instanceId]
       properties:
-        observed_at: {type: string, format: date-time}
-        version: {type: string}
-        capabilities:
-          type: array
-          items: {type: string}
-        health: {$ref: "#/components/schemas/Health"}
-    Health:
+        serviceId: {type: string, enum: [kongming, muniu]}
+        instanceId: {type: string}
+    HealthEvent:
       type: object
-      required: [source, status, observed_at]
+      required: [serviceId, instanceId, status, observedAt]
       properties:
-        source: {type: string}
-        status: {type: string, enum: [ok, degraded, unknown]}
-        observed_at: {type: string, format: date-time}
-        metrics:
-          type: object
-          additionalProperties: true
+        serviceId: {type: string, enum: [kongming, muniu]}
+        instanceId: {type: string}
+        status: {type: string, enum: [UP, DEGRADED]}
+        observedAt: {type: string, format: date-time}
     UsageIngest:
       type: object
-      required: [rows, source, schema_version]
+      required: [source, schema_version, rows]
       properties:
         source: {type: string, enum: [muniu]}
-        schema_version: {type: integer, minimum: 1}
-        rows:
-          type: array
-          items: {$ref: "#/components/schemas/UsageRow"}
-    UsageRow:
-      type: object
-      description: 字段名即 Go 结构体导出名（当前 wire 名，X-01 冻结时评估是否统一 snake_case）
-      required: [ID, RequestID, TenantID, APIKeyID, Provider, ModelAlias, UpstreamModel, Stream,
-                 Status, PromptTokens, CompletionTokens, ReasoningTokens, CachedTokens,
-                 VisionTokens, Estimated, CostCredits, Currency, LatencyTotalMs, CreatedAt]
-      properties:
-        ID: {type: string}
-        RequestID: {type: string}
-        TenantID: {type: string}
-        APIKeyID: {type: string}
-        Provider: {type: string}
-        ModelAlias: {type: string}
-        UpstreamModel: {type: string}
-        Stream: {type: boolean}
-        Status: {type: string, enum: [ok, error, client_cancel]}
-        ErrorClass: {type: string}
-        PromptTokens: {type: integer}
-        CompletionTokens: {type: integer}
-        ReasoningTokens: {type: integer}
-        CachedTokens: {type: integer}
-        VisionTokens: {type: integer}
-        Estimated: {type: boolean}
-        CostCredits: {type: integer}
-        Currency: {type: string}
-        LatencyFirstTokenMs: {type: [integer, "null"]}
-        LatencyTotalMs: {type: integer}
-        CreatedAt: {type: string, format: date-time}
+        schema_version: {type: integer}
+        rows: {type: array, items: {type: object}}
     ClaimRequest:
       type: object
-      required: [service_id, instance_id, limit]
       properties:
-        service_id: {type: string}
-        instance_id: {type: string}
         limit: {type: integer, minimum: 1}
-    ClaimResponse:
-      type: object
-      required: [commands]
-      properties:
-        commands:
-          type: array
-          items: {$ref: "#/components/schemas/WireCommand"}
     WireCommand:
       type: object
-      required: [id, action, action_schema_version, params, idempotency_key, actor, reason]
+      required:
+        [id, serviceId, action, actionSchemaVersion, params, reason, actor, status, attempts,
+         maxAttempts, createdAt, updatedAt]
       properties:
         id: {type: string}
-        action: {type: string, enum: [cache_purge, topology_reload]}
-        action_schema_version: {type: integer, minimum: 1}
-        params: {type: object, additionalProperties: true}
-        idempotency_key: {type: string}
-        actor: {type: string}
+        serviceId: {type: string}
+        action: {type: string}
+        actionSchemaVersion: {type: integer}
+        params: {type: object}
         reason: {type: string}
+        actor: {type: string}
+        status: {type: string}
+        attempts: {type: integer}
+        maxAttempts: {type: integer}
+        claimedBy: {type: string}
+        result: {type: object}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        finishedAt: {type: string, format: date-time}
     AckRequest:
       type: object
-      required: [service_id, instance_id, status]
+      required: [status]
       properties:
-        service_id: {type: string}
-        instance_id: {type: string}
-        status: {type: string, enum: [acked, failed]}
-        result: {type: string, maxLength: 2048}
-        error: {type: string, maxLength: 1024}
+        status: {type: string, enum: [SUCCEEDED, FAILED]}
+        result: {type: object}
+        error: {type: string}

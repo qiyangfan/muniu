@@ -14,7 +14,7 @@
 | 付费推理探针(`probe_model` 最小补全,max_tokens 微值) | ≈元级/天/渠道 | 关(声明制) | 推理面(免费端点 200 不证推理面) | 同上 |
 | 被动统计(真实流量渠道失败率) | 零 | 开 | 推理面真实表现 | 窗口失败率越线(样本 ≥ 最低样本数) |
 
-适配器能力:openai 兼容族(openai/doubao/qwen/deepseek/moonshot/glm)与 anthropic 具备两类探针端点;gemini 原生 v1 不支持探针(该族渠道跳过探针,被动统计照常)——登记限制。
+适配器能力:openai 兼容族(openai/doubao/qwen/deepseek/moonshot/glm)与 anthropic 具备两类探针端点;gemini 原生 v1beta 提供 models.list(`GET /models`),免费控制面探针由 openspec `add-gemini-free-health-probe` 落地;推理探针暂不实现(`probe_model` 声明校验期拒绝)。
 
 ## 状态机与纪律
 

@@ -54,6 +54,7 @@ func TestWireContract_端点与常量对齐(t *testing.T) {
 		{p.Snapshot, "GET"},
 		{p.Register, "POST"},
 		{p.Heartbeat, "POST"},
+		{p.Health, "POST"},
 		{p.Usage, "POST"},
 		{p.Claim, "POST"},
 		{p.Ack, "POST"},
@@ -72,15 +73,17 @@ func TestWireContract_端点与常量对齐(t *testing.T) {
 func TestWireContract_关键必填字段(t *testing.T) {
 	c := loadWireContract(t)
 	required := map[string][]string{
-		"SnapshotEnvelope":    {"version", "observed_at", "payload"},
-		"SnapshotPayload":     {"revocations", "tenants"},
-		"ImagePricingEntry":   {"alias", "currency", "default", "tiers"},
-		"RegistrationRequest": {"service_id", "instance_id", "version", "capabilities", "started_at"},
-		"HeartbeatRequest":    {"observed_at", "version", "capabilities", "health"},
-		"UsageIngest":         {"rows", "source", "schema_version"},
-		"ClaimRequest":        {"service_id", "instance_id", "limit"},
-		"WireCommand":         {"id", "action", "action_schema_version", "params"},
-		"AckRequest":          {"service_id", "instance_id", "status"},
+		"SnapshotEnvelope":    {"version", "observed_at", "service_id", "etag", "security_sections", "sections"},
+		"SnapshotSections":    {"tenant_directory", "entitlements", "policy_packages", "key_revocations"},
+		"RegistrationRequest": {"serviceId", "instanceId", "environment", "version"},
+		"HeartbeatRequest":    {"serviceId", "instanceId"},
+		"HealthEvent":         {"serviceId", "instanceId", "status", "observedAt"},
+		"UsageIngest":         {"source", "schema_version", "rows"},
+		"WireCommand": {
+			"id", "serviceId", "action", "actionSchemaVersion", "params", "reason", "actor",
+			"status", "attempts", "maxAttempts", "createdAt", "updatedAt",
+		},
+		"AckRequest": {"status"},
 	}
 	for schema, fields := range required {
 		entry, ok := c.Components.Schemas[schema]

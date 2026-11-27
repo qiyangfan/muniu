@@ -28,18 +28,18 @@ type Paths struct {
 func DefaultPaths() Paths {
 	return Paths{
 		Snapshot:  "/control/v1/snapshot",
-		Register:  "/control/v1/registry/instances",
-		Heartbeat: "/control/v1/registry/instances/{instance_id}/heartbeat",
+		Register:  "/control/v1/registry/register",
+		Heartbeat: "/control/v1/registry/heartbeat",
 		Usage:     "/ingest/usage",
-		Health:    "/control/v1/health",
+		Health:    "/ingest/health",
 		Claim:     "/control/v1/commands/claim",
 		Ack:       "/control/v1/commands/{command_id}/ack",
 	}
 }
 
-// HeartbeatPath 填充实例 id 的路径段。
-func (p Paths) HeartbeatPath(instanceID string) string {
-	return strings.ReplaceAll(p.Heartbeat, "{instance_id}", url.PathEscape(instanceID))
+// HeartbeatPath 返回心跳端点；当前 X-01 由请求体携带实例 id，路径无占位符。
+func (p Paths) HeartbeatPath(string) string {
+	return p.Heartbeat
 }
 
 // AckPath 填充命令 id 的路径段。
@@ -123,6 +123,8 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body any,
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
+	// local pre-shared 身份按调用方 service id 校验；managed 由 token 的 azp 决定。
+	req.Header.Set("X-Service-Id", ServiceID)
 	if c.Token != nil {
 		token, err := c.Token.Token(ctx)
 		if err != nil {

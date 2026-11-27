@@ -1,18 +1,19 @@
 # 控制面客户端:身份 · 快照 · 注册 · 命令 · 上报(control-plane-client)
 
 > 本文件描述 muniu 作为数据面消费锦官共享控制的**行为契约**。跨仓 wire schema 的
-> 最终权威是 X-01(`2026-11-26-add-control-contract-harness`);该契约尚未冻结前,
-> 本仓按本文实现并以本地测试证明,跨仓契约测试标记阻塞。字段变更必须双方 change 同步,
-> 禁止单边漂移。机器可校验副本见
-> [contracts/control-plane-wire.v1.yaml](../../contracts/control-plane-wire.v1.yaml)(提案 v1)。
+> 最终权威是锦官 X-01(`2026-11-26-add-control-contract-harness`)；2026-11-27 已按
+> 锦官实际端点冻结（快照 RSA 头签名、camelCase 注册、命令数组、健康独立上报）。
+> 字段变更必须双方 change 同步，禁止单边漂移。机器可校验副本见
+> [contracts/control-plane-wire.v1.yaml](../../contracts/control-plane-wire.v1.yaml)。
 
 ## 1. 双形态与配置
 
 - `control_plane.mode: standalone`(缺省):完全关闭控制面循环;价目/拓扑/租户走本地配置与管理面。
 - `control_plane.mode: managed`:统一快照 + 注册心跳 + 命令 claim + 用量/健康上报。
-- managed 必填:`base_url`、服务身份(`service_token` 或 `token_url/client_id/client_secret`)、
-  `snapshot_public_key_file`。pre-shared `service_token` **仅限 loopback**;非本机控制面必须用
-  Keycloak client credentials。
+- managed 必填:`base_url`、服务身份(`service_token` 或 `token_url/client_id/client_secret`)。
+  快照验签默认按 `X-Jinguan-Key-Id` 从 `base_url + /.well-known/jwks.json` 取公钥
+  (`snapshot_jwks_url` 可覆盖);`snapshot_public_key_file` 仅作离线 pin。pre-shared
+  `service_token` **仅限 loopback**;非本机控制面必须用 Keycloak client credentials。
 - 旧配置键(`control_plane.pricing_url/topology_url`、`auth.revocations_url`、
   `metering.ingest_url/ingest_token`、`metering.sink: ingest`)**已退役**,加载期拒绝。
 - 控制面不可达不阻塞启动与数据面;控制面配置缺失/非法属于启动期错误。
@@ -24,27 +25,37 @@ control_plane:
   token_url: "https://keycloak.example.com/realms/longzhong/protocol/openid-connect/token"
   client_id: "muniu-control"
   client_secret: "${MUNIU_CONTROL_CLIENT_SECRET}"
-  snapshot_public_key_file: "/etc/muniu/control-signing.pem"
+  snapshot_jwks_url: "https://jinguan.example.com/.well-known/jwks.json"
   poll_interval_sec: 60
   heartbeat_interval_sec: 30
   command_poll_interval_sec: 15
   request_timeout_sec: 10
 service_api:
-  token: "${MUNIU_SERVICE_READ_TOKEN}"
+  token: "${MUNIU_SERVICE_READ_TOKEN}"          # 本地回环演练
+  issuer: "https://keycloak.example.com/realms/longzhong"
+  clients: ["jinguan-read-muniu"]
+  # audience: muniu                           # 缺省
+  # required_scope: service:read               # 缺省
 ```
 
 ## 2. 服务身份
 
 - 出站:所有控制面请求带 `Authorization: Bearer <service token>`。
-  - client credentials 短时 token,缓存至到期前 30s;
+  - client credentials 短时 token,缓存至到期前 30s;请求
+    `control:register control:snapshot control:command control:usage` 四个 scope;
   - pre-shared 仅本地演练,配置校验拒绝非 loopback base_url。
-- 入站服务只读 API:`service_api.token` 恒时比较;未配置即不挂载。
+- 入站服务只读 API:本地 `service_api.token` 恒时比较且只接受回环来源;声明
+  `service_api.issuer` 后校验 Keycloak RS256 服务 token(discovery/JWKS 按 kid 缓存、
+  未知 kid 限速刷新),要求 `aud` 含 `muniu`、`azp` 命中 `clients` 白名单、`scope`
+  含 `service:read`、`iss/exp/nbf` 有效。未配置任何身份即不挂载。
 - 凭据只存内存,日志/payload 不回显;注册 payload 不含 endpoint、凭据或服务域配置。
 
 ## 3. 统一快照
 
 - 端点:`GET /control/v1/snapshot`,带 `If-None-Match` 条件请求;304 视为可达。
-- 响应头:`ETag`、`X-Control-Signature`(RSA-SHA256 PKCS#1 v1.5,对**原始响应体**签名)。
+- 响应头:`ETag`、`X-Jinguan-Signature`(RSA-SHA256 PKCS#1 v1.5,对**原始响应体**签名)、
+  `X-Jinguan-Key-Id`。JWKS 公钥按 kid 缓存;未知 kid 限速强制刷新,退役/轮换公钥同时发布。
+  旧 `X-Control-Signature` 仅用于升级期读取 last-known。
 - 响应体:
 
 ```json
@@ -79,10 +90,11 @@ service_api:
 
 ## 4. 注册与心跳
 
-- `POST /control/v1/registry/instances`(幂等注册)与
-  `POST /control/v1/registry/instances/{instance_id}/heartbeat`。
-- payload:`service_id=muniu`、`instance_id`、`version`、`capabilities`、`entitlement_keys`、
-  `admin_api`、`started_at`;心跳另带真实 `health`(source/status/metrics)。
+- `POST /control/v1/registry/register`(幂等注册)与
+  `POST /control/v1/registry/heartbeat`。
+- payload:`serviceId=muniu`、`instanceId`、`environment`、`version`、`capabilities`、
+  `adminCapabilities`;心跳只带 `serviceId/instanceId`。健康状态独立 `POST /ingest/health`
+  (`serviceId/instanceId/status/observedAt`),失败不伪造 ready。
 - 失败指数退避(1s→60s),恢复后重新注册并补报;不阻塞数据面。
 - 不伪造 ready:健康只由 DB ping/资源探针给出,未知时 `unknown`。
 - 状态迁移(ok↔degraded)写系统审计;逐心跳不写库,只留结构化日志。
@@ -96,8 +108,8 @@ service_api:
 
 ## 6. 跨服务命令
 
-- `POST /control/v1/commands/claim` 拉取(带 service/instance);`POST /control/v1/commands/{id}/ack`
-  回执 `acked|failed`。
+- `POST /control/v1/commands/claim` 拉取(请求只带 `limit`，响应为 command-envelope 数组);
+  `POST /control/v1/commands/{id}/ack` 回执 `SUCCEEDED|FAILED`（result 对象或 error 文本）。
 - 有限动作枚举:`cache_purge`(参数 `all=true` 或 `tenant`,二选一)、`topology_reload`(仅 standalone,空参数)。
 - 未知 action/schema_version/参数 → `failed` 回执且不执行;命令 ID 幂等,已终态不重复执行;
   claim 后先在本地台账落 `pending` 再执行,终态更新失败不回执、等重投;ack 失败重试上限 5 次。
@@ -106,8 +118,9 @@ service_api:
 
 ## 7. 只读投影与管理面边界
 
-- `GET /service/v1/summary`(服务身份):返回服务域计数、运行时长、快照/注册/命令状态;
-  不含凭据、token、连接串或服务域配置原值。
+- `GET /service/v1/read-projection`(服务身份):返回 `service_id/version/etag/observed_at/sections`
+  信封，供锦官只读投影；`GET /service/v1/summary` 保留为兼容摘要。字段脱敏，不含凭据、
+  token、连接串或服务域配置原值。
 - managed 下本地价目/租户/拓扑写入口 403;`SIGHUP` 拓扑重载被忽略。
 - key 签发仍在本地，但 managed 下必须先获得有效快照/last-known（否则 503
   `tenant_directory_unavailable`），且绑定租户必须命中快照租户目录并为 `active`。

@@ -38,7 +38,7 @@ fail-fast:任一变量缺注入,副本都会拒绝启动。
 | 服务注册/心跳 | `POST /control/v1/registry/instances[/{id}/heartbeat]` | managed 自动启用 | 服务身份 |
 | 用量/健康 | `POST /ingest/usage` / health 事件 | `metering.sink: control` | 服务身份 |
 | 跨服务命令 | `POST /control/v1/commands/claim` + `/{id}/ack` | managed 自动启用 | 服务身份 |
-| 服务只读 API | `GET /service/v1/summary`(muniu 提供) | `service_api.token` | 服务身份 Bearer |
+| 服务只读 API | `GET /service/v1/summary`(muniu 提供) | `service_api.issuer` + `clients` | Keycloak `service:read` 服务 token |
 
 收敛与失败:快照 `poll_interval_sec`、心跳 `heartbeat_interval_sec`、命令
 `command_poll_interval_sec` 均可配;安全类缺失 fail-closed,非安全类 last-known + stale。

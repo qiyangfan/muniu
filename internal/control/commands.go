@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -49,13 +50,12 @@ type CommandView struct {
 	CompletedAt         string          `json:"completed_at,omitempty"`
 }
 
-// WireCommand 锦官队列下发的命令形态。
+// WireCommand 锦官队列下发的命令形态（X-01 command-envelope v1，camelCase）。
 type WireCommand struct {
 	ID                  string          `json:"id"`
 	Action              string          `json:"action"`
-	ActionSchemaVersion int64           `json:"action_schema_version"`
+	ActionSchemaVersion int64           `json:"actionSchemaVersion"`
 	Params              json.RawMessage `json:"params"`
-	IdempotencyKey      string          `json:"idempotency_key"`
 	Actor               string          `json:"actor"`
 	Reason              string          `json:"reason"`
 }
@@ -110,26 +110,37 @@ func (e *CommandExecutor) Run(ctx context.Context) {
 	}
 }
 
-// claimResponse claim 响应。
-type claimResponse struct {
-	Commands []WireCommand `json:"commands"`
-}
-
 // ClaimOnce 拉取一批命令并逐条执行/回执。
+// X-01 claim 响应是 command-envelope 数组；兼容旧版 {"commands":[]} 提案。
 func (e *CommandExecutor) ClaimOnce(ctx context.Context) error {
-	body := map[string]any{"service_id": ServiceID, "instance_id": e.InstanceID, "limit": 10}
+	body := map[string]any{"limit": 10}
 	_, raw, err := e.Client.Post(ctx, e.Client.Paths.Claim, body)
 	if err != nil {
 		return err
 	}
-	var resp claimResponse
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return fmt.Errorf("control: claim 响应非法: %w", err)
+	commands, err := parseClaimResponse(raw)
+	if err != nil {
+		return err
 	}
-	for _, cmd := range resp.Commands {
+	for _, cmd := range commands {
 		e.handle(ctx, cmd)
 	}
 	return nil
+}
+
+// parseClaimResponse 解析 X-01 数组；旧版对象仅用于升级期兼容。
+func parseClaimResponse(raw []byte) ([]WireCommand, error) {
+	var commands []WireCommand
+	if err := json.Unmarshal(raw, &commands); err == nil {
+		return commands, nil
+	}
+	var legacy struct {
+		Commands []WireCommand `json:"commands"`
+	}
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return nil, fmt.Errorf("control: claim 响应非法: %w", err)
+	}
+	return legacy.Commands, nil
 }
 
 // handle 单条命令：先校验后执行；同一命令 ID 命中已终态时不重复执行。
@@ -168,7 +179,7 @@ func (e *CommandExecutor) insertPending(ctx context.Context, cmd WireCommand) bo
 	row := store.ControlCommandRow{
 		ID: cmd.ID, Action: cmd.Action, ActionSchemaVersion: cmd.ActionSchemaVersion,
 		Params: string(cmd.Params), Source: "control", Status: "pending",
-		IdempotencyKey: cmd.IdempotencyKey, Actor: cmd.Actor, Reason: cmd.Reason,
+		IdempotencyKey: cmd.ID, Actor: cmd.Actor, Reason: cmd.Reason,
 		CreatedAt: e.nowRFC(),
 	}
 	inserted, err := store.InsertControlCommand(ctx, e.DB, row)
@@ -198,13 +209,24 @@ func (e *CommandExecutor) retryAck(ctx context.Context, id, status, result, errM
 	}
 }
 
-// ack 回执控制面。
+// ack 回执控制面；X-01 只接受 status/result/error。
 func (e *CommandExecutor) ack(ctx context.Context, id, status, result, errMsg string) error {
-	body := map[string]any{
-		"service_id": ServiceID, "instance_id": e.InstanceID,
-		"status": status, "result": truncate(result, 2048), "error": truncate(errMsg, 1024),
+	wireStatus := "FAILED"
+	if status == "acked" {
+		wireStatus = "SUCCEEDED"
+	}
+	body := map[string]any{"status": wireStatus}
+	if wireStatus == "SUCCEEDED" {
+		body["result"] = map[string]any{"summary": truncate(result, 2048)}
+	} else {
+		body["error"] = truncate(errMsg, 1024)
 	}
 	_, _, err := e.Client.Post(ctx, e.Client.Paths.AckPath(id), body)
+	var statusErr *StatusError
+	if errors.As(err, &statusErr) && statusErr.Status == http.StatusConflict {
+		// 已终态命令重复回执：X-01 返回 409，本地终态已生效，按幂等成功处理。
+		return nil
+	}
 	return err
 }
 

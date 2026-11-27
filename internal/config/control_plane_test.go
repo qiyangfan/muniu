@@ -26,22 +26,21 @@ func TestConfig_退役的分散控制键拒绝(t *testing.T) {
 	}
 }
 
-func TestConfig_managed身份与验签必填(t *testing.T) {
+func TestConfig_managed身份必填与JWKS缺省(t *testing.T) {
 	base := "control_plane:\n  mode: managed\n  base_url: \"http://127.0.0.1:8090\"\n"
 	if _, err := loadYAML(t, base); err == nil || !strings.Contains(err.Error(), "服务身份") {
 		t.Fatalf("缺服务身份必须拒绝: %v", err)
 	}
 	withToken := base + "  service_token: \"token-0123456789abcdef\"\n"
-	if _, err := loadYAML(t, withToken); err == nil || !strings.Contains(err.Error(), "snapshot_public_key_file") {
-		t.Fatalf("缺验签公钥必须拒绝: %v", err)
-	}
-	ok := withToken + "  snapshot_public_key_file: \"/run/secrets/muniu-control.pem\"\n"
-	cfg, err := loadYAML(t, ok)
+	cfg, err := loadYAML(t, withToken)
 	if err != nil {
-		t.Fatalf("完整 managed 配置应通过: %v", err)
+		t.Fatalf("无静态公钥时应由 JWKS 派生并通过: %v", err)
 	}
 	if cfg.Metering.Sink != "control" {
 		t.Fatalf("managed 计量 sink 缺省应为 control: %q", cfg.Metering.Sink)
+	}
+	if cfg.ControlPlane.SnapshotJWKSURL != "" {
+		t.Fatalf("JWKS URL 缺省应留空由 base_url 派生: %q", cfg.ControlPlane.SnapshotJWKSURL)
 	}
 }
 
@@ -75,5 +74,34 @@ func TestConfig_计量sink模式约束与serviceAPItoken(t *testing.T) {
 	shortToken := "service_api:\n  token: \"short\"\n"
 	if _, err := loadYAML(t, shortToken); err == nil || !strings.Contains(err.Error(), "过短") {
 		t.Fatalf("服务只读 token 过短必须拒绝: %v", err)
+	}
+}
+
+func TestConfig_服务只读Keycloak校验(t *testing.T) {
+	// 只声明 audience 而没有 issuer：拒绝，避免静默退化为未校验。
+	partial := "service_api:\n  audience: \"muniu\"\n"
+	if _, err := loadYAML(t, partial); err == nil || !strings.Contains(err.Error(), "成套") {
+		t.Fatalf("缺 issuer 的 Keycloak 片段必须拒绝: %v", err)
+	}
+	// issuer 必须为绝对 URL，且 clients 白名单必填。
+	badURL := "service_api:\n  issuer: \"keycloak\"\n  clients: [\"jinguan-read-muniu\"]\n"
+	if _, err := loadYAML(t, badURL); err == nil || !strings.Contains(err.Error(), "绝对 URL") {
+		t.Fatalf("非法 issuer 必须拒绝: %v", err)
+	}
+	noClients := "service_api:\n  issuer: \"http://127.0.0.1:8080/realms/longzhong\"\n"
+	if _, err := loadYAML(t, noClients); err == nil || !strings.Contains(err.Error(), "clients") {
+		t.Fatalf("缺 clients 白名单必须拒绝: %v", err)
+	}
+	// 完整声明通过，并物化缺省 audience/scope。
+	valid := noClients + "  clients: [\"jinguan-read-muniu\"]\n"
+	cfg, err := loadYAML(t, valid)
+	if err != nil {
+		t.Fatalf("完整 Keycloak 服务段应通过: %v", err)
+	}
+	if !cfg.ServiceAPI.Enabled() || !cfg.ServiceAPI.Keycloak() {
+		t.Fatal("Keycloak 服务段应启用的读者面")
+	}
+	if cfg.ServiceAPI.Audience != "muniu" || cfg.ServiceAPI.RequiredScope != "service:read" {
+		t.Fatalf("缺省 audience/scope 未物化: %+v", cfg.ServiceAPI)
 	}
 }

@@ -489,6 +489,17 @@ components:
         shared:
           type: object
           additionalProperties: true
+    ServiceReadProjectionResponse:
+      type: object
+      required: [service_id, version, etag, observed_at, sections]
+      properties:
+        service_id: { type: string, enum: [muniu] }
+        version: { type: string }
+        etag: { type: string }
+        observed_at: { type: string }
+        sections:
+          type: object
+          additionalProperties: true
     ServiceSummaryResponse:
       type: object
       required: [source, service_id, mode, version, instance_id, domain, control, stale]
@@ -1115,7 +1126,7 @@ paths:
               schema: {$ref: "#/components/schemas/RuntimeLogsResponse"}
   /service/v1/summary:
     get:
-      summary: 服务只读摘要（供锦官只读投影；服务身份认证，不含凭据）
+      summary: 服务只读摘要（供锦官只读投影；Keycloak service:read 或回环 pre-shared，不含凭据）
       parameters:
         - {name: Authorization, in: header, required: true, schema: {type: string}}
       responses:
@@ -1124,4 +1135,16 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/ServiceSummaryResponse"}
+        "401": {description: 服务身份无效}
+  /service/v1/read-projection:
+    get:
+      summary: X-01 服务只读投影信封（service_id/version/etag/observed_at/sections；Keycloak service:read 或回环 pre-shared）
+      parameters:
+        - {name: Authorization, in: header, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: 只读投影
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ServiceReadProjectionResponse"}
         "401": {description: 服务身份无效}

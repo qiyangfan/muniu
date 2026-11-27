@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -312,6 +313,106 @@ func TestNew_EC公钥解析分支(t *testing.T) {
 func mustJSON(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func signJWTWithKey(t *testing.T, key *rsa.PrivateKey, kid string, claims map[string]any) string {
+	t.Helper()
+	header := map[string]any{"alg": "RS256", "typ": "JWT", "kid": kid}
+	hb, _ := json.Marshal(header)
+	cb, _ := json.Marshal(claims)
+	input := base64.RawURLEncoding.EncodeToString(hb) + "." + base64.RawURLEncoding.EncodeToString(cb)
+	sum := sha256.Sum256([]byte(input))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, sum[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
+}
+
+func serviceClaims(idp *fakeIdP) map[string]any {
+	return map[string]any{
+		"iss": idp.issuer(), "aud": []string{"muniu"}, "azp": "jinguan-read-muniu",
+		"sub": "service-account-jinguan-read-muniu", "scope": "service:read",
+		"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(),
+	}
+}
+
+func serviceVerifier(idp *fakeIdP) *ServiceVerifier {
+	return NewServiceVerifier(ServiceTokenConfig{
+		Issuer: idp.issuer(), Audience: "muniu",
+		AllowedClients: []string{"jinguan-read-muniu"}, RequiredScope: "service:read",
+	}, idp.srv.Client())
+}
+
+func TestServiceVerifier_合法令牌与负向声明(t *testing.T) {
+	idp := newFakeIdP(t)
+	v := serviceVerifier(idp)
+	token := idp.sign(serviceClaims(idp), "RS256")
+	client, err := v.Verify(context.Background(), token)
+	if err != nil || client != "jinguan-read-muniu" {
+		t.Fatalf("合法服务令牌应通过: client=%q err=%v", client, err)
+	}
+
+	cases := []struct {
+		name   string
+		claims map[string]any
+	}{
+		{name: "受众不符", claims: map[string]any{"aud": []string{"kongming"}}},
+		{name: "issuer 不符", claims: map[string]any{"iss": "https://evil.example"}},
+		{name: "调用方不在白名单", claims: map[string]any{"azp": "kongming-control"}},
+		{name: "缺 service:read", claims: map[string]any{"scope": "openid"}},
+		{name: "过期", claims: map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}},
+		{name: "缺 exp", claims: map[string]any{"exp": nil}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			claims := serviceClaims(idp)
+			for k, v := range tc.claims {
+				if v == nil {
+					delete(claims, k)
+				} else {
+					claims[k] = v
+				}
+			}
+			if _, err := serviceVerifier(idp).Verify(context.Background(), idp.sign(claims, "RS256")); !errors.Is(err, ErrServiceTokenInvalid) {
+				t.Fatalf("必须拒绝: %v", err)
+			}
+		})
+	}
+	if _, err := serviceVerifier(idp).Verify(context.Background(), idp.sign(serviceClaims(idp), "HS256")); !errors.Is(err, ErrServiceTokenInvalid) {
+		t.Fatalf("非 RS256 必须拒绝: %v", err)
+	}
+}
+
+func TestServiceVerifier_未知kid强制刷新JWKS(t *testing.T) {
+	idp := newFakeIdP(t)
+	v := serviceVerifier(idp)
+	if _, err := v.Verify(context.Background(), idp.sign(serviceClaims(idp), "RS256")); err != nil {
+		t.Fatalf("首轮 kid-1 应通过: %v", err)
+	}
+	rotated, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idp.mu.Lock()
+	idp.key2 = rotated
+	idp.mu.Unlock()
+	token := signJWTWithKey(t, rotated, "kid-2", serviceClaims(idp))
+	if _, err := v.Verify(context.Background(), token); err != nil {
+		t.Fatalf("未知 kid 应强制刷新 JWKS 后通过: %v", err)
+	}
+}
+
+func TestServiceVerifier_坏签名拒绝(t *testing.T) {
+	idp := newFakeIdP(t)
+	other, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := signJWTWithKey(t, other, "kid-1", serviceClaims(idp))
+	if _, err := serviceVerifier(idp).Verify(context.Background(), token); !errors.Is(err, ErrServiceTokenInvalid) {
+		t.Fatalf("坏签名必须拒绝: %v", err)
+	}
 }
 
 // TestIdentityFromClaims_只取本client角色 覆盖 realm roles 与其它 client 角色泄漏。

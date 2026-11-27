@@ -2259,7 +2259,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 服务只读摘要（供锦官只读投影；服务身份认证，不含凭据） */
+        /** 服务只读摘要（供锦官只读投影；Keycloak service:read 或回环 pre-shared，不含凭据） */
         get: {
             parameters: {
                 query?: never;
@@ -2278,6 +2278,51 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["ServiceSummaryResponse"];
+                    };
+                };
+                /** @description 服务身份无效 */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/service/v1/read-projection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** X-01 服务只读投影信封（service_id/version/etag/observed_at/sections；Keycloak service:read 或回环 pre-shared） */
+        get: {
+            parameters: {
+                query?: never;
+                header: {
+                    Authorization: string;
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description 只读投影 */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ServiceReadProjectionResponse"];
                     };
                 };
                 /** @description 服务身份无效 */
@@ -2880,6 +2925,16 @@ export interface components {
             managed?: boolean;
             snapshot?: components["schemas"]["RuntimeSnapshotStatus"];
             shared?: {
+                [key: string]: unknown;
+            };
+        };
+        ServiceReadProjectionResponse: {
+            /** @enum {string} */
+            service_id: "muniu";
+            version: string;
+            etag: string;
+            observed_at: string;
+            sections: {
                 [key: string]: unknown;
             };
         };

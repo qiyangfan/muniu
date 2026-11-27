@@ -34,24 +34,32 @@ metering:
 #     - "<base64 密钥,建议经环境变量注入后展开>"
 
 # 共享控制面（managed）：统一快照/注册心跳/命令/用量上报，全部走服务身份。
-# standalone 不声明本段；声明即要求 base_url + 服务身份 + 快照验签公钥。
+# standalone 不声明本段；声明即要求 base_url + 服务身份；快照默认按 kid 拉 JWKS。
 # control_plane:
 #   mode: managed
 #   base_url: "https://jinguan.example.com"
+#   environment: "prod"                          # 注册环境标识，缺省 local
 #   instance_id: "muniu-1"                       # 缺省 hostname-pid；重启稳定可显式配置
 #   token_url: "https://keycloak.example.com/realms/longzhong/protocol/openid-connect/token"
 #   client_id: "muniu-control"
 #   client_secret: "<MUNIU_CONTROL_CLIENT_SECRET>"
-#   snapshot_public_key_file: "/etc/muniu/control-signing.pem"
+#   snapshot_jwks_url: "https://jinguan.example.com/.well-known/jwks.json"  # 空=由 base_url 派生
+#   # 可选离线 pin；配置后不再自动跟随锦官轮换
+#   # snapshot_public_key_file: "/etc/muniu/control-signing.pem"
 #   poll_interval_sec: 60
 #   heartbeat_interval_sec: 30
 #   command_poll_interval_sec: 15
 #   request_timeout_sec: 10
 #   # 本地演练可用 pre-shared（仅 loopback）：service_token: "<MUNIU_CONTROL_TOKEN>"
 
-# 服务只读 API（供锦官只读投影）：独立 Bearer，空即关闭；不返回凭据。
+# 服务只读 API（供锦官只读投影）：未配置任何身份即关闭；不返回凭据。
+# 本地 pre-shared 只接受回环来源；managed 生产走 Keycloak 服务 token。
 # service_api:
-#   token: "<MUNIU_SERVICE_READ_TOKEN>"
+#   token: "<MUNIU_SERVICE_READ_TOKEN>"              # 仅回环演练
+#   issuer: "https://keycloak.example.com/realms/longzhong"
+#   clients: ["jinguan-read-muniu"]                  # azp 白名单
+#   # audience: muniu                               # 缺省 muniu
+#   # required_scope: service:read                  # 缺省 service:read
 
 # inmem 按实例计数；redis 共享限流计数，故障时降级为实例计数并告警。
 # ratelimit:

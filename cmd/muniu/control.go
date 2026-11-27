@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/rsa"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -36,7 +35,7 @@ type controlWiring struct {
 	db         *sql.DB
 	logger     *slog.Logger
 	client     *control.Client
-	publicKey  *rsa.PublicKey
+	keys       control.KeySource
 	px         *proxy.Proxy
 	buildPool  func(config.Provider) (*keypool.Pool, adapter.Adapter, error)
 	pricingDir *metering.PricingDirectory
@@ -49,8 +48,8 @@ type controlWiring struct {
 	startedAt  time.Time
 }
 
-// newControlClient managed 下构造服务身份客户端与验签公钥；standalone 返回 nil。
-func newControlClient(cfg *config.Config, logger *slog.Logger) (*control.Client, *rsa.PublicKey, error) {
+// newControlClient managed 下构造服务身份客户端与验签公钥源；standalone 返回 nil。
+func newControlClient(cfg *config.Config, logger *slog.Logger) (*control.Client, control.KeySource, error) {
 	if !cfg.ControlPlane.Managed() {
 		return nil, nil, nil
 	}
@@ -59,18 +58,29 @@ func newControlClient(cfg *config.Config, logger *slog.Logger) (*control.Client,
 	if cp.TokenURL != "" {
 		token = &control.ClientCredentials{
 			TokenURL: cp.TokenURL, ClientID: cp.ClientID, ClientSecret: cp.ClientSecret,
+			Scope: control.ControlScopes,
 		}
 	} else {
 		token = control.StaticToken(cp.ServiceToken)
 	}
-	pub, err := control.LoadPublicKey(cp.SnapshotPublicKeyFile)
-	if err != nil {
-		return nil, nil, err
+	var keys control.KeySource
+	if strings.TrimSpace(cp.SnapshotPublicKeyFile) != "" {
+		pub, err := control.LoadPublicKey(cp.SnapshotPublicKeyFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		keys = control.StaticKeySource{PublicKey: pub}
+	} else {
+		url := strings.TrimSpace(cp.SnapshotJWKSURL)
+		if url == "" {
+			url = strings.TrimRight(cp.BaseURL, "/") + "/.well-known/jwks.json"
+		}
+		keys = control.NewJWKSKeySource(url)
 	}
 	timeout := time.Duration(cp.RequestTimeoutSec) * time.Second
 	client := control.NewClient(cp.BaseURL, token, timeout)
 	logger.Info("控制面客户端已配置", "base_url", cp.BaseURL, "mode", cp.Mode)
-	return client, pub, nil
+	return client, keys, nil
 }
 
 // defaultInstanceID 主机名+进程号；重启需稳定时应显式配置 control_plane.instance_id。
@@ -101,9 +111,10 @@ func newControlRuntime(ctx context.Context, w controlWiring) (*control.Runtime, 
 		return control.NewLocalRuntime(w.db, instanceID, targets, w.logger), nil
 	}
 	rt, err := control.NewRuntime(control.RuntimeOptions{
-		ServiceID: control.ServiceID, InstanceID: instanceID, Version: version.Version,
+		ServiceID: control.ServiceID, InstanceID: instanceID,
+		Environment: w.cfg.ControlPlane.Environment, Version: version.Version,
 		StartedAt: w.startedAt,
-		Client:    w.client, PublicKey: w.publicKey, DB: w.db,
+		Client:    w.client, Keys: w.keys, DB: w.db,
 		Store:             controlSnapshotStore{db: w.db},
 		Applier:           &snapshotApplier{wiring: w},
 		Targets:           targets,

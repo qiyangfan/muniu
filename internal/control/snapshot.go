@@ -20,8 +20,14 @@ import (
 	"github.com/solvela/muniu/internal/store"
 )
 
-// SignatureHeader 快照响应签名头，值为 RSA-SHA256 PKCS#1 v1.5 签名 base64。
-const SignatureHeader = "X-Control-Signature"
+// SignatureHeader 锦官快照响应签名头，值为 RSA-SHA256 PKCS#1 v1.5 签名 base64。
+const SignatureHeader = "X-Jinguan-Signature"
+
+// KeyIDHeader 签名 kid；JWKS 模式按此选择公钥。
+const KeyIDHeader = "X-Jinguan-Key-Id"
+
+// LegacySignatureHeader 仅用于读取旧版消费端提案快照，不再作为新契约。
+const LegacySignatureHeader = "X-Control-Signature"
 
 // SnapshotStore last-known 读取接口（装配层用 store 函数实现）。
 type SnapshotStore interface {
@@ -59,6 +65,7 @@ type SnapshotStatus struct {
 type SnapshotConsumer struct {
 	Client    *Client
 	PublicKey *rsa.PublicKey
+	Keys      KeySource
 	Applier   Applier
 	Store     SnapshotStore
 	ServiceID string
@@ -99,7 +106,7 @@ func (c *SnapshotConsumer) LoadLastKnown(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	env, err := c.verifyAndParse(rec.Payload, rec.Signature)
+	env, err := c.verifyAndParse(ctx, rec.Payload, rec.Signature, "")
 	if err != nil {
 		c.recordError("last-known 校验失败: " + err.Error())
 		return err
@@ -158,7 +165,12 @@ func (c *SnapshotConsumer) fetchOnce(ctx context.Context) {
 		c.touch()
 		return
 	}
-	env, err := c.verifyAndParse(raw, hdr.Get(SignatureHeader))
+	sig := hdr.Get(SignatureHeader)
+	if sig == "" {
+		sig = hdr.Get(LegacySignatureHeader)
+	}
+	keyID := hdr.Get(KeyIDHeader)
+	env, err := c.verifyAndParse(ctx, raw, sig, keyID)
 	if err != nil {
 		c.recordError(err.Error())
 		c.Logger.Warn("控制快照验签/解析失败,保持 last-known", "error_detail", err.Error())
@@ -232,7 +244,7 @@ func (c *SnapshotConsumer) Status() SnapshotStatus {
 		if window < 2*time.Minute {
 			window = 2 * time.Minute
 		}
-		st.Stale = c.now().Sub(st.LastContact) > window
+		st.Stale = st.LastError != "" || c.now().Sub(st.LastContact) > window
 	}
 	return st
 }
@@ -244,28 +256,68 @@ func (c *SnapshotConsumer) LastSnapshot() *SnapshotEnvelope {
 	return c.last
 }
 
-// verifyAndParse 验签后解析信封并校验安全类字段。
-func (c *SnapshotConsumer) verifyAndParse(body []byte, sig string) (*SnapshotEnvelope, error) {
+// verifyAndParse 按 kid/已发布公钥验签后解析 X-01 快照信封并校验安全类字段。
+// 旧版本仓提案信封（带 payload）只用于升级期读取 last-known，不再作为新契约。
+func (c *SnapshotConsumer) verifyAndParse(
+	ctx context.Context, body []byte, sig, keyID string,
+) (*SnapshotEnvelope, error) {
+	keys, err := c.verificationKeys(ctx, keyID)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for _, key := range keys {
+		if err := VerifySignature(key, body, sig); err != nil {
+			lastErr = err
+			continue
+		}
+		return c.parseSnapshotBody(body)
+	}
+	if lastErr == nil {
+		lastErr = errors.New("control: 快照验签公钥未配置")
+	}
+	return nil, lastErr
+}
+
+func (c *SnapshotConsumer) verificationKeys(ctx context.Context, keyID string) ([]*rsa.PublicKey, error) {
+	if c.Keys != nil {
+		if strings.TrimSpace(keyID) == "" {
+			return c.Keys.Keys(ctx)
+		}
+		key, err := c.Keys.Key(ctx, keyID)
+		if err != nil {
+			return nil, err
+		}
+		return []*rsa.PublicKey{key}, nil
+	}
 	if c.PublicKey == nil {
 		return nil, errors.New("control: 快照验签公钥未配置")
 	}
-	if err := VerifySignature(c.PublicKey, body, sig); err != nil {
-		return nil, err
-	}
-	var env SnapshotEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
+	return []*rsa.PublicKey{c.PublicKey}, nil
+}
+
+func (c *SnapshotConsumer) parseSnapshotBody(body []byte) (*SnapshotEnvelope, error) {
+	var wire WireSnapshot
+	if err := json.Unmarshal(body, &wire); err != nil {
 		return nil, fmt.Errorf("control: 快照 JSON 非法: %w", err)
 	}
-	if env.Version <= 0 {
+	if wire.Sections.TenantDirectory != nil || wire.Sections.KeyRevocations != nil {
+		return wire.ToEnvelope(c.ServiceID)
+	}
+	var legacy SnapshotEnvelope
+	if err := json.Unmarshal(body, &legacy); err != nil {
+		return nil, fmt.Errorf("control: 快照 JSON 非法: %w", err)
+	}
+	if legacy.Version <= 0 {
 		return nil, errors.New("control: 快照版本必须为正")
 	}
-	if env.ObservedAt.IsZero() {
+	if legacy.ObservedAt.IsZero() {
 		return nil, errors.New("control: 快照缺少 observed_at")
 	}
-	if err := ValidatePayload(env.Payload); err != nil {
+	if err := ValidatePayload(legacy.Payload); err != nil {
 		return nil, err
 	}
-	return &env, nil
+	return &legacy, nil
 }
 
 // VerifySignature 校验 RSA-SHA256 PKCS#1 v1.5 裸签名（base64 标准或 URL 安全）。

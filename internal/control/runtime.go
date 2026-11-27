@@ -15,13 +15,15 @@ import (
 
 // RuntimeOptions 装配输入。
 type RuntimeOptions struct {
-	ServiceID  string
-	InstanceID string
-	Version    string
-	StartedAt  time.Time
+	ServiceID   string
+	InstanceID  string
+	Environment string
+	Version     string
+	StartedAt   time.Time
 
 	Client            *Client
 	PublicKey         *rsa.PublicKey
+	Keys              KeySource
 	DB                *sql.DB
 	Store             SnapshotStore
 	Applier           Applier
@@ -60,9 +62,10 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 	}
 	snap := NewSnapshotConsumer(opts.Client, opts.PublicKey, opts.Applier, opts.Store,
 		opts.ServiceID, opts.SnapshotInterval, opts.Logger)
+	snap.Keys = opts.Keys
 	id := Identity{
-		ServiceID: opts.ServiceID, InstanceID: opts.InstanceID, Version: opts.Version,
-		StartedAt: opts.StartedAt,
+		ServiceID: opts.ServiceID, InstanceID: opts.InstanceID,
+		Environment: opts.Environment, Version: opts.Version, StartedAt: opts.StartedAt,
 	}
 	reg := NewRegistrar(opts.Client, id, opts.HeartbeatInterval, opts.Health, opts.Logger)
 	reg.Audit = opts.RegistrationAudit

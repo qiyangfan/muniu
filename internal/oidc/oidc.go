@@ -51,6 +51,9 @@ var ErrStateInvalid = errors.New("oidc: state 非法或已使用")
 // ErrTokenInvalid id_token 验签或声明校验失败。
 var ErrTokenInvalid = errors.New("oidc: id_token 校验失败")
 
+// ErrServiceTokenInvalid 服务令牌验签或声明校验失败;调用方统一映射 401,不回传细节。
+var ErrServiceTokenInvalid = errors.New("oidc: 服务令牌校验失败")
+
 const (
 	pendingTTL     = 10 * time.Minute
 	metadataTTL    = 10 * time.Minute
@@ -433,6 +436,162 @@ func (rp *RelyingParty) checkAudience(claims map[string]any) error {
 	return nil
 }
 
+// ServiceTokenConfig 服务只读 API 的 Keycloak 令牌校验声明。
+type ServiceTokenConfig struct {
+	Issuer         string
+	Audience       string   // 目标服务受众,如 muniu
+	AllowedClients []string // 允许的 azp 白名单;空即全部拒绝
+	RequiredScope  string   // 必含 scope,如 service:read
+}
+
+// ServiceVerifier 校验 Keycloak client credentials access token:
+// 发现文档 + JWKS 按 kid 验签,校验 iss/aud/exp/nbf/azp/scope。仅接受 RS256。
+type ServiceVerifier struct {
+	rp       *RelyingParty
+	audience string
+	allowed  map[string]struct{}
+	scope    string
+}
+
+// NewServiceVerifier 构造服务令牌校验器;网络端点按需拉取并缓存。
+func NewServiceVerifier(cfg ServiceTokenConfig, hc *http.Client) *ServiceVerifier {
+	allowed := make(map[string]struct{}, len(cfg.AllowedClients))
+	for _, client := range cfg.AllowedClients {
+		if client = strings.TrimSpace(client); client != "" {
+			allowed[client] = struct{}{}
+		}
+	}
+	return &ServiceVerifier{
+		rp:       New(Config{Issuer: cfg.Issuer}, hc),
+		audience: cfg.Audience,
+		allowed:  allowed,
+		scope:    cfg.RequiredScope,
+	}
+}
+
+// Verify 返回通过校验的 client id;失败统一 ErrServiceTokenInvalid。
+func (v *ServiceVerifier) Verify(ctx context.Context, raw string) (string, error) {
+	claims, err := v.claims(ctx, strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	clientID, _ := claims["azp"].(string)
+	if clientID == "" {
+		clientID, _ = claims["client_id"].(string)
+	}
+	if _, ok := v.allowed[clientID]; !ok {
+		return "", fmt.Errorf("%w: 调用方不在读者白名单", ErrServiceTokenInvalid)
+	}
+	scope, _ := claims["scope"].(string)
+	if !scopeContains(scope, v.scope) {
+		return "", fmt.Errorf("%w: 缺少 scope %s", ErrServiceTokenInvalid, v.scope)
+	}
+	return clientID, nil
+}
+
+// claims 验签并校验服务令牌声明;不校验 nonce(非 id_token)。
+func (v *ServiceVerifier) claims(ctx context.Context, raw string) (map[string]any, error) {
+	parsed, err := parseServiceToken(raw)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := v.rp.metadata(ctx)
+	if err != nil {
+		return nil, wrapServiceErr(err)
+	}
+	if err := v.rp.verifySignature(ctx, doc.JWKSURL, parsed.kid, parsed.alg, parsed.input, parsed.sig); err != nil {
+		return nil, wrapServiceErr(err)
+	}
+	claims, err := decodeServiceClaims(parsed.payload)
+	if err != nil {
+		return nil, err
+	}
+	if err := v.checkClaims(claims); err != nil {
+		return nil, err
+	}
+	return claims, nil
+}
+
+type serviceToken struct {
+	alg     string
+	kid     string
+	input   []byte
+	sig     []byte
+	payload []byte
+}
+
+// parseServiceToken 解析头部/签名/载荷;只接受 RS256。
+func parseServiceToken(raw string) (serviceToken, error) {
+	parts := strings.Split(raw, ".")
+	if len(parts) != 3 {
+		return serviceToken{}, fmt.Errorf("%w: JWT 须为三段", ErrServiceTokenInvalid)
+	}
+	headerRaw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return serviceToken{}, fmt.Errorf("%w: 头部解码失败", ErrServiceTokenInvalid)
+	}
+	var header struct {
+		Alg string `json:"alg"`
+		Kid string `json:"kid"`
+	}
+	if err := json.Unmarshal(headerRaw, &header); err != nil {
+		return serviceToken{}, fmt.Errorf("%w: 头部非法", ErrServiceTokenInvalid)
+	}
+	if header.Alg != "RS256" {
+		return serviceToken{}, fmt.Errorf("%w: 不接受算法 %q", ErrServiceTokenInvalid, header.Alg)
+	}
+	sig, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		return serviceToken{}, fmt.Errorf("%w: 签名解码失败", ErrServiceTokenInvalid)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return serviceToken{}, fmt.Errorf("%w: 载荷解码失败", ErrServiceTokenInvalid)
+	}
+	return serviceToken{
+		alg: header.Alg, kid: header.Kid,
+		input: []byte(parts[0] + "." + parts[1]), sig: sig, payload: payload,
+	}, nil
+}
+
+func decodeServiceClaims(payload []byte) (map[string]any, error) {
+	var claims map[string]any
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return nil, fmt.Errorf("%w: 载荷非法", ErrServiceTokenInvalid)
+	}
+	return claims, nil
+}
+
+func (v *ServiceVerifier) checkClaims(claims map[string]any) error {
+	if iss, _ := claims["iss"].(string); iss != v.rp.cfg.Issuer {
+		return fmt.Errorf("%w: iss 不符", ErrServiceTokenInvalid)
+	}
+	if !audienceContains(claims["aud"], v.audience) {
+		return fmt.Errorf("%w: aud 不含 %s", ErrServiceTokenInvalid, v.audience)
+	}
+	if err := checkTimeClaims(claims, v.rp.now()); err != nil {
+		return wrapServiceErr(err)
+	}
+	return nil
+}
+
+// wrapServiceErr 保留底层错误链并统一归入服务令牌失败。
+func wrapServiceErr(err error) error {
+	return fmt.Errorf("%w: %w", ErrServiceTokenInvalid, err)
+}
+
+func scopeContains(granted, required string) bool {
+	if required == "" {
+		return true
+	}
+	for _, scope := range strings.Fields(granted) {
+		if scope == required {
+			return true
+		}
+	}
+	return false
+}
+
 // checkTimeClaims exp 必填且未过期,nbf 不晚于容差窗口。
 func checkTimeClaims(claims map[string]any, now time.Time) error {
 	if exp, ok := numClaim(claims["exp"]); !ok || now.After(time.Unix(exp, 0).Add(clockLeeway)) {
@@ -522,7 +681,10 @@ func (rp *RelyingParty) jwks(ctx context.Context, jwksURL string, force bool) ([
 		rp.mu.Unlock()
 		return keys, nil
 	}
-	rp.keysTried = rp.now()
+	if force {
+		// 只对强制刷新限速；首次常规拉取不应阻塞紧随其后的轮换刷新。
+		rp.keysTried = rp.now()
+	}
 	rp.mu.Unlock()
 
 	raw, err := rp.getJSON(ctx, jwksURL)

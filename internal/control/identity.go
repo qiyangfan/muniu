@@ -31,11 +31,15 @@ func (s StaticToken) Token(context.Context) (string, error) {
 	return string(s), nil
 }
 
+// ControlScopes 机器身份请求的最小 scope 集；锦官按端点 scope 校验。
+const ControlScopes = "control:register control:snapshot control:command control:usage"
+
 // ClientCredentials Keycloak 机器身份：client_credentials 短时令牌，缓存至到期前 30s。
 type ClientCredentials struct {
 	TokenURL     string
 	ClientID     string
 	ClientSecret string
+	Scope        string
 	Client       *http.Client
 
 	mu      sync.Mutex
@@ -95,6 +99,9 @@ func (c *ClientCredentials) tokenRequest(ctx context.Context) (*http.Request, er
 	form.Set("grant_type", "client_credentials")
 	form.Set("client_id", c.ClientID)
 	form.Set("client_secret", c.ClientSecret)
+	if c.Scope != "" {
+		form.Set("scope", c.Scope)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("control: 构造令牌请求: %w", err)

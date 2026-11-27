@@ -19,10 +19,11 @@ type Health struct {
 
 // Identity 注册身份与版本/能力单一来源。
 type Identity struct {
-	ServiceID  string
-	InstanceID string
-	Version    string
-	StartedAt  time.Time
+	ServiceID   string
+	InstanceID  string
+	Environment string
+	Version     string
+	StartedAt   time.Time
 }
 
 // RegistrationAudit 注册/心跳状态迁移审计；不逐心跳写库，只在状态变化时落痕。
@@ -71,19 +72,26 @@ func NewRegistrar(client *Client, id Identity, interval time.Duration, health fu
 // Run 启动即注册，成功后周期心跳；任何失败指数退避并重新注册（幂等）。
 func (r *Registrar) Run(ctx context.Context) {
 	backoff := r.Backoff
+	registered := false
 	for {
-		if err := r.register(ctx); err != nil {
-			r.setFailure(ctx, err)
-			r.Logger.Warn("服务注册失败,退避重试", "attempts", r.Attempts(), "retry_in", backoff)
-			if !sleepCtx(ctx, backoff) {
-				return
+		if !registered {
+			if err := r.register(ctx); err != nil {
+				r.setFailure(ctx, err)
+				r.Logger.Warn("服务注册失败,退避重试", "attempts", r.Attempts(), "retry_in", backoff,
+					"error_detail", err.Error())
+				if !sleepCtx(ctx, backoff) {
+					return
+				}
+				backoff = nextBackoff(backoff)
+				continue
 			}
-			backoff = nextBackoff(backoff)
-			continue
+			registered = true
 		}
 		if err := r.heartbeat(ctx); err != nil {
+			registered = false
 			r.setFailure(ctx, err)
-			r.Logger.Warn("服务心跳失败,重新注册后重试", "error_detail", err.Error())
+			r.Logger.Warn("服务心跳失败,重新注册后重试", "attempts", r.Attempts(), "retry_in", backoff,
+				"error_detail", err.Error())
 			if !sleepCtx(ctx, backoff) {
 				return
 			}
@@ -98,16 +106,19 @@ func (r *Registrar) Run(ctx context.Context) {
 	}
 }
 
-// register 幂等注册（同一 instance_id 重复上报只更新 last_seen）。
+// register 幂等注册（同一 instanceId 重复上报只更新 last_seen）。
 func (r *Registrar) register(ctx context.Context) error {
+	environment := r.Identity.Environment
+	if environment == "" {
+		environment = "local"
+	}
 	payload := map[string]any{
-		"service_id":       r.Identity.ServiceID,
-		"instance_id":      r.Identity.InstanceID,
-		"version":          r.Identity.Version,
-		"capabilities":     Capabilities(),
-		"entitlement_keys": EntitlementKeys(),
-		"admin_api":        AdminAPIs(),
-		"started_at":       r.Identity.StartedAt.UTC().Format(time.RFC3339),
+		"serviceId":         r.Identity.ServiceID,
+		"instanceId":        r.Identity.InstanceID,
+		"environment":       environment,
+		"version":           r.Identity.Version,
+		"capabilities":      Capabilities(),
+		"adminCapabilities": AdminAPIs(),
 	}
 	if _, _, err := r.Client.Post(ctx, r.Client.Paths.Register, payload); err != nil {
 		return err
@@ -122,22 +133,21 @@ func (r *Registrar) register(ctx context.Context) error {
 	if !wasOK {
 		r.audit(ctx, "ok", "registered "+r.Identity.InstanceID)
 	}
+	r.reportHealth(ctx, r.health(ctx))
 	r.Logger.Info("服务已注册", "service_id", r.Identity.ServiceID, "instance_id", r.Identity.InstanceID)
 	return nil
 }
 
-// heartbeat 心跳携带健康事件；与计费行分离。
+// heartbeat 心跳只报告实例存活；健康状态走独立 /ingest/health，避免伪造 ready。
 func (r *Registrar) heartbeat(ctx context.Context) error {
-	h := r.health(ctx)
 	payload := map[string]any{
-		"observed_at":  time.Now().UTC().Format(time.RFC3339),
-		"version":      r.Identity.Version,
-		"capabilities": Capabilities(),
-		"health":       h,
+		"serviceId":  r.Identity.ServiceID,
+		"instanceId": r.Identity.InstanceID,
 	}
 	if _, _, err := r.Client.Post(ctx, r.Client.Paths.HeartbeatPath(r.Identity.InstanceID), payload); err != nil {
 		return err
 	}
+	r.reportHealth(ctx, r.health(ctx))
 	r.mu.Lock()
 	recovered := r.status.State != "ok"
 	r.status.State = "ok"
@@ -148,6 +158,24 @@ func (r *Registrar) heartbeat(ctx context.Context) error {
 		r.audit(ctx, "ok", "heartbeat recovered "+r.Identity.InstanceID)
 	}
 	return nil
+}
+
+// reportHealth 上报真实健康事件；未知状态按 DEGRADED 上报，不伪造 UP。
+// 健康上报失败不改变注册状态，避免把控制面局部故障误判为数据面故障。
+func (r *Registrar) reportHealth(ctx context.Context, h Health) {
+	status := "DEGRADED"
+	if h.Status == "ok" {
+		status = "UP"
+	}
+	payload := map[string]any{
+		"serviceId":  r.Identity.ServiceID,
+		"instanceId": r.Identity.InstanceID,
+		"status":     status,
+		"observedAt": time.Now().UTC().Format(time.RFC3339),
+	}
+	if _, _, err := r.Client.Post(ctx, r.Client.Paths.Health, payload); err != nil {
+		r.Logger.Warn("健康事件上报失败(不影响注册)", "error_detail", err.Error())
+	}
 }
 
 // health 真实探针；未注入时返回 unknown，不伪造健康。

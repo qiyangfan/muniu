@@ -169,7 +169,7 @@ token 数,muniu 的取舍是「宁可记账精确、偶发小额超限」,不做
 - **standalone(缺省,一等公民)**:`muniu` 一条命令起服——单二进制 + 内嵌 SQLite,`muniu.yaml` 静态拓扑/价目,零外部依赖。
 - **managed(无状态副本)**:多副本 + LB + 控制面(统一快照/注册/命令/usage 上报)。参考部署样例与控制面对接契约见 [deploy/cluster/](deploy/cluster/README.md);每实例分片语义与集群口径见 [docs/design/cluster-semantics.md](docs/design/cluster-semantics.md)。
 
-配置开关:`control_plane.mode: managed`(统一快照/注册/命令/上报,需服务身份 + 验签公钥)、`service_api.token`(服务只读 API)——缺省 standalone,行为零回归。
+配置开关:`control_plane.mode: managed`(统一快照/注册/命令/上报,需服务身份 + 验签公钥)、`service_api`(服务只读 API:回环 pre-shared 或 Keycloak `service:read` 服务 token)——缺省 standalone,行为零回归。
 
 ## 文档地图
 

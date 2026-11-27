@@ -15,10 +15,12 @@ import (
 	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,15 +73,28 @@ func publicPEM(t *testing.T, pub *rsa.PublicKey) string {
 
 func snapshotBody(t *testing.T, version int64) []byte {
 	t.Helper()
-	env := SnapshotEnvelope{
-		Version: version, ObservedAt: time.Now().UTC(),
-		Payload: SnapshotPayload{
-			Pricing:     []PricingEntry{},
-			Revocations: &Revocations{Version: 1},
-			Tenants:     []Tenant{{ID: "t1", Name: "default", Status: "active"}},
+	return wireSnapshotBody(t, version, true)
+}
+
+func wireSnapshotBody(t *testing.T, version int64, withRevocations bool) []byte {
+	t.Helper()
+	wire := WireSnapshot{
+		Version: version, ObservedAt: time.Now().UTC(), ServiceID: ServiceID,
+		ETag:             `"v` + strconv.FormatInt(version, 10) + `"`,
+		SecuritySections: []string{"tenant_directory", "entitlements", "policy_packages", "key_revocations"},
+		Sections: WireSections{
+			TenantDirectory: &WireTenantDirectory{Tenants: []WireTenant{{
+				ID: "t1", TenantKey: "default", Name: "default", Status: "ACTIVE",
+			}}},
+			Entitlements:   &WireEntitlements{Tenants: []WireEntitlement{{TenantKey: "default"}}},
+			PolicyPackages: json.RawMessage(`{"packageCount":0,"packages":[]}`),
+			Pricing:        &WirePricing{Pricing: []PricingEntry{}},
 		},
 	}
-	raw, err := json.Marshal(env)
+	if withRevocations {
+		wire.Sections.KeyRevocations = &Revocations{Version: 1}
+	}
+	raw, err := json.Marshal(wire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,10 +197,7 @@ func TestSnapshot_验签应用版本单调与lastKnown(t *testing.T) {
 	}
 
 	// 缺吊销名单（安全类）拒绝
-	bad := SnapshotEnvelope{Version: 3, ObservedAt: time.Now().UTC(),
-		Payload: SnapshotPayload{Tenants: []Tenant{{ID: "t1", Name: "default", Status: "active"}}}}
-	raw, _ := json.Marshal(bad)
-	body.Store(raw)
+	body.Store(wireSnapshotBody(t, 3, false))
 	c.fetchOnce(context.Background())
 	if applier.count() != 2 || c.Status().Version != 2 {
 		t.Fatal("缺吊销名单的安全快照必须拒绝")
@@ -221,6 +233,68 @@ func TestSnapshot_验签应用版本单调与lastKnown(t *testing.T) {
 	c3 := NewSnapshotConsumer(client, pub, applied2, &memStore{rec: rec}, ServiceID, time.Minute, testLogger())
 	if err := c3.LoadLastKnown(context.Background()); err == nil || applied2.count() != 0 {
 		t.Fatal("篡改的 last-known 必须拒绝且不应用")
+	}
+}
+
+func rsaJWK(pub *rsa.PublicKey, kid string) map[string]any {
+	return map[string]any{
+		"kty": "RSA",
+		"kid": kid,
+		"n":   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+		"e":   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
+	}
+}
+
+func TestSnapshot_JWKS按keyid验签(t *testing.T) {
+	key, pub := newRSAKey(t)
+	raw := snapshotBody(t, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/.well-known/jwks.json" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []any{rsaJWK(pub, "kid-1")}})
+			return
+		}
+		w.Header().Set(KeyIDHeader, "kid-1")
+		w.Header().Set(SignatureHeader, signBody(t, key, raw))
+		_, _ = w.Write(raw)
+	}))
+	t.Cleanup(srv.Close)
+
+	client := NewClient(srv.URL, StaticToken("token-0123456789abcdef"), time.Second)
+	applier := &recordingApplier{}
+	c := NewSnapshotConsumer(client, nil, applier, &memStore{}, ServiceID, time.Minute, testLogger())
+	c.Keys = NewJWKSKeySource(srv.URL + "/.well-known/jwks.json")
+	c.fetchOnce(context.Background())
+	if applier.count() != 1 || c.Status().Version != 1 {
+		t.Fatalf("JWKS 模式应按 kid 验签并应用: applied=%d status=%+v", applier.count(), c.Status())
+	}
+}
+
+func TestJWKSKeySource_未知kid触发刷新(t *testing.T) {
+	_, pub1 := newRSAKey(t)
+	_, pub2 := newRSAKey(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		keys := []any{rsaJWK(pub1, "kid-1")}
+		if calls.Add(1) > 1 {
+			keys = append(keys, rsaJWK(pub2, "kid-2"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
+	}))
+	t.Cleanup(srv.Close)
+	src := NewJWKSKeySource(srv.URL)
+	src.mu.Lock()
+	src.forcedAt = time.Now().Add(-time.Minute)
+	src.mu.Unlock()
+
+	key, err := src.Key(context.Background(), "kid-1")
+	if err != nil || key.N.Cmp(pub1.N) != 0 {
+		t.Fatalf("kid-1 应解析到首把公钥: %v", err)
+	}
+	if _, err := src.Key(context.Background(), "kid-2"); err != nil {
+		t.Fatalf("未知 kid 应触发刷新: %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("未知 kid 只应触发一次刷新: %d", calls.Load())
 	}
 }
 
@@ -274,12 +348,15 @@ func TestRegistrar_退避与恢复补报(t *testing.T) {
 		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+		switch r.URL.Path {
+		case "/control/v1/registry/heartbeat":
 			heartbeats.Add(1)
 			payloads.Store("heartbeat", body)
 			w.WriteHeader(http.StatusNoContent)
-		case r.URL.Path == "/control/v1/registry/instances":
+		case "/ingest/health":
+			payloads.Store("health", body)
+			w.WriteHeader(http.StatusNoContent)
+		case "/control/v1/registry/register":
 			registers.Add(1)
 			if firstFail.Swap(false) {
 				w.WriteHeader(http.StatusServiceUnavailable)
@@ -316,7 +393,8 @@ func TestRegistrar_退避与恢复补报(t *testing.T) {
 	}
 	regBody, _ := payloads.Load("register")
 	m := regBody.(map[string]any)
-	if m["service_id"] != ServiceID || m["instance_id"] != "inst-1" || m["version"] != "test" {
+	if m["serviceId"] != ServiceID || m["instanceId"] != "inst-1" || m["version"] != "test" ||
+		m["environment"] != "local" {
 		t.Fatalf("注册 payload 不符: %v", m)
 	}
 	for _, forbidden := range []string{"endpoint", "token", "credential", "service_config", "base_url"} {
@@ -326,9 +404,13 @@ func TestRegistrar_退避与恢复补报(t *testing.T) {
 	}
 	hb, _ := payloads.Load("heartbeat")
 	hbm := hb.(map[string]any)
-	health, _ := hbm["health"].(map[string]any)
-	if health == nil || health["status"] != "ok" || health["source"] != ServiceID {
-		t.Fatalf("心跳必须携带真实健康事件: %v", hbm)
+	if hbm["serviceId"] != ServiceID || hbm["instanceId"] != "inst-1" {
+		t.Fatalf("心跳 payload 不符: %v", hbm)
+	}
+	healthBody, _ := payloads.Load("health")
+	hm := healthBody.(map[string]any)
+	if hm["serviceId"] != ServiceID || hm["status"] != "UP" {
+		t.Fatalf("健康事件须独立上报为 UP: %v", hm)
 	}
 }
 
@@ -359,13 +441,13 @@ func TestCommandExecutor_执行前先落pending(t *testing.T) {
 		switch {
 		case r.URL.Path == "/control/v1/commands/claim":
 			if claims.Add(1) > 1 {
-				_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{}})
+				_ = json.NewEncoder(w).Encode([]any{})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{
-				map[string]any{"id": "c-pending", "action": "cache_purge", "action_schema_version": 1,
-					"params": map[string]any{"all": true}, "idempotency_key": "k1"},
-			}})
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"id": "c-pending", "action": "cache_purge", "actionSchemaVersion": 1,
+					"params": map[string]any{"all": true}},
+			})
 		case strings.HasSuffix(r.URL.Path, "/ack"):
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -397,13 +479,15 @@ func TestCommandExecutor_执行前先落pending(t *testing.T) {
 func TestRegistrar_心跳失败保持指数退避(t *testing.T) {
 	var registers, heartbeats atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/control/v1/registry/instances":
+		switch r.URL.Path {
+		case "/control/v1/registry/register":
 			registers.Add(1)
 			w.WriteHeader(http.StatusNoContent)
-		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+		case "/control/v1/registry/heartbeat":
 			heartbeats.Add(1)
 			w.WriteHeader(http.StatusInternalServerError)
+		case "/ingest/health":
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -485,16 +569,16 @@ func TestCommandExecutor_幂等未知拒绝与本地命令(t *testing.T) {
 		switch {
 		case r.URL.Path == "/control/v1/commands/claim":
 			if claimCalls.Add(1) > 1 {
-				_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{}})
+				_ = json.NewEncoder(w).Encode([]any{})
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"commands": []any{
-				map[string]any{"id": "c1", "action": "cache_purge", "action_schema_version": 1,
-					"params": map[string]any{"all": true}, "idempotency_key": "k1", "actor": "alice", "reason": "cleanup"},
-				map[string]any{"id": "c2", "action": "config_write", "action_schema_version": 1, "params": map[string]any{}},
-				map[string]any{"id": "c3", "action": "cache_purge", "action_schema_version": 9, "params": map[string]any{"all": true}},
-				map[string]any{"id": "c4", "action": "cache_purge", "action_schema_version": 1, "params": map[string]any{"tenant": ""}},
-			}})
+			_ = json.NewEncoder(w).Encode([]any{
+				map[string]any{"id": "c1", "action": "cache_purge", "actionSchemaVersion": 1,
+					"params": map[string]any{"all": true}, "actor": "alice", "reason": "cleanup"},
+				map[string]any{"id": "c2", "action": "config_write", "actionSchemaVersion": 1, "params": map[string]any{}},
+				map[string]any{"id": "c3", "action": "cache_purge", "actionSchemaVersion": 9, "params": map[string]any{"all": true}},
+				map[string]any{"id": "c4", "action": "cache_purge", "actionSchemaVersion": 1, "params": map[string]any{"tenant": ""}},
+			})
 		case strings.HasSuffix(r.URL.Path, "/ack"):
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
@@ -515,7 +599,7 @@ func TestCommandExecutor_幂等未知拒绝与本地命令(t *testing.T) {
 	if targets.purges != 1 {
 		t.Fatalf("只有合法 cache_purge 执行一次: %d", targets.purges)
 	}
-	for id, want := range map[string]string{"c1": "acked", "c2": "failed", "c3": "failed", "c4": "failed"} {
+	for id, want := range map[string]string{"c1": "SUCCEEDED", "c2": "FAILED", "c3": "FAILED", "c4": "FAILED"} {
 		got, ok := acks.Load(id)
 		if !ok || got != want {
 			t.Fatalf("%s ack 应为 %s,实际 %v", id, want, got)
