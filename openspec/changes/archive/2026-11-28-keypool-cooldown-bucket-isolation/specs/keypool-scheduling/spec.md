@@ -23,7 +23,7 @@ key 必须 (MUST) 为限频(429)、欠费、5xx 瞬态维护互不覆盖的独�
 
 ### Requirement: 桶级持久化与释放
 
-长冷却必须 (MUST) 按 `(provider, key, bucket)` 多行持久化并各自恢复;credit 桶全程落库,rate 桶 ≥5 分钟落库,5xx 瞬态不落库;余额充值回写只允许 (MUST) 清除 credit 桶,rate 桶不受影响;清除事件必须 (MUST) 只删对应桶行。
+长冷却必须 (MUST) 按 `(provider, key, bucket)` 多行持久化并各自恢复;credit 桶全程落库,rate 桶 ≥5 分钟落库,5xx 瞬态不落库;余额充值回写只允许 (MUST) 清除 credit 桶,rate 桶不受影响;清除事件必须 (MUST) 只删对应桶行;成功与启动加载必须 (MUST) 清除已到期行,不得 (MUST NOT) 提前删除未到期行。
 
 #### Scenario: 充值只释放欠费
 
@@ -39,3 +39,8 @@ key 必须 (MUST) 为限频(429)、欠费、5xx 瞬态维护互不覆盖的独�
 
 - **WHEN** key 因 5xx 连续失败进入 30 秒瞬态冷却
 - **THEN** 不产生持久化行
+
+#### Scenario: 过期行清理
+
+- **WHEN** 库内冷却行已过期,进程重启或该 key 随后成功
+- **THEN** 过期行被删除,未到期桶行保持不变

@@ -28,14 +28,19 @@
 
 ### Requirement: 租户并发配置与观测
 
-租户在途上限必须 (MUST) 支持 `tenant_default_max_inflight` 全局缺省(0=不限)与 standalone `tenants[].max_inflight` 覆盖;managed 租户无快照字段时必须 (MUST) 使用本地缺省;网关必须 (MUST) 暴露在途水位与拒绝计数指标,并在拒绝日志中携带 tenant 与 request_id。
+租户在途上限必须 (MUST) 支持 `tenant_default_max_inflight` 全局缺省(0=不限)与 `tenant_max_inflight` 覆盖表;managed 租户必须 (MUST) 消费快照 `entitlements.quotas` 的 `max_inflight` 维度(0=不限),维度缺席时必须 (MUST) 回落本地缺省;网关必须 (MUST) 暴露 `muniu_tenant_inflight` 在途水位与 `muniu_tenant_admission_denials_total{tenant}` 拒绝计数指标,并在拒绝日志中携带 tenant 与 request_id。
 
 #### Scenario: managed 使用本地缺省
 
-- **WHEN** managed 租户快照不含并发字段,本地缺省为 8
+- **WHEN** managed 租户快照不含 `max_inflight` 维度,本地缺省为 8
 - **THEN** 该租户按 8 执行准入
+
+#### Scenario: managed 配额覆盖
+
+- **WHEN** 快照下发 `max_inflight=3`,本地缺省为 8
+- **THEN** 该租户按 3 执行准入;后续快照移除该维度后恢复按 8
 
 #### Scenario: 拒绝可观测
 
 - **WHEN** 租户因在途超限被拒绝
-- **THEN** `muniu_tenant_admission_denials_total{tenant}` 递增,日志含 tenant 与 request_id
+- **THEN** `muniu_tenant_admission_denials_total{tenant}` 递增,`muniu_tenant_inflight{tenant}` 反映在途数,日志含 tenant 与 request_id

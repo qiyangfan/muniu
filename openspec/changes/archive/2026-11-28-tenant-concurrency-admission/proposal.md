@@ -11,7 +11,7 @@
 - 新增租户级在途并发上限：同一租户跨 lane（chat/messages/responses/gemini/embeddings/images/multimodal）共享一个在途计数。
 - 准入点在各 lane 进入候选循环/上游调用之前；超限请求返回 429 `tenant_inflight_exceeded`，不触上游、不落 usage 行。
 - 槽位在所有出口释放（成功、失败、客户端断连、预算中断、panic 隔离路径）。
-- 配置：`tenant_default_max_inflight`（缺省 0=不限）与 standalone `tenants[].max_inflight` 覆盖；managed 租户快照暂无该字段，v1 使用本地缺省值，控制面字段另立跨仓变更。
+- 配置：`tenant_default_max_inflight`（缺省 0=不限）与 `tenant_max_inflight` 覆盖表；managed 租户由快照 `entitlements.quotas` 的 `max_inflight` 维度下发，维度缺席回落本地缺省。
 - 观测：`muniu_tenant_inflight` 水位与 `muniu_tenant_admission_denials_total{tenant}`；拒绝日志带 tenant/request_id。
 - 本变更是对外契约变更（新增拒绝行为），实施前需确认；分布式共享计数不在本变更范围（每副本独立，上限按副本计）。
 

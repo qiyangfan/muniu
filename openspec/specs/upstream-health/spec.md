@@ -118,3 +118,135 @@
 
 - **WHEN** 两个渠道分别存在非法间隔与无 key 声明推理探针
 - **THEN** 校验错误同时包含两处问题
+
+### Requirement: Gemini 原生免费控制面探针
+
+Gemini 原生适配器渠道必须 (MUST) 默认获得免费控制面探针:按探针间隔请求 `GET {base_url}/models`(Google models.list),以 `x-goog-api-key` 鉴权,零货币成本;全局 `health.free_probe_enabled` 与渠道级 `providers[].health.free_probe: false` 的退订语义与其他适配器一致;探针结果零触碰 key 池状态(EMA/冷却/禁用)。
+
+#### Scenario: Gemini 静默渠道控制面死亡被发现
+
+- **WHEN** 某 gemini 渠道数小时无真实流量,上游控制面故障(域名不可达/服务宕/密钥被吊销)
+- **THEN** 免费探针按间隔发起 `GET {base_url}/models`,连续失败达阈值后渠道进入降级态并发射 `provider_degraded` 告警,早于任何真实用户请求,全程零货币成本
+
+#### Scenario: Gemini 探针鉴权形态
+
+- **WHEN** gemini 渠道的免费探针出站
+- **THEN** 请求携带 `x-goog-api-key` 头,不携带其他适配器族的鉴权头
+
+#### Scenario: Gemini 渠道退订零探针
+
+- **WHEN** gemini 渠道声明 `providers[].health.free_probe: false`
+- **THEN** 该渠道零探针请求,被动统计照常工作
+
+### Requirement: Gemini 推理探针声明拒绝
+
+Gemini 渠道声明 `providers[].health.probe_model` 必须 (MUST) 在配置校验期拒绝并明确报错,不得静默忽略或降级为免费探针;推理探针启用范围仅限已声明推理端点形态的适配器。
+
+#### Scenario: Gemini 声明 probe_model 被拒绝
+
+- **WHEN** 某 gemini 渠道持有 key 并声明 `health.probe_model: gemini-pro`
+- **THEN** 配置加载失败,错误信息指明该渠道与 `probe_model` 不受支持
+
+### Requirement: 探针取样避开不可用 key
+
+探针必须 (MUST) 从池内选择非禁用且不在冷却期的 key 作为取样目标,并按渠道轮换;不得 (MUST NOT) 调用 `Pick/Report` 或写入 EMA、冷却、禁用状态。池内无可用 key 时探针必须 (MUST) 跳过本轮,不得 (MUST NOT) 计入失败或推进降级。
+
+#### Scenario: 首键撤销不再熔断渠道
+
+- **WHEN** 渠道首把 key 因 401 被禁用,其余 key 健康
+- **THEN** 免费探针使用其余健康 key,渠道相位保持 healthy
+
+#### Scenario: 首键冷却不污染推理探针
+
+- **WHEN** 渠道首把 key 处于欠费冷却,其余 key 可用
+- **THEN** 推理探针不选择该冷却 key,也不因它的 402 判渠道降级
+
+#### Scenario: 全部不可用跳过探针
+
+- **WHEN** 渠道全部 key 均禁用或冷却
+- **THEN** 本轮不发起探针请求,不增加连续失败计数;数据面按池耗尽语义处理
+
+#### Scenario: 轮换覆盖多 key
+
+- **WHEN** 渠道有两把健康 key 且连续多轮探针
+- **THEN** 探针取样在 key 间轮换,不固定首键
+
+### Requirement: 被动统计只消费渠道级证据
+
+渠道被动失败窗口与半开试探裁决必须 (MUST) 只消费渠道级证据:429/401/403/欠费不得计入;dial/TLS/首 token 超时/5xx/首 token 前断流计入;400/404 与客户端断连、预算中断不计入。证据分类以 `error-evidence-scope` 判定表为唯一源。
+
+#### Scenario: 429 风暴不降渠道
+
+- **WHEN** 单渠道多把 key 轮流返回 429,期间持续有请求成功
+- **THEN** 渠道被动窗口不计入这些 429,渠道相位保持 healthy
+
+#### Scenario: 5xx 触发被动降级
+
+- **WHEN** 渠道真实流量窗口内 5xx 失败率达到阈值且样本充足
+- **THEN** 渠道进入被动降级,与既有阈值语义一致
+
+#### Scenario: 参数错误不计失败
+
+- **WHEN** 渠道返回 400 或 404
+- **THEN** 被动窗口 total 与 failure 均不增加
+
+### Requirement: 半开试探只由渠道级成败裁决
+
+半开期真实请求必须 (MUST) 仅在渠道级成功或渠道级失败时裁决恢复/回降;key 级限频、鉴权失败与请求级参数错误不得 (MUST NOT) 使渠道回降级。
+
+#### Scenario: 半开期 key 限频不误判
+
+- **WHEN** 渠道处于 half-open,真实请求因单 key 429 换道后成功
+- **THEN** 渠道按成功试探恢复,不因 429 回降级
+
+### Requirement: 熔断覆盖全部数据面 lane
+
+所有实际发起上游候选尝试的数据面路径(chat/messages/responses/gemini、embeddings、images、multimodal)必须 (MUST) 在候选级查询渠道熔断态并跳过降级渠道,且把渠道级成败回填被动窗口与半开试探;responses 状态查询路径必须 (MUST) 在熔断期快速失败 503 `provider_circuit_open`(该路径无法换道)。跳过的候选不得 (MUST NOT) 计入错误类或换道率。
+
+#### Scenario: 非 chat lane 跳过熔断渠道
+
+- **WHEN** 某渠道在 chat lane 已进入 degraded,embeddings/images/multimodal 请求的别名包含该渠道
+- **THEN** 这些 lane 的候选循环跳过该渠道,上游零调用,用户由其余候选服务
+
+#### Scenario: 半开试探跨 lane 生效
+
+- **WHEN** 渠道处于 half-open,首个真实请求来自 embeddings lane 并成功
+- **THEN** 渠道按成功试探恢复,chat lane 随后恢复使用
+
+#### Scenario: 状态查询快速失败
+
+- **WHEN** responses 状态查询的目标渠道处于 degraded
+- **THEN** 返回 503 `provider_circuit_open`,不发起上游查询
+
+### Requirement: 半开期并发试探上限
+
+半开期必须 (MUST) 限制同时在途的真实试探请求数为 `health.half_open_max_inflight`(缺省 1,0=不限);超额请求必须 (MUST) 快速失败 503 `provider_circuit_open` 且不触上游;试探成功或失败必须 (MUST) 释放名额并裁决恢复或回降级。
+
+#### Scenario: 半开并发只放一个试探
+
+- **WHEN** 渠道 half-open,同时到达 10 个请求,上限为 1
+- **THEN** 仅 1 个请求打到上游,其余 9 个 503;上游零调用
+
+#### Scenario: 试探成功恢复
+
+- **WHEN** 该唯一试探请求成功
+- **THEN** 渠道恢复 healthy,后续请求正常放行
+
+#### Scenario: 名额释放
+
+- **WHEN** 试探请求因断连或预算中断终结
+- **THEN** 名额释放,后续半开请求可再次试探
+
+### Requirement: 被动统计独立参数
+
+渠道被动失败窗口必须 (MUST) 使用独立的 `health.passive_window_sec`、`passive_min_samples`、`passive_rate_milli`(缺省 300/20/300),不得 (MUST NOT) 与换道率告警的 `switch_*` 参数共用;修改告警阈值不得改变被动熔断判定。
+
+#### Scenario: 告警参数不影响熔断
+
+- **WHEN** 将 `switch_rate_milli` 调整为 100,`passive_rate_milli` 保持 300
+- **THEN** 换道率告警按 10% 触发,被动熔断仍按 30% 判定
+
+#### Scenario: 缺省等值
+
+- **WHEN** 配置未声明任何 `passive_*` 字段
+- **THEN** 被动窗口按 300 秒、20 样本、30% 运行,与变更前一致

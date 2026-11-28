@@ -1,10 +1,10 @@
-# Spec Delta
+# failover-deadline Specification
 
 ## Purpose
 
 首 token 前的换道阶段预算：用最大尝试数与总时长给候选链设上界，避免客户端被 N×首 token 超时拖死，同时不误伤已开始输出的长回答。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: 首 token 前阶段预算
 
@@ -29,3 +29,8 @@
 
 - **WHEN** 前两个候选因熔断或池不可用被跳过,第三个候选真实请求失败
 - **THEN** `max_attempts` 只计入第三个候选的一次真实尝试
+
+#### Scenario: 非 chat lane 同口径
+
+- **WHEN** embeddings/images/multimodal 候选链在首 token 前耗尽尝试次数或 key 池
+- **THEN** 与 chat 一样返回 504 `failover_budget_exhausted` 或 429/503 池耗尽信封,不触后续上游
