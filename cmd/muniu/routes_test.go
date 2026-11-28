@@ -53,6 +53,9 @@ func TestRoutes_与OpenAPI契约无漂移(t *testing.T) {
 	cfgContent := `
 health:
   enabled: false
+storage:
+  sqlite:
+    path: ` + filepath.Join(dir, "muniu.db") + `
 service_api:
   token: "read-token-0123456789abcdef"
 providers:

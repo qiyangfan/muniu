@@ -82,6 +82,8 @@ service_api:
 - 租户身份以控制面 ID 为准:managed 本地租户表只是投影。同名不同 ID 的本地残留无引用
   (`api_keys`/`semantic_cache`/管理员租户绑定均为零)时随快照事务删除;有引用则整包拒绝并报
   `tenant_identity_conflict`,需人工迁移,禁止静默改写历史归属。
+- 租户并发上限从 `entitlements.quotas` 的 `max_inflight` 维度读取(0=不限);维度缺席时回落本地
+  `tenant_default_max_inflight`/`tenant_max_inflight`,快照整体替换时缺席租户的 managed 覆盖同步撤销。
 - 安全类 fail-closed:`revocations` 或 `tenants` 缺失、签名无效、JSON 非法 → 整包拒绝。
   managed 下未收到有效吊销快照前平台 key 一律拒绝;租户配额快照未就绪时数据面 503;
   租户 `status=disabled` 时数据面 403 `tenant_disabled`(命中快照即时生效,含平台 key)。

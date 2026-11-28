@@ -71,9 +71,9 @@ func TestManager_探针URL尾斜杠归一(t *testing.T) {
 	}
 }
 
-// TestManager_不支持探针的适配器静默跳过 gemini 原生 v1 无探针端点(登记限制):
+// TestManager_未登记适配器静默跳过 未登记探针能力的适配器:
 // 声明探针参数不得转化为每轮失败计数(否则误熔断健康渠道),应静默跳过、被动统计照常。
-func TestManager_不支持探针的适配器静默跳过(t *testing.T) {
+func TestManager_未登记适配器静默跳过(t *testing.T) {
 	up := newCountingUpstream()
 	defer up.srv.Close()
 	m := NewManager(context.Background(), Options{
@@ -81,8 +81,8 @@ func TestManager_不支持探针的适配器静默跳过(t *testing.T) {
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]Channel {
 			return map[string]Channel{"g": {
-				Name: "g", Adapter: "gemini", BaseURL: up.srv.URL,
-				FreeProbe: true, ProbeModel: "gemini-pro",
+				Name: "g", Adapter: "unknown-adapter", BaseURL: up.srv.URL,
+				FreeProbe: true, ProbeModel: "up-a",
 				Keys: []ChannelKey{{ID: "k", Value: "v"}},
 			}}
 		},
@@ -102,7 +102,7 @@ func TestManager_不支持探针的适配器静默跳过(t *testing.T) {
 		t.Fatalf("应无探针结果: %+v", providers)
 	}
 	// 管理面透出装配后的探针声明(spec:端点返回探针配置)。
-	if !providers[0].FreeProbe || providers[0].ProbeModel != "gemini-pro" {
+	if !providers[0].FreeProbe || providers[0].ProbeModel != "up-a" {
 		t.Fatalf("探针配置应如实透出: %+v", providers[0])
 	}
 }
@@ -113,8 +113,8 @@ func TestManager_无key渠道被动降级到期转半开(t *testing.T) {
 	m := NewManager(context.Background(), Options{
 		Interval: 20 * time.Millisecond, Timeout: time.Second,
 		OpenFor: 40 * time.Millisecond, // 熔断计时极短,到期即转半开
-		// 被动窗口:3 样本即判越线(全部失败)
-		SwitchWindow: time.Minute, SwitchMinSamples: 3, SwitchRateMilli: 1000,
+		// 被动窗口:3 样本即判越线(全部失败);独立参数,不借 switch_*
+		PassiveWindow: time.Minute, PassiveMinSamples: 3, PassiveRateMilli: 1000,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Sources: func() map[string]Channel {
 			return map[string]Channel{"k": {Name: "k", Adapter: "openai", BaseURL: "http://127.0.0.1:1", FreeProbe: false}}
@@ -238,4 +238,23 @@ func TestManager_oauth渠道探针三态头(t *testing.T) {
 	if b, _ := gotBeta.Load().(string); b != adapter.AuthOAuthBetaHeader {
 		t.Fatalf("oauth 渠道探针应带官方 beta 头, got %q", b)
 	}
+}
+
+// TestManager_半开并发名额 半开期只放行配置数量的试探;释放后可再次试探。
+func TestManager_半开并发名额(t *testing.T) {
+	m := NewManager(context.Background(), Options{HalfOpenMaxInflight: 1})
+	m.mu.Lock()
+	m.states["p"] = &ProviderState{Provider: "p", Phase: PhaseHalfOpen}
+	m.mu.Unlock()
+	if !m.TrialAcquire("p") {
+		t.Fatal("首个试探应放行")
+	}
+	if m.TrialAcquire("p") {
+		t.Fatal("超过上限应拒绝")
+	}
+	m.TrialRelease("p")
+	if !m.TrialAcquire("p") {
+		t.Fatal("释放后应恢复放行")
+	}
+	m.TrialRelease("p")
 }

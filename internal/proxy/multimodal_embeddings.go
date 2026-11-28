@@ -28,6 +28,12 @@ func (p *Proxy) HandlerMultimodalEmbeddings() http.Handler {
 
 func (p *Proxy) handleMultimodalEmbeddings(w http.ResponseWriter, r *http.Request) {
 	tw := &trackWriter{ResponseWriter: w}
+	release, ok := p.acquireTenant(r)
+	if !ok {
+		p.writeError(tw, r, protocol.TypeRateLimited, "tenant_inflight_exceeded", "租户在途并发已达上限,请稍后重试")
+		return
+	}
+	defer release()
 	body, err := io.ReadAll(http.MaxBytesReader(tw, r.Body, maxMultimodalEmbeddingBody))
 	if err != nil {
 		p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求体过大或不可读")
@@ -94,65 +100,75 @@ func multimodalCandidates(topo *topologySnapshot, cands []config.Candidate) []fa
 	return fcs
 }
 
-// runMultimodalCandidates 候选循环：oauth 收窄、取 key、尝试、按 Decide 动作分支。
+// runMultimodalCandidates 候选循环：oauth 收窄、取 key、预算、尝试、按 Decide 动作分支。
+//
+//nolint:cyclop // 候选顺序状态机:跳过/取 key/预算/重试出口必须保持显式
 func (p *Proxy) runMultimodalCandidates(tw *trackWriter, r *http.Request, topo *topologySnapshot,
 	req *protocol.MultimodalEmbeddingRequest, fcs []failover.Candidate) {
 	iter := failover.NewIterator(fcs, p.randIntn)
-	var (
-		lastClass    failover.ErrorClass
-		lastUpstream *meterState
-		oauthSkipped bool // oauth 候选收窄:多模态 lane 不可达,唯一跳因时显式信封
-		otherSkipped bool // 池缺失/池耗尽等非 oauth 跳因
-	)
+	st := p.newLaneAttemptState()
+	var lastUpstream *meterState
+	var pending *failover.Candidate
 	for {
-		cand, ok := iter.Next()
-		if !ok {
-			p.finishMultimodalExhausted(tw, r, lastClass, lastUpstream, oauthSkipped, otherSkipped)
-			return
+		var cand failover.Candidate
+		if pending != nil {
+			cand, pending = *pending, nil
+		} else {
+			next, ok := iter.Next()
+			if !ok {
+				p.finishMultimodalExhausted(tw, r, st, lastUpstream)
+				return
+			}
+			cand = next
 		}
 		if topo.authModes[cand.Provider] == adapter.AuthOAuth {
-			oauthSkipped = true
+			st.oauthSkipped = true
 			p.logger.Warn("oauth 渠道不支持多模态 embeddings lane,跳过候选",
 				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
 			continue
 		}
-		key := p.pickMultimodalKey(topo, cand, &otherSkipped)
+		pool := topo.pools[cand.Provider]
+		key := pool.Pick(time.Now())
 		if key == nil {
+			st.pool.note(pool.Availability(time.Now()))
 			continue
 		}
-		m := &meterState{start: time.Now(), status: "ok"}
+		if p.laneBudgetExhausted(st) {
+			p.finishLaneBudgetExhausted(tw, r, st)
+			return
+		}
+		releaseTrial, admitted := p.laneAdmitted(cand.Provider)
+		if !admitted {
+			continue
+		}
+		st.attempts++
+		m := &meterState{start: time.Now(), status: "ok", deadline: st.deadline}
 		ad := topo.adapters[cand.Provider]
 		prep := ad.(adapter.MultimodalEmbeddingPreparer)
-		handled, class := p.attemptMultimodalEmbeddings(tw, r, ad, prep, cand, key, req, m)
-		p.reportKeyOutcome(topo.pools[cand.Provider], key, class, handled, m)
+		handled, class := runAttemptWithRelease(releaseTrial, func() (bool, failover.ErrorClass) {
+			return p.attemptMultimodalEmbeddings(tw, r, ad, prep, cand, key, req, m)
+		})
+		p.healthLaneOutcome(cand.Provider, class)
+		p.reportKeyOutcome(pool, key, class, handled, m)
 		if m.upstreamStatus != 0 {
 			lastUpstream = m
 		}
-		if stop, next := p.multimodalFailureExit(tw, r, class, m, lastUpstream); stop {
+		if stop, next := p.multimodalFailureExit(tw, r, class, m); stop {
 			return
 		} else if next {
-			lastClass = class
+			if shouldRetrySameProviderKey(tw.committed, class, m) {
+				st.last = class
+				pending = &cand
+				continue
+			}
+			st.last = class
 		}
 	}
-}
-
-// pickMultimodalKey 取候选 key；池缺失或池内无可用 key 登记非 oauth 跳因。
-func (p *Proxy) pickMultimodalKey(topo *topologySnapshot, cand failover.Candidate, otherSkipped *bool) *keypool.Key {
-	pool := topo.pools[cand.Provider]
-	if pool == nil {
-		*otherSkipped = true
-		return nil
-	}
-	key := pool.Pick(time.Now())
-	if key == nil {
-		*otherSkipped = true
-	}
-	return key
 }
 
 // multimodalFailureExit 非成功出口：next=true 换道继续，否则请求终结。
 func (p *Proxy) multimodalFailureExit(tw *trackWriter, r *http.Request, class failover.ErrorClass,
-	m *meterState, lastUpstream *meterState) (stop, next bool) {
+	m *meterState) (stop, next bool) {
 	if class == "" || tw.committed {
 		return true, false
 	}
@@ -166,13 +182,12 @@ func (p *Proxy) multimodalFailureExit(tw *trackWriter, r *http.Request, class fa
 		}
 		p.writeError(tw, r, classToType(class), string(class), m.upstreamMsg)
 	}
-	_ = lastUpstream
 	return true, false
 }
 
-// finishMultimodalExhausted 候选耗尽：最后上游响应优先原样透传，其次 oauth 唯一跳因显式信封。
-func (p *Proxy) finishMultimodalExhausted(tw *trackWriter, r *http.Request, lastClass failover.ErrorClass,
-	lastUpstream *meterState, oauthSkipped, otherSkipped bool) {
+// finishMultimodalExhausted 候选耗尽：最后上游响应优先原样透传，其次池耗尽分级与 oauth 唯一跳因。
+func (p *Proxy) finishMultimodalExhausted(tw *trackWriter, r *http.Request, st *laneAttemptState,
+	lastUpstream *meterState) {
 	if tw.committed {
 		return
 	}
@@ -180,12 +195,15 @@ func (p *Proxy) finishMultimodalExhausted(tw *trackWriter, r *http.Request, last
 		writeUpstreamResponse(tw, lastUpstream.upstreamStatus, lastUpstream.upstreamHeaders, lastUpstream.upstreamBody)
 		return
 	}
-	if oauthSkipped && lastClass == "" && !otherSkipped {
+	if p.finishLanePoolExhausted(tw, r, st) {
+		return
+	}
+	if st.oauthSkipped && st.last == "" && !st.pool.skipped {
 		p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
 			"该别名的候选均为 OAuth 订阅渠道,不支持多模态 embeddings lane,请为别名配置非 oauth 候选")
 		return
 	}
-	p.writeError(tw, r, classToType(lastClass), "all_candidates_failed", "上游供应商暂时不可用,已尝试全部支持的候选")
+	p.writeError(tw, r, classToType(st.last), "all_candidates_failed", "上游供应商暂时不可用,已尝试全部支持的候选")
 }
 
 func (p *Proxy) attemptMultimodalEmbeddings(w http.ResponseWriter, r *http.Request, ad adapter.Adapter,
@@ -205,7 +223,7 @@ func (p *Proxy) attemptMultimodalEmbeddings(w http.ResponseWriter, r *http.Reque
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
 	var firstTokFired atomic.Bool
-	firstTok := time.AfterFunc(p.timeouts.FirstToken, func() {
+	firstTok := time.AfterFunc(p.firstTokenTimeout(m), func() {
 		firstTokFired.Store(true)
 		opCancel()
 	})

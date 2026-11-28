@@ -59,19 +59,39 @@ func TestKeyCooldown_保存加载往返与清除(t *testing.T) {
 	}
 }
 
-// TestKeyCooldown_乱序守卫 评审 B6 哨兵:同键两个事件的落库完成顺序可颠倒(锁外同步写),
-// 行状态必须由事件序号单调裁决——迟到的旧进入(UPSERT)不得覆盖新释放(DELETE),
-// 迟到的旧释放不得覆盖新进入。序号守卫移除时本用例必红。
+// TestKeyCooldown_启动清理过期行 Load 只恢复未到期状态;到期行必须单独删除,
+// 否则成功路径永远看不到它们,会长期留在库里。
+func TestKeyCooldown_启动清理过期行(t *testing.T) {
+	db := openTestStore(t)
+	now := time.Now()
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "old", "credit", now.Add(-time.Hour), 1, now, 1); err != nil {
+		t.Fatalf("存过期行: %v", err)
+	}
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "live", "rate", now.Add(time.Hour), 1, now, 2); err != nil {
+		t.Fatalf("存未到期行: %v", err)
+	}
+	n, err := PruneExpiredKeyCooldowns(context.Background(), db, "pa", now)
+	if err != nil || n != 1 {
+		t.Fatalf("应删一行: n=%d err=%v", n, err)
+	}
+	rows, err := LoadKeyCooldowns(context.Background(), db, "pa")
+	if err != nil || len(rows) != 1 || rows[0].KeyID != "live" {
+		t.Fatalf("未到期行必须保留: %+v err=%v", rows, err)
+	}
+}
+
+// TestKeyCooldown_乱序守卫 评审 B6 哨兵:同桶两个事件的落库完成顺序可颠倒(锁外同步写),
+// 行状态必须由事件序号单调裁决——迟到的旧进入/旧释放不得覆盖新事件;不同桶互不清除。
 func TestKeyCooldown_乱序守卫(t *testing.T) {
 	db := openTestStore(t)
 	now := time.Now()
 
-	// 新事件:进入(seq=2)
+	// 新事件:credit 进入(seq=2)
 	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "credit", now.Add(30*time.Minute), 1, now, 2); err != nil {
 		t.Fatalf("保存: %v", err)
 	}
-	// 迟到旧事件:释放(seq=1)→ 守卫应忽略
-	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "", time.Time{}, 0, now, 1); err != nil {
+	// 迟到旧事件:credit 释放(seq=1)→ 守卫应忽略
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "credit", time.Time{}, 0, now, 1); err != nil {
 		t.Fatalf("旧释放: %v", err)
 	}
 	rows, _ := LoadKeyCooldowns(context.Background(), db, "pa")
@@ -79,20 +99,21 @@ func TestKeyCooldown_乱序守卫(t *testing.T) {
 		t.Fatalf("旧释放不得覆盖新进入: %+v", rows)
 	}
 
-	// 迟到旧事件:更早的进入(seq=1)→ 守卫应忽略
+	// 不同桶的旧序号事件应独立共存(桶隔离)
 	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "rate", now.Add(time.Minute), 3, now, 1); err != nil {
-		t.Fatalf("旧进入: %v", err)
+		t.Fatalf("rate 进入: %v", err)
 	}
 	rows, _ = LoadKeyCooldowns(context.Background(), db, "pa")
-	if len(rows) != 1 || rows[0].Bucket != "credit" || rows[0].Consec != 1 {
-		t.Fatalf("旧进入不得覆盖新进入: %+v", rows)
+	if len(rows) != 2 {
+		t.Fatalf("credit/rate 应各一行: %+v", rows)
 	}
 
-	// 更新事件(seq=3):释放 → 生效删行
-	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "", time.Time{}, 0, now, 3); err != nil {
+	// 新事件(seq=3):只释放 credit → rate 行保留
+	if err := SaveKeyCooldown(context.Background(), db, "pa", "K", "credit", time.Time{}, 0, now, 3); err != nil {
 		t.Fatalf("新释放: %v", err)
 	}
-	if rows, _ = LoadKeyCooldowns(context.Background(), db, "pa"); len(rows) != 0 {
-		t.Fatalf("新释放应删行: %+v", rows)
+	rows, _ = LoadKeyCooldowns(context.Background(), db, "pa")
+	if len(rows) != 1 || rows[0].Bucket != "rate" {
+		t.Fatalf("只应删 credit,rate 保留: %+v", rows)
 	}
 }

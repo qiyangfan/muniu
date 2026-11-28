@@ -40,7 +40,7 @@ func SaveKeyCooldown(
 	now time.Time,
 	seq int64,
 ) error {
-	if bucket == "" {
+	if bucket == "" { // 全键清除(对账/键移除)
 		_, err := db.ExecContext(ctx, `DELETE FROM key_cooldowns
 			WHERE provider=? AND key_id=? AND ev_seq<?`, provider, keyID, seq)
 		if err != nil {
@@ -48,22 +48,31 @@ func SaveKeyCooldown(
 		}
 		return nil
 	}
+	if until.IsZero() { // 单桶清除(充值释放/到期清理),不影响同键其他桶
+		_, err := db.ExecContext(ctx, `DELETE FROM key_cooldowns
+			WHERE provider=? AND key_id=? AND bucket=? AND ev_seq<?`, provider, keyID, bucket, seq)
+		if err != nil {
+			return fmt.Errorf("store: 删冷却桶 %s/%s/%s: %w", provider, keyID, bucket, err)
+		}
+		return nil
+	}
 	_, err := db.ExecContext(ctx, `INSERT INTO key_cooldowns
 		(provider, key_id, bucket, cool_until, consec, ev_seq, updated_at)
 		VALUES (?,?,?,?,?,?,?)
-		ON CONFLICT(provider, key_id) DO UPDATE SET
-		bucket=excluded.bucket, cool_until=excluded.cool_until,
-		consec=excluded.consec, ev_seq=excluded.ev_seq, updated_at=excluded.updated_at
+		ON CONFLICT(provider, key_id, bucket) DO UPDATE SET
+		cool_until=excluded.cool_until, consec=excluded.consec,
+		ev_seq=excluded.ev_seq, updated_at=excluded.updated_at
 		WHERE key_cooldowns.ev_seq < excluded.ev_seq`,
 		provider, keyID, bucket, cooldownTime(until), consec, seq, cooldownTime(now))
 	if err != nil {
-		return fmt.Errorf("store: 存冷却行 %s/%s: %w", provider, keyID, err)
+		return fmt.Errorf("store: 存冷却行 %s/%s/%s: %w", provider, keyID, bucket, err)
 	}
 	return nil
 }
 
 // LoadKeyCooldowns 单渠道全量冷却行(启动恢复);含已到期行,由池侧过期过滤
 // (序号仍在行上,池侧须对过期行同样播种序号,否则重启后新事件被旧守卫压住)。
+// 装配层加载后调用 PruneExpiredKeyCooldowns 清理这些已到期行。
 func LoadKeyCooldowns(ctx context.Context, db *sql.DB, provider string) ([]KeyCooldownRow, error) {
 	rows, err := db.QueryContext(ctx, `SELECT key_id, bucket, cool_until, consec, ev_seq
 		FROM key_cooldowns WHERE provider=?`, provider)
@@ -86,6 +95,17 @@ func LoadKeyCooldowns(ctx context.Context, db *sql.DB, provider string) ([]KeyCo
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// PruneExpiredKeyCooldowns 启动清理已到期行:LoadKeyCooldowns 只恢复未到期状态,
+// 到期行若不删会永久留在库里(成功路径只能清本进程见过的桶)。
+func PruneExpiredKeyCooldowns(ctx context.Context, db *sql.DB, provider string, now time.Time) (int64, error) {
+	res, err := db.ExecContext(ctx, `DELETE FROM key_cooldowns
+		WHERE provider=? AND cool_until<=?`, provider, cooldownTime(now))
+	if err != nil {
+		return 0, fmt.Errorf("store: 清过期冷却行 %s: %w", provider, err)
+	}
+	return res.RowsAffected()
 }
 
 // PruneKeyCooldowns 孤儿对账:拓扑替换后键集变化时清掉 keep 之外的行(仅限单渠道)。

@@ -129,6 +129,8 @@ components:
       required: [tenant_directory, entitlements, policy_packages, key_revocations]
       properties:
         tenant_directory: {type: object}
+        # muniu 解释 entitlements.quotas 的 rpm/tpm/daily_quota_credits/max_inflight;
+        # max_inflight 缺席=本地缺省,0=不限。
         entitlements: {type: object}
         policy_packages: {type: object}
         pricing: {type: object}

@@ -65,7 +65,6 @@ const (
 
 // 冷却桶标签:欠费回写(充值释放)只作用于 credit 桶;持久化按桶恢复阶梯计数。
 const (
-	bucketNone   = ""
 	bucketCredit = "credit"
 	bucketRate   = "rate"
 )
@@ -76,12 +75,11 @@ type keyState struct {
 	weight    float64
 	current   float64 // smooth WRR 当前权重
 
-	disabled       bool
-	cooldownUntil  time.Time
-	cooldownBucket string // bucketNone | bucketCredit | bucketRate；欠费回写只作用于 credit 桶
-	consec429      int
-	consec5xx      int
-	consecCredit   int // 欠费桶连续计数（阶梯推进依据），成功或充值回写清零
+	disabled                               bool
+	untilCredit, untilRate, untilTransient time.Time // 三桶独立截止;任一活跃即不可用
+	consec429                              int
+	consec5xx                              int
+	consecCredit                           int // 欠费桶连续计数（阶梯推进依据），成功或充值回写清零
 
 	ema     [emaWindow]bool // true=成功
 	emaIdx  int
@@ -114,7 +112,7 @@ func (p *Pool) WithSink(provider string, sink CooldownSink) *Pool {
 	return p
 }
 
-// LoadCooldowns 启动恢复：仅接受未到期的记录恢复进池（bucket/至时刻/阶梯计数一并恢复）。
+// LoadCooldowns 启动恢复：按桶恢复未到期记录（至时刻/阶梯计数各自独立）。
 func (p *Pool) LoadCooldowns(rows []CooldownRecord, now time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -130,12 +128,11 @@ func (p *Pool) LoadCooldowns(rows []CooldownRecord, now time.Time) {
 		if !r.Until.After(now) {
 			continue
 		}
-		k.cooldownUntil, k.cooldownBucket = r.Until, r.Bucket
 		switch r.Bucket {
 		case bucketCredit:
-			k.consecCredit = r.Consec
+			k.untilCredit, k.consecCredit = r.Until, r.Consec
 		case bucketRate:
-			k.consec429 = r.Consec
+			k.untilRate, k.consec429 = r.Until, r.Consec
 		}
 	}
 }
@@ -167,18 +164,18 @@ func (p *Pool) RecordCreditExhausted(keyID string, exhausted bool, now time.Time
 	}
 	var ev *cooldownEvent
 	if exhausted {
-		// 幂等：冷却中重复回写零作用
-		if k.cooldownBucket == bucketCredit && now.Before(k.cooldownUntil) {
+		// 幂等：credit 桶冷却中重复回写零作用
+		if now.Before(k.untilCredit) {
 			p.mu.Unlock()
 			return
 		}
 		k.consecCredit++
 		enterCreditCooldown(k, now)
-		ev = p.persistEventLocked(k, now)
-	} else if k.cooldownBucket == bucketCredit { // 充值恢复只解除 credit 桶，rate 桶不受影响
+		ev = p.persistBucketLocked(k, bucketCredit, now)
+	} else if !k.untilCredit.IsZero() || k.consecCredit > 0 { // 充值恢复只解除 credit 桶，rate/transient 不受影响
 		k.consecCredit = 0
-		k.cooldownBucket, k.cooldownUntil = bucketNone, time.Time{}
-		ev = p.persistEventLocked(k, now) // 清除语义：bucket 空 → store 删行
+		k.untilCredit = time.Time{}
+		ev = p.clearBucketLocked(k, bucketCredit)
 	} else {
 		k.consecCredit = 0
 	}
@@ -243,7 +240,7 @@ func (p *Pool) Pick(now time.Time) *Key {
 	best := -1
 	bestCur := 0.0
 	for i, k := range p.keys {
-		if k.disabled || now.Before(k.cooldownUntil) {
+		if !k.available(now) {
 			continue
 		}
 		eff := k.weight * emaRateFloor(k)
@@ -282,20 +279,31 @@ func (p *Pool) Report(k *Key, outcome Outcome, now time.Time, retryAfter time.Du
 		p.mu.Unlock()
 		return
 	}
-	var ev *cooldownEvent
+	events := p.applyOutcomeLocked(st, outcome, now, retryAfter)
+	p.mu.Unlock()
+	for _, ev := range events {
+		p.persist(ev)
+	}
+}
+
+// applyOutcomeLocked 单次结果的状态迁移;成功路径顺带清理已到期桶。
+func (p *Pool) applyOutcomeLocked(st *keyState, outcome Outcome, now time.Time,
+	retryAfter time.Duration) []*cooldownEvent {
+	var events []*cooldownEvent
 	switch outcome {
 	case OutcomeSuccess:
-		reportSuccess(st, now)
+		reportSuccess(st)
+		events = p.clearExpiredLocked(st, now)
 	case OutcomeRateLimited:
 		st.consec429++
 		st.record(false)
 		enterRateCooldown(st, now, retryAfter)
-		ev = p.persistEventLocked(st, now)
+		events = append(events, p.persistBucketLocked(st, bucketRate, now))
 	case OutcomeCreditExhausted:
 		st.consecCredit++
 		st.record(false)
 		enterCreditCooldown(st, now)
-		ev = p.persistEventLocked(st, now)
+		events = append(events, p.persistBucketLocked(st, bucketCredit, now))
 	case OutcomeServerError:
 		reportServerError(st, now)
 	case OutcomeAuthFailed:
@@ -304,20 +312,51 @@ func (p *Pool) Report(k *Key, outcome Outcome, now time.Time, retryAfter time.Du
 	default:
 		st.record(false)
 	}
-	p.mu.Unlock()
-	p.persist(ev)
+	return events
 }
 
-// reportSuccess 成功即清零全部连续计数；已过期的冷却桶同步清空。
-func reportSuccess(st *keyState, now time.Time) {
-	st.consec429, st.consec5xx, st.consecCredit = 0, 0, 0
-	if now.After(st.cooldownUntil) {
-		st.cooldownBucket = bucketNone
+// clearExpiredLocked 成功即清理已到期的桶状态与持久行;未到期桶保持原状,
+// 成功语义只清零阶梯,不提前解除限频/欠费冷却。transient 不落库,仅清内存。
+func (p *Pool) clearExpiredLocked(st *keyState, now time.Time) []*cooldownEvent {
+	var events []*cooldownEvent
+	if !st.untilCredit.IsZero() && !st.untilCredit.After(now) {
+		st.untilCredit = time.Time{}
+		events = append(events, p.clearBucketLocked(st, bucketCredit))
 	}
+	if !st.untilRate.IsZero() && !st.untilRate.After(now) {
+		st.untilRate = time.Time{}
+		events = append(events, p.clearBucketLocked(st, bucketRate))
+	}
+	if !st.untilTransient.IsZero() && !st.untilTransient.After(now) {
+		st.untilTransient = time.Time{}
+	}
+	return events
+}
+
+// available 非禁用且三个冷却桶均未到期。
+func (k *keyState) available(now time.Time) bool {
+	return !k.disabled && !now.Before(k.untilCredit) && !now.Before(k.untilRate) && !now.Before(k.untilTransient)
+}
+
+// latestCooldown 三桶中最晚的截止时刻(观测用)。
+func (k *keyState) latestCooldown() time.Time {
+	until := k.untilCredit
+	if k.untilRate.After(until) {
+		until = k.untilRate
+	}
+	if k.untilTransient.After(until) {
+		until = k.untilTransient
+	}
+	return until
+}
+
+// reportSuccess 成功即清零全部连续计数；各桶按自身截止时刻自然到期，不互相取消。
+func reportSuccess(st *keyState) {
+	st.consec429, st.consec5xx, st.consecCredit = 0, 0, 0
 	st.record(true)
 }
 
-// reportServerError 5xx 连续计数，达阈值冷却 30s 并清零连续计数。
+// reportServerError 5xx 连续计数，达阈值进入 30s transient 桶并清零连续计数。
 func reportServerError(st *keyState, now time.Time) {
 	st.consec5xx++
 	st.record(false)
@@ -325,8 +364,8 @@ func reportServerError(st *keyState, now time.Time) {
 		return
 	}
 	st.consec5xx = 0
-	if until := now.Add(cooldown5xx); until.After(st.cooldownUntil) {
-		st.cooldownUntil = until
+	if until := now.Add(cooldown5xx); until.After(st.untilTransient) {
+		st.untilTransient = until
 	}
 }
 
@@ -336,18 +375,16 @@ func enterRateCooldown(st *keyState, now time.Time, retryAfter time.Duration) {
 	if delay <= 0 {
 		delay = ladderDelay(base429, st.consec429, 2, max429)
 	}
-	st.cooldownBucket = bucketRate
-	if until := now.Add(delay); until.After(st.cooldownUntil) {
-		st.cooldownUntil = until
+	if until := now.Add(delay); until.After(st.untilRate) {
+		st.untilRate = until
 	}
 }
 
 // enterCreditCooldown 进入 credit 桶：30m × 2^(连续次数-1) 封顶 2h；至时刻只增不退。
 func enterCreditCooldown(st *keyState, now time.Time) {
 	delay := ladderDelay(creditBase, st.consecCredit, creditLadder, creditMax)
-	st.cooldownBucket = bucketCredit
-	if until := now.Add(delay); until.After(st.cooldownUntil) {
-		st.cooldownUntil = until
+	if until := now.Add(delay); until.After(st.untilCredit) {
+		st.untilCredit = until
 	}
 }
 
@@ -375,27 +412,39 @@ func (p *Pool) persist(ev *cooldownEvent) {
 	_ = p.sink.SaveCooldown(p.provider, ev.keyID, ev.bucket, ev.until, ev.consec, ev.seq)
 }
 
-// persistEventLocked 持锁判定本次迁移是否需要落库：欠费桶全程落库（阶梯与至时刻是
-// 重启恢复的必要状态）；rate 桶仅 ≥persistMinCooldown 的长冷却落库；清除事件恒落库删行。
-func (p *Pool) persistEventLocked(st *keyState, now time.Time) *cooldownEvent {
+// persistBucketLocked 持锁判定桶迁移是否需要落库：credit 全程、rate 仅 ≥persistMinCooldown
+// 的长冷却、transient 不落库。
+func (p *Pool) persistBucketLocked(st *keyState, bucket string, now time.Time) *cooldownEvent {
 	if p.sink == nil {
 		return nil
 	}
-	st.persistSeq++ // 锁内单调递增:store 侧 ev_seq 守卫据此裁决锁外落库的完成乱序
-	if st.cooldownBucket == bucketNone {
-		return &cooldownEvent{keyID: st.id, bucket: bucketNone, seq: st.persistSeq}
+	var until time.Time
+	consec := 0
+	switch bucket {
+	case bucketCredit:
+		until, consec = st.untilCredit, st.consecCredit
+	case bucketRate:
+		until, consec = st.untilRate, st.consec429
+	default:
+		return nil
 	}
-	if st.cooldownBucket == bucketCredit || st.cooldownUntil.Sub(now) >= persistMinCooldown {
-		consec := st.consecCredit
-		if st.cooldownBucket == bucketRate {
-			consec = st.consec429
-		}
-		return &cooldownEvent{
-			keyID: st.id, bucket: st.cooldownBucket,
-			until: st.cooldownUntil, consec: consec, seq: st.persistSeq,
-		}
+	if until.IsZero() || !until.After(now) {
+		return nil
 	}
-	return nil
+	if bucket == bucketRate && until.Sub(now) < persistMinCooldown {
+		return nil
+	}
+	st.persistSeq++
+	return &cooldownEvent{keyID: st.id, bucket: bucket, until: until, consec: consec, seq: st.persistSeq}
+}
+
+// clearBucketLocked 生成单桶清除事件(store 按 provider/key/bucket 删行,不影响其他桶)。
+func (p *Pool) clearBucketLocked(st *keyState, bucket string) *cooldownEvent {
+	if p.sink == nil {
+		return nil
+	}
+	st.persistSeq++
+	return &cooldownEvent{keyID: st.id, bucket: bucket, seq: st.persistSeq}
 }
 
 func (k *keyState) record(success bool) {
@@ -417,7 +466,7 @@ func (p *Pool) StateOf(id string, now time.Time) string {
 	switch {
 	case k.disabled:
 		return "disabled"
-	case now.Before(k.cooldownUntil):
+	case k.latestCooldown().After(now):
 		return "cooldown"
 	default:
 		return "healthy"
@@ -429,10 +478,14 @@ func (p *Pool) CooldownRemain(id string, now time.Time) time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	k := p.byID(id)
-	if k == nil || now.After(k.cooldownUntil) {
+	if k == nil {
 		return 0
 	}
-	return k.cooldownUntil.Sub(now)
+	until := k.latestCooldown()
+	if !until.After(now) {
+		return 0
+	}
+	return until.Sub(now)
 }
 
 // EMARate 键的 EMA 成功率（观测/测试用）。
@@ -468,6 +521,68 @@ func (p *Pool) Snapshot() []KeyView {
 	return out
 }
 
+// PoolAvailability 池级可用性只读快照:用于池耗尽信封的最早恢复与原因分级。
+type PoolAvailability struct {
+	Available      bool      // 是否存在可服务 key
+	Earliest       time.Time // 全部不可用时最早的恢复时刻(禁用键不贡献)
+	AllRateLimited bool      // 全部不可用原因均为限频/欠费计时(无禁用/5xx)
+}
+
+// Availability 池级可用性(只读,不触碰调度状态)。
+func (p *Pool) Availability(now time.Time) PoolAvailability {
+	if p == nil {
+		return PoolAvailability{}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.keys) == 0 {
+		return PoolAvailability{}
+	}
+	var av PoolAvailability
+	av.AllRateLimited = true
+	for _, k := range p.keys {
+		if k.available(now) {
+			return PoolAvailability{Available: true}
+		}
+		if k.disabled {
+			av.AllRateLimited = false
+			continue
+		}
+		if k.untilTransient.After(now) {
+			av.AllRateLimited = false
+		}
+		until := k.latestCooldown()
+		if until.After(now) && (av.Earliest.IsZero() || until.Before(av.Earliest)) {
+			av.Earliest = until
+		}
+	}
+	return av
+}
+
+// ProbeKey 探针取样键视图(只读):健康探针只消费可服务 key,不触碰调度状态。
+type ProbeKey struct {
+	ID    string
+	Value string
+}
+
+// ProbeKeys 当前可服务的 key(非禁用且不在冷却期),顺序稳定、零运行态副作用。
+// 与 Snapshot 分开:探针不应看到禁用/冷却键,balance 等旁路仍消费完整快照。
+func (p *Pool) ProbeKeys(now time.Time) []ProbeKey {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]ProbeKey, 0, len(p.keys))
+	for _, k := range p.keys {
+		if !k.available(now) {
+			continue
+		}
+		out = append(out, ProbeKey{ID: k.id, Value: k.value})
+	}
+	return out
+}
+
 // byID 查键状态，调用方须持 mu。
 func (p *Pool) byID(id string) *keyState {
 	for _, k := range p.keys {
@@ -487,7 +602,7 @@ func (p *Pool) StateCounts(now time.Time) map[string]int {
 		switch {
 		case k.disabled:
 			out["disabled"]++
-		case now.Before(k.cooldownUntil):
+		case k.latestCooldown().After(now):
 			out["cooldown"]++
 		default:
 			out["healthy"]++
@@ -524,7 +639,7 @@ func (p *Pool) PickWithHint(hintKeyID string, now time.Time) *Key {
 	}
 	p.mu.Lock()
 	for _, k := range p.keys {
-		if k.id == hintKeyID && !k.disabled && !now.Before(k.cooldownUntil) {
+		if k.id == hintKeyID && k.available(now) {
 			p.mu.Unlock()
 			return &Key{ID: k.id, Value: k.value}
 		}

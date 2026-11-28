@@ -14,7 +14,7 @@
 | 付费推理探针(`probe_model` 最小补全,max_tokens 微值) | ≈元级/天/渠道 | 关(声明制) | 推理面(免费端点 200 不证推理面) | 同上 |
 | 被动统计(真实流量渠道失败率) | 零 | 开 | 推理面真实表现 | 窗口失败率越线(样本 ≥ 最低样本数) |
 
-适配器能力:openai 兼容族(openai/doubao/qwen/deepseek/moonshot/glm)与 anthropic 具备两类探针端点;gemini 原生 v1beta 提供 models.list(`GET /models`),免费控制面探针由 openspec `add-gemini-free-health-probe` 落地;推理探针暂不实现(`probe_model` 声明校验期拒绝)。
+适配器能力:openai 兼容族(openai/doubao/qwen/deepseek/moonshot/glm)与 anthropic 具备两类探针端点;gemini 原生 v1beta 具备免费控制面探针(`GET /models`,`x-goog-api-key`),推理探针暂不实现(`probe_model` 声明校验期拒绝)。
 
 ## 状态机与纪律
 
@@ -50,3 +50,7 @@ health:
 - **热更边界**:`health` 节与渠道探针声明属非热更域,SIGHUP 不生效需重启(与 balance 同口径);运行期 key 取值随拓扑快照动态映射。
 - **个人/企业分层**:免费探针缺省全开满足个人项目零成本;付费探针按渠道声明,只给需要推理面早发现的渠道。
 - **管理可见性**:`GET /admin/v1/upstream-health` 各渠道相位/原因/探针结果与别名换道率;控制台 Providers 页透出健康态。
+
+## 半开并发与被动参数(ADR-0019 2026-11-27 修订)
+
+半开期只放行 `health.half_open_max_inflight`(缺省 1,0=不限)个在途试探,超额 503 `provider_circuit_open`;名额全出口释放。被动失败窗口使用独立的 `passive_window_sec`/`passive_min_samples`/`passive_rate_milli`(缺省 300/20/300),不再与换道率告警的 `switch_*` 共用;被动/半开证据只消费渠道级错误(ADR-0027)。

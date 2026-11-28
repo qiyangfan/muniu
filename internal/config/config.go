@@ -16,6 +16,7 @@ import (
 
 	"github.com/solvela/muniu/internal/adapter"
 	"github.com/solvela/muniu/internal/balance"
+	"github.com/solvela/muniu/internal/health"
 	"github.com/solvela/muniu/internal/metering"
 )
 
@@ -46,6 +47,9 @@ type Timeouts struct {
 	Dial       int64 `yaml:"dial"`
 	FirstToken int64 `yaml:"first_token"`
 	ChunkIdle  int64 `yaml:"chunk_idle"`
+	// 首 token 前阶段预算(ADR-0026):nil=缺省(120s/4 次),0=不限。
+	FailoverDeadlineSec *int `yaml:"failover_deadline_sec"`
+	MaxAttempts         *int `yaml:"max_attempts"`
 }
 
 // DialDuration 建连超时。
@@ -58,6 +62,28 @@ func (t Timeouts) FirstTokenDuration() time.Duration {
 
 // ChunkIdleDuration 帧间空闲超时。
 func (t Timeouts) ChunkIdleDuration() time.Duration { return time.Duration(t.ChunkIdle) * time.Second }
+
+// FailoverDeadlineDuration 首 token 前阶段总预算;nil 取 120s,0=不限。
+func (t Timeouts) FailoverDeadlineDuration() time.Duration {
+	if t.FailoverDeadlineSec == nil {
+		return 120 * time.Second
+	}
+	if *t.FailoverDeadlineSec <= 0 {
+		return 0
+	}
+	return time.Duration(*t.FailoverDeadlineSec) * time.Second
+}
+
+// MaxAttemptsValue 首 token 前最大真实上游尝试数;nil 取 4,0=不限。
+func (t Timeouts) MaxAttemptsValue() int {
+	if t.MaxAttempts == nil {
+		return 4
+	}
+	if *t.MaxAttempts <= 0 {
+		return 0
+	}
+	return *t.MaxAttempts
+}
 
 // ProviderBalance 渠道级余额源声明;nil = 不观测(零行为)。
 // kind 值域单一事实点在 internal/balance(BalanceSourceTypes),非法值启动期拒绝。
@@ -134,6 +160,11 @@ type HealthCfg struct {
 	SwitchWindowSec  int   `yaml:"switch_window_sec"`  // 别名换道率窗口,缺省 300
 	SwitchRateMilli  int64 `yaml:"switch_rate_milli"`  // 换道率越线阈值,缺省 300(毫单位)
 	SwitchMinSamples int   `yaml:"switch_min_samples"` // 换道率最低样本数,缺省 20(小分母不判定)
+	// 半开并发试探上限(0=不限)与被动统计独立参数(ADR-0019 2026-11-27 修订)。
+	HalfOpenMaxInflight *int  `yaml:"half_open_max_inflight"`
+	PassiveWindowSec    int   `yaml:"passive_window_sec"`
+	PassiveMinSamples   int   `yaml:"passive_min_samples"`
+	PassiveRateMilli    int64 `yaml:"passive_rate_milli"`
 }
 
 // KeyRef key 引用成员:env(环境变量名,绝不存明文)或 account(oauth 账号引用,凭据在
@@ -336,6 +367,9 @@ type Config struct {
 		Backend   string `yaml:"backend"`    // inmem 缺省，实例自治；redis 为共享视图的集群形态
 		RedisAddr string `yaml:"redis_addr"` // backend=redis 必填，形如 host:port
 	} `yaml:"ratelimit"`
+	// 租户在途并发准入(ADR-0028):0=不限;覆盖表按租户 ID 生效。
+	TenantDefaultMaxInflight int            `yaml:"tenant_default_max_inflight"`
+	TenantMaxInflight        map[string]int `yaml:"tenant_max_inflight"`
 	// OAuth OAuth 端点声明(订阅账号授权流与刷新,oauth-subscription-lane 契约);
 	// 空段 = 授权流关闭(手动录入凭据仍可用),声明 oauth 渠道则四字段必齐。
 	OAuth OAuthCfg `yaml:"oauth"`
@@ -521,6 +555,14 @@ func (c *Config) validateCore(add problemAdder) {
 	c.validateAuth(add)
 	c.validateAlerts(add)
 	c.validateServiceAPI(add)
+	if c.TenantDefaultMaxInflight < 0 {
+		add("tenant_default_max_inflight(%d) 不可为负(0=不限)", c.TenantDefaultMaxInflight)
+	}
+	for id, v := range c.TenantMaxInflight {
+		if v < 0 {
+			add("tenant_max_inflight[%s](%d) 不可为负(0=不限)", id, v)
+		}
+	}
 }
 
 // validateServer 监听地址缺省与三层超时:0 为未配置取缺省,负数为配错拒绝启动。
@@ -538,6 +580,17 @@ func (c *Config) validateServer(add problemAdder) {
 	t.Dial = nonZeroInt64(t.Dial, 5)
 	t.FirstToken = nonZeroInt64(t.FirstToken, 60)
 	t.ChunkIdle = nonZeroInt64(t.ChunkIdle, 30)
+	validateFailoverBudget(t, add)
+}
+
+// validateFailoverBudget 首 token 前预算字段:0=不限,负值拒绝。
+func validateFailoverBudget(t *Timeouts, add problemAdder) {
+	if t.FailoverDeadlineSec != nil && *t.FailoverDeadlineSec < 0 {
+		add("server.timeouts.failover_deadline_sec(%d) 不可为负(0=不限)", *t.FailoverDeadlineSec)
+	}
+	if t.MaxAttempts != nil && *t.MaxAttempts < 0 {
+		add("server.timeouts.max_attempts(%d) 不可为负(0=不限)", *t.MaxAttempts)
+	}
 }
 
 // nonZeroInt64 0 取缺省;非零(含负值,由各自负值闸拒绝)原样保留。
@@ -713,16 +766,37 @@ func (c *Config) validateHealth(add problemAdder) {
 	h.OpenSeconds = zeroTo(h.OpenSeconds, 300)
 	h.SwitchWindowSec = zeroTo(h.SwitchWindowSec, 300)
 	h.SwitchMinSamples = zeroTo(h.SwitchMinSamples, 20)
+	h.PassiveWindowSec = zeroTo(h.PassiveWindowSec, 300)
+	h.PassiveMinSamples = zeroTo(h.PassiveMinSamples, 20)
+	h.PassiveRateMilli = zeroTo(h.PassiveRateMilli, 300)
 	validateHealthNumeric(h, add)
 	h.SwitchRateMilli = zeroTo(h.SwitchRateMilli, 300)
 	if h.SwitchRateMilli < 0 {
 		add("health.switch_rate_milli(%d) 不可为负(非负毫单位)", h.SwitchRateMilli)
 	}
-	// 渠道级:声明 probe_model 的渠道必须持 key(无 key 渠道探针无从发起)
+	validateHealthExtended(h, add)
+	// 渠道级:声明 probe_model 的渠道必须持 key(无 key 渠道探针无从发起),
+	// 且适配器必须具备推理探针端点形态(gemini 仅支持免费控制面探针,声明即拒绝,不静默无效)
 	for i, p := range c.Providers {
-		if p.Health != nil && p.Health.ProbeModel != "" && len(p.Keys) == 0 {
+		if p.Health == nil || p.Health.ProbeModel == "" {
+			continue
+		}
+		if len(p.Keys) == 0 {
 			add("providers[%d](%s) 声明 health.probe_model 但 keys 为空(无 key 渠道探针无从发起)", i, p.Name)
 		}
+		if !health.InferenceProbeSupported(p.Adapter) {
+			add("providers[%d](%s) 适配器 %s 不支持推理探针,请移除 health.probe_model(免费控制面探针不受影响)", i, p.Name, p.Adapter)
+		}
+	}
+}
+
+// validateHealthExtended 被动/半开扩展参数值域。
+func validateHealthExtended(h *HealthCfg, add problemAdder) {
+	if h.PassiveRateMilli < 0 {
+		add("health.passive_rate_milli(%d) 不可为负(非负毫单位)", h.PassiveRateMilli)
+	}
+	if h.HalfOpenMaxInflight != nil && *h.HalfOpenMaxInflight < 0 {
+		add("health.half_open_max_inflight(%d) 不可为负(0=不限)", *h.HalfOpenMaxInflight)
 	}
 }
 
@@ -732,6 +806,7 @@ func validateHealthNumeric(h *HealthCfg, add problemAdder) {
 		"probe_interval_sec": h.ProbeIntervalSec, "probe_timeout_sec": h.ProbeTimeoutSec,
 		"failure_threshold": h.FailureThreshold, "open_seconds": h.OpenSeconds,
 		"switch_window_sec": h.SwitchWindowSec, "switch_min_samples": h.SwitchMinSamples,
+		"passive_window_sec": h.PassiveWindowSec, "passive_min_samples": h.PassiveMinSamples,
 	} {
 		if v < 0 {
 			add("health.%s(%d) 不可为负(正整数秒/次)", name, v)

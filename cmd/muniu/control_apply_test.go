@@ -8,6 +8,21 @@ import (
 	"github.com/solvela/muniu/internal/control"
 )
 
+func TestManagedTenantLimits_缺席不覆盖(t *testing.T) {
+	three, zero := int64(3), int64(0)
+	limits := managedTenantLimits([]control.Tenant{
+		{ID: "a", MaxInflight: &three},
+		{ID: "b"},
+		{ID: "c", MaxInflight: &zero},
+	})
+	if limits["a"] != 3 || limits["c"] != 0 {
+		t.Fatalf("显式值应保留: %+v", limits)
+	}
+	if _, ok := limits["b"]; ok {
+		t.Fatalf("缺席租户不得入表: %+v", limits)
+	}
+}
+
 func TestImagePricingRecords_nil与解析(t *testing.T) {
 	applier := &snapshotApplier{wiring: controlWiring{settlement: "CNY", fxMilli: 7200}}
 	if records, tables, replace, err := applier.imagePricingRecords(nil, time.Now()); err != nil ||

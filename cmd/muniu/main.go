@@ -634,22 +634,26 @@ func newProxyRuntime(ctx context.Context, a proxyAssembly) (*proxy.Proxy, *healt
 		ImagePricing: a.imageDir,
 		Settlement:   a.settlement,
 		Timeouts: proxy.Timeouts{
-			Dial:       a.cfg.Server.Timeouts.DialDuration(),
-			FirstToken: a.cfg.Server.Timeouts.FirstTokenDuration(),
-			ChunkIdle:  a.cfg.Server.Timeouts.ChunkIdleDuration(),
+			Dial:             a.cfg.Server.Timeouts.DialDuration(),
+			FirstToken:       a.cfg.Server.Timeouts.FirstTokenDuration(),
+			ChunkIdle:        a.cfg.Server.Timeouts.ChunkIdleDuration(),
+			FailoverDeadline: a.cfg.Server.Timeouts.FailoverDeadlineDuration(),
+			MaxAttempts:      a.cfg.Server.Timeouts.MaxAttemptsValue(),
 		},
-		Pipeline:         a.pipeline,
-		Pools:            a.pools,
-		TPM:              a.tpmRecorder,
-		Cache:            a.cacheInst,
-		TenantSwitch:     a.tenantSw,
-		Capabilities:     a.cfg.Models,
-		StrictGovernance: a.cfg.StrictGovernance,
-		OAuth:            a.cfg.OAuth, // 实例 oauth 段:拓扑守门 auth 共享校验的完整性基准
-		Plugins:          a.pluginReg,
-		Alerts:           a.alerts,
-		Health:           healthMgr,
-		Logger:           a.logger,
+		TenantDefaultMaxInflight: a.cfg.TenantDefaultMaxInflight,
+		TenantMaxInflight:        a.cfg.TenantMaxInflight,
+		Pipeline:                 a.pipeline,
+		Pools:                    a.pools,
+		TPM:                      a.tpmRecorder,
+		Cache:                    a.cacheInst,
+		TenantSwitch:             a.tenantSw,
+		Capabilities:             a.cfg.Models,
+		StrictGovernance:         a.cfg.StrictGovernance,
+		OAuth:                    a.cfg.OAuth, // 实例 oauth 段:拓扑守门 auth 共享校验的完整性基准
+		Plugins:                  a.pluginReg,
+		Alerts:                   a.alerts,
+		Health:                   healthMgr,
+		Logger:                   a.logger,
 	})
 	outboundDial = a.cfg.Server.Timeouts.DialDuration() // 探针/余额出站代理与数据面建连超时同口径
 	startHealth(healthMgr)
@@ -755,6 +759,9 @@ func newPoolBuilder(
 			logger.Warn("冷却行加载失败,重启恢复降级", "provider", prov.Name, "error_detail", lerr.Error())
 		} else {
 			pool.LoadCooldowns(cooldownRecords(rows), time.Now())
+		}
+		if _, perr := store.PruneExpiredKeyCooldowns(ctx, db, prov.Name, time.Now()); perr != nil {
+			logger.Warn("冷却过期行清理失败", "provider", prov.Name, "error_detail", perr.Error())
 		}
 		if perr := store.PruneKeyCooldowns(ctx, db, prov.Name, keyIDSet(pool.KeyIDs())); perr != nil {
 			logger.Warn("冷却孤儿对账失败", "provider", prov.Name, "error_detail", perr.Error())
@@ -1039,6 +1046,14 @@ func registerPlugin(ctx context.Context, reg *plugin.Registry, pc config.PluginC
 	return nil
 }
 
+// halfOpenMaxInflight nil=缺省(-1 交由 Manager 兜底 1),0=不限。
+func halfOpenMaxInflight(v *int) int {
+	if v == nil {
+		return -1
+	}
+	return *v
+}
+
 // newHealthManager 构造上游健康观测；显式关闭时返回 nil。
 func newHealthManager(
 	ctx context.Context, cfg *config.Config, alerts *alerting.Notifier, logger *slog.Logger,
@@ -1049,16 +1064,20 @@ func newHealthManager(
 	}
 	base := healthChannelBase(cfg)
 	mgr := health.NewManager(ctx, health.Options{
-		Interval:         time.Duration(cfg.Health.ProbeIntervalSec) * time.Second,
-		Timeout:          time.Duration(cfg.Health.ProbeTimeoutSec) * time.Second,
-		FailureThreshold: cfg.Health.FailureThreshold,
-		OpenFor:          time.Duration(cfg.Health.OpenSeconds) * time.Second,
-		SwitchWindow:     time.Duration(cfg.Health.SwitchWindowSec) * time.Second,
-		SwitchMinSamples: cfg.Health.SwitchMinSamples,
-		SwitchRateMilli:  cfg.Health.SwitchRateMilli,
-		Logger:           logger,
-		Sources:          healthSources(base, proxyRef, logger),
-		Emit:             healthEmitter(alerts),
+		Interval:            time.Duration(cfg.Health.ProbeIntervalSec) * time.Second,
+		Timeout:             time.Duration(cfg.Health.ProbeTimeoutSec) * time.Second,
+		FailureThreshold:    cfg.Health.FailureThreshold,
+		OpenFor:             time.Duration(cfg.Health.OpenSeconds) * time.Second,
+		SwitchWindow:        time.Duration(cfg.Health.SwitchWindowSec) * time.Second,
+		SwitchMinSamples:    cfg.Health.SwitchMinSamples,
+		SwitchRateMilli:     cfg.Health.SwitchRateMilli,
+		HalfOpenMaxInflight: halfOpenMaxInflight(cfg.Health.HalfOpenMaxInflight),
+		PassiveWindow:       time.Duration(cfg.Health.PassiveWindowSec) * time.Second,
+		PassiveMinSamples:   cfg.Health.PassiveMinSamples,
+		PassiveRateMilli:    cfg.Health.PassiveRateMilli,
+		Logger:              logger,
+		Sources:             healthSources(base, proxyRef, logger),
+		Emit:                healthEmitter(alerts),
 	})
 	logger.Info("上游健康观测已启用", "free_probe", cfg.Health.FreeProbeEnabled == nil || *cfg.Health.FreeProbeEnabled)
 	return mgr
@@ -1073,7 +1092,7 @@ func healthChannelBase(cfg *config.Config) map[string]health.Channel {
 	for _, p := range cfg.Providers {
 		ch := health.Channel{Name: p.Name, Adapter: p.Adapter, BaseURL: p.BaseURL, Auth: p.Auth}
 		ch.FreeProbe = freeProbeEnabled(cfg, p) && health.ProbeSupported(p.Adapter) && len(p.Keys) > 0
-		if p.Health != nil && p.Health.ProbeModel != "" && len(p.Keys) > 0 && health.ProbeSupported(p.Adapter) {
+		if p.Health != nil && p.Health.ProbeModel != "" && len(p.Keys) > 0 && health.InferenceProbeSupported(p.Adapter) {
 			ch.ProbeModel = p.Health.ProbeModel
 		}
 		base[p.Name] = ch
@@ -1102,7 +1121,7 @@ func healthSources(
 		providers, pools := px.Topology()
 		out := make(map[string]health.Channel, len(base))
 		for _, p := range providers {
-			ch, ok := healthChannelSnapshot(base, p, pools[p.Name].Snapshot(), logger)
+			ch, ok := healthChannelSnapshot(base, p, pools[p.Name].ProbeKeys(time.Now()), logger)
 			if ok {
 				out[p.Name] = ch
 			}
@@ -1113,7 +1132,7 @@ func healthSources(
 
 // healthChannelSnapshot 生成单渠道探针快照；热替换新增渠道无基线时跳过。
 func healthChannelSnapshot(
-	base map[string]health.Channel, p config.Provider, keys []keypool.KeyView, logger *slog.Logger,
+	base map[string]health.Channel, p config.Provider, keys []keypool.ProbeKey, logger *slog.Logger,
 ) (health.Channel, bool) {
 	ch, ok := base[p.Name]
 	if !ok {
@@ -1486,6 +1505,7 @@ func registerMetricsGauges(ctx context.Context, db *sql.DB, pipeline *metering.P
 		}
 		return []metrics.Sample{{Value: float64(n)}}
 	})
+	metrics.NewGaugeFunc("muniu_tenant_inflight", "租户在途请求数", px.TenantInflightSamples)
 	metrics.NewGaugeFunc("muniu_keypool_state", "key 池状态计数", func() []metrics.Sample {
 		now := time.Now()
 		var out []metrics.Sample

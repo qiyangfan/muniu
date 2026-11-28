@@ -101,6 +101,54 @@ func wireSnapshotBody(t *testing.T, version int64, withRevocations bool) []byte 
 	return raw
 }
 
+func TestWireTenant_maxInflight(t *testing.T) {
+	build := func(quota *WireQuota) *WireSnapshot {
+		ent := WireEntitlement{TenantKey: "default"}
+		if quota != nil {
+			ent.Quotas = []WireQuota{*quota}
+		}
+		return &WireSnapshot{
+			Version: 1, ObservedAt: time.Now().UTC(), ServiceID: ServiceID,
+			SecuritySections: []string{"tenant_directory", "entitlements", "policy_packages", "key_revocations"},
+			Sections: WireSections{
+				TenantDirectory: &WireTenantDirectory{Tenants: []WireTenant{{
+					ID: "t1", TenantKey: "default", Name: "default", Status: "ACTIVE",
+				}}},
+				Entitlements:   &WireEntitlements{Tenants: []WireEntitlement{ent}},
+				PolicyPackages: json.RawMessage(`{"packageCount":0,"packages":[]}`),
+				KeyRevocations: &Revocations{Version: 1},
+			},
+		}
+	}
+	env, err := build(&WireQuota{Dimension: "max_inflight", Unit: "count", Limit: 3}).ToEnvelope(ServiceID)
+	if err != nil || len(env.Payload.Tenants) != 1 || env.Payload.Tenants[0].MaxInflight == nil ||
+		*env.Payload.Tenants[0].MaxInflight != 3 {
+		t.Fatalf("max_inflight 应映射为租户上限: %+v err=%v", env, err)
+	}
+	// 显式 0 与缺席必须区分:0=不限,缺席=本地缺省。
+	env, err = build(&WireQuota{Dimension: "max_inflight", Unit: "count", Limit: 0}).ToEnvelope(ServiceID)
+	if err != nil || env.Payload.Tenants[0].MaxInflight == nil || *env.Payload.Tenants[0].MaxInflight != 0 {
+		t.Fatalf("显式 0 应保留: %+v err=%v", env, err)
+	}
+	env, err = build(nil).ToEnvelope(ServiceID)
+	if err != nil || env.Payload.Tenants[0].MaxInflight != nil {
+		t.Fatalf("缺席应为 nil: %+v err=%v", env, err)
+	}
+	// 同租户重复权益条目不得把已下发的上限覆盖成缺席后的零值。
+	dup := build(nil)
+	dup.Sections.Entitlements.Tenants = []WireEntitlement{
+		{TenantKey: "default", Quotas: []WireQuota{{Dimension: "max_inflight", Unit: "count", Limit: 3}}},
+		{TenantKey: "default"},
+	}
+	env, err = dup.ToEnvelope(ServiceID)
+	if err != nil || env.Payload.Tenants[0].MaxInflight == nil || *env.Payload.Tenants[0].MaxInflight != 3 {
+		t.Fatalf("重复权益条目不得吞掉 max_inflight: %+v err=%v", env, err)
+	}
+	if _, err := build(&WireQuota{Dimension: "max_inflight", Unit: "count", Limit: -1}).ToEnvelope(ServiceID); err == nil {
+		t.Fatal("负数 max_inflight 必须拒绝")
+	}
+}
+
 type recordingApplier struct {
 	mu      sync.Mutex
 	applied []int64

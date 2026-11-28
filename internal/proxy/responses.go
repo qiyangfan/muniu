@@ -118,6 +118,12 @@ func (p *Proxy) writeStatelessNotFound(w http.ResponseWriter, r *http.Request) {
 
 // proxyStateless 代理转发：取 key 确认域内可用性，经 NativeFetch 原样透传状态、头、体。
 func (p *Proxy) proxyStateless(w http.ResponseWriter, r *http.Request, respID, provider string) {
+	release, ok := p.acquireTenant(r)
+	if !ok {
+		p.writeError(w, r, protocol.TypeRateLimited, "tenant_inflight_exceeded", "租户在途并发已达上限,请稍后重试")
+		return
+	}
+	defer release()
 	snap := p.topo.Load()
 	opCtx, cancel := context.WithTimeout(r.Context(), p.timeouts.FirstToken)
 	defer cancel()
@@ -141,6 +147,11 @@ func (p *Proxy) proxyStateless(w http.ResponseWriter, r *http.Request, respID, p
 // statelessRequest 解析目标、取 key 并构造出站请求；不可用时已写错误响应。
 func (p *Proxy) statelessRequest(w http.ResponseWriter, r *http.Request, ctx context.Context,
 	snap *topologySnapshot, provider, respID string) (*http.Client, *http.Request, bool) {
+	if p.healthLaneContracted(provider) {
+		p.writeError(w, r, protocol.TypeUnavailable, providerCircuitOpenCode,
+			"上游渠道处于健康熔断期,状态查询暂不可用")
+		return nil, nil, false
+	}
 	// oauth 收窄防御检查:responses 状态 lane 不可达 oauth 渠道(创建侧已收窄,此处兜底
 	// 亲和条目指向已改声明的渠道),上游零调用
 	if snap.authModes[provider] == adapter.AuthOAuth {

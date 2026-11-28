@@ -28,7 +28,7 @@ func (p *Proxy) attemptNativeNonStream(w http.ResponseWriter, r *http.Request,
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
 	var firstTokFired atomic.Bool
-	firstTok := time.AfterFunc(p.timeouts.FirstToken, func() {
+	firstTok := time.AfterFunc(p.firstTokenTimeout(m), func() {
 		firstTokFired.Store(true)
 		opCancel()
 	})
@@ -102,7 +102,7 @@ func (p *Proxy) attemptNativeStream(w http.ResponseWriter, r *http.Request, upst
 	opCtx, opCancel := context.WithCancel(r.Context())
 	defer opCancel()
 	var firstTokFired atomic.Bool
-	firstTok := time.AfterFunc(p.timeouts.FirstToken, func() {
+	firstTok := time.AfterFunc(p.firstTokenTimeout(m), func() {
 		firstTokFired.Store(true)
 		opCancel()
 	})

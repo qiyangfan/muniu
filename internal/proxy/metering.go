@@ -27,7 +27,8 @@ const costBudgetExceededCode = "cost_budget_exceeded"
 
 // meterState 单请求计量状态，随 attempt 生命周期演进，退出时统一落账。
 type meterState struct {
-	start time.Time
+	start    time.Time
+	deadline time.Time // 首 token 前阶段预算截止;零值=不限
 
 	normalize    func(json.RawMessage) (protocol.Usage, error) // 适配器 usage 归一，attempt 注入
 	output       strings.Builder                               // delta 文本累计，估算 fallback 用，content+reasoning
@@ -280,17 +281,11 @@ func (p *Proxy) reportKeyOutcome(pool *keypool.Pool, key *keypool.Key,
 		reportCreditExhausted(pool, key, now)
 		return
 	}
-	switch class {
-	case failover.ClassRateLimited:
-		pool.Report(key, keypool.OutcomeRateLimited, now, m.retryAfter)
-	case failover.ClassAuthFailed:
-		pool.Report(key, keypool.OutcomeAuthFailed, now, 0)
-	case failover.ClassUpstream5xx:
-		pool.Report(key, keypool.OutcomeServerError, now, 0)
-	default:
-		// dial/timeout/mid_stream/unknown/内部类只记 EMA 失败，不触发冷却计数
-		pool.Report(key, keypool.OutcomeFailure, now, 0)
+	outcome, report := keyOutcomeOf(class)
+	if !report {
+		return
 	}
+	pool.Report(key, outcome, now, m.retryAfter)
 }
 
 // reportCreditExhausted 欠费证据（封闭白名单）→ 欠费桶：只改池的跨请求记忆，换道语义不变
@@ -535,4 +530,20 @@ func (m *meterState) cacheReadSum() int64 {
 		total += extractCacheRead(f)
 	}
 	return total
+}
+
+// keyOutcomeOf ErrorClass -> key 池 Outcome;report=false 表示请求/候选级错误不进入 key 健康度。
+func keyOutcomeOf(class failover.ErrorClass) (keypool.Outcome, bool) {
+	switch class {
+	case failover.ClassRateLimited:
+		return keypool.OutcomeRateLimited, true
+	case failover.ClassAuthFailed:
+		return keypool.OutcomeAuthFailed, true
+	case failover.ClassUpstream5xx:
+		return keypool.OutcomeServerError, true
+	case failover.ClassBadRequest, failover.ClassUnknown:
+		return 0, false
+	default:
+		return keypool.OutcomeFailure, true
+	}
 }

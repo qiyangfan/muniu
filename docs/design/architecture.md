@@ -57,7 +57,7 @@ key 池状态、限流窗口、apikey 缓存全部进程内内存态,由 mutex �
 | `muniu_semantic_cache_queries_total` | counter | model,result | 语义缓存判定:hit/miss=实际检索,skip=缓存未参与(租户关/tools/温度/超 8K) |
 | `muniu_first_token_duration_ms` | histogram | — | 流式首 token 延迟(ms),桶 1ms 起步(实测 p50≈1.13ms);仅流式观测 |
 | `muniu_plugin_calls_total` 等 | counter/histogram/gauge | per-plugin | 插件调用/耗时/containment/实例水位(ADR-0011) |
-| `muniu_pipeline_in_flight` / `muniu_metering_buffer_rows` / `muniu_keypool_state` | gauge | — | 管道水位/缓冲行数/key 池状态 |
+| `muniu_pipeline_in_flight` / `muniu_metering_buffer_rows` / `muniu_keypool_state` / `muniu_tenant_inflight` | gauge | — | 管道水位/缓冲行数/key 池状态/租户在途 |
 
 序列基数受配置界(provider × 别名 × 枚举),禁请求级标签;指标禁用时零开销且行为与启用前逐字节等价。
 

@@ -32,8 +32,12 @@ type foHarness struct {
 	pipeline *metering.Pipeline
 }
 
-func newFoHarness(t *testing.T, upA *testkit.Upstream, statusB int, bodyB string, streamB []testkit.Event) *foHarness {
+func newFoHarness(t *testing.T, upA *testkit.Upstream, statusB int, bodyB string, streamB []testkit.Event, timeoutOpt ...Timeouts) *foHarness {
 	t.Helper()
+	tmo := Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second}
+	if len(timeoutOpt) > 0 {
+		tmo = timeoutOpt[0]
+	}
 	reg := adapter.NewRegistry()
 	reg.Register("prov-a", adapter.NewOpenAI(upA.URL(), ""))
 	var poolB *keypool.Pool
@@ -69,7 +73,7 @@ func newFoHarness(t *testing.T, upA *testkit.Upstream, statusB int, bodyB string
 		Pricing: mustDir(t, map[string]metering.Pricing{
 			"alias-a": {Currency: "CNY", InputCreditsPerM: 2_000_000, OutputCreditsPerM: 8_000_000},
 		}),
-		Timeouts: Timeouts{Dial: time.Second, FirstToken: 10 * time.Second, ChunkIdle: 10 * time.Second},
+		Timeouts: tmo,
 		Pipeline: pipeline,
 		Pools:    map[string]*keypool.Pool{"prov-a": poolA, "prov-b": poolB},
 		RandIntn: func(n int) int { return 0 }, // 起点确定为首候选
@@ -273,8 +277,8 @@ func TestFailover_全候选key池冷却_耗尽信封(t *testing.T) {
 	h.poolB.Report(&keypool.Key{ID: "KB"}, keypool.OutcomeRateLimited, now, time.Hour)
 
 	code, body := foPost(t, h.ts, `{"model":"alias-a","messages":[{"role":"user","content":"hi"}]}`)
-	if code != 502 || !strings.Contains(body, "all_candidates_failed") {
-		t.Fatalf("全池冷却应 502 all_candidates_failed: %d %s", code, body)
+	if code != 429 || !strings.Contains(body, "keypool_rate_limited") {
+		t.Fatalf("全池冷却应 429 keypool_rate_limited: %d %s", code, body)
 	}
 }
 

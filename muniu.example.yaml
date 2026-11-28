@@ -8,6 +8,8 @@ server:
     dial: 5          # TCP+TLS 建连
     first_token: 60  # 上游首个内容帧(非流式=响应首字节)
     chunk_idle: 30   # 流式相邻两帧最大间隔,超时判上游僵死
+    # failover_deadline_sec: 120  # 首 token 前换道总预算;0=不限
+    # max_attempts: 4             # 首 token 前最大真实上游尝试数;0=不限
 
 storage:
   sqlite:
@@ -65,6 +67,12 @@ metering:
 # ratelimit:
 #   backend: redis
 #   redis_addr: "127.0.0.1:6379"
+
+# 租户在途并发准入(ADR-0028):0=不限;覆盖表按租户 ID。
+# managed 租户由控制面 entitlements.quotas 的 max_inflight 维度覆盖,缺席回落本值。
+# tenant_default_max_inflight: 0
+# tenant_max_inflight:
+#   <tenant-id>: 8
 
 # 可选的 OAuth 订阅账号端点声明(订阅转 API,ADR-0021)：声明 auth: oauth 渠道时四字段
 # 必齐(部分声明加载期拒绝)。凭据经管理面 /admin/v1/oauth/accounts 录入或授权流落库;
@@ -242,7 +250,7 @@ pricing:
 # (多候选透明切换、单候选 503 provider_circuit_open 快速失败),恢复自动扩回并通知。
 # health:
 #   enabled: true             # 总开关;false 时路由行为与无此能力逐字节一致
-#   free_probe_enabled: true  # 免费控制面探针总闸(gemini 原生渠道不支持探针,被动统计照常)
+#   free_probe_enabled: true  # 免费控制面探针总闸(gemini 原生支持免费探针,推理探针暂不支持)
 #   probe_interval_sec: 300   # 探针间隔
 #   probe_timeout_sec: 10     # 探针单次超时
 #   failure_threshold: 2      # 连续失败阈值
@@ -250,6 +258,10 @@ pricing:
 #   switch_window_sec: 300    # 别名换道率窗口
 #   switch_rate_milli: 300    # 换道率越线阈值(毫单位,300=30%)
 #   switch_min_samples: 20    # 换道率最低样本数(小分母不判定)
+#   half_open_max_inflight: 1 # 半开并发试探上限;0=不限
+#   passive_window_sec: 300   # 被动失败率窗口(独立于 switch_*)
+#   passive_min_samples: 20   # 被动窗口最低样本数
+#   passive_rate_milli: 300   # 被动失败率阈值(毫单位)
 # 渠道级声明示例(挂到对应 provider 下):
 #     health:
 #       free_probe: false     # 渠道级退订免费探针

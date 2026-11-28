@@ -69,6 +69,11 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 			actor_kind TEXT NOT NULL CHECK(actor_kind IN ('session','token','login','federated')),
 			actor_name TEXT NOT NULL, action TEXT NOT NULL, target_id TEXT,
 			outcome TEXT NOT NULL, detail TEXT, created_at TEXT NOT NULL)`,
+		`CREATE TABLE key_cooldowns (
+			provider TEXT NOT NULL, key_id TEXT NOT NULL, bucket TEXT NOT NULL,
+			cool_until TEXT NOT NULL, consec INTEGER NOT NULL DEFAULT 0,
+			ev_seq INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL,
+			PRIMARY KEY (provider, key_id))`,
 	}
 	for v := 1; v <= 22; v++ {
 		stmts = append(stmts, fmt.Sprintf(
@@ -104,8 +109,8 @@ func TestMigration0023_升级backfill存量GLOBAL(t *testing.T) {
 	if err := db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&maxVersion); err != nil {
 		t.Fatal(err)
 	}
-	if maxVersion != 24 {
-		t.Fatalf("迁移账应推进到 24,实际 %d", maxVersion)
+	if maxVersion != 25 {
+		t.Fatalf("迁移账应推进到 25,实际 %d", maxVersion)
 	}
 }
 

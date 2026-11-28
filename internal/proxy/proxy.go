@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,9 @@ type Timeouts struct {
 	Dial       time.Duration
 	FirstToken time.Duration
 	ChunkIdle  time.Duration
+	// 首 token 前阶段预算:0=不限。
+	FailoverDeadline time.Duration
+	MaxAttempts      int
 }
 
 const providerCircuitOpenCode = "provider_circuit_open"
@@ -84,6 +88,9 @@ type Config struct {
 	Health   *health.Manager    // 渠道健康熔断管理器；nil = 关闭,候选域零收缩
 	RandIntn func(int) int      // 候选起点随机源；nil 用全局随机，测试可注入
 	Logger   *slog.Logger
+	// 租户在途并发准入(ADR-0028):0=不限;覆盖表按租户 ID 生效。
+	TenantDefaultMaxInflight int
+	TenantMaxInflight        map[string]int
 }
 
 // Proxy 编排器：注册表、拓扑快照、三层超时与计量管道；拓扑快照含路由、池、适配器、能力目录，支持原子热替换。
@@ -108,6 +115,12 @@ type Proxy struct {
 	client        *http.Client
 	affinity      *affinityTable      // 有状态粘性路由亲和表，进程内 TTL+LRU
 	cacheAffinity *cacheAffinityTable // 会话缓存亲和表(ADR-0020),独立生命周期
+
+	tenantMu               sync.Mutex
+	tenantInflight         map[string]int
+	tenantDefaultMaxFlight int
+	tenantMaxFlight        map[string]int
+	tenantManagedMaxFlight map[string]int // 控制面 entitlements.quotas.max_inflight;按快照整体替换
 }
 
 // New 构造代理：路由候选按 priority 升序排序；HTTP 客户端带拨号层超时与连接池。
@@ -135,25 +148,29 @@ func New(cfg Config) *Proxy {
 		settlement = "CNY"
 	}
 	p := &Proxy{
-		settlement:    settlement,
-		registry:      cfg.Registry,
-		pricing:       cfg.Pricing,
-		imagePricing:  cfg.ImagePricing,
-		timeouts:      cfg.Timeouts,
-		pipeline:      cfg.Pipeline,
-		tpm:           cfg.TPM,
-		cache:         cfg.Cache,
-		tenantSw:      cfg.TenantSwitch,
-		plugins:       cfg.Plugins,
-		alerts:        cfg.Alerts,
-		health:        cfg.Health,
-		strictGov:     cfg.StrictGovernance,
-		oauthCfg:      cfg.OAuth,
-		randIntn:      randIntn,
-		logger:        logger,
-		client:        &http.Client{Transport: transport},
-		affinity:      newAffinityTable(),
-		cacheAffinity: newCacheAffinityTable(),
+		settlement:             settlement,
+		tenantInflight:         map[string]int{},
+		tenantDefaultMaxFlight: cfg.TenantDefaultMaxInflight,
+		tenantMaxFlight:        cfg.TenantMaxInflight,
+		tenantManagedMaxFlight: map[string]int{},
+		registry:               cfg.Registry,
+		pricing:                cfg.Pricing,
+		imagePricing:           cfg.ImagePricing,
+		timeouts:               cfg.Timeouts,
+		pipeline:               cfg.Pipeline,
+		tpm:                    cfg.TPM,
+		cache:                  cfg.Cache,
+		tenantSw:               cfg.TenantSwitch,
+		plugins:                cfg.Plugins,
+		alerts:                 cfg.Alerts,
+		health:                 cfg.Health,
+		strictGov:              cfg.StrictGovernance,
+		oauthCfg:               cfg.OAuth,
+		randIntn:               randIntn,
+		logger:                 logger,
+		client:                 &http.Client{Transport: transport},
+		affinity:               newAffinityTable(),
+		cacheAffinity:          newCacheAffinityTable(),
 	}
 	p.topo.Store(&topologySnapshot{
 		providers:   append([]config.Provider(nil), cfg.Providers...),
@@ -303,6 +320,8 @@ func (t *trackWriter) Unwrap() http.ResponseWriter { return t.ResponseWriter }
 // handleChat 生命周期：解析校验、路由、候选循环。
 // 直通路径：入站原生上下文经 request context 传入，每 attempt 判定直通或翻译路径；
 // 失格请求惰性升格，有状态请求粘性路由。
+//
+//nolint:cyclop // 请求生命周期顺序门禁:拆分会隐藏鉴权/路由/预算/换道的出口顺序
 func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	tw := &trackWriter{ResponseWriter: w} // 提交追踪：已写出的响应绝不二次写出或换道
 	body, err := io.ReadAll(http.MaxBytesReader(tw, r.Body, maxInboundBody))
@@ -340,6 +359,14 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	if over {
 		return
 	}
+	// 租户在途名额只覆盖真实候选循环:缓存命中与预算拒绝不占名额;缓存查询自身的
+	// 嵌入调用走 embeddings lane 的准入,不会在同一请求里重复占用 chat 请求名额。
+	release, ok := p.acquireTenant(r)
+	if !ok {
+		p.writeError(tw, r, protocol.TypeRateLimited, "tenant_inflight_exceeded", "租户在途并发已达上限,请稍后重试")
+		return
+	}
+	defer release()
 
 	// 身份先于 iterator 解析:stick 健康时作为组内起点提示
 	sk := p.resolveStick(r, nat, req)
@@ -352,6 +379,9 @@ func (p *Proxy) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	lc := &chatLoopCtrl{tw: tw, r: r, topo: topo, req: req, nat: nat, midLoop: midLoop,
 		pluginModified: pluginModified, prices: requestPrices, budget: requestBudget}
+	if d := p.timeouts.FailoverDeadline; d > 0 {
+		lc.deadline = time.Now().Add(d)
+	}
 	p.runChatCandidates(iter, lc, &chatLoopState{}, &sk, cph)
 }
 
@@ -404,16 +434,43 @@ type chatLoopCtrl struct {
 	pluginModified bool
 	prices         *metering.Pricing
 	budget         int64
+	deadline       time.Time // 首 token 前阶段预算截止;零值=不限
+}
+
+// acquireTrial 半开试探名额;无 health 或超限返回 false(超限置 circuitSkipped)。
+func (p *Proxy) acquireTrial(provider string, st *chatLoopState) bool {
+	if p.health == nil {
+		return false
+	}
+	if !p.health.TrialAcquire(provider) {
+		st.circuitSkipped = true
+		return false
+	}
+	return true
+}
+
+// shouldRetrySameKey key 级硬错误且未提交时,换同 provider 下一把 key。
+func (p *Proxy) shouldRetrySameKey(lc *chatLoopCtrl, class failover.ErrorClass, m *meterState) bool {
+	return shouldRetrySameProviderKey(lc.tw.committed, class, m)
 }
 
 // runChatCandidates 候选循环：跳过、路径判定、取 key、执行、按 Decide 动作分支。
+//
+//nolint:cyclop,funlen // 候选循环是顺序状态机:跳过/路径/取 key/预算/重试出口必须保持显式
 func (p *Proxy) runChatCandidates(iter failover.Iterator, lc *chatLoopCtrl, st *chatLoopState,
 	sk *stickState, cph *cachePhase) {
+	var pendingRetry *failover.Candidate
 	for {
-		cand, ok := iter.Next()
-		if !ok {
-			p.finishChatExhausted(lc.tw, lc.r, lc.req, lc.nat, st, sk)
-			return
+		var cand failover.Candidate
+		if pendingRetry != nil {
+			cand, pendingRetry = *pendingRetry, nil
+		} else {
+			next, ok := iter.Next()
+			if !ok {
+				p.finishChatExhausted(lc.tw, lc.r, lc.req, lc.nat, st, sk)
+				return
+			}
+			cand = next
 		}
 		if kind, skip := p.skipChatCandidate(lc.r, lc.topo, lc.nat, cand, lc.midLoop); skip {
 			st.noteSkip(kind)
@@ -428,18 +485,40 @@ func (p *Proxy) runChatCandidates(iter failover.Iterator, lc *chatLoopCtrl, st *
 		if key == nil {
 			continue
 		}
+		if p.budgetExhausted(lc, st) {
+			p.finishBudgetExhausted(lc, st, sk)
+			return
+		}
+		trialAcquired := p.acquireTrial(cand.Provider, st)
+		if p.health != nil && !trialAcquired {
+			continue
+		}
+		st.attempts++
 		m := &meterState{
-			start: time.Now(), status: "ok",
+			start: time.Now(), status: "ok", deadline: lc.deadline,
 			priceSnapshot: lc.prices, priceSnapshotTaken: true,
 			budget: lc.budget, budgetPrices: lc.prices,
 		}
-		handled, class := p.attempt(lc.tw, lc.r, lc.topo, lc.req, lc.nat, path, cand, key, m)
+		var releaseTrial func()
+		if trialAcquired {
+			releaseTrial = func() { p.health.TrialRelease(cand.Provider) }
+		}
+		handled, class := runAttemptWithRelease(releaseTrial, func() (bool, failover.ErrorClass) {
+			return p.attempt(lc.tw, lc.r, lc.topo, lc.req, lc.nat, path, cand, key, m)
+		})
 		if pool := lc.topo.pools[cand.Provider]; pool != nil {
 			p.reportKeyOutcome(pool, key, class, handled, m)
 		}
 		if class == "" {
 			p.finishChatSuccess(lc.r, lc.nat, cand, key, m, sk, cph, lc.req)
 			return
+		}
+		// key 级硬错误:同 provider 换下一把健康 key 重试;不计别名换道/渠道窗口(ADR-0027)。
+		if p.shouldRetrySameKey(lc, class, m) {
+			st.last = class
+			p.dropStickOnFailure(cand, sk)
+			pendingRetry = &cand
+			continue
 		}
 		if p.handleChatFailure(lc, path, cand, class, m, st, sk) {
 			return
@@ -482,6 +561,7 @@ func (p *Proxy) pickChatKey(r *http.Request, topo *topologySnapshot, cand failov
 	}
 	// 该 provider 全部 key 冷却或禁用：跳过候选，不计错误类
 	st.otherSkipped = true
+	st.pool.note(pool.Availability(time.Now()))
 	p.alerts.Emit("keypool_exhausted:"+cand.Provider, "warning",
 		"provider "+cand.Provider+" key 池不可用(全部冷却/禁用)")
 	p.logger.Warn("provider key 池不可用,跳过候选",
@@ -669,14 +749,155 @@ func (st *chatLoopState) noteSkip(k skipKind) {
 // chatLoopState 候选循环的跨轮状态。
 type chatLoopState struct {
 	last           failover.ErrorClass
-	bridgeSkipped  bool // 桥接适配性豁免跳过
-	otherSkipped   bool // 非桥接原因的候选跳过，如 key 池全冷却
-	circuitSkipped bool // 健康熔断收缩的候选跳过;唯一跳过原因时快速失败
-	oauthSkipped   bool // oauth lane 收窄跳过;唯一跳过原因时显式信封
+	attempts       int             // 真实上游尝试数(跳过不计)
+	bridgeSkipped  bool            // 桥接适配性豁免跳过
+	otherSkipped   bool            // 非桥接原因的候选跳过，如 key 池全冷却
+	circuitSkipped bool            // 健康熔断收缩的候选跳过;唯一跳过原因时快速失败
+	oauthSkipped   bool            // oauth lane 收窄跳过;唯一跳过原因时显式信封
+	pool           poolSkipTracker // key 池不可用跳过与恢复时刻
+}
+
+// budgetExhausted 首 token 前阶段预算是否已用尽。
+func (p *Proxy) budgetExhausted(lc *chatLoopCtrl, st *chatLoopState) bool {
+	if !lc.deadline.IsZero() && !time.Now().Before(lc.deadline) {
+		return true
+	}
+	return p.timeouts.MaxAttempts > 0 && st.attempts >= p.timeouts.MaxAttempts
+}
+
+// finishBudgetExhausted 预算命中:不再发起上游调用,给 504 自解释信封。
+func (p *Proxy) finishBudgetExhausted(lc *chatLoopCtrl, st *chatLoopState, sk *stickState) {
+	if lc.tw.committed {
+		return
+	}
+	noteStaleIfPending(sk)
+	p.writeError(lc.tw, lc.r, protocol.TypeTimeout, "failover_budget_exhausted",
+		fmt.Sprintf("首 token 前换道预算已用尽(尝试 %d 次,最后错误: %s)", st.attempts, st.last))
+}
+
+// firstTokenTimeout 首 token 单次超时取 min(配置值, 阶段预算剩余),避免末次尝试越过总预算。
+func (p *Proxy) firstTokenTimeout(m *meterState) time.Duration {
+	d := p.timeouts.FirstToken
+	if !m.deadline.IsZero() {
+		if rem := time.Until(m.deadline); rem < d {
+			d = rem
+		}
+	}
+	if d <= 0 {
+		return time.Millisecond
+	}
+	return d
 }
 
 // finishChatExhausted 候选耗尽出口：单因若为唯一跳过原因则给具体提示，否则统一 all_candidates_failed。
 // 能走到耗尽说明每个候选都未对客户端产出，即 decide 为 next_candidate，信封可安全写出。
+// acquireTenant 租户在途并发准入(ADR-0028);cap<=0 或未认证请求恒放行。
+// 上限优先级:managed 快照配额 > 本地覆盖表 > 全局缺省。
+func (p *Proxy) acquireTenant(r *http.Request) (func(), bool) {
+	info := auth.KeyFrom(r.Context())
+	if info == nil {
+		return func() {}, true
+	}
+	p.tenantMu.Lock()
+	cap := p.tenantDefaultMaxFlight
+	if v, ok := p.tenantMaxFlight[info.TenantID]; ok {
+		cap = v
+	}
+	if v, ok := p.tenantManagedMaxFlight[info.TenantID]; ok {
+		cap = v
+	}
+	if cap <= 0 {
+		p.tenantMu.Unlock()
+		return func() {}, true
+	}
+	if p.tenantInflight[info.TenantID] >= cap {
+		p.tenantMu.Unlock()
+		TenantAdmissionDenials.Inc(info.TenantID)
+		if p.logger != nil {
+			p.logger.Warn("租户在途并发超限,拒绝请求",
+				"tenant", info.TenantID, "limit", cap, "request_id", loggingRequestID(r.Context()))
+		}
+		return nil, false
+	}
+	p.tenantInflight[info.TenantID]++
+	p.tenantMu.Unlock()
+	return func() {
+		p.tenantMu.Lock()
+		if p.tenantInflight[info.TenantID] > 0 {
+			p.tenantInflight[info.TenantID]--
+		}
+		p.tenantMu.Unlock()
+	}, true
+}
+
+// ReplaceManagedTenantLimits 控制面快照应用后整体替换 managed 租户并发上限;
+// 缺席租户回落到本地覆盖表/全局缺省,已准入的在途请求不受影响。
+func (p *Proxy) ReplaceManagedTenantLimits(limits map[string]int) {
+	next := make(map[string]int, len(limits))
+	for id, limit := range limits {
+		next[id] = limit
+	}
+	p.tenantMu.Lock()
+	p.tenantManagedMaxFlight = next
+	p.tenantMu.Unlock()
+}
+
+// healthLaneContracted 非 chat lane 的渠道熔断门卫(候选级跳过,零上游)。
+func (p *Proxy) healthLaneContracted(provider string) bool {
+	return p.health != nil && p.health.Contracted(provider)
+}
+
+// laneAdmitted 非 chat lane 的统一门卫:熔断收缩 + 半开名额;返回释放函数。
+func (p *Proxy) laneAdmitted(provider string) (func(), bool) {
+	if p.health == nil {
+		return func() {}, true
+	}
+	if p.health.Contracted(provider) {
+		return nil, false
+	}
+	return p.acquireHealthTrial(provider)
+}
+
+// acquireHealthTrial 非 chat lane 的半开名额;nil health 恒放行。
+func (p *Proxy) acquireHealthTrial(provider string) (func(), bool) {
+	if p.health == nil {
+		return func() {}, true
+	}
+	if !p.health.TrialAcquire(provider) {
+		return nil, false
+	}
+	return func() { p.health.TrialRelease(provider) }, true
+}
+
+// healthLaneOutcome 非 chat lane 的渠道级回填:成功计入 total,仅渠道级失败计入 failure/半开。
+func (p *Proxy) healthLaneOutcome(provider string, class failover.ErrorClass) {
+	if p.health == nil {
+		return
+	}
+	if class == "" {
+		p.health.ProviderTraffic(provider, false)
+		p.health.TrialResult(provider, true)
+		return
+	}
+	if failover.ChannelSignal(class) {
+		p.health.ProviderTraffic(provider, true)
+		p.health.TrialResult(provider, false)
+	}
+}
+
+// setPoolRetryAfter 池耗尽时给最早恢复提示(秒,向上取整;过去/零值不写)。
+func setPoolRetryAfter(w http.ResponseWriter, earliest time.Time) {
+	if earliest.IsZero() {
+		return
+	}
+	d := time.Until(earliest)
+	if d <= 0 {
+		return
+	}
+	secs := int((d + time.Second - 1) / time.Second)
+	w.Header().Set("Retry-After", fmt.Sprintf("%d", secs))
+}
+
 func (p *Proxy) finishChatExhausted(tw *trackWriter, r *http.Request, req *protocol.ChatRequest,
 	nat *inboundNative, st *chatLoopState, sk *stickState) {
 	if tw.committed {
@@ -702,10 +923,29 @@ func (p *Proxy) finishChatExhausted(tw *trackWriter, r *http.Request, req *proto
 			"该别名的候选均为 OAuth 订阅渠道,不支持当前入站 lane(仅 chat/messages 可达),请为别名配置非 oauth 候选")
 		return
 	}
+	if p.finishPoolExhausted(tw, r, st) {
+		return
+	}
 	p.alerts.Emit("all_candidates_failed", "critical",
 		"别名 "+req.Model+" 全部候选失败(最后错误: "+string(st.last)+")")
 	p.writeError(tw, r, classToType(st.last), "all_candidates_failed",
 		"上游供应商暂时不可用,已尝试全部候选(最后错误: "+string(st.last)+")")
+}
+
+// finishPoolExhausted 全候选仅因 key 池不可用而跳过时按限频/不可用分级;返回是否已写响应。
+func (p *Proxy) finishPoolExhausted(tw *trackWriter, r *http.Request, st *chatLoopState) bool {
+	if !st.pool.skipped || st.last != "" || st.circuitSkipped || st.oauthSkipped || st.bridgeSkipped {
+		return false
+	}
+	setPoolRetryAfter(tw, st.pool.earliest)
+	if st.pool.allRate {
+		p.writeError(tw, r, protocol.TypeRateLimited, "keypool_rate_limited",
+			"该别名的 key 均在限频/欠费冷却中,请按 Retry-After 稍后重试")
+		return true
+	}
+	p.writeError(tw, r, protocol.TypeUnavailable, "keypool_exhausted",
+		"该别名的 key 均不可用(冷却或禁用),请稍后重试")
+	return true
 }
 
 // finishChatSuccess 成功出口：健康回填、直通亲和回写、会话缓存亲和写侧与缓存入库。
@@ -785,9 +1025,11 @@ func (st *chatLoopState) nextCandidate(p *Proxy, req *protocol.ChatRequest, cand
 	st.last = class
 	p.dropStickOnFailure(cand, sk) // 换道即清：stick 键上的失败已实证(评审 C1 契约接线)
 	if p.health != nil {
-		p.health.AliasSwitch(req.Model)               // 换道率分子
-		p.health.ProviderTraffic(cand.Provider, true) // 被动失败窗口
-		p.health.TrialResult(cand.Provider, false)    // 半开试探失败回降
+		p.health.AliasSwitch(req.Model) // 换道率分子
+		if failover.ChannelSignal(class) {
+			p.health.ProviderTraffic(cand.Provider, true) // 只消费渠道级证据
+			p.health.TrialResult(cand.Provider, false)    // 半开试探失败回降
+		}
 	}
 }
 

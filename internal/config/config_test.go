@@ -817,6 +817,26 @@ model_routes:
 		t.Fatalf("负值应一次报全: %v", err)
 	}
 
+	// Gemini 仅支持免费控制面探针;probe_model 必须显式拒绝,不得静默无效
+	geminiProbe := `
+providers:
+  - name: g
+    adapter: gemini
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    keys:
+      - env: G1
+    weight: 10
+    health:
+      probe_model: gemini-pro
+model_routes:
+  alias-g:
+    - { provider: g, model: gemini-pro, priority: 0 }
+`
+	_, err = Load(writeTemp(t, geminiProbe))
+	if err == nil || !strings.Contains(err.Error(), "gemini") || !strings.Contains(err.Error(), "probe_model") {
+		t.Fatalf("gemini 声明推理探针应拒绝: %v", err)
+	}
+
 	// 总开关关闭:合法
 	_, err = Load(writeTemp(t, "health:\n  enabled: false\n"+base))
 	if err != nil {
@@ -1280,5 +1300,30 @@ func TestAdminCookiesSecure_由部署配置决定(t *testing.T) {
 		if got := tc.cfg.AdminCookiesSecure(); got != tc.want {
 			t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestHealth_HalfOpenZeroUnlimited(t *testing.T) {
+	base := `
+providers:
+  - name: a
+    adapter: openai
+    base_url: "https://api.a.com/v1"
+    keys: [ { env: K1 } ]
+    weight: 1
+model_routes:
+  alias-a:
+    - { provider: a, model: up-a, priority: 0 }
+`
+	cfg, err := Load(writeTemp(t, base+"health:\n  half_open_max_inflight: 0\n"))
+	if err != nil {
+		t.Fatalf("0=不限应通过: %v", err)
+	}
+	if cfg.Health.HalfOpenMaxInflight == nil || *cfg.Health.HalfOpenMaxInflight != 0 {
+		t.Fatalf("0 应原样保留: %+v", cfg.Health.HalfOpenMaxInflight)
+	}
+	_, err = Load(writeTemp(t, base+"health:\n  half_open_max_inflight: -1\n"))
+	if err == nil || !strings.Contains(err.Error(), "half_open_max_inflight") {
+		t.Fatalf("负值应拒绝: %v", err)
 	}
 }

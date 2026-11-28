@@ -38,7 +38,7 @@ func (p *Proxy) attemptStream(w http.ResponseWriter, r *http.Request, upstream *
 	defer opCancel()
 	// 触发标志用原子位：Timer.Stop 不幂等，二次调用恒 false，不能作为是否超时的判据
 	var firstTokFired atomic.Bool
-	firstTok := time.AfterFunc(p.timeouts.FirstToken, func() {
+	firstTok := time.AfterFunc(p.firstTokenTimeout(m), func() {
 		firstTokFired.Store(true)
 		opCancel()
 	})

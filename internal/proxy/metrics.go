@@ -39,3 +39,17 @@ func observeTokens(provider, alias string, u protocol.Usage) {
 	TokensTotal.Add(u.CachedTokens, "cached_prompt", provider, alias)
 	TokensTotal.Add(u.CompletionTokens, "completion", provider, alias)
 }
+
+// TenantAdmissionDenials 租户在途并发拒绝计数(ADR-0028)。
+var TenantAdmissionDenials = metrics.NewCounterVec("muniu_tenant_admission_denials_total", "租户在途并发拒绝数", "tenant")
+
+// TenantInflightSamples 租户在途水位样本;抓取时读锁,零租户也输出 0 序列。
+func (p *Proxy) TenantInflightSamples() []metrics.Sample {
+	p.tenantMu.Lock()
+	defer p.tenantMu.Unlock()
+	out := make([]metrics.Sample, 0, len(p.tenantInflight))
+	for tenant, n := range p.tenantInflight {
+		out = append(out, metrics.Sample{Labels: [][2]string{{"tenant", tenant}}, Value: float64(n)})
+	}
+	return out
+}

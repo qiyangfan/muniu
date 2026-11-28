@@ -130,7 +130,8 @@ type Revocations struct {
 	Revoked []string `json:"revoked"`
 }
 
-// Tenant 租户目录与配额投影；0=不限。
+// Tenant 租户目录与配额投影；0=不限。MaxInflight 为 nil 表示快照未下发，
+// 由数据面回落本地缺省；指针用于区分「未下发」与「显式不限(0)」。
 type Tenant struct {
 	ID                string `json:"id"`
 	Name              string `json:"name"`
@@ -138,6 +139,7 @@ type Tenant struct {
 	RPMLimit          int64  `json:"rpm_limit"`
 	TPMLimit          int64  `json:"tpm_limit"`
 	DailyQuotaCredits int64  `json:"daily_quota_credits"`
+	MaxInflight       *int64 `json:"max_inflight,omitempty"`
 }
 
 // ValidatePayload 安全类结构校验：吊销/租户必须在场且合法，否则整包拒绝保留 last-known。
@@ -185,8 +187,20 @@ func validateTenant(i int, t Tenant) error {
 	if t.Status != "active" && t.Status != "disabled" {
 		return fmt.Errorf("租户 %s status 非法 %q", t.ID, t.Status)
 	}
+	if err := validateTenantLimits(t); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateTenantLimits 租户限额非负且 max_inflight 不超出本机 int 范围。
+func validateTenantLimits(t Tenant) error {
 	if t.RPMLimit < 0 || t.TPMLimit < 0 || t.DailyQuotaCredits < 0 {
 		return fmt.Errorf("租户 %s 限额不可为负", t.ID)
+	}
+	if t.MaxInflight != nil &&
+		(*t.MaxInflight < 0 || int64(int(*t.MaxInflight)) != *t.MaxInflight) {
+		return fmt.Errorf("租户 %s max_inflight 不可为负或超出本机范围", t.ID)
 	}
 	return nil
 }

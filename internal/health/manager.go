@@ -43,16 +43,20 @@ type ChannelKey struct {
 
 // Options 健康管理器装配参数;零值经 NewManager 兜底缺省。
 type Options struct {
-	Interval         time.Duration // 探针间隔,缺省 300s
-	Timeout          time.Duration // 探针单次超时,缺省 10s
-	FailureThreshold int           // 连续失败阈值,缺省 2
-	OpenFor          time.Duration // 熔断时长(degraded 计时),缺省 300s
-	SwitchWindow     time.Duration // 别名换道率窗口,缺省 300s
-	SwitchMinSamples int           // 换道率最低样本数,缺省 20
-	SwitchRateMilli  int64         // 换道率越线阈值,缺省 300
-	Logger           *slog.Logger
-	Now              func() time.Time
-	Client           *http.Client // 探针 HTTP 客户端(测试注入)
+	Interval            time.Duration // 探针间隔,缺省 300s
+	Timeout             time.Duration // 探针单次超时,缺省 10s
+	FailureThreshold    int           // 连续失败阈值,缺省 2
+	OpenFor             time.Duration // 熔断时长(degraded 计时),缺省 300s
+	SwitchWindow        time.Duration // 别名换道率窗口,缺省 300s
+	SwitchMinSamples    int           // 换道率最低样本数,缺省 20
+	SwitchRateMilli     int64         // 换道率越线阈值,缺省 300
+	HalfOpenMaxInflight int           // 半开并发试探上限,-1=缺省 1,0=不限
+	PassiveWindow       time.Duration // 被动失败率窗口,缺省 300s
+	PassiveMinSamples   int           // 被动窗口最低样本数,缺省 20
+	PassiveRateMilli    int64         // 被动失败率越线阈值,缺省 300
+	Logger              *slog.Logger
+	Now                 func() time.Time
+	Client              *http.Client // 探针 HTTP 客户端(测试注入)
 	// Sources 运行期渠道拓扑(感知热替换):渠道名 → 探针参数与 key 取值。
 	Sources func() map[string]Channel
 	// Emit 状态迁移事件出口(装配层转 alerting 管道);nil = 仅落状态不通知。
@@ -69,12 +73,14 @@ type Manager struct {
 	stop   chan struct{}
 	done   chan struct{}
 
-	mu           sync.Mutex
-	states       map[string]*ProviderState
-	aliasWins    map[string]*RingWindow // 别名换道率窗口
-	aliasFiring  map[string]bool        // switch_rate_exceeded 触发态(单次发射/回落解除)
-	providerWins map[string]*RingWindow // 渠道被动失败率窗口
-	client       *http.Client
+	mu            sync.Mutex
+	states        map[string]*ProviderState
+	aliasWins     map[string]*RingWindow // 别名换道率窗口
+	aliasFiring   map[string]bool        // switch_rate_exceeded 触发态(单次发射/回落解除)
+	providerWins  map[string]*RingWindow // 渠道被动失败率窗口
+	probeIdx      map[string]int         // 渠道探针取样轮换下标
+	trialInflight map[string]int         // 半开期在途试探数
+	client        *http.Client
 }
 
 // NewManager 构造并兜底缺省;调用方随后 Start()。
@@ -84,11 +90,13 @@ func NewManager(ctx context.Context, opts Options) *Manager {
 	return &Manager{
 		opts: opts, log: opts.Logger, ctx: ctx, cancel: cancel,
 		stop: make(chan struct{}), done: make(chan struct{}),
-		states:       map[string]*ProviderState{},
-		aliasWins:    map[string]*RingWindow{},
-		aliasFiring:  map[string]bool{},
-		providerWins: map[string]*RingWindow{},
-		client:       opts.Client,
+		states:        map[string]*ProviderState{},
+		aliasWins:     map[string]*RingWindow{},
+		aliasFiring:   map[string]bool{},
+		providerWins:  map[string]*RingWindow{},
+		probeIdx:      map[string]int{},
+		trialInflight: map[string]int{},
+		client:        opts.Client,
 	}
 }
 
@@ -104,6 +112,12 @@ func managerDefaults(opts Options) Options {
 	opts.FailureThreshold = positiveInt(opts.FailureThreshold, 2)
 	opts.SwitchMinSamples = positiveInt(opts.SwitchMinSamples, 20)
 	opts.SwitchRateMilli = positiveInt64(opts.SwitchRateMilli, 300)
+	if opts.HalfOpenMaxInflight < 0 {
+		opts.HalfOpenMaxInflight = 1
+	}
+	opts.PassiveWindow = positiveDur(opts.PassiveWindow, 5*time.Minute)
+	opts.PassiveMinSamples = positiveInt(opts.PassiveMinSamples, 20)
+	opts.PassiveRateMilli = positiveInt64(opts.PassiveRateMilli, 300)
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
@@ -171,22 +185,7 @@ func (m *Manager) tick(ctx context.Context) {
 		return
 	}
 	for name, ch := range m.opts.Sources() {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					m.log.Error("健康探针 panic(已按渠道隔离)", "provider", name, "error_detail", fmtSprint(r))
-				}
-			}()
-			if ch.FreeProbe && ProbeSupported(ch.Adapter) {
-				oc, class := m.freeProbe(ctx, ch)
-				m.applyProbe(name, oc, class, ReasonControlPlane)
-			}
-			if ch.ProbeModel != "" && ProbeSupported(ch.Adapter) { // 不支持探针的适配器族静默跳过(登记限制),防每轮失败计数误熔断
-				oc, class := m.inferenceProbe(ctx, ch)
-				m.applyProbe(name, oc, class, ReasonInference)
-			}
-			m.advanceTick(name)
-		}()
+		m.probeChannel(ctx, name, ch)
 	}
 	// 状态 GC:热替换移除的渠道不再有任何信号触达,超期清理,防幽灵渠道永驻管理面。
 	// 纯按信号新鲜度清理(不比對 Sources):热替换新增渠道靠真实流量触达保持,被动统计不受影响。
@@ -203,6 +202,24 @@ func (m *Manager) tick(ctx context.Context) {
 }
 
 func fmtSprint(v any) string { return fmt.Sprint(v) }
+
+// probeChannel 单渠道一轮探针(panic 隔离);无可用 key 时跳过主动探针,仍推进半开计时。
+func (m *Manager) probeChannel(ctx context.Context, name string, ch Channel) {
+	defer func() {
+		if r := recover(); r != nil {
+			m.log.Error("健康探针 panic(已按渠道隔离)", "provider", name, "error_detail", fmtSprint(r))
+		}
+	}()
+	if ch.FreeProbe && ProbeSupported(ch.Adapter) && len(ch.Keys) > 0 {
+		oc, class := m.freeProbe(ctx, ch)
+		m.applyProbe(name, oc, class, ReasonControlPlane)
+	}
+	if ch.ProbeModel != "" && InferenceProbeSupported(ch.Adapter) && len(ch.Keys) > 0 {
+		oc, class := m.inferenceProbe(ctx, ch)
+		m.applyProbe(name, oc, class, ReasonInference)
+	}
+	m.advanceTick(name)
+}
 
 // applyProbe 状态机推进 + 事件出口(探针侧)。
 func (m *Manager) applyProbe(name string, oc ProbeOutcome, class string, layer Reason) {
@@ -233,6 +250,36 @@ func (m *Manager) stateOf(name string) *ProviderState {
 	st := &ProviderState{Provider: name}
 	m.states[name] = st
 	return st
+}
+
+// TrialAcquire 半开期试探名额:非半开恒放行;半开期超过上限拒绝(调用方快速失败)。
+func (m *Manager) TrialAcquire(name string) bool {
+	if m == nil {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st, ok := m.states[name]
+	if !ok || st.Phase != PhaseHalfOpen {
+		return true
+	}
+	if m.opts.HalfOpenMaxInflight > 0 && m.trialInflight[name] >= m.opts.HalfOpenMaxInflight {
+		return false
+	}
+	m.trialInflight[name]++
+	return true
+}
+
+// TrialRelease 释放半开试探名额(所有出口必须调用;非半开期无副作用)。
+func (m *Manager) TrialRelease(name string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.trialInflight[name] > 0 {
+		m.trialInflight[name]--
+	}
+	m.mu.Unlock()
 }
 
 // Contracted 渠道是否处于降级收缩态(候选循环据此整路跳过);nil 管理器恒 false。
@@ -304,7 +351,7 @@ func (m *Manager) ProviderTraffic(name string, failed bool) {
 	m.mu.Lock()
 	win, ok := m.providerWins[name]
 	if !ok {
-		win = NewRingWindow(m.opts.SwitchWindow, m.opts.SwitchMinSamples, m.opts.SwitchRateMilli)
+		win = NewRingWindow(m.opts.PassiveWindow, m.opts.PassiveMinSamples, m.opts.PassiveRateMilli)
 		m.providerWins[name] = win
 	}
 	breached := win.Add(1, boolToInt(failed), now)

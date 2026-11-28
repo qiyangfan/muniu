@@ -61,7 +61,7 @@ type WireEntitlement struct {
 	EntitlementKeys []string    `json:"entitlementKeys"`
 }
 
-// WireQuota 配额维度；muniu 解释 rpm/tpm/daily_quota_credits。
+// WireQuota 配额维度；muniu 解释 rpm/tpm/daily_quota_credits/max_inflight。
 type WireQuota struct {
 	Dimension string `json:"dimension"`
 	Unit      string `json:"unit"`
@@ -174,8 +174,11 @@ func requireSecuritySections(declared []string) error {
 }
 
 // tenants 把租户目录与权益配额合并为 muniu 的租户投影。
+//
+//nolint:cyclop // 配额维度白名单映射与租户目录合并是单一投影职责,拆分会割裂缺席/显式 0 的判定
 func (w *WireSnapshot) tenants() ([]Tenant, error) {
 	quotas := make(map[string]map[string]int64, len(w.Sections.Entitlements.Tenants))
+	maxInflight := make(map[string]int64, len(w.Sections.Entitlements.Tenants))
 	for _, e := range w.Sections.Entitlements.Tenants {
 		values := make(map[string]int64, len(e.Quotas))
 		for _, q := range e.Quotas {
@@ -186,6 +189,9 @@ func (w *WireSnapshot) tenants() ([]Tenant, error) {
 				values["tpm"] = q.Limit
 			case "daily_quota_credits":
 				values["daily_quota_credits"] = q.Limit
+			case "max_inflight":
+				values["max_inflight"] = q.Limit
+				maxInflight[e.TenantKey] = q.Limit
 			}
 		}
 		quotas[e.TenantKey] = values
@@ -197,6 +203,13 @@ func (w *WireSnapshot) tenants() ([]Tenant, error) {
 			name = t.TenantKey
 		}
 		q := quotas[t.TenantKey]
+		var maxInflightPtr *int64
+		if limit, ok := maxInflight[t.TenantKey]; ok {
+			if limit < 0 || int64(int(limit)) != limit {
+				return nil, fmt.Errorf("control: 租户 %s max_inflight 超出本机范围", t.TenantKey)
+			}
+			maxInflightPtr = &limit
+		}
 		out = append(out, Tenant{
 			ID:                t.ID,
 			Name:              name,
@@ -204,6 +217,7 @@ func (w *WireSnapshot) tenants() ([]Tenant, error) {
 			RPMLimit:          q["rpm"],
 			TPMLimit:          q["tpm"],
 			DailyQuotaCredits: q["daily_quota_credits"],
+			MaxInflight:       maxInflightPtr,
 		})
 	}
 	return out, nil

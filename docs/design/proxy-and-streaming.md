@@ -42,7 +42,7 @@
 
 **欠费桶独立于限流桶**:欠费证据(封闭白名单:HTTP 402,或错误体 `type/code = insufficient_quota`,error 嵌套与顶层两种摆位)上报欠费桶——换道语义不变(判定表已按原错误类走完),只改池的跨请求记忆。**文案永不参与判定**(厂商方言逐版本漂移是已知维护陷阱);400+「余额不足」文案是白名单负面用例。欠费桶阶梯 30 分钟起步、连续 ×2、2 小时封顶(封顶只兜无余额源渠道的自愈上界;订阅窗口世界的长阶梯不适用——API key 充值即恢复),一次成功清零阶梯。限流桶语义不变(Retry-After/指数 ×2/30min 上限)。
 
-**冷却持久化**:≥5 分钟的桶迁移落库(`key_cooldowns` 表,迁移 0018;欠费桶全程、429 桶后段;5xx 30s 瞬态不落库防写放大),启动加载恢复、SIGHUP 热替换复用未变渠道状态并对账孤儿行;重启后已冷却 key 不被立即重试。写入在池锁外同步执行(低频事件),失败静默留痕——恢复窗口=下次迁移或重启加载。
+**冷却持久化**:≥5 分钟的桶迁移落库(`key_cooldowns` 表,迁移 0018;欠费桶全程、429 桶后段;5xx 30s 瞬态不落库防写放大),启动加载恢复、SIGHUP 热替换复用未变渠道状态并对账孤儿行;重启后已冷却 key 不被立即重试。启动加载后清理已到期行,成功路径同步清除本进程已到期桶,避免行长期积累。写入在池锁外同步执行(低频事件),失败静默留痕——恢复窗口=下次迁移或重启加载。
 
 **余额回写联动**:balance 逐 key 评估(仅 Bearer 族;云账务哨兵/manual 无 key 归属)回调装配层——有效余额=0 → 池记欠费冷却(**幂等**:冷却中重复评估不推进阶梯不刷新至时刻);余额>0 → **提前释放**欠费冷却并清零阶梯(充值即恢复);查询失败零回调(余额源故障不得驱动冷却迁移)。metrics `muniu_keypool_credit_events_total{cause=upstream|balance, action=enter|release}`。
 
@@ -272,3 +272,7 @@ data: [DONE]
 **worth 闸门**:仅当 (渠道,key) 上次成功 attempt 的 usage 缓存读 >0(`cached_tokens`/`prompt_cache_hit_tokens`/`cache_read_input_tokens` 三族方言键,usage 平铺或嵌套两摆位)才建立粘性;**写侧(缓存建立)各方言归一不一,v1 不参与判定**。失败语义:本次尝试失败/换道/断言出口 → 立即清条(缓存前提已破);池冷却/熔断让位转原序服务 → **条目保留不改写**(恢复即复粘——写侧仅 stick 命中续期或无条目首建)。
 
 **容量与可观测**:LRU 容量 4096、TTL 10 分钟、进程内存态不落盘;`muniu_cache_affinity_total{result=hit|miss|stale}` 三分计数(每请求恰一者)。responses lane 维持既有状态亲和不动;gemini/images/embeddings 不接入。
+
+## 首 token 前阶段预算(ADR-0026)
+
+`server.timeouts.failover_deadline_sec`(缺省 120)与 `max_attempts`(缺省 4)只约束首 token 提交前的候选尝试:跳过候选不计次,命中任一边界返回 504 `failover_budget_exhausted` 并停止换道;首 token 提交后预算失效,长响应不受影响。显式 0 = 不限。预算与「同 provider 换 key」覆盖 chat/messages/responses/gemini/embeddings/images/multimodal 的推理候选循环;池耗尽且无真实上游错误时按 key 状态分级:全部限频/欠费冷却 → 429 `keypool_rate_limited` + 最早恢复 `Retry-After`;存在禁用或混合原因 → 503 `keypool_exhausted`。

@@ -23,6 +23,12 @@ func (p *Proxy) HandlerImages() http.Handler { return http.HandlerFunc(p.handleI
 
 func (p *Proxy) handleImages(w http.ResponseWriter, r *http.Request) {
 	tw := &trackWriter{ResponseWriter: w}
+	release, ok := p.acquireTenant(r)
+	if !ok {
+		p.writeError(tw, r, protocol.TypeRateLimited, "tenant_inflight_exceeded", "租户在途并发已达上限,请稍后重试")
+		return
+	}
+	defer release()
 	body, err := io.ReadAll(http.MaxBytesReader(tw, r.Body, 4<<20))
 	if err != nil {
 		p.writeError(tw, r, protocol.TypeBadRequest, "bad_request", "请求体过大或不可读")
@@ -95,7 +101,9 @@ func (p *Proxy) imagePreflight(tw *trackWriter, r *http.Request, req *protocol.I
 	return cost, price.Currency, false
 }
 
-// runImageCandidates 候选循环：oauth 收窄、取 key、尝试、按 Decide 动作分支。
+// runImageCandidates 候选循环：oauth 收窄、取 key、预算、尝试、按 Decide 动作分支。
+//
+//nolint:cyclop // 候选顺序状态机:跳过/取 key/预算/重试出口必须保持显式
 func (p *Proxy) runImageCandidates(tw *trackWriter, r *http.Request, topo *topologySnapshot,
 	req *protocol.ImageRequest, cands []config.Candidate, cost int64, currency string) {
 	fcs := make([]failover.Candidate, len(cands))
@@ -103,39 +111,57 @@ func (p *Proxy) runImageCandidates(tw *trackWriter, r *http.Request, topo *topol
 		fcs[i] = failover.Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, Weight: c.Weight}
 	}
 	iter := failover.NewIterator(fcs, p.randIntn)
-	var last failover.ErrorClass
-	oauthSkipped := false // oauth 候选收窄:images lane 不可达,唯一跳因时显式信封
-	otherSkipped := false // 池缺失/池耗尽等非 oauth 跳因
+	st := p.newLaneAttemptState()
+	var pending *failover.Candidate
 	for {
-		cand, ok := iter.Next()
-		if !ok {
-			p.finishImageExhausted(tw, r, last, oauthSkipped, otherSkipped)
-			return
+		var cand failover.Candidate
+		if pending != nil {
+			cand, pending = *pending, nil
+		} else {
+			next, ok := iter.Next()
+			if !ok {
+				p.finishImageExhausted(tw, r, st)
+				return
+			}
+			cand = next
 		}
 		if topo.authModes[cand.Provider] == adapter.AuthOAuth {
-			oauthSkipped = true
+			st.oauthSkipped = true
 			p.logger.Warn("oauth 渠道不支持 images lane,跳过候选",
 				"request_id", loggingRequestID(r.Context()), "provider", cand.Provider)
 			continue
 		}
 		pool := topo.pools[cand.Provider]
-		if pool == nil {
-			otherSkipped = true
-			continue
-		}
 		key := pool.Pick(time.Now())
 		if key == nil {
-			otherSkipped = true
+			st.pool.note(pool.Availability(time.Now()))
 			continue
 		}
-		m := &meterState{start: time.Now(), status: "ok"}
-		handled, class := p.attemptImages(tw, r, topo.adapters[cand.Provider], cand, key, req, m)
+		if p.laneBudgetExhausted(st) {
+			p.finishLaneBudgetExhausted(tw, r, st)
+			return
+		}
+		releaseTrial, admitted := p.laneAdmitted(cand.Provider)
+		if !admitted {
+			continue
+		}
+		st.attempts++
+		m := &meterState{start: time.Now(), status: "ok", deadline: st.deadline}
+		handled, class := runAttemptWithRelease(releaseTrial, func() (bool, failover.ErrorClass) {
+			return p.attemptImages(tw, r, topo.adapters[cand.Provider], cand, key, req, m)
+		})
+		p.healthLaneOutcome(cand.Provider, class)
 		p.reportKeyOutcome(pool, key, class, handled, m)
 		p.recordImages(r, req.Model, cand, m, cost, currency)
 		if stop, next := p.imageFailureExit(tw, r, class, m); stop {
 			return
 		} else if next {
-			last = class
+			if shouldRetrySameProviderKey(tw.committed, class, m) {
+				st.last = class
+				pending = &cand
+				continue
+			}
+			st.last = class
 		}
 	}
 }
@@ -155,15 +181,20 @@ func (p *Proxy) imageFailureExit(tw *trackWriter, r *http.Request, class failove
 	return true, false
 }
 
-// finishImageExhausted 候选耗尽：oauth 唯一跳因时显式信封，否则统一 all_candidates_failed。
-func (p *Proxy) finishImageExhausted(tw *trackWriter, r *http.Request, last failover.ErrorClass,
-	oauthSkipped, otherSkipped bool) {
-	if oauthSkipped && last == "" && !otherSkipped {
+// finishImageExhausted 候选耗尽：oauth 唯一跳因时显式信封，池耗尽按 429/503 分级。
+func (p *Proxy) finishImageExhausted(tw *trackWriter, r *http.Request, st *laneAttemptState) {
+	if tw.committed {
+		return
+	}
+	if p.finishLanePoolExhausted(tw, r, st) {
+		return
+	}
+	if st.oauthSkipped && st.last == "" && !st.pool.skipped {
 		p.writeError(tw, r, protocol.TypeBadRequest, oauthLaneUnsupportedCode,
 			"该别名的候选均为 OAuth 订阅渠道,不支持 images lane,请为别名配置非 oauth 候选")
 		return
 	}
-	p.writeError(tw, r, classToType(last), "all_candidates_failed", "上游供应商暂时不可用,已尝试全部候选")
+	p.writeError(tw, r, classToType(st.last), "all_candidates_failed", "上游供应商暂时不可用,已尝试全部候选")
 }
 
 // imageFail 统一失败出口：落分类并终结请求。
@@ -189,7 +220,7 @@ func (p *Proxy) attemptImages(w http.ResponseWriter, r *http.Request, ad adapter
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	var fired atomic.Bool
-	timer := time.AfterFunc(p.timeouts.FirstToken, func() { fired.Store(true); cancel() })
+	timer := time.AfterFunc(p.firstTokenTimeout(m), func() { fired.Store(true); cancel() })
 	defer timer.Stop()
 	upReq, err := p.outboundRequest(r, ctx, out)
 	if err != nil {

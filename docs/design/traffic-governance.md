@@ -51,3 +51,7 @@ v0.2 起租户聚合限额生效(该租户全部 key 共享 TPM/日配额第二�
 - key 池:WRR 分布均匀性(统计断言)、冷却进出状态机、EMA 权重衰减;
 - 限流:令牌桶边界(恰 N-1/N/N+1)、TPM 环形桶跨窗滑动、配额边界(恰差 1 微单位);
 - 全部并发对抗 `-race`。
+
+## 租户在途并发准入(ADR-0028)
+
+速率配额之外的第二道隔离:`tenant_default_max_inflight`(缺省 0=不限)与 `tenant_max_inflight` 覆盖表按租户 ID 限制跨 lane 在途上游调用;managed 租户由快照 `entitlements.quotas` 的 `max_inflight` 维度下发,缺席回落本地值。超限在候选循环前返回 429 `tenant_inflight_exceeded`,不触上游、不落 usage 行;chat/messages/responses/gemini/embeddings/images/multimodal 共用同一计数器,槽位全出口释放。观测面为 `muniu_tenant_inflight{tenant}`(gauge)与 `muniu_tenant_admission_denials_total{tenant}`,拒绝日志带 tenant/request_id。每副本独立计数,总上限按副本数放大。

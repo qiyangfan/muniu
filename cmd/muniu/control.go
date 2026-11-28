@@ -222,6 +222,19 @@ func (a *snapshotApplier) applyRuntime(p control.SnapshotPayload, prep *proxy.Pr
 	if a.wiring.quotas != nil {
 		a.wiring.quotas.Replace(quotas)
 	}
+	a.wiring.px.ReplaceManagedTenantLimits(managedTenantLimits(p.Tenants))
+}
+
+// managedTenantLimits 抽取快照中显式下发的租户并发上限；缺席租户不入表，
+// 由 Proxy 回落本地覆盖表/全局缺省。
+func managedTenantLimits(tenants []control.Tenant) map[string]int {
+	limits := map[string]int{}
+	for _, t := range tenants {
+		if t.MaxInflight != nil {
+			limits[t.ID] = int(*t.MaxInflight)
+		}
+	}
+	return limits
 }
 
 // pricingRecords 价目投影：nil=缺席（保留现状），空数组=显式空。先建表后落库。

@@ -10,7 +10,7 @@
 2. **准入点**:语义缓存之后、候选循环/上游调用之前;缓存命中不占名额,被限制的是上游并发。
 3. **拒绝语义**:超限返回 429 `tenant_inflight_exceeded`,不触上游、不落 usage 行;不设置 `Retry-After`——槽位释放时间取决于在途请求时长,固定秒数是伪精确。
 4. **释放纪律**:准入后全生命周期 `defer Release`,覆盖成功、失败、客户端断连、预算中断与 panic 隔离路径;泄漏由水位指标与测试兜底。
-5. **配置**:`tenant_default_max_inflight` 全局缺省(0=不限),standalone `tenants[].max_inflight` 可覆盖;managed 租户快照暂无该字段时使用本地缺省;控制面字段另立跨仓变更。默认 0 保持现有部署行为。
+5. **配置**:`tenant_default_max_inflight` 全局缺省(0=不限),`tenant_max_inflight` 覆盖表按租户 ID 覆盖;managed 租户由快照 `entitlements.quotas` 的 `max_inflight` 维度下发(0=不限,缺席回落本地缺省)。默认 0 保持现有部署行为。
 6. **多副本**:每副本独立计数,总在途 ≤ 副本数 × 配置值;不做分布式共享计数(与 ADR-0008 的降级纪律一致)。
 7. **观测**:`muniu_tenant_inflight` 水位与 `muniu_tenant_admission_denials_total{tenant}`;拒绝日志携带 tenant 与 request_id。
 

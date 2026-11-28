@@ -32,7 +32,7 @@ func (p *Proxy) attemptNonStream(w http.ResponseWriter, r *http.Request, upstrea
 	defer opCancel()
 	// 触发标志用原子位，Timer.Stop 不幂等不可作判据；与流式路径同一套判定
 	var firstTokFired atomic.Bool
-	firstTok := time.AfterFunc(p.timeouts.FirstToken, func() {
+	firstTok := time.AfterFunc(p.firstTokenTimeout(m), func() {
 		firstTokFired.Store(true)
 		opCancel()
 	})
@@ -117,13 +117,22 @@ func (p *Proxy) classifyTransportErr(w http.ResponseWriter, r *http.Request, err
 	return false, failover.ClassDialFail
 }
 
-// parseRetryAfter 解析 Retry-After 头的秒数形态；非法或缺失返回 0。
+// parseRetryAfter 解析 Retry-After:delta-seconds 或 HTTP-date;非法/缺失/过去时刻返回 0
+// (由调用方回落指数阶梯,不得当成 0 秒冷却立即重试)。
 func parseRetryAfter(v string) time.Duration {
-	secs, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil || secs <= 0 {
-		return 0
+	v = strings.TrimSpace(v)
+	if secs, err := strconv.Atoi(v); err == nil {
+		if secs <= 0 {
+			return 0
+		}
+		return time.Duration(secs) * time.Second
 	}
-	return time.Duration(secs) * time.Second
+	if t, err := http.ParseTime(v); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
 }
 
 // truncateForLog 日志用 body 截断，防止大错误体刷爆日志。

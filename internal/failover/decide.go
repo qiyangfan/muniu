@@ -39,3 +39,19 @@ func Decide(class ErrorClass, pastFirstToken bool, stream bool) Action {
 func isSilentClass(class ErrorClass) bool {
 	return class == ClassContextCanceled || class == ClassCostBudget
 }
+
+// RetrySameProvider key 级硬信号允许同 provider 换 key 重试(429/401/403;欠费证据
+// 由调用方按 creditEvidence 另行并入)。其余错误走下一候选,避免在故障渠道内横向打满。
+func RetrySameProvider(class ErrorClass) bool {
+	return class == ClassRateLimited || class == ClassAuthFailed
+}
+
+// ChannelSignal 渠道级证据:只有这些错误才允许进入被动窗口与半开试探裁决。
+func ChannelSignal(class ErrorClass) bool {
+	switch class {
+	case ClassDialFail, ClassTimeoutFirst, ClassUpstream5xx, ClassMidStreamFail:
+		return true
+	default:
+		return false
+	}
+}
